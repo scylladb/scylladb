@@ -179,6 +179,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     using drop_guard_and_retake = bool_class<class retake_guard_tag>;
 
+    // Whether a strongly consistent migration stage runs the global barrier before its
+    // raft configuration sync.
+    using with_barrier = bool_class<class with_barrier_tag>;
+
     // Engaged if an ongoing topology change should be rolled back. The string inside
     // will indicate a reason for the rollback.
     std::optional<sstring> _rollback;
@@ -2212,9 +2216,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // cluster, including those of node operations that have nothing to do
             // with tablets.
             //
-            // Must run after this stage's barrier, which is what makes every host see
-            // the stage and cuts off the previous stage's triggers. The barrier of the
-            // next stage fences this one's, exactly as it does for streaming.
+            // A sync handler starts only if its host sees the stage and the migration it
+            // was sent for, and proposes nothing once that stage moves on there. So a
+            // sync that arrives late is refused. Hosts see a new stage at slightly
+            // different times, though: a follower may judge convergence while a leader
+            // that hasn't applied the stage yet lands an older stage's change. So a stage
+            // whose older sync could still propose something runs the barrier first,
+            // which waits for every older handler. That is only sc_rollback: every other
+            // sync follows a barrier, or follows only syncs that target the configuration
+            // the group already has.
             auto do_config_sync = [&] {
                 return advance_in_background(gid, tablet_state.config_sync[trinfo.stage], "config_sync", [&] {
                     auto group_id = tmap.get_tablet_raft_info(gid.tablet).group_id;
@@ -2264,10 +2274,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 });
             };
 
-            // Advances past a stage of a strongly consistent migration which changes
-            // the raft configuration: barrier first, then the configuration change.
-            auto transition_to_with_config_sync = [&] (locator::tablet_transition_stage stage) {
-                if (do_barrier() && do_config_sync()) {
+            // Advances past a stage of a strongly consistent migration once its raft
+            // configuration change is done. The barrier runs first when the change needs
+            // requests drained - a promotion, of requests whose serving set lacks the
+            // promoted replica, and a removal, of requests that may still be inside the
+            // removed replica's raft server - or when an older sync of this migration
+            // could still propose something.
+            auto transition_to_with_config_sync = [&] (locator::tablet_transition_stage stage, with_barrier needs_barrier) {
+                if ((!needs_barrier || do_barrier()) && do_config_sync()) {
                     transition_to(stage);
                 }
             };
@@ -2300,8 +2314,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             const bool is_strong_consistency = tmap.has_raft_info();
 
+            // A strongly consistent migration that fails before sc_become_voter has
+            // never promoted the pending replica, so it only has to remove it. A failure
+            // at sc_become_voter goes to sc_rollback instead, to demote it first.
             auto rollback_stage = is_strong_consistency ?
-                locator::tablet_transition_stage::sc_rollback :
+                locator::tablet_transition_stage::sc_remove_pending :
                 locator::tablet_transition_stage::cleanup_target;
 
             switch (trinfo.stage) {
@@ -2318,7 +2335,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    if (do_barrier()) {
+                    // The barrier lets every node see the pending replica's new storage
+                    // before the next stage writes to it. A strongly consistent tablet
+                    // takes writes only through raft, and raft reaches the pending replica
+                    // only through its raft server, which the pending replica starts only
+                    // once it has applied this stage. So this stage does nothing for it,
+                    // and is kept for uniformity with the eventually consistent migration.
+                    if (is_strong_consistency || do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
@@ -2344,8 +2367,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     } else if (is_strong_consistency) {
                         // The pending replica joins the group as a non-voter, so that
                         // the snapshot transfer of the next stage has something to
-                        // transfer to.
-                        transition_to_with_config_sync(locator::tablet_transition_stage::streaming);
+                        // transfer to. No barrier: no replica becomes a voter and none is
+                        // removed.
+                        transition_to_with_config_sync(locator::tablet_transition_stage::streaming, with_barrier::no);
                     } else {
                         transition_to_with_barrier(locator::tablet_transition_stage::streaming);
                     }
@@ -2477,14 +2501,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             }
                         }
                     })) {
+                        // No barrier before deleting the session. A stale RPC arriving
+                        // after the deletion fails at the session guard, and the barrier
+                        // of the next stage drains those in flight. A strongly consistent
+                        // migration keeps its session to the end, as it identifies the
+                        // migration to its syncs (see do_config_sync). So a stale snapshot
+                        // transfer isn't fenced, but it is only a read barrier on the
+                        // pending replica, harmless beside its promotion.
                         if (is_strong_consistency) {
-                            // The barrier fences off stale snapshot transfer RPCs. The
-                            // session stays nonetheless: a strongly consistent migration
-                            // keeps it to the end, as it identifies the migration to its
-                            // syncs (see do_config_sync).
-                            if (do_barrier()) {
-                                transition_to(locator::tablet_transition_stage::sc_become_voter);
-                            }
+                            transition_to(locator::tablet_transition_stage::sc_become_voter);
                         } else {
                             rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                             get_mutation_builder()
@@ -2525,7 +2550,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             if (_feature_service.tablets_intermediate_fallback_cleanup && !is_strong_consistency) {
                                 transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
                             } else if (is_strong_consistency) {
-                                transition_to(rollback_stage);
+                                transition_to(locator::tablet_transition_stage::sc_rollback);
                             } else {
                                 transition_to_with_barrier(rollback_stage);
                             }
@@ -2534,17 +2559,34 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     if (is_strong_consistency) {
                         // The pending replica becomes a voter and the leaving one is
-                        // removed from the group. use_new is where the leaving replica
-                        // tears its raft server down, so the removal has to be
-                        // committed before the migration gets there.
-                        transition_to_with_config_sync(locator::tablet_transition_stage::use_new);
+                        // demoted to a non-voter, in one change. Views before this stage
+                        // serve the old replica set only, so the barrier drains them before
+                        // the pending replica can be elected. Without a pending replica
+                        // nobody becomes a voter, so no drain is needed, and the sync of
+                        // sc_add_nonvoter targets the configuration the group already has,
+                        // so it can't propose anything.
+                        transition_to_with_config_sync(locator::tablet_transition_stage::use_new,
+                                with_barrier(bool(trinfo.pending_replica)));
                     } else {
                         transition_to_with_barrier(locator::tablet_transition_stage::use_new);
                     }
                 }
                     break;
                 case locator::tablet_transition_stage::use_new:
-                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
+                    if (!is_strong_consistency) {
+                        transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
+                    } else if (get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo)) {
+                        // Views of sc_become_voter let the leaving replica serve, so the
+                        // barrier drains the requests that may still be inside its raft
+                        // server. The sync then removes it from the group, and cleanup
+                        // tears its server down. Retried until it succeeds: there is no
+                        // rollback from use_new.
+                        transition_to_with_config_sync(locator::tablet_transition_stage::cleanup, with_barrier::yes);
+                    } else {
+                        // Nothing to drain and nothing to remove: sc_become_voter and
+                        // use_new serve the same replica set.
+                        transition_to(locator::tablet_transition_stage::cleanup);
+                    }
                     break;
                 case locator::tablet_transition_stage::cleanup: {
                     bool wait = utils::get_local_injector().enter("cleanup_tablet_wait");
@@ -2573,25 +2615,32 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                     break;
                 case locator::tablet_transition_stage::sc_rollback:
-                    // Restores the old replica set as the group's configuration,
-                    // removing the pending replica. cleanup_target is where the pending
-                    // replica tears its raft server down, so the removal has to be
-                    // committed before the migration gets there.
+                    // Demotes the pending replica and makes the leaving one a voter again.
+                    // The leaving replica serves at every stage, so its promotion needs no
+                    // drain. The barrier is for the sync of sc_become_voter: it may still
+                    // run on a leader that hasn't applied this stage yet, and land its
+                    // change after the followers judged this stage's configuration
+                    // converged - they find it in place, since that change never landed.
                     //
                     // Retried until it succeeds: unlike the forward path there is
-                    // nothing further to fall back to, which is the same position the
-                    // barrier at this stage used to be in.
-                    transition_to_with_config_sync(locator::tablet_transition_stage::cleanup_target);
+                    // nothing further to fall back to.
+                    transition_to_with_config_sync(locator::tablet_transition_stage::sc_remove_pending, with_barrier::yes);
                     break;
                 case locator::tablet_transition_stage::sc_remove_pending:
                     // Views of sc_rollback let the pending replica serve, so the barrier
                     // drains the requests that may still be inside its raft server. The
                     // sync then removes it from the group, and cleanup_target tears its
                     // server down. Retried until it succeeds, like sc_rollback.
-                    transition_to_with_config_sync(locator::tablet_transition_stage::cleanup_target);
+                    transition_to_with_config_sync(locator::tablet_transition_stage::cleanup_target, with_barrier::yes);
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
-                    if (do_barrier()) {
+                    // The barrier keeps coordinators from writing to the pending replica
+                    // while it is cleaned. A strongly consistent tablet needs none: the
+                    // sync of sc_remove_pending removed the pending replica, and its
+                    // barrier drained the requests that may have been inside its raft
+                    // server. The cleanup handler's read barrier orders the cleanup after
+                    // the server's teardown.
+                    if (is_strong_consistency || do_barrier()) {
                         if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target",
                                 [this, &trinfo, gid, gids] (this auto) -> future<> {
                             if (!trinfo.pending_replica) {

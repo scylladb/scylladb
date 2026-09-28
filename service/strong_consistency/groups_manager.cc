@@ -510,84 +510,81 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     }
 }
 
-static raft::config_member_set to_voter_set(const locator::tablet_replica_set& replicas) {
-    raft::config_member_set members;
-    members.reserve(replicas.size());
-    for (const auto& r : replicas) {
-        members.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
-    }
-    return members;
-}
-
 // The raft group configuration implied by a tablet's replica set and the stage its
-// migration is in.
+// migration is in; see "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
 //
-// This is the single source of truth for the group's expected membership: both the
-// delta that drives a configuration change and the check that validates it are
-// derived from here, so the two cannot drift apart.
+// A replica leaves the group in two changes: it is demoted to a non-voter first, and
+// removed by a later stage, once no request can still be inside its raft server with
+// a view that lets it serve. The pending replica joins as a non-voter and is promoted
+// once it has caught up.
 static raft::config_member_set expected_raft_config(
         const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo) {
+    // The non-voter is inserted after the voters, so that an intra-node migration, where
+    // the leaving and the pending replica share a host, doesn't demote that host.
+    const auto config = [] (const locator::tablet_replica_set& voters,
+            const std::optional<locator::tablet_replica>& non_voter = std::nullopt) {
+        raft::config_member_set members;
+        members.reserve(voters.size() + 1);
+        for (const auto& r : voters) {
+            members.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+        }
+        if (non_voter) {
+            members.emplace(raft::server_address{to_server_id(non_voter->host), {}}, raft::is_voter::no);
+        }
+        return members;
+    };
+
     if (!trinfo) {
-        return to_voter_set(tinfo.replicas);
+        return config(tinfo.replicas);
     }
 
     switch (trinfo->stage) {
         case tablet_transition_stage::start_migration:
+        case tablet_transition_stage::sc_remove_pending:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return config(tinfo.replicas);
+
+        case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::sc_snapshot_transfer:
+        case tablet_transition_stage::sc_rollback:
+            return config(tinfo.replicas, trinfo->pending_replica);
+
+        case tablet_transition_stage::sc_become_voter:
+            return config(trinfo->next, get_leaving_replica(tinfo, *trinfo));
+
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return config(trinfo->next);
+
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:
         case tablet_transition_stage::rebuild_repair:
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
-        // The rollback path restores the old replica set.
-        case tablet_transition_stage::sc_rollback:
-        case tablet_transition_stage::sc_remove_pending:
-        case tablet_transition_stage::cleanup_target:
-        case tablet_transition_stage::revert_migration:
-            return to_voter_set(tinfo.replicas);
-
-        case tablet_transition_stage::sc_add_nonvoter:
-        case tablet_transition_stage::sc_snapshot_transfer: {
-            auto members = to_voter_set(tinfo.replicas);
-            if (trinfo->pending_replica) {
-                // Inserted after the voters, so that an intra-node migration, where
-                // the pending replica shares a host with a current replica, doesn't
-                // demote that host to a non-voter.
-                members.emplace(raft::server_address{to_server_id(trinfo->pending_replica->host), {}},
-                        raft::is_voter::no);
-            }
-            return members;
-        }
-
-        case tablet_transition_stage::sc_become_voter:
-        case tablet_transition_stage::use_new:
-        case tablet_transition_stage::cleanup:
-        case tablet_transition_stage::end_migration:
-            return to_voter_set(trinfo->next);
+            break;
     }
-    on_internal_error(logger, format("expected_raft_config: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
+    on_internal_error(logger, format("expected_raft_config: unexpected transition stage {} of a strongly "
+            "consistent tablet", trinfo->stage));
 }
 
 // Should this node host a raft server for the tablet's group at the tablet's current
 // migration stage?
 //
-// This is a wider set than expected_raft_config(): a replica keeps hosting the group
-// while a configuration change that removes it is merely *intended*, and stops only
-// once the change has been *confirmed* by the barrier of the preceding transition.
-// The distinction matters in both directions:
+// A replica hosts the group while it is a member of any configuration the group may
+// have while a view of the stage is live. The pending replica also hosts from
+// start_migration on, so that it can be added.
 //
-//  - The leaving replica is still a member of the committed configuration during
-//    sc_become_voter, and its vote may be required to commit the change that removes
-//    it - with RF=2 the old configuration has no majority without it. It may also be
-//    the leader that has to drive its own removal.
-//  - The pending replica is in the same position during sc_rollback: the rollback
-//    removes it, and it may be the current leader, the only node able to drive that.
-//
-// Once the removal is confirmed - use_new for the leaving replica, cleanup_target for
-// the pending one - the replica stops hosting the group, so that its raft server is
-// torn down before the tablet cleanup of the same migration touches its storage.
-// Neither stage can be rolled back to a stage that would need the group again.
+// Hosting ends only with the publish of a stage: raft never tells a removed server
+// about its removal, and after a restart hosting is derived from the stage again. The
+// stage that ends it is published after two things: a drain of every request that
+// could still be inside the replica's server with a view that lets it serve, and the
+// sync that removed the replica from the configuration. For the leaving replica that
+// is cleanup, after use_new drained and removed it. For the pending one it is
+// cleanup_target, after sc_remove_pending did. So no request holds the server when it
+// is torn down, and the leader never replicates into a server that is gone.
 static bool hosts_raft_group(const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo,
         const locator::tablet_replica& replica) {
@@ -602,25 +599,17 @@ static bool hosts_raft_group(const locator::tablet_info& tinfo,
         case tablet_transition_stage::sc_add_nonvoter:
         case tablet_transition_stage::sc_snapshot_transfer:
         case tablet_transition_stage::sc_become_voter:
-        // The rollback may be entered from sc_become_voter, where the pending replica
-        // can already be a voter and the leader.
+        case tablet_transition_stage::use_new:
         case tablet_transition_stage::sc_rollback:
-        // The pending replica is removed by the sync of this stage, and tears its raft
-        // server down only at cleanup_target.
         case tablet_transition_stage::sc_remove_pending:
             return locator::contains(tinfo.replicas, replica) || is_pending;
 
-        case tablet_transition_stage::use_new:
         case tablet_transition_stage::cleanup:
         case tablet_transition_stage::end_migration:
-            // The leaving replica has been removed from the configuration, and the
-            // transition into use_new observed it.
             return locator::contains(trinfo->next, replica);
 
         case tablet_transition_stage::cleanup_target:
         case tablet_transition_stage::revert_migration:
-            // The pending replica has been removed from the configuration, and the
-            // transition into cleanup_target observed it.
             return locator::contains(tinfo.replicas, replica);
 
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:
