@@ -1543,21 +1543,12 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
     return make_ready_future<stop_iteration>(true);
 }
 
-class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
+class regular_compaction_task_executor : public compaction_task_executor {
 public:
     regular_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t)
         : compaction_task_executor(mgr, do_throw_if_stopping, &t, compaction_type::Compaction, "Compaction")
-        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
     {}
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
 protected:
-    virtual future<> run() override {
-        return perform();
-    }
-
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!is_system_keyspace(_compacting_table->schema()->ks_name())) {
             co_await utils::get_local_injector().inject("compaction_regular_compaction_task_executor_do_run", utils::wait_for_message(10s));
