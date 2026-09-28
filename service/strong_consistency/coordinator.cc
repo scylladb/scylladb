@@ -24,6 +24,7 @@
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/abstract_formatter.hh"
 
+#include <fmt/ranges.h>
 #include <fmt/std.h>
 
 #include <algorithm>
@@ -331,15 +332,16 @@ public:
     // The routing information to hand back to a driver that sent `block` with the
     // request, or nullopt if the block matches the tablet's current version. That version
     // is a hash of the serving set, rotated to start with `leader`, so where a driver is
-    // told to go and where it will actually be answered agree. Nullopt as well when
-    // `leader` isn't in the serving set, or isn't known.
-    std::optional<locator::tablet_routing_info_v2> routing_info(raft::server_id leader,
+    // told to go and where it will actually be answered agree. `leader` must be in the
+    // serving set; callers check that.
+    std::optional<locator::tablet_routing_info_v2> routing_info(locator::host_id leader,
             locator::tablet_version_block block) const {
         auto replicas = _serving.materialize();
         std::ranges::sort(replicas);
-        const auto leader_it = std::ranges::find(replicas, locator::host_id{leader.uuid()}, &locator::tablet_replica::host);
+        const auto leader_it = std::ranges::find(replicas, leader, &locator::tablet_replica::host);
         if (leader_it == replicas.end()) [[unlikely]] {
-            return std::nullopt;
+            on_internal_error(logger, fmt::format("replica_selector::routing_info: leader {} is not among the serving "
+                    "replicas {} of tablet {} at transition stage {}", leader, replicas, _tablet_id, transition_stage()));
         }
         std::ranges::rotate(replicas, leader_it);
 
@@ -626,9 +628,11 @@ auto coordinator::mutate(schema_ptr schema,
                 &aoe.abort_source()));
 
         if (!add_entry_result.failed()) {
+            // Names this node as the leader: begin_mutate() found it to be the leader, and
+            // it is in the serving set.
             co_return mutate_result{
                 .routing_info = tablet_version_block
-                        ? op->replicas.routing_info(op->raft_server.server().current_leader(), *tablet_version_block)
+                        ? op->replicas.routing_info(locator::host_id{op->raft_server.server().id().uuid()}, *tablet_version_block)
                         : std::nullopt,
             };
         }
@@ -774,10 +778,22 @@ auto coordinator::query(schema_ptr schema,
     }
 
     auto [result, cache_temp] = std::move(query_future).get();
+
+    // A linearizable read names this node as the leader: begin_read() found it to be the
+    // leader, and it is in the serving set. A non-linearizable read knows only the leader
+    // its raft names, if any, which may be outside the serving set; it then returns no
+    // routing info.
+    std::optional<locator::host_id> leader;
+    if (rtype == read_type::linearizable) {
+        leader = locator::host_id{op.raft_server.server().id().uuid()};
+    } else if (const auto named = op.raft_server.server().current_leader();
+            named && op.replicas.find_replica(locator::host_id{named.uuid()})) {
+        leader = locator::host_id{named.uuid()};
+    }
     co_return query_result{
         .result = std::move(result),
-        .routing_info = tablet_version_block
-                ? op.replicas.routing_info(op.raft_server.server().current_leader(), *tablet_version_block)
+        .routing_info = tablet_version_block && leader
+                ? op.replicas.routing_info(*leader, *tablet_version_block)
                 : std::nullopt,
     };
 }
