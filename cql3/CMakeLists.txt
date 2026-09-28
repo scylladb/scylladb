@@ -51,6 +51,7 @@ target_sources(cql3
     statements/eventual_consistency/modification_executor.cc
     statements/strong_consistency/modification_executor.cc
     statements/strong_consistency/batch_statement.cc
+    statements/eventual_consistency/batch_executor.cc
     statements/strong_consistency/statement_helpers.cc
     functions/vector_similarity_fcts.cc
     functions/scoring_fcts.cc
