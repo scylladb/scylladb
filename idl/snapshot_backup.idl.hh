@@ -18,4 +18,5 @@
 // first_token and last_token represent the range covered by the sstables requested
 // for backing up.   
 verb [[]] backup_snapshot_sstables(table_id table_id, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move);
+verb [[]] clear_snapshot_sstables(table_id table_id, sstring tag);
 

@@ -141,6 +141,10 @@ public:
 
     future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
 
+    // Clears a cluster snapshot. It releases every node's snapshot references
+    // and deletes the catalogging rows accounting for that snapshot.
+    future<tasks::task_id> clear_cluster_snapshot(sstring tag);
+
     future<> disable_all_operations();
 
     // Must be called on shard 0
@@ -208,6 +212,7 @@ private:
 
     future<> delete_expired_snapshots();
     future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
+    future<> clear_sstables_handler(table_id, sstring tag);
 };
 
 }
