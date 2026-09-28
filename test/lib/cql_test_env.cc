@@ -99,6 +99,7 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->maintenance_compaction_scheduling_group = co_await create_scheduling_group("maintenance_compaction", 200);
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
         _scheduling_groups->logstor_compaction_scheduling_group = co_await create_scheduling_group("logstor_compaction", 1000);
+        _scheduling_groups->logstor_separator_scheduling_group = co_await create_scheduling_group("logstor_separator", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
         _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
@@ -676,6 +677,7 @@ private:
             dbcfg.maintenance_compaction_scheduling_group = scheduling_groups.maintenance_compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
             dbcfg.logstor_compaction_scheduling_group = scheduling_groups.logstor_compaction_scheduling_group;
+            dbcfg.logstor_separator_scheduling_group = scheduling_groups.logstor_separator_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
