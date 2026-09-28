@@ -28,10 +28,6 @@ class delete_statement : public modification_statement {
 public:
     delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats);
 
-    /// Reads a DELETE's WHERE clause, and checks that what it says agrees with what
-    /// the statement writes.
-    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
-
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const override;
 
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const override;
@@ -48,6 +44,10 @@ public:
 
 private:
     friend class raw::delete_statement;
+
+    /// Reads a DELETE's WHERE clause, and checks that what it says agrees with what
+    /// the statement writes.
+    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
 
     void validate_where_clause_for_conditions() const;
 
