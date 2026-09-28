@@ -226,8 +226,10 @@ value. For example, to run the PRUNE with 100 parallel reads/writes, you can use
 node that receives the statement and returns its result as rows. The syntax follows
 Cassandra's CEP-38 (CQL Management API). Parameters are named, in any order, and are
 ordinary terms, so they can be bind markers in a prepared statement. Commands are
-superuser-only. The `host_id` parameter is reserved for selecting the node to run on and
-is currently rejected.
+superuser-only by default; `toppartitions` also accepts `SELECT` on the named table. The `host_id` parameter is reserved for selecting the node to run on and
+is currently rejected. The only command
+today is `toppartitions`, see
+{doc}`nodetool toppartitions </operating-scylla/nodetool-commands/toppartitions>`.
 
 ## Synchronous materialized views
 

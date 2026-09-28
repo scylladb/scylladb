@@ -74,6 +74,8 @@ public:
     virtual future<> check_access(const service::client_state& state, const command_args& args) const;
 };
 
+const command& toppartitions_command_instance();
+
 // nullptr if there is no such command.
 const command* find_command(std::string_view name);
 
