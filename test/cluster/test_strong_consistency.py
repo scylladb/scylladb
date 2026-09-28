@@ -2083,9 +2083,9 @@ async def test_rf_change(manager: ScyllaClusterManager):
 async def test_tablet_migration_config_change_retried(manager: ScyllaClusterManager):
     """A raft configuration change that fails once must be re-driven.
 
-    Re-driving is the barrier's job. If it were coupled to the next token
+    Re-driving is the sync's job. If it were coupled to the next token
     metadata change instead, a failed attempt on an otherwise quiet cluster
-    would leave the coordinator failing the same barrier forever.
+    would leave the coordinator failing the same sync forever.
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + [
