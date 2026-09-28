@@ -203,6 +203,10 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        # Other tablets tables (the system keyspaces' once they are on tablets) split and
+        # merge too as perform_topology_ops() changes the shard count, so every wait below
+        # names the test table.
+        table_id = await manager.get_table_id(ks, "test")
 
         async def perform_topology_ops():
             logger.info("Topology ops in background")
@@ -257,7 +261,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
             logger.info("Waiting for split")
             await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
-            await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+            await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
             logger.info("Waiting for topology ops")
             await topology_ops_task
@@ -293,9 +297,9 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await manager.enable_tablet_balancing()
 
             logger.info("Waiting for merge decision")
-            await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
-            # Waits for balancer to co-locate sibling tablets
-            await s1_log.wait_for("All sibling tablets are co-located")
+            await s1_log.wait_for(f"Emitting resize decision of type merge for table {table_id}", from_mark=s1_mark)
+            # Waits for balancer to co-locate sibling tablets of this table
+            await s1_log.wait_for(f"All sibling tablets are co-located for table {table_id}", from_mark=s1_mark)
             # Do some shuffling to make sure balancer works with co-located tablets
             await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
@@ -307,8 +311,8 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
             await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
 
-            await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
-            await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+            await s1_log.wait_for(f'Detected tablet merge for table {ks}.test', from_mark=s1_mark)
+            await s1_log.wait_for(f'Merge completion fiber finished for table {ks}.test', from_mark=s1_mark)
 
             logger.info("Waiting for topology ops")
             await topology_ops_task
