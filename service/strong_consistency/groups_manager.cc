@@ -56,10 +56,10 @@ static constexpr auto config_sync_timeout = std::chrono::seconds(30);
 // and a failed attempt costs it one retry of a single tablet's background action.
 static constexpr auto config_convergence_timeout = std::chrono::seconds(60);
 
-// How long the topology barrier waits for the raft server of a group this node just
-// left to be torn down. Purely local: the deletion was scheduled when the stage that
-// ended the membership was published, which this barrier has already synchronized
-// with, so all that's left is draining in-flight requests and stopping the server.
+// How long the tablet cleanup waits for the raft server of a group this node left to
+// be torn down. Purely local: the deletion was scheduled when the stage that ended the
+// membership was published, which the cleanup has already synchronized with, and no
+// request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
 static raft::server_id to_server_id(host_id host_id) {
@@ -415,16 +415,20 @@ future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id ta
     co_await state.server->read_barrier(&aoe.abort_source());
 }
 
-bool groups_manager::is_group_running(raft::group_id group_id) const {
-    return _raft_groups.contains(group_id);
-}
-
-future<> groups_manager::erase_raft_group_state(raft::group_id group_id) {
-    if (is_group_running(group_id)) {
-        // The caller is expected to have checked this already; failing here rather than
-        // erasing is what keeps a mistake from silently taking a live group's state away.
-        throw std::runtime_error(fmt::format(
-                "erase_raft_group_state({}): the raft group is still running on this shard", group_id));
+future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id group_id) {
+    if (const auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
+        if (it->second.gate && !it->second.gate->is_closed()) {
+            on_internal_error(logger, format("cleanup_group({}-{}): the raft group is running and not being deleted",
+                    tablet, group_id));
+        }
+        logger.debug("cleanup_group({}-{}): waiting for the raft server to be torn down", tablet, group_id);
+        auto drained = co_await coroutine::as_future(it->second.server_control_op.get_future(
+                lowres_clock::now() + group_teardown_timeout));
+        if (drained.failed()) {
+            drained.ignore_ready_future();
+            co_await coroutine::return_exception(std::runtime_error(format(
+                    "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
+        }
     }
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
@@ -1051,81 +1055,6 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
     abort_on_expiry aoe(deadline);
     auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
     co_await converge_group_config(tablet, gid, guard, deadline, aoe.abort_source());
-}
-
-future<> groups_manager::drain_group_deletion(global_tablet_id tablet, raft::group_id gid,
-        lowres_clock::time_point deadline) {
-    const auto it = _raft_groups.find(gid);
-    if (it == _raft_groups.end()) {
-        co_return;
-    }
-
-    logger.debug("drain_group_deletion({}-{}): waiting for the raft server to be torn down", tablet, gid);
-    auto drained = co_await coroutine::as_future(it->second.server_control_op.get_future(deadline));
-    if (drained.failed()) {
-        drained.ignore_ready_future();
-        co_await coroutine::return_exception(std::runtime_error(format(
-                "drain_group_deletion({}-{}): the raft server was not torn down before the deadline", tablet, gid)));
-    }
-
-    // update() schedules the deletion as soon as the stage that ends this node's
-    // membership is published, and this barrier runs after that. A group that is still
-    // here once its control operations drained is therefore not being deleted at all.
-    if (_raft_groups.contains(gid)) {
-        co_await coroutine::return_exception(std::runtime_error(format(
-                "drain_group_deletion({}-{}): the raft group is still running although the tablet's "
-                "current stage doesn't place a replica on this node", tablet, gid)));
-    }
-}
-
-future<> groups_manager::local_topology_barrier(token_metadata_ptr tm, abort_source& as) {
-    if (!_features.strongly_consistent_tables) {
-        co_return;
-    }
-
-    const auto deadline = lowres_clock::now() + group_teardown_timeout;
-
-    const auto this_replica = locator::tablet_replica {
-        .host = tm->get_my_id(),
-        .shard = this_shard_id()
-    };
-
-    const auto& tablets = tm->tablets();
-    for (const auto& [table_id, _]: tablets.all_table_groups()) {
-        const auto& tablet_map = tablets.get_tablet_map(table_id);
-        if (!tablet_map.has_raft_info()) {
-            continue;
-        }
-        // Only a tablet in transition can need anything from this barrier: without a
-        // transition, hosts_raft_group() reduces to the same test as has_replica()
-        // below, so the teardown branch is unreachable.
-        for (const auto& [tid, trinfo]: tablet_map.transitions()) {
-            // A wider set than hosts_raft_group() below, so that a replica whose
-            // membership the current stage ended is still visited here, to wait for its
-            // raft server to be torn down.
-            if (!tablet_map.has_replica(tid, this_replica)) {
-                continue;
-            }
-            if (hosts_raft_group(tablet_map.get_tablet_info(tid), &trinfo, this_replica)) {
-                // Still a member. Whether the group's configuration matches what this
-                // stage implies is not this barrier's business - the coordinator drives
-                // and verifies that per tablet, through sync_raft_group_config().
-                continue;
-            }
-            // Checked between tablets rather than inside the wait: each wait is short
-            // and bounded by the deadline, and stopping here is what keeps a barrier
-            // nobody is waiting for anymore - the node is shutting down, or the
-            // topology command has been superseded - from walking the whole map.
-            as.check();
-            // The tablet cleanup of this migration is about to remove the tablet's
-            // storage on this node. Nothing may apply raft entries to it after that,
-            // so the raft server has to be gone before the barrier that precedes the
-            // cleanup completes.
-            co_await drain_group_deletion(global_tablet_id{table_id, tid},
-                    tablet_map.get_tablet_raft_info(tid).group_id, deadline);
-            co_await coroutine::maybe_yield();
-        }
-    }
 }
 
 void groups_manager::update(token_metadata_ptr new_tm) {

@@ -247,11 +247,6 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     future<> converge_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
         locator::tablet_metadata_guard& guard, lowres_clock::time_point deadline, abort_source& as);
 
-    // Waits until the raft server of a group this node is no longer a member of is torn
-    // down. On behalf of local_topology_barrier(); see there for what a failure means.
-    future<> drain_group_deletion(locator::global_tablet_id tablet, raft::group_id group_id,
-        lowres_clock::time_point deadline);
-
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
         cql3::query_processor& qp, replica::database& _db, service::migration_manager& mm, db::system_keyspace& sys_ks,
@@ -289,18 +284,17 @@ public:
 
     future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
 
-    // Is a raft server for the group running on this shard? Note that a group being
-    // deleted counts as running until its raft server is destroyed.
-    bool is_group_running(raft::group_id group_id) const;
-
-    // Deletes everything this shard persists about the group, so that a tablet migrated
-    // back here later rejoins the group with no history of its previous membership.
+    // Called by tablet cleanup, the point at which a replica has definitively left the
+    // group, before the tablet's storage is removed.
     //
-    // Called by tablet cleanup, which is the point at which a replica has definitively
-    // left: the raft server is already gone by then, and the tablet's storage is about
-    // to be. Refuses while a raft server for the group is still running, because that
-    // would pull the state out from under a live group.
-    future<> erase_raft_group_state(raft::group_id group_id);
+    // Waits for the teardown of the group's raft server, which update() scheduled when
+    // the stage that ended this replica's hosting was published, and then deletes
+    // everything this shard persists about the group, so that a tablet migrated back
+    // here later rejoins the group with no history of its previous membership.
+    //
+    // Idempotent. A group whose raft server is running and not being deleted is an
+    // internal error: the caller has checked that the stage ended the hosting.
+    future<> cleanup_group(locator::global_tablet_id tablet, raft::group_id group_id);
 
     // Drives the raft group of one tablet in transition to the configuration its
     // current migration stage implies, and doesn't return until it got there.
@@ -327,21 +321,6 @@ public:
     // tablet's current stage returns immediately.
     future<> sync_raft_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
         lowres_clock::time_point deadline);
-
-    // Makes sure the raft server of a group whose membership the tablet's current
-    // migration stage ended is torn down - before the tablet cleanup of the same
-    // migration removes the tablet's storage on this node.
-    //
-    // This is all the topology barrier does for strongly consistent tablets. The wait
-    // is local and short: the deletion was scheduled when the stage was published,
-    // which this barrier already synchronized with. Establishing a stage's raft
-    // configuration is not part of it - that is sync_raft_group_config()'s job, driven
-    // per tablet by the coordinator.
-    //
-    // Bounded by `as` as well, so that a barrier nobody is waiting for anymore - the
-    // node is shutting down, or the topology command was superseded - returns instead
-    // of waiting out its deadline.
-    future<> local_topology_barrier(locator::token_metadata_ptr tm, abort_source& as);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.
