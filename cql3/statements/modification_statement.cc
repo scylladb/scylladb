@@ -265,6 +265,147 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
+namespace {
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+process_forced_rebounce(unsigned shard, query_processor& qp, const query_options& options) {
+    static int64_t counter = {0};
+    static logging::logger logger("modification_statement");
+    if (counter <= 0) {
+        const auto counter_opt = utils::get_local_injector().inject_parameter<decltype(counter)>("forced_bounce_to_shard_counter");
+        decltype(counter) counter_value = 0;
+        if (!counter_opt) {
+            logger.warn("forced_bounce_to_shard_counter is not set. Using default value 1.");
+        } else {
+            try {
+                counter_value = boost::lexical_cast<decltype(counter_value)>(*counter_opt);
+            } catch (const boost::bad_lexical_cast& e) {
+                logger.warn("Incorrect forced_bounce_to_shard_counter value: [{}]. Using default value 1.", *counter_opt);
+            }
+        }
+        if (counter_value <= 0) {
+            counter_value = 1;
+        }
+        counter = counter_value;
+    }
+
+    const auto prev_counter_value = counter;
+    if (prev_counter_value <= 1) {
+        logger.info("Disabling forced_bounce_to_shard_counter.");
+        co_await utils::error_injection_type::disable_on_all("forced_bounce_to_shard_counter");
+        counter = 0;
+    } else {
+        --counter;
+    }
+
+    // While counter > 1 select a different shard to re-bounce to.
+    // On the last iteration, re-bounce to the correct shard.
+    if (counter != 0) {
+        const auto shard_num = this_smp_shard_count();
+        const auto local_shard = this_shard_id();
+        auto target_shard = local_shard + 1;
+        if (target_shard == shard) {
+            ++target_shard;
+        }
+        if (target_shard > shard_num - 1) {
+            target_shard = 0;
+        }
+        shard = target_shard;
+    }
+
+    logger.info("Applying forced_bounce_to_shard_counter, re-bouncing to shard {}.", shard);
+    co_return co_await make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+        qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
+}
+
+} // namespace
+
+future<coordinator_result<>>
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const {
+    auto cl = options.get_consistency();
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
+        if (mutations.empty()) {
+            return make_ready_future<coordinator_result<>>(bo::success());
+        }
+
+        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
+            .node_local_only = options.get_specific_options().node_local_only,
+            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails(),
+            .violations_out = violations
+        });
+    });
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
+
+    auto cl_for_learn = options.get_consistency();
+    utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
+    if (!cl_for_paxos) [[unlikely]] {
+        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
+    }
+    db::timeout_clock::time_point now = db::timeout_clock::now();
+    const timeout_config& cfg = qs.get_client_state().get_timeout_config();
+
+    auto statement_timeout = now + cfg.write_timeout; // All CAS networking operations run with write timeout.
+    auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.
+    auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
+
+    modification_spec spec(*this, options);
+
+    if (spec.keys.empty()) {
+        throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional {}",
+                    type.is_update() ? "update" : "deletion"));
+    }
+    if (spec.ranges.empty()) {
+        throw exceptions::invalid_request_exception(format("Unrestricted clustering key in a conditional {}",
+                    type.is_update() ? "update" : "deletion"));
+    }
+
+    auto request = std::make_unique<cas_request>(s);
+    auto* request_ptr = request.get();
+    // cas_request can be used for batches as well single statements; Here we have just a single
+    // modification in the list of CAS commands, since we're handling single-statement execution.
+    request->add_row_update(*this, std::move(spec), options);
+
+    auto token = request->key()[0].start()->value().as_decorated_key().token();
+
+    auto cas_shard = service::cas_shard(*s, token);
+
+    if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
+        return process_forced_rebounce(cas_shard.shard(), qp, options);
+    }
+    if (!cas_shard.this_shard()) {
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+                qp.bounce_to_shard(cas_shard.shard(), std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+            );
+    }
+
+    std::optional<locator::tablet_routing_info> tablet_info;
+
+    auto&& table = s->table();
+    if (_may_use_token_aware_routing && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+        tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
+    }
+
+    return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
+            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
+            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
+        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
+        if (tablet_info) {
+            result->add_tablet_info(std::move(*tablet_info));
+        }
+        // Surface any coordinator-side large data guardrail soft limit violations
+        // detected during the LWT to the client as a CQL warning.
+        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
+            result->add_warning(std::move(warning));
+        }
+        return result;
+    });
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (!qp.db().try_find_table(s->id())) {
@@ -347,147 +488,6 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     co_return std::move(result);
-}
-
-future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const {
-    auto cl = options.get_consistency();
-    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
-        if (mutations.empty()) {
-            return make_ready_future<coordinator_result<>>(bo::success());
-        }
-
-        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
-            .node_local_only = options.get_specific_options().node_local_only,
-            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails(),
-            .violations_out = violations
-        });
-    });
-}
-
-namespace {
-
-future<::shared_ptr<cql_transport::messages::result_message>>
-process_forced_rebounce(unsigned shard, query_processor& qp, const query_options& options) {
-    static int64_t counter = {0};
-    static logging::logger logger("modification_statement");
-    if (counter <= 0) {
-        const auto counter_opt = utils::get_local_injector().inject_parameter<decltype(counter)>("forced_bounce_to_shard_counter");
-        decltype(counter) counter_value = 0;
-        if (!counter_opt) {
-            logger.warn("forced_bounce_to_shard_counter is not set. Using default value 1.");
-        } else {
-            try {
-                counter_value = boost::lexical_cast<decltype(counter_value)>(*counter_opt);
-            } catch (const boost::bad_lexical_cast& e) {
-                logger.warn("Incorrect forced_bounce_to_shard_counter value: [{}]. Using default value 1.", *counter_opt);
-            }
-        }
-        if (counter_value <= 0) {
-            counter_value = 1;
-        }
-        counter = counter_value;
-    }
-
-    const auto prev_counter_value = counter;
-    if (prev_counter_value <= 1) {
-        logger.info("Disabling forced_bounce_to_shard_counter.");
-        co_await utils::error_injection_type::disable_on_all("forced_bounce_to_shard_counter");
-        counter = 0;
-    } else {
-        --counter;
-    }
-
-    // While counter > 1 select a different shard to re-bounce to.
-    // On the last iteration, re-bounce to the correct shard.
-    if (counter != 0) {
-        const auto shard_num = this_smp_shard_count();
-        const auto local_shard = this_shard_id();
-        auto target_shard = local_shard + 1;
-        if (target_shard == shard) {
-            ++target_shard;
-        }
-        if (target_shard > shard_num - 1) {
-            target_shard = 0;
-        }
-        shard = target_shard;
-    }
-
-    logger.info("Applying forced_bounce_to_shard_counter, re-bouncing to shard {}.", shard);
-    co_return co_await make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-        qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
-}
-
-} // namespace
-
-future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
-
-    auto cl_for_learn = options.get_consistency();
-    utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
-    if (!cl_for_paxos) [[unlikely]] {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
-    }
-    db::timeout_clock::time_point now = db::timeout_clock::now();
-    const timeout_config& cfg = qs.get_client_state().get_timeout_config();
-
-    auto statement_timeout = now + cfg.write_timeout; // All CAS networking operations run with write timeout.
-    auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.
-    auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
-
-    modification_spec spec(*this, options);
-
-    if (spec.keys.empty()) {
-        throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional {}",
-                    type.is_update() ? "update" : "deletion"));
-    }
-    if (spec.ranges.empty()) {
-        throw exceptions::invalid_request_exception(format("Unrestricted clustering key in a conditional {}",
-                    type.is_update() ? "update" : "deletion"));
-    }
-
-    auto request = std::make_unique<cas_request>(s);
-    auto* request_ptr = request.get();
-    // cas_request can be used for batches as well single statements; Here we have just a single
-    // modification in the list of CAS commands, since we're handling single-statement execution.
-    request->add_row_update(*this, std::move(spec), options);
-
-    auto token = request->key()[0].start()->value().as_decorated_key().token();
-
-    auto cas_shard = service::cas_shard(*s, token);
-
-    if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
-        return process_forced_rebounce(cas_shard.shard(), qp, options);
-    }
-    if (!cas_shard.this_shard()) {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(cas_shard.shard(), std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
-            );
-    }
-
-    std::optional<locator::tablet_routing_info> tablet_info;
-
-    auto&& table = s->table();
-    if (_may_use_token_aware_routing && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-        tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
-    }
-
-    return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
-            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
-            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
-        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
-        if (tablet_info) {
-            result->add_tablet_info(std::move(*tablet_info));
-        }
-        // Surface any coordinator-side large data guardrail soft limit violations
-        // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return result;
-    });
 }
 
 void modification_statement::build_cas_result_set_metadata() {
