@@ -198,16 +198,14 @@ void insert_statement::execute_operations_for_key(mutation& m, const clustering_
 }
 
 utils::chunked_vector<mutation> insert_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
-    auto mutations = make_mutations(keys);
+        const modification_spec& spec,
+        const update_parameters& params) const {
+    auto mutations = make_mutations(spec.keys);
     for (auto& m : mutations) {
-        for (auto&& range : ranges) {
+        for (auto&& range : spec.ranges) {
             auto prefix = row_key(range);
             open_row(*s, type, !_column_operations.empty(), m, prefix, params);
-            execute_operations_for_key(m, prefix, params, json_cache);
+            execute_operations_for_key(m, prefix, params, spec.json_cache);
         }
     }
 

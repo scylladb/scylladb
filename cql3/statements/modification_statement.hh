@@ -13,6 +13,7 @@
 #include "cql3/stats.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/statements/modification_spec.hh"
 #include "cql3/statements/statement_type.hh"
 #include "exceptions/coordinator_result.hh"
 
@@ -96,7 +97,7 @@ private:
     std::optional<bool> _is_raw_counter_shard_write;
 
 public:
-    typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
+    using json_cache_opt = modification_spec::json_cache_opt;
 
     modification_statement(
             statement_type type_,
@@ -204,10 +205,8 @@ public:
     // of mutations, one per partition key, for statements which affect multiple partition keys,
     // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
     virtual utils::chunked_vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
-            const std::vector<query::clustering_range>& ranges,
-            const update_parameters& params,
-            const json_cache_opt& json_cache) const = 0;
+            const modification_spec& spec,
+            const update_parameters& params) const = 0;
 
 protected:
     // One empty mutation per partition the statement addresses, for apply_updates()
@@ -248,7 +247,7 @@ public:
 
 private:
     future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys, db::large_data_violation_type* violations) const;
+    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
@@ -264,7 +263,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
+    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, modification_spec spec) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

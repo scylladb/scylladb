@@ -135,16 +135,14 @@ void update_statement::validate_where_clause_for_conditions() const {
 }
 
 utils::chunked_vector<mutation> update_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
-    auto mutations = make_mutations(keys);
-    auto rows = restrictions::update_restrictions::clustering_rows(ranges);
+        const modification_spec& spec,
+        const update_parameters& params) const {
+    auto mutations = make_mutations(spec.keys);
+    auto rows = restrictions::update_restrictions::clustering_rows(spec.ranges);
     for (auto& m : mutations) {
         for (const clustering_key_prefix& prefix : rows) {
             open_row(*s, type, !_column_operations.empty(), m, prefix, params);
-            execute_operations_for_key(m, prefix, params, json_cache);
+            execute_operations_for_key(m, prefix, params, spec.json_cache);
         }
     }
 

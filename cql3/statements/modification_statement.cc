@@ -121,9 +121,8 @@ future<> modification_statement::check_access(query_processor& qp, const service
 }
 
 future<utils::chunked_vector<mutation>>
-modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
+modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, modification_spec spec) const {
     auto cl = options.get_consistency();
-    auto ranges = create_clustering_ranges(options, json_cache);
     auto f = make_ready_future<update_parameters::prefetch_data>(s);
 
     if (is_counter()) {
@@ -133,9 +132,9 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
     }
 
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(qp, ranges, cl);
+        lw_shared_ptr<query::read_command> cmd = read_command(qp, spec.ranges, cl);
         // FIXME: ignoring "local"
-        f = qp.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
+        f = qp.proxy().query(s, cmd, dht::partition_range_vector(spec.keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
@@ -144,13 +143,12 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
         });
     }
 
-    return f.then([this, keys = std::move(keys), ranges = std::move(ranges), json_cache = std::move(json_cache), &options, now]
-            (auto rows) {
+    return f.then([this, spec = std::move(spec), &options, now] (auto rows) {
 
         update_parameters params(s, options, this->get_timestamp(now, options),
                 this->get_time_to_live(options), std::move(rows));
 
-        utils::chunked_vector<mutation> mutations = apply_updates(keys, ranges, params, json_cache);
+        utils::chunked_vector<mutation> mutations = apply_updates(spec, params);
 
         return make_ready_future<utils::chunked_vector<mutation>>(std::move(mutations));
     });
@@ -214,6 +212,12 @@ void modification_statement::classify_exists_condition(bool restricts_clustering
         }
     }
 }
+
+modification_spec::modification_spec(const modification_statement& stmt, const query_options& options)
+    : json_cache(stmt.maybe_prepare_json_cache(options))
+    , keys(stmt.build_partition_keys(options, json_cache))
+    , ranges(stmt.create_clustering_ranges(options, json_cache))
+{ }
 
 utils::chunked_vector<mutation> modification_statement::make_mutations(
         const std::vector<dht::partition_range>& keys) const {
@@ -295,17 +299,16 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         co_return result;
     }
 
-    json_cache_opt json_cache = maybe_prepare_json_cache(options);
-    std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
+    modification_spec spec(*this, options);
 
-    bool keys_size_one = keys.size() == 1;
+    bool keys_size_one = spec.keys.size() == 1;
     auto token = dht::token();
     if (keys_size_one) {
-        token = keys[0].start()->value().token();
-    } 
+        token = spec.keys[0].start()->value().token();
+    }
 
     auto violations = db::large_data_violation_type::none;
-    auto res = co_await execute_without_condition(qp, qs, options, json_cache, std::move(keys), &violations);
+    auto res = co_await execute_without_condition(qp, qs, options, std::move(spec), &violations);
     
     if (!res) {
         co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
@@ -347,10 +350,10 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 }
 
 future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys, db::large_data_violation_type* violations) const {
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
@@ -433,24 +436,22 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.
     auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
 
-    json_cache_opt json_cache = maybe_prepare_json_cache(options);
-    std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
-    std::vector<query::clustering_range> ranges = create_clustering_ranges(options, json_cache);
+    modification_spec spec(*this, options);
 
-    if (keys.empty()) {
+    if (spec.keys.empty()) {
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional {}",
                     type.is_update() ? "update" : "deletion"));
     }
-    if (ranges.empty()) {
+    if (spec.ranges.empty()) {
         throw exceptions::invalid_request_exception(format("Unrestricted clustering key in a conditional {}",
                     type.is_update() ? "update" : "deletion"));
     }
 
-    auto request = std::make_unique<cas_request>(s, std::move(keys));
+    auto request = std::make_unique<cas_request>(s);
     auto* request_ptr = request.get();
     // cas_request can be used for batches as well single statements; Here we have just a single
     // modification in the list of CAS commands, since we're handling single-statement execution.
-    request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
+    request->add_row_update(*this, std::move(spec), options);
 
     auto token = request->key()[0].start()->value().as_decorated_key().token();
 

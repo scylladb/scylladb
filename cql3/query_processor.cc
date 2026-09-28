@@ -1075,14 +1075,13 @@ future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
         on_internal_error(log, "Only modification statement is supported in get_mutations_internal");
     }
     auto opts = make_internal_options(stmt, values, db::consistency_level::LOCAL_ONE);
-    auto json_cache = mod_stmt->maybe_prepare_json_cache(opts);
-    auto keys = mod_stmt->build_partition_keys(opts, json_cache);
+    modification_spec spec(*mod_stmt, opts);
     // timeout only applies when modification requires read
     auto timeout = db::timeout_clock::now() + query_state.get_client_state().get_timeout_config().read_timeout;
     if (mod_stmt->requires_read()) {
         on_internal_error(log, "Read-modified-write queries forbidden in get_mutations_internal");
     }
-    co_return co_await mod_stmt->get_mutations(*this, opts, timeout, true, timestamp, query_state, json_cache, std::move(keys));
+    co_return co_await mod_stmt->get_mutations(*this, opts, timeout, true, timestamp, query_state, std::move(spec));
 }
 
 future<::shared_ptr<untyped_result_set>>

@@ -170,9 +170,8 @@ future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_pro
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
         auto timestamp = _attrs->get_timestamp(now, statement_options);
-        modification_statement::json_cache_opt json_cache = statement->maybe_prepare_json_cache(statement_options);
-        std::vector<dht::partition_range> keys = statement->build_partition_keys(statement_options, json_cache);
-        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state, json_cache, std::move(keys));
+        modification_spec spec(*statement, statement_options);
+        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
         for (auto&& m : more) {
             // We want unordered_set::try_emplace(), but we don't have it
@@ -383,23 +382,20 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         const query_options& statement_options = options.for_statement(i);
 
         statement.inc_cql_stats(qs.get_client_state().is_internal());
-        modification_statement::json_cache_opt json_cache = statement.maybe_prepare_json_cache(statement_options);
+        modification_spec spec(statement, statement_options);
         // At most one key
-        std::vector<dht::partition_range> keys = statement.build_partition_keys(statement_options, json_cache);
-        if (keys.empty()) {
+        if (spec.keys.empty()) {
             continue;
         }
         if (!request) {
             schema = statement.s;
-            request = std::make_unique<cas_request>(schema, std::move(keys));
-        } else if (keys.size() != 1 || keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
+            request = std::make_unique<cas_request>(schema);
+        } else if (spec.keys.size() != 1 || spec.keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
         cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
 
-        std::vector<query::clustering_range> ranges = statement.create_clustering_ranges(statement_options, json_cache);
-
-        request->add_row_update(statement, std::move(ranges), std::move(json_cache), statement_options);
+        request->add_row_update(statement, std::move(spec), statement_options);
     }
     if (!request) {
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));

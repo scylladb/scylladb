@@ -25,8 +25,7 @@ using namespace std::chrono;
  */
 struct cas_row_update {
     modification_statement const& statement;
-    std::vector<query::clustering_range> ranges;
-    modification_statement::json_cache_opt json_cache;
+    modification_spec spec;
     // This statement query options. Different from cas_request::query_options,
     // which may stand for BATCH statement, not individual modification_statement,
     // in case of BATCH
@@ -40,22 +39,23 @@ class cas_request: public service::cas_request {
 private:
     std::vector<cas_row_update> _updates;
     schema_ptr _schema;
-    // A single partition key. Represented as a vector of partition ranges
-    // since this is the conventional format for storage_proxy.
-    std::vector<dht::partition_range> _key;
     update_parameters::prefetch_data _rows;
 
-public:
-    cas_request(schema_ptr schema_arg, std::vector<dht::partition_range> key_arg)
-          : _schema(schema_arg)
-          , _key(std::move(key_arg))
-          , _rows(schema_arg)
-    {
-        throwing_assert(_key.size() == 1 && query::is_single_partition(_key.front()));
+    // The single partition every row update addresses, as a vector of
+    // partition ranges since this is the conventional format for storage_proxy.
+    const std::vector<dht::partition_range>& partition() const {
+        throwing_assert(!_updates.empty());
+        return _updates.front().spec.keys;
     }
 
+public:
+    explicit cas_request(schema_ptr schema_arg)
+          : _schema(schema_arg)
+          , _rows(schema_arg)
+    { }
+
     dht::partition_range_vector key() const {
-        return dht::partition_range_vector(_key);
+        return dht::partition_range_vector(partition());
     }
 
     const update_parameters::prefetch_data& rows() const {
@@ -64,8 +64,8 @@ public:
 
     lw_shared_ptr<query::read_command> read_command(query_processor& qp) const;
 
-    void add_row_update(const modification_statement& stmt_arg, std::vector<query::clustering_range> ranges_arg,
-        modification_statement::json_cache_opt json_cache_arg, const query_options& options_arg);
+    void add_row_update(const modification_statement& stmt_arg, modification_spec spec_arg,
+        const query_options& options_arg);
 
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options&) override;

@@ -11,6 +11,7 @@
 import re
 import pytest
 from cassandra.protocol import InvalidRequest, SyntaxException
+from cassandra.cluster import NoHostAvailable
 
 from .util import new_test_table, unique_key_int
 
@@ -139,6 +140,38 @@ def test_lwt_with_batch_conflict_5(cql, table1, scylla_only):
     # but that's what Cassandra returns
     for r in rs:
         assert r.applied == True
+
+
+# In a conditional batch, a member without IF whose partition key IN list is
+# empty must not be accepted when its clustering restrictions are invalid.
+# ScyllaDB used to skip such a member without evaluating them, and apply the
+# batch. Here a multi-column restriction has a null.
+def test_lwt_batch_empty_in_member_null_in_multi_column_restriction(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, PRIMARY KEY (p, c1, c2)') as table:
+        stmt = cql.prepare(f'BEGIN BATCH '
+                           f'UPDATE {table} SET r = 1 WHERE p = ? AND c1 = 0 AND c2 = 0 IF EXISTS; '
+                           f'DELETE FROM {table} WHERE p IN ? AND (c1, c2) = (?, ?); '
+                           f'APPLY BATCH')
+        # ScyllaDB answers InvalidRequest. Cassandra rejects any IN on the
+        # partition key in a conditional batch, with a server error that the
+        # driver reports as NoHostAvailable.
+        with pytest.raises((InvalidRequest, NoHostAvailable)):
+            cql.execute(stmt, [unique_key_int(), [], 1, None])
+
+# The same, for a clustering key IN list longer than
+# max_clustering_key_restrictions_per_query (100 by default).
+def test_lwt_batch_empty_in_member_clustering_in_list_over_limit(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, PRIMARY KEY (p, c1, c2)') as table:
+        stmt = cql.prepare(f'BEGIN BATCH '
+                           f'UPDATE {table} SET r = 1 WHERE p = ? AND c1 = 0 AND c2 = 0 IF EXISTS; '
+                           f'UPDATE {table} SET r = 2 WHERE p IN ? AND c1 = 0 AND c2 IN ?; '
+                           f'APPLY BATCH')
+        # Both answer with a server error, which the driver reports as
+        # NoHostAvailable: ScyllaDB reports an IN list over the limit that way
+        # in every statement (see test_in_clause_cartesian_product_limits),
+        # and Cassandra rejects the IN on the partition key as above.
+        with pytest.raises((InvalidRequest, NoHostAvailable)):
+            cql.execute(stmt, [unique_key_int(), [], list(range(101))])
 
 
 # Test NOT IN condition in LWT IF clause

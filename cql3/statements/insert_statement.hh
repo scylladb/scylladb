@@ -49,10 +49,8 @@ public:
     virtual void validate_primary_key(const query_options& options) const override;
 
     virtual utils::chunked_vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
-            const std::vector<query::clustering_range>& ranges,
-            const update_parameters& params,
-            const json_cache_opt& json_cache) const override;
+            const modification_spec& spec,
+            const update_parameters& params) const override;
 
 protected:
     /// The value the statement gives the column, or nullptr if it does not name it.
