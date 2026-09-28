@@ -5087,9 +5087,9 @@ BOOST_AUTO_TEST_CASE(optimized_constant_like) {
     BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "xxyyz", true));
     BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), "qxyyz", true));
     BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")), std::nullopt, true));
-    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "xxyyz", false, "xx%"));
-    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "qxyyz", false, "xx%"));
-    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), std::nullopt, false, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "xxyyz", true, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), "qxyyz", true, "xx%"));
+    BOOST_REQUIRE(check(binary_operator(target_var, oper_t::LIKE, pattern_var), std::nullopt, true, "xx%"));
 
     // Verify that optimization works for subexpressions, not just top-level expressions
     auto complex = make_conjunction(
@@ -5097,6 +5097,32 @@ BOOST_AUTO_TEST_CASE(optimized_constant_like) {
             // repeated for simplicity
             binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")));
     BOOST_REQUIRE(check(std::move(complex), "xxyyz", true));
+}
+
+BOOST_AUTO_TEST_CASE(optimized_bound_like_pattern_changes) {
+    auto target_var = make_bind_variable(0, utf8_type);
+    auto pattern_var = make_bind_variable(1, utf8_type);
+    auto e = binary_operator(target_var, oper_t::LIKE, pattern_var);
+    // The same optimized expression is evaluated with different patterns, as a
+    // prepared statement is across executions, so it must follow the pattern.
+    auto optimized = optimize_like(e);
+    BOOST_REQUIRE(find_binop(optimized, [] (const binary_operator&) { return true; }) == nullptr);
+
+    auto check = [&] (std::optional<sstring> target, std::optional<sstring> pattern) {
+        auto params = std::vector<raw_value>({
+            target ? make_text_raw(*target) : raw_value::make_null(),
+            pattern ? make_text_raw(*pattern) : raw_value::make_null(),
+        });
+        return evaluate_with_bind_variables(optimized, params) == evaluate_with_bind_variables(e, params);
+    };
+
+    for (auto&& pattern : {"xx%", "%yy%", "xx%", "qxyyz", "%z"}) {
+        BOOST_REQUIRE(check("xxyyz", pattern));
+        BOOST_REQUIRE(check("qxyyz", pattern));
+        BOOST_REQUIRE(check(std::nullopt, pattern));
+    }
+    BOOST_REQUIRE(check("xxyyz", std::nullopt));
+    BOOST_REQUIRE(check(std::nullopt, std::nullopt));
 }
 
 BOOST_AUTO_TEST_CASE(prepare_token_func_without_receiver) {
