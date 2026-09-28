@@ -84,7 +84,7 @@ future<> session_manager::drain_closing_sessions() {
         co_await s.close();
         warn_timer.reset();
         if (_sessions.erase(id)) {
-            slogger.info("drain_closing_sessions: session {} closed", id);
+            slogger.debug("drain_closing_sessions: session {} closed", id);
         }
     }
     slogger.debug("drain_closing_sessions: done");
