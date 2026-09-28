@@ -49,7 +49,6 @@ target_sources(cql3
     functions/error_injection_fcts.cc
     statements/strong_consistency/select_statement.cc
     statements/eventual_consistency/modification_executor.cc
-    statements/strong_consistency/modification_statement.cc
     statements/strong_consistency/modification_executor.cc
     statements/strong_consistency/batch_statement.cc
     statements/strong_consistency/statement_helpers.cc
