@@ -160,7 +160,15 @@ public:
     // The group's entries in the shared commitlog cannot be deleted; what makes them inert
     // is the absence of the row this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
-    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    //
+    // The raft_groups row is deleted above both this node's clock and the highest timestamp of the
+    // resize markers in that row (`max_marker_timestamp`). The markers are stamped by the leader's
+    // clock, which may be ahead of this node's. Passing `max_marker_timestamp` may put the
+    // tombstone above this node's clock, so that it also hides the row which a later bootstrap of
+    // the group on this shard writes. Only a group that is never bootstrapped here again, such as
+    // a resized parent, may pass it.
+    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+            api::timestamp_type max_marker_timestamp = api::min_timestamp);
 
     // The whole row, for a replay that has to decide what to keep.
     static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);

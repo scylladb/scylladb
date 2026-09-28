@@ -170,14 +170,16 @@ future<std::optional<raft::index_t>> raft_groups_storage::load_commit_idx_if_per
     co_return raft::index_t(rs->one().get_or<int64_t>("snapshot_idx", raft::index_t{}.value()));
 }
 
-future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        api::timestamp_type max_marker_timestamp) {
     // One row holds everything this shard persists about the group, so the erase is one
     // statement and cannot be left half done. Afterwards the group reads as never
     // bootstrapped, so start_raft_group() bootstraps it afresh if this shard ever hosts
     // it again.
-    static const auto delete_group_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+    static const auto delete_group_cql = format("DELETE FROM system.{} USING TIMESTAMP ? WHERE shard = ? AND group_id = ?",
         db::system_keyspace::RAFT_GROUPS);
-    co_await qp.execute_internal(delete_group_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    const auto group_timestamp = std::max(api::new_timestamp(), max_marker_timestamp + 1);
+    co_await qp.execute_internal(delete_group_cql, {group_timestamp, int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
 
     rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
 }

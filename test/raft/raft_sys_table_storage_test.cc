@@ -36,6 +36,7 @@
 #include "locator/tablets.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -824,6 +825,33 @@ SEASTAR_TEST_CASE(test_groups_erase_persisted_state_isolation) {
 
         BOOST_CHECK(co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid1, 0));
         BOOST_CHECK((co_await storage_g1_s0.load_snapshot_descriptor()).id);
+    });
+}
+
+// Test that erase_persisted_state() deletes a resize marker stamped by a clock ahead of this
+// node's once it is given the marker's timestamp, and only then.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_above_markers) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const auto ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+
+        co_await qp.execute_internal(
+                "INSERT INTO system.raft_groups (shard, group_id, end_resize) VALUES (?, ?, true) USING TIMESTAMP ?",
+                {int16_t(test_shard), gid.id, ahead}, cql3::query_processor::cache_internal::no);
+        const auto marker_present = [&] () -> future<bool> {
+            auto rs = co_await qp.execute_internal(
+                    "SELECT end_resize FROM system.raft_groups WHERE shard = ? AND group_id = ?",
+                    {int16_t(test_shard), gid.id}, cql3::query_processor::cache_internal::no);
+            co_return !rs->empty() && rs->one().has("end_resize");
+        };
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        BOOST_CHECK(co_await marker_present());
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard, ahead);
+        BOOST_CHECK(!co_await marker_present());
     });
 }
 
@@ -1836,10 +1864,11 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
         co_await storage.bootstrap(raft::configuration({srv}), false);
 
+        service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
         auto state_machine = service::strong_consistency::make_state_machine(
                 locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
                 gid, env.local_db(), env.migration_manager().local(),
-                env.get_system_keyspace().local(), storage);
+                env.get_system_keyspace().local(), storage, resize_tracker);
 
         std::vector<raft::log_entry_ptr> batch = {
             make_mutation_entry(schema, raft::term_t(1), raft::index_t(1), 0, 13),
