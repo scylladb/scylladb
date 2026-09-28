@@ -8,6 +8,7 @@
  */
 
 #include "batch_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "raw/batch_statement.hh"
@@ -38,6 +39,10 @@ timeout_for_type(batch_statement::type t) {
     return t == batch_statement::type::COUNTER
             ? &timeout_config::counter_write_timeout
             : &timeout_config::write_timeout;
+}
+
+int64_t batch_statement::get_timestamp(int64_t now, const query_options& options) const {
+    return _attrs->get_timestamp(now, options);
 }
 
 db::timeout_clock::duration batch_statement::get_timeout(const service::client_state& state, const query_options& options) const {
@@ -101,7 +106,7 @@ void batch_statement::validate(query_processor& qp, const service::client_state&
     }
 }
 
-const std::vector<batch_statement::single_statement>& batch_statement::get_statements()
+const std::vector<batch_statement::single_statement>& batch_statement::get_statements() const
 {
     return _statements;
 }
@@ -163,17 +168,21 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
-future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
-        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
+namespace eventual_consistency {
+
+future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& batch,
+        query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
+        bool local, api::timestamp_type now, service::query_state& query_state) {
+    const auto& statements = batch.get_statements();
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     mutation_set_type result;
-    result.reserve(_statements.size());
-    for (size_t i = 0; i != _statements.size(); ++i) {
-        auto&& statement = _statements[i].statement;
+    result.reserve(statements.size());
+    for (size_t i = 0; i != statements.size(); ++i) {
+        auto&& statement = statements[i].statement;
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
-        auto timestamp = _attrs->get_timestamp(now, statement_options);
+        auto timestamp = batch.get_timestamp(now, statement_options);
         modification_spec spec(*statement, statement_options);
         auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
@@ -197,15 +206,14 @@ future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_pro
     co_return vresult;
 }
 
-future<coordinator_result<>> batch_statement::execute_without_conditions(
+future<coordinator_result<>> execute_without_conditions(const batch_statement& batch,
         query_processor& qp,
         utils::chunked_vector<mutation> mutations,
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr tr_state,
         service_permit permit,
-        db::large_data_violation_type* violations) const
-{
+        db::large_data_violation_type* violations) {
     // FIXME: do we need to do this?
 #if 0
     // Extract each collection of cfs from it's IMutation and then lazily concatenate all of them into a single Iterable.
@@ -217,17 +225,17 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
         }
     }));
 #endif
-    verify_batch_size(qp, mutations);
+    batch.verify_batch_size(qp, mutations);
 
     bool mutate_atomic = true;
-    if (_type != type::LOGGED) {
-        _stats.batches_pure_unlogged += 1;
+    if (batch.batch_type() != batch_statement::type::LOGGED) {
+        batch.stats().batches_pure_unlogged += 1;
         mutate_atomic = false;
     } else {
         if (mutations.size() > 1) {
-            _stats.batches_pure_logged += 1;
+            batch.stats().batches_pure_logged += 1;
         } else {
-            _stats.batches_unlogged_from_logged += 1;
+            batch.stats().batches_unlogged_from_logged += 1;
             mutate_atomic = false;
         }
     }
@@ -236,10 +244,10 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
+future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(const batch_statement& batch,
         query_processor& qp,
         const query_options& options,
-        service::query_state& qs) const {
+        service::query_state& qs) {
 
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
@@ -257,9 +265,10 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     computed_function_values cached_fn_calls;
 
-    for (size_t i = 0; i < _statements.size(); ++i) {
+    const auto& statements = batch.get_statements();
+    for (size_t i = 0; i < statements.size(); ++i) {
 
-        modification_statement& statement = *_statements[i].statement;
+        modification_statement& statement = *statements[i].statement;
         const query_options& statement_options = options.for_statement(i);
 
         statement.inc_cql_stats(qs.get_client_state().is_internal());
@@ -282,7 +291,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
     }
 
-    auto cas_shard = service::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
+    auto cas_shard = service::cas_shard(*statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (!cas_shard.this_shard()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls))
@@ -292,8 +301,8 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     auto* request_ptr = request.get();
     return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
-        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([&batch, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
+        auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
         // Surface any coordinator-side large data guardrail soft limit violations
         // detected during the LWT to the client as a CQL warning.
         if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
@@ -301,6 +310,8 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         }
         return result;
     });
+}
+
 }
 
 void batch_statement::validate()
@@ -387,7 +398,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(qp, options, query_state).then([guardrail_state, cl] (auto result) {
+        return eventual_consistency::execute_with_conditions(*this, qp, options, query_state).then([guardrail_state, cl] (auto result) {
             if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
                 result->add_warning(format("Using write consistency level {} listed on the "
                                            "write_consistency_levels_warned is not recommended.", cl));
@@ -402,9 +413,9 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
 
-    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
+    return eventual_consistency::get_mutations(*this, qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
                     permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
+        return eventual_consistency::execute_without_conditions(*this, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
     }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
