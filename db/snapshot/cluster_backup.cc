@@ -11,6 +11,7 @@
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "cluster_backup.hh"
@@ -38,6 +39,7 @@
 extern logging::logger snap_log;
 
 static constexpr auto cluster_backup_task_type = "cluster backup";
+static constexpr auto cluster_clear_snapshot_task_type = "cluster clear snapshot";
 
 template<> 
 struct std::hash<db::snapshot_dc_location> {
@@ -385,6 +387,92 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
     });
 }
 
+
+static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, tasks::task_manager::task::progress& total_progress, abort_source& as) {
+    using namespace db::snapshot;
+
+    snap_log.info("Begin clearing snapshot {}", snapshot_name);
+
+    db::snapshot_table_helper sth(snap_ctl.qp().local());
+    auto snapshot = co_await sth.get_snapshot(snapshot_name, db::consistency_level::QUORUM);
+    if (!snapshot) {
+        throw std::invalid_argument(fmt::format("No snapshot named {} in the snapshot catalog", snapshot_name));
+    }
+
+    auto tables = co_await sth.get_snapshot_tables(snapshot_name, {}, {}, db::consistency_level::QUORUM);
+    auto nodes = co_await sth.get_snapshot_nodes(snapshot_name, {}, {}, db::consistency_level::QUORUM);
+    auto& db = snap_ctl.db().local();
+
+    auto tmptr = snap_ctl.sp().local().shared_token_metadata().get();
+    std::unordered_set<locator::host_id> departed;
+    for (const auto& n : nodes) {
+        if (!tmptr->get_topology().find_node(n.node)) {
+            snap_log.warn("Snapshot {}: node {} is no longer a cluster member, its snapshot references cannot be released",
+                    snapshot_name, n.node);
+            departed.insert(n.node);
+        }
+    }
+
+    total_progress.total = tables.size() * (nodes.size() + 1) + 1;
+
+    for (const auto& t : tables) {
+        if (auto e = as.abort_requested_exception_ptr(); e) {
+            std::rethrow_exception(e);
+        }
+        auto tbl = db.get_tables_metadata().get_table_if_exists(t.table_id);
+        if (!tbl) {
+            // FIXME SCYLLADB-3488: The schema is gone and the storage options as well, so nothing
+            // can name this table's refs in the bucket anymore.
+            // The catalog rows below are still deleted.
+            snap_log.warn("Snapshot {}: table {}.{} no longer exists, its snapshot references cannot be released",
+                    snapshot_name, t.keyspace_name, t.table_name);
+            total_progress.completed += nodes.size() + 1;
+            continue;
+        }
+
+        co_await coroutine::parallel_for_each(nodes, [&] (const db::snapshot_node_entry& node) -> future<> {
+            if (departed.contains(node.node)) {
+                total_progress.completed += 1;
+                co_return;
+            }
+            snap_log.info("Requesting clear of snapshot {} table {}.{} from {}", snapshot_name, t.keyspace_name, t.table_name, node.node);
+            co_await ser::snapshot_backup_rpc_verbs::send_clear_snapshot_sstables(&snap_ctl.ms(), node.node, t.table_id, snapshot_name);
+            total_progress.completed += 1;
+        });
+
+        // In cluster world, a backup is a "promoted" snapshot plus a manifest file.
+        // If the backup is gone, we delete its manifest as well, if it exists, if not, it was
+        // only a snapshot all along.
+        const auto* table_os = std::get_if<data_dictionary::storage_options::object_storage>(&tbl->get_storage_options().value);
+        if (table_os) {
+            auto managed = table_os->location ? std::string(*table_os->location) : std::string(sstables::object_storage_default_prefix);
+            auto client = snap_ctl.sstm().container().local().get_endpoint_client(table_os->endpoint);
+            auto prefix = db::snapshot::snapshot_meta_location(managed, *tbl, snapshot_name);
+            co_await client->delete_object(sstables::object_name(table_os->bucket, prefix, "manifest.json"));
+        }
+        total_progress.completed += 1;
+    }
+
+    std::unordered_set<std::string> datacenters;
+    for (const auto& node : nodes) {
+        datacenters.insert(node.datacenter);
+    }
+    for (const auto& t : tables) {
+        for (const auto& node : nodes) {
+            co_await sth.delete_snapshot_sstables_partition(snapshot_name, t.keyspace_name, t.table_name, node.datacenter, node.rack);
+        }
+        for (const auto& dc : datacenters) {
+            co_await sth.delete_snapshot_tablets_partition(snapshot_name, t.keyspace_name, t.table_name, dc);
+        }
+    }
+    co_await sth.delete_snapshot_metadata(snapshot_name);
+
+    // The commit marker gets deleted last.
+    co_await sth.delete_snapshot_entry(snapshot_name, db::consistency_level::QUORUM);
+    total_progress.completed += 1;
+    snap_log.info("Cleared snapshot {}", snapshot_name);
+}
+
 future<tasks::task_id> 
 db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::unordered_map<sstring, snapshot_dc_location> locations, bool move_files) {
     if (ks_tables.empty()) {
@@ -422,6 +510,76 @@ static future<> mark_sstable_backed_up(db::snapshot_ctl& snap, const std::string
     // overloads.
     std::array entry{e};
     co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, entry, db::consistency_level::QUORUM, 0);
+}
+
+future<tasks::task_id>
+db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name) {
+    if (snapshot_name.empty()) {
+        throw std::invalid_argument("You must supply a snapshot name.");
+    }
+    auto progress = make_lw_shared<tasks::task_manager::task::progress>();
+    tasks::task_manager::task_builder task_builder{std::move(tm), cluster_clear_snapshot_task_type};
+    task_builder.set_scope("cluster")
+                .set_entity(snapshot_name)
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
+                    return make_ready_future<tasks::task_manager::task::progress>(*progress);
+                });
+    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), progress] (tasks::task_manager::task::impl& self) mutable {
+        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, progress, &as = self.get_abort_source()] {
+            return do_cluster_clear_snapshot(ctl, snapshot_name, *progress, as);
+        });
+    });
+    co_return task->id();
+}
+
+future<>
+db::snapshot::clear_sstables(db::snapshot_ctl& snap, table_id table_id, std::string tag) {
+    snap_log.info("Got clear request for snapshot {}, table {}", tag, table_id);
+
+    auto& db = snap.db().local();
+    auto& cf = db.find_column_family(table_id);
+    auto ksname = cf.schema()->ks_name();
+    auto cfname = cf.schema()->cf_name();
+    auto global_table = co_await get_table_on_all_shards(snap.db(), ksname, cfname);
+    auto& storage_options = global_table->get_storage_options();
+
+    if (storage_options.is_local_type()) {
+        co_return co_await snap.clear_snapshot(tag, { ksname }, cfname);
+    }
+
+    // Delete the refs, and when it was the sstable's last claim, the
+    // pinned components and the retained snapshot_owned registry entry gets cleared
+    // as well.
+    // A ref that is kept by another snapshot or by a live sstable, pins
+    // the sstable components.
+    const auto os = std::get<data_dictionary::storage_options::object_storage>(storage_options.value);
+    auto location = snap.sp().local().shared_token_metadata().get()->get_topology().get_location();
+    auto me = snap.sp().local().shared_token_metadata().get()->get_topology().my_host_id();
+    db::snapshot_table_helper sth(snap.qp().local());
+    auto rows = co_await sth.get_snapshot_sstables(tag, ksname, cfname, location.dc, location.rack, db::consistency_level::QUORUM);
+    auto own = rows | std::views::filter([&] (const auto& e) { return e.node == me; })
+            | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
+
+    auto client = snap.sstm().container().local().get_endpoint_client(os.endpoint);
+    auto& manager = db.get_sstables_manager(*cf.schema());
+    auto* registry = manager.has_sstables_registry() ? &manager.sstables_registry() : nullptr;
+
+    co_await seastar::max_concurrent_for_each(own, 16, [&] (const db::snapshot_sstable_entry& e) -> future<> {
+        auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), ksname, cfname);
+        if (!desc) {
+            snap_log.warn("Snapshot '{}' of {}.{}: cannot derive the reference of {} from toc_name '{}', its ref (if any) leaks until healed",
+                    tag, ksname, cfname, e.sstable_id, e.toc_name);
+            co_return;
+        }
+        desc->sid = e.sstable_id;
+        co_await sstables::release_object_storage_snapshot_ref(*client, os, registry, cf.schema()->id(), me, tag, *desc);
+        utils::get_local_injector().inject("cluster_clear_snapshot_release", [] {
+            throw std::runtime_error("cluster_clear_snapshot_release: injected error");
+        });
+    });
 }
 
 future<>
