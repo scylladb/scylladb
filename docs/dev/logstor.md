@@ -141,6 +141,21 @@ mutation sources:
 SELECT * FROM MUTATION_FRAGMENTS(keyspace.table_name) WHERE pk = 1;
 ```
 
+## Measuring Performance
+
+Two tests measure the cost of a logstor operation on one node, at two levels.
+
+**`scylla perf-simple-query --logstor`** measures the whole read and write path - CQL, the
+coordinator, the replica and logstor - against a logstor table. It is the same test that measures an
+sstable backed table, so the baseline is the same command without the flag. Use it for the cost of
+an operation as a workload sees it, and for the two storage engines side by side.
+
+**`test/perf/perf_logstor`** drives a logstor directly - no CQL, no coordinator, no replica - and
+measures the steps of a read and of a write both together and one at a time, so that a change to the
+hot path can be attributed to the step it moved. Its tests, its options, how its steps add up and
+what a run has to get right are in the comment at the top of
+[test/perf/perf_logstor.cc](../../test/perf/perf_logstor.cc).
+
 ## On-Disk Format
 
 ### Files
