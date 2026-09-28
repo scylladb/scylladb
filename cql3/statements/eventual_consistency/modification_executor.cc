@@ -153,7 +153,7 @@ execute_with_condition(const modification_statement& stmt, query_processor& qp, 
     std::optional<locator::tablet_routing_info> tablet_info;
 
     auto&& table = stmt.s->table();
-    if (stmt._may_use_token_aware_routing && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+    if (stmt.may_use_token_aware_routing() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
     }
 
@@ -275,7 +275,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
 
     auto&& table = stmt.s->table();
 
-    if (keys_size_one && stmt._may_use_token_aware_routing) {
+    if (keys_size_one && stmt.may_use_token_aware_routing()) {
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
             // We only return routing information for EXECUTE requests.
             // They will carry a tablet version block; QUERY requests

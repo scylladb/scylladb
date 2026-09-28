@@ -35,7 +35,12 @@ class operation;
 namespace statements {
 
 
-namespace raw { class modification_statement; }
+namespace raw {
+class modification_statement;
+class update_statement;
+class delete_statement;
+class insert_statement;
+}
 
 class modification_executor;
 
@@ -145,7 +150,6 @@ public:
 
     bool is_conditional() const override;
 
-public:
     void analyze_condition(expr::expression cond);
 
     void set_if_not_exist_condition();
@@ -261,6 +265,9 @@ public:
     const modification_executor& executor() const { return *_executor; }
     void set_executor(const modification_executor& e) { _executor = &e; }
 
+    // Whether a client can route the request by token.
+    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
+
     // True if this modification commits through Raft rather than storage_proxy.
     // The native protocol handler asks, because a batch may not mix the two.
     bool is_strongly_consistent() const;
@@ -281,7 +288,11 @@ protected:
 private:
     const modification_executor* _executor;
 
+    // Prepared statements are shared, so only prepare may build one.
     friend class raw::modification_statement;
+    friend class raw::update_statement;
+    friend class raw::delete_statement;
+    friend class raw::insert_statement;
 };
 
 }
