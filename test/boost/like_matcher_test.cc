@@ -186,6 +186,70 @@ BOOST_AUTO_TEST_CASE(test_percent_multiple) {
     BOOST_TEST(!matches(bookends, u8"dark"));
 }
 
+BOOST_AUTO_TEST_CASE(test_percent_only) {
+    for (auto p : {u8"%", u8"%%", u8"%%%"}) {
+        auto m = matcher(p);
+        BOOST_TEST(matches(m, u8""));
+        BOOST_TEST(matches(m, u8"a"));
+        BOOST_TEST(matches(m, u8"%"));
+        BOOST_TEST(matches(m, u8"ШШШ"));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_percent_prefix_suffix_overlap) {
+    auto m = matcher(u8"ab%ba");
+    BOOST_TEST(matches(m, u8"abba"));
+    BOOST_TEST(matches(m, u8"abxba"));
+    BOOST_TEST(!matches(m, u8"aba"));
+    BOOST_TEST(!matches(m, u8"ab"));
+    BOOST_TEST(!matches(m, u8"ba"));
+
+    auto same = matcher(u8"aa%aa");
+    BOOST_TEST(matches(same, u8"aaaa"));
+    BOOST_TEST(matches(same, u8"aaaaa"));
+    BOOST_TEST(!matches(same, u8"aaa"));
+}
+
+BOOST_AUTO_TEST_CASE(test_percent_middle_segments) {
+    auto m = matcher(u8"%ab%ab%");
+    BOOST_TEST(matches(m, u8"abab"));
+    BOOST_TEST(matches(m, u8"xabyabz"));
+    BOOST_TEST(!matches(m, u8"aba"));
+    BOOST_TEST(!matches(m, u8"ab"));
+
+    // Middle segments must not overlap the prefix, the suffix, or each other.
+    auto anchored = matcher(u8"a%a%a%a");
+    BOOST_TEST(matches(anchored, u8"aaaa"));
+    BOOST_TEST(matches(anchored, u8"abababa"));
+    BOOST_TEST(!matches(anchored, u8"aaa"));
+    BOOST_TEST(!matches(anchored, u8"abab"));
+
+    auto ordered = matcher(u8"%x%y%");
+    BOOST_TEST(matches(ordered, u8"xy"));
+    BOOST_TEST(matches(ordered, u8"yxy"));
+    BOOST_TEST(!matches(ordered, u8"yx"));
+
+    auto empty_segments = matcher(u8"%%a%%%b%%");
+    BOOST_TEST(matches(empty_segments, u8"ab"));
+    BOOST_TEST(matches(empty_segments, u8"_a_b_"));
+    BOOST_TEST(!matches(empty_segments, u8"ba"));
+}
+
+BOOST_AUTO_TEST_CASE(test_percent_multibyte) {
+    auto prefix = matcher(u8"ШЩ%");
+    BOOST_TEST(matches(prefix, u8"ШЩ"));
+    BOOST_TEST(matches(prefix, u8"ШЩЪ"));
+    BOOST_TEST(!matches(prefix, u8"Ш"));
+
+    auto suffix = matcher(u8"%ЩЪ");
+    BOOST_TEST(matches(suffix, u8"ШЩЪ"));
+    BOOST_TEST(!matches(suffix, u8"ЩШЪ"));
+
+    auto contains = matcher(u8"%Щ%");
+    BOOST_TEST(matches(contains, u8"ШЩЪ"));
+    BOOST_TEST(!matches(contains, u8"ШЪ"));
+}
+
 BOOST_AUTO_TEST_CASE(test_escape_underscore) {
     auto last = matcher(u8R"(a\_)");
     BOOST_TEST(matches(last, u8"a_"));
@@ -442,4 +506,11 @@ BOOST_AUTO_TEST_CASE(test_reset) {
     m.reset(bytes(reinterpret_cast<const char*>(u8"alpha")));
     BOOST_TEST(matches(m, u8"alpha"));
     BOOST_TEST(!matches(m, u8"omega"));
+    // Switch between the regex and non-regex implementations.
+    m.reset(bytes(reinterpret_cast<const char*>(u8"a_p%")));
+    BOOST_TEST(matches(m, u8"alpha"));
+    BOOST_TEST(!matches(m, u8"omega"));
+    m.reset(bytes(reinterpret_cast<const char*>(u8"%meg%")));
+    BOOST_TEST(!matches(m, u8"alpha"));
+    BOOST_TEST(matches(m, u8"omega"));
 }
