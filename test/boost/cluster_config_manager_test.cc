@@ -227,9 +227,13 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_text_value_that_would_bre
         BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, std::string(4097, 'a')));
 
         BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_text_option = 'a plain value'").get());
-        BOOST_REQUIRE_THROW(
+        // Match on the message: it is formatted from a std::string_view and an sstring, and
+        // the wrong format() overload renders the sstring as a list of characters.
+        BOOST_REQUIRE_EXCEPTION(
             e.execute_cql("ALTER CLUSTER WITH test_text_option = 'two\nlines'").get(),
-            exceptions::invalid_request_exception);
+            exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find("Invalid value for cluster config 'test_text_option': must not contain a line break") != std::string_view::npos;
+        });
         BOOST_REQUIRE_THROW(
             e.execute_cql("ALTER CLUSTER WITH test_text_option = 'ends the block */ here'").get(),
             exceptions::invalid_request_exception);
