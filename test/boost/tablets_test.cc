@@ -30,6 +30,7 @@
 #include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
+#include "db/cluster_config_manager.hh"
 #include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
@@ -7707,6 +7708,165 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
         bool once = false;
         rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
         BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+    }, std::move(cfg_in)).get();
+}
+
+// Runs the repair scheduler against one tablet replicated on two nodes and reports whether
+// the plan scheduled an auto repair for it. The tablet map is rebuilt before each run with
+// the given last repair time, so runs are independent of each other.
+class auto_repair_scheduling_checker {
+    cql_test_env& _e;
+    topology_builder _topo;
+    host_id _host1;
+    host_id _host2;
+    sstring _ks_name;
+    table_id _table;
+    tablet_id _tablet{0};
+public:
+    explicit auto_repair_scheduling_checker(cql_test_env& e)
+        : _e(e)
+        , _topo(e)
+    {
+        unsigned shard_count = 1;
+        auto dc1 = _topo.dc();
+        _host1 = _topo.add_node(node_state::normal, shard_count);
+        _topo.start_new_rack();
+        _host2 = _topo.add_node(node_state::normal, shard_count);
+        _ks_name = add_keyspace(_e, {{dc1, 2}}, 1);
+        _table = add_table(_e, _ks_name).get();
+    }
+
+    // The table name as a quoted CQL identifier, for ALTER TABLE.
+    sstring table_ref() const {
+        return format("{}.\"{}\"", _ks_name, _e.local_db().find_column_family(_table).schema()->cf_name());
+    }
+
+    const sstring& ks_name() const {
+        return _ks_name;
+    }
+
+    // Makes the cluster config manager pick up every ALTER issued so far.
+    void refresh_config() {
+        _e.cluster_config_manager().local().refresh().get();
+    }
+
+    bool scheduled(db_clock::time_point last_repair_time = db_clock::time_point()) {
+        mutate_tablets(_e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            _tablet = tid;
+            tablet_info ti{
+                tablet_replica_set {
+                    tablet_replica{_host1, 0},
+                    tablet_replica{_host2, 0},
+                }
+            };
+            ti.repair_time = last_repair_time;
+            tmap.set_tablet(tid, std::move(ti));
+            tmeta.set_tablet_map(_table, std::move(tmap));
+            co_return;
+        });
+        bool once = false;
+        rebalance_tablets(_e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+        auto& tmap = _e.shared_token_metadata().local().get()->tablets().get_tablet_map(_table);
+        auto* trinfo = tmap.get_tablet_transition_info(_tablet);
+        return trinfo && trinfo->transition == tablet_transition_kind::repair;
+    }
+};
+
+// auto_repair_enabled set at cluster, keyspace or table scope decides whether a tablet is
+// scheduled for auto repair, with the narrower scope winning, and removing every override
+// falls back to auto_repair_enabled_default from the yaml config.
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_enabled_cluster_config) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(false);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        auto_repair_scheduling_checker checker(e);
+
+        BOOST_REQUIRE(!checker.scheduled());
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
+        checker.refresh_config();
+        BOOST_REQUIRE(checker.scheduled());
+
+        e.execute_cql(format("ALTER KEYSPACE {} WITH auto_repair_enabled = false", checker.ks_name())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled());
+
+        e.execute_cql(format("ALTER TABLE {} WITH auto_repair_enabled = true", checker.table_ref())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(checker.scheduled());
+
+        e.execute_cql(format("ALTER TABLE {} WITH auto_repair_enabled = null", checker.table_ref())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled());
+
+        e.execute_cql(format("ALTER KEYSPACE {} WITH auto_repair_enabled = null", checker.ks_name())).get();
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = null").get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled());
+    }, std::move(cfg_in)).get();
+}
+
+// A stored auto_repair_enabled override takes precedence over a yaml default that enables
+// auto repair.
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_cluster_config_overrides_yaml_default) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        auto_repair_scheduling_checker checker(e);
+
+        BOOST_REQUIRE(checker.scheduled());
+
+        e.execute_cql(format("ALTER KEYSPACE {} WITH auto_repair_enabled = false", checker.ks_name())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled());
+
+        e.execute_cql(format("ALTER KEYSPACE {} WITH auto_repair_enabled = null", checker.ks_name())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(checker.scheduled());
+    }, std::move(cfg_in)).get();
+}
+
+// auto_repair_threshold_in_seconds from cluster config replaces auto_repair_threshold_default_in_seconds
+// when deciding whether a tablet repaired recently is due again, and 0 disables the time-based
+// trigger even for a tablet that was never repaired. The yaml threshold is set above the
+// registered default so that falling back to it is distinguishable from substituting the
+// default.
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_threshold_cluster_config) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(100000);
+    do_with_cql_env_thread([] (auto& e) {
+        auto_repair_scheduling_checker checker(e);
+        auto repaired_10s_ago = db_clock::now() - std::chrono::seconds(10);
+        auto never_repaired = db_clock::time_point();
+
+        BOOST_REQUIRE(!checker.scheduled(repaired_10s_ago));
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 1").get();
+        checker.refresh_config();
+        BOOST_REQUIRE(checker.scheduled(repaired_10s_ago));
+
+        e.execute_cql(format("ALTER TABLE {} WITH auto_repair_threshold_in_seconds = 100000", checker.table_ref())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled(repaired_10s_ago));
+
+        e.execute_cql(format("ALTER TABLE {} WITH auto_repair_threshold_in_seconds = 0", checker.table_ref())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled(never_repaired));
+
+        e.execute_cql(format("ALTER TABLE {} WITH auto_repair_threshold_in_seconds = null", checker.table_ref())).get();
+        checker.refresh_config();
+        BOOST_REQUIRE(checker.scheduled(repaired_10s_ago));
+
+        // Due under the registered default of 86400 seconds, not under the yaml value.
+        auto repaired_90000s_ago = db_clock::now() - std::chrono::seconds(90000);
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = null").get();
+        checker.refresh_config();
+        BOOST_REQUIRE(!checker.scheduled(repaired_90000s_ago));
     }, std::move(cfg_in)).get();
 }
 
