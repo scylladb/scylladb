@@ -96,7 +96,11 @@ public:
     // The group's entries in the shared commitlog cannot be deleted; what makes them inert
     // is the absence of the state this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
-    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    //
+    // The raft_groups row is deleted above `min_timestamp` as well as above this node's clock: the
+    // resize markers in it are stamped by the clock of the group's leader, which may be ahead.
+    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+            api::timestamp_type min_timestamp = api::min_timestamp);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new

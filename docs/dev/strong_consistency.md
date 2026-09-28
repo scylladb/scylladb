@@ -266,3 +266,11 @@ mutation could therefore not serve all of them, so `raft_command` is a variant
 the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
 so every replica and every replay writes the same cell. The kind of resize in progress comes from
 the tablet metadata, not from the markers.
+
+`service::strong_consistency::raft_resize_tracker` holds, per shard, which markers the parent of
+every resize the replica takes part in has applied. It is reloaded from `system.raft_groups`
+before the parent's Raft server is created: after a restart the parent's committed entries are
+applied by commitlog replay rather than by `state_machine::apply()`, so nothing else would record
+the markers. The state is created when the replica learns of the resize, from the tablet
+metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
+server.

@@ -36,6 +36,7 @@ class migration_manager;
 namespace service::strong_consistency {
 
 class raft_server;
+class raft_resize_tracker;
 
 // What separates a raft group's live configuration from the one its tablet's current
 // migration stage implies. Defined in groups_manager.cc.
@@ -175,6 +176,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::feature_service& _features;
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
+    raft_resize_tracker& _resize_tracker;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
@@ -187,7 +189,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
-    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
+    // Also erases the group's persisted raft state if `erase_persisted`.
+    void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state, bool erase_persisted = false);
 
     void schedule_raft_groups_deletion(bool all);
 
@@ -255,7 +258,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
         cql3::query_processor& qp, replica::database& _db, service::migration_manager& mm, db::system_keyspace& sys_ks,
-        gms::feature_service& features, gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer);
+        gms::feature_service& features, gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer,
+        sharded<raft_resize_tracker>& resize_tracker);
 
     // Called whenever a new token_metadata is published on this shard.
     // Starts raft::server instances for all strongly consistent tablets now
