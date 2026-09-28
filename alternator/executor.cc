@@ -374,8 +374,12 @@ static schema_ptr get_table_for_write(service::storage_proxy& proxy, const rjson
     return find_table(proxy, table_name);
 }
 
+rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name) {
+    return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", keyspace_name, table_name));
+}
+
 static rjson::value generate_arn_for_table(const schema& schema) {
-    return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
+    return generate_arn_for_table(schema.ks_name(), schema.cf_name());
 }
 
 static rjson::value generate_arn_for_index(const schema& schema, std::string_view index_name) {

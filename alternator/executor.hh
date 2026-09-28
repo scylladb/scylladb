@@ -208,6 +208,9 @@ public:
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);
 };
 
+// The ARN of a table, also for one which is not created yet.
+rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name);
+
 // returns table creation time in seconds since epoch for `db_clock`
 double get_table_creation_time(const schema &schema);
 
