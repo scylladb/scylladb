@@ -37,8 +37,14 @@ namespace statements {
 
 namespace raw { class modification_statement; }
 
+class modification_executor;
+
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
+ *
+ * Knows what to write and deliberately not how to commit it. The
+ * modification_executor below does that, chosen when the statement is prepared
+ * from the keyspace it addresses.
  */
 class modification_statement : public cql_statement {
 public:
@@ -197,6 +203,10 @@ public:
     // returns a result set).
     const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
 
+    // The result set metadata a conditional modification answers with, for a
+    // modification_executor building that result set.
+    const seastar::shared_ptr<metadata>& cas_result_metadata() const { return _metadata; }
+
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
     lw_shared_ptr<query::read_command> read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const;
@@ -245,13 +255,6 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
-private:
-    future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const;
-
-    future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
-
 public:
     /**
      * Convert statement into a list of mutations to apply on the server
@@ -265,6 +268,11 @@ public:
      */
     future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, modification_spec spec) const;
 
+    // How this modification reaches storage. Set when the statement is prepared
+    // and never null afterwards; see cql3::statements::modification_executor.
+    const modification_executor& executor() const { return *_executor; }
+    void set_executor(const modification_executor& e) { _executor = &e; }
+
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
@@ -277,6 +285,9 @@ protected:
      * @throws InvalidRequestException
      */
     void reject_in_relations_with_conditions(bool key_is_in_relation, bool clustering_key_has_IN) const;
+
+private:
+    const modification_executor* _executor;
 
     friend class raw::modification_statement;
 };
