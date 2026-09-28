@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 #include <fmt/ranges.h>
 
 #include "api/api.hh"
@@ -18,6 +19,7 @@
 #include "compaction/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "replica/database.hh"
+#include "service/storage_service.hh"
 
 using namespace seastar::httpd;
 
@@ -59,6 +61,27 @@ static future<tasks::task_manager::task_ptr> upgrade_sstables(sharded<replica::d
 
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
     return compaction_module.start_upgrade_sstables_keyspace_compaction(db, std::move(keyspace), std::move(table_infos), exclude_current_version);
+}
+
+static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
+    auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+    auto& ks = db.local().find_keyspace(keyspace);
+    const auto& rs = ks.get_replication_strategy();
+    if (rs.is_local() || !rs.is_vnode_based()) {
+        auto reason = rs.is_local() ? "require" : "support";
+        apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
+        co_return nullptr;
+    }
+    apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
+    const auto my_id = db.local().get_token_metadata().get_my_id();
+    if (!db.local().vnodes_cleanup_allowed() || ks.get_static_effective_replication_map()->has_pending_ranges(my_id)) {
+        auto msg = "Can not perform cleanup operation when topology changes";
+        apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
+        co_await coroutine::return_exception(std::runtime_error(msg));
+    }
+
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
@@ -141,6 +164,22 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         co_return json::json_return_type(static_cast<int>(scrub_status::successful));
     });
 
+    t::force_keyspace_cleanup_async.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        tasks::task_id id = tasks::task_id::create_null_id();
+        auto task = co_await force_keyspace_cleanup(ctx, db, std::move(req));
+        if (task) {
+            id = task->get_status().id;
+        }
+        co_return json::json_return_type(id.to_sstring());
+    });
+    ss::force_keyspace_cleanup.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto task = co_await force_keyspace_cleanup(ctx, db, std::move(req));
+        if (task) {
+            co_await task->done();
+        }
+        co_return json::json_return_type(0);
+    });
+
     ss::force_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto flush = get_query_param<bool>(*req, "flush_memtables", true);
         auto consider_only_existing_data = get_query_param<bool>(*req, "consider_only_existing_data");
@@ -166,6 +205,8 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     ss::upgrade_sstables.unset(r);
     t::scrub_async.unset(r);
     ss::scrub.unset(r);
+    t::force_keyspace_cleanup_async.unset(r);
+    ss::force_keyspace_cleanup.unset(r);
     ss::force_compaction.unset(r);
 }
 
