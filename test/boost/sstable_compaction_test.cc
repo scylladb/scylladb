@@ -1018,6 +1018,42 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
   });
 }
 
+// The compaction manager closes the gates of the compaction states as soon as the node is asked
+// to stop, while other services still run: e.g. the group0 state machine can be truncating a
+// table for a schema change, and so disable its compaction. A stopped manager runs no compaction,
+// so disabling it must succeed, rather than fail with a closed gate: the raft applier stops the
+// raft instance on an error, and a drop which fails midway leaves its remaining tables unstopped.
+// Reproducer for SCYLLADB-4647 and SCYLLADB-4993.
+SEASTAR_TEST_CASE(disable_compaction_after_compaction_manager_stop_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto cf = env.make_table_for_tests(table_for_tests::make_default_schema());
+        auto& cm = env.test_compaction_manager().get_compaction_manager();
+        auto& view = cf.as_table_state();
+
+        // The gate of the view used here has no holders, it is closed as soon as
+        // the manager gets to closing the gates.
+        auto stop_cm = cm.stop();
+        auto stop = defer([&] noexcept {
+            cf.stop().get();
+            stop_cm.get();
+        });
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return env.test_compaction_manager().is_compaction_state_gate_closed(view);
+        }));
+
+        cm.stop_and_disable_compaction(view).get();
+        // Callers which check that compaction is disabled, e.g. truncate, must see it as such.
+        BOOST_REQUIRE(cm.compaction_disabled(view));
+        bool ran = false;
+        cm.run_with_compaction_disabled(view, [&ran] {
+            ran = true;
+            return make_ready_future<>();
+        }).get();
+        BOOST_REQUIRE(ran);
+    });
+}
+
 SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
   return test_env::do_with_async([] (test_env& env) {
     auto cf = env.make_table_for_tests();
