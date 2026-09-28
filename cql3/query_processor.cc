@@ -27,6 +27,7 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
@@ -1081,7 +1082,7 @@ future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
     if (mod_stmt->requires_read()) {
         on_internal_error(log, "Read-modified-write queries forbidden in get_mutations_internal");
     }
-    co_return co_await mod_stmt->get_mutations(*this, opts, timeout, true, timestamp, query_state, std::move(spec));
+    co_return co_await statements::eventual_consistency::get_mutations(*mod_stmt, *this, opts, timeout, true, timestamp, query_state, std::move(spec));
 }
 
 future<::shared_ptr<untyped_result_set>>
