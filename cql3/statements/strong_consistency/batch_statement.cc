@@ -6,20 +6,45 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "cql3/statements/modification_statement.hh"
 #include "batch_statement.hh"
 
-#include "db/timeout_clock.hh"
-#include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
-#include "service/strong_consistency/coordinator.hh"
-#include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/strong_consistency/modification_executor.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "db/timeout_clock.hh"
 #include "exceptions/exceptions.hh"
+#include "service/strong_consistency/coordinator.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3::statements::strong_consistency {
 
 static logging::logger logger("sc_batch_statement");
+
+using result_message = cql_transport::messages::result_message;
+
+void batch_statement::validate() const {
+    if (_type == type::COUNTER) {
+        throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    }
+
+    if (_attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
+    }
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
+    }
+
+    schema_ptr batch_schema;
+    for (const auto& s: _statements) {
+        const auto& stmt = *s.statement;
+        if (!batch_schema) {
+            batch_schema = stmt.s;
+        } else if (batch_schema != stmt.s) {
+            throw exceptions::invalid_request_exception("All statements in a strongly consistent batch must target the same table");
+        }
+    }
+}
 
 batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
     : cql_statement(&timeout_config::write_timeout)
@@ -35,8 +60,6 @@ batch_statement::batch_statement(type type_, std::vector<single_statement> state
     : batch_statement(-1, type_, std::move(statements), std::move(attrs))
 {
 }
-
-using result_message = cql_transport::messages::result_message;
 
 future<shared_ptr<result_message>> batch_statement::execute(query_processor& qp, service::query_state& qs,
     const query_options& options, std::optional<service::group0_guard> guard) const
@@ -134,29 +157,6 @@ uint32_t batch_statement::get_bound_terms() const {
 
 bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
-}
-
-void batch_statement::validate() const {
-    if (_type == type::COUNTER) {
-        throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
-    }
-
-    if (_attrs->is_time_to_live_set()) {
-        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
-    }
-    if (_attrs->is_timestamp_set()) {
-        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
-    }
-
-    schema_ptr batch_schema;
-    for (const auto& s: _statements) {
-        const auto& stmt = *s.statement;
-        if (!batch_schema) {
-            batch_schema = stmt.s;
-        } else if (batch_schema != stmt.s) {
-            throw exceptions::invalid_request_exception("All statements in a strongly consistent batch must target the same table");
-        }
-    }
 }
 
 void batch_statement::validate(query_processor& qp, const service::client_state& state) const {
