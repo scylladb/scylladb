@@ -54,8 +54,8 @@ class modification_executor;
 class modification_statement : public cql_statement {
 public:
     const statement_type type;
-    bool _may_use_token_aware_routing;
 private:
+    bool _may_use_token_aware_routing;
     const uint32_t _bound_terms;
     // If we have operation on list entries, such as adding or
     // removing an entry, the modification statement must prefetch
@@ -144,19 +144,11 @@ public:
 
     bool should_reclassify_control_connection() const override;
 
-    void add_operation(std::unique_ptr<operation> op);
-
     void inc_cql_stats(bool is_internal) const;
 
     bool is_conditional() const override;
 
-    void analyze_condition(expr::expression cond);
-
-    void set_if_not_exist_condition();
-
     bool has_if_not_exist_condition() const;
-
-    void set_if_exist_condition();
 
     bool has_if_exist_condition() const;
 
@@ -164,18 +156,9 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
-    /// row or about a clustering row.  Must run before the checks that read
-    /// applies_only_to_static_columns(), which this can change.
-    void classify_exists_condition(bool restricts_clustering_columns);
-
     /// Checks that the primary key the statement names has no null values, throwing
     /// invalid_request_exception otherwise.
     virtual void validate_primary_key(const query_options& options) const = 0;
-
-    // CAS statement returns a result set. Prepare result set metadata
-    // so that get_result_metadata() returns a meaningful value.
-    void build_cas_result_set_metadata();
 
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const = 0;
@@ -263,7 +246,6 @@ public:
     // How this modification reaches storage. Set when the statement is prepared
     // and never null afterwards; see cql3::statements::modification_executor.
     const modification_executor& executor() const { return *_executor; }
-    void set_executor(const modification_executor& e) { _executor = &e; }
 
     // Whether a client can route the request by token.
     bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
@@ -285,6 +267,11 @@ protected:
      */
     void reject_in_relations_with_conditions(bool key_is_in_relation, bool clustering_key_has_IN) const;
 
+    /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
+    /// row or about a clustering row.  Must run before the checks that read
+    /// applies_only_to_static_columns(), which this can change.
+    void classify_exists_condition(bool restricts_clustering_columns);
+
 private:
     const modification_executor* _executor;
 
@@ -293,6 +280,20 @@ private:
     friend class raw::update_statement;
     friend class raw::delete_statement;
     friend class raw::insert_statement;
+
+    void add_operation(std::unique_ptr<operation> op);
+
+    void analyze_condition(expr::expression cond);
+
+    void set_if_not_exist_condition();
+
+    void set_if_exist_condition();
+
+    // CAS statement returns a result set. Prepare result set metadata
+    // so that get_result_metadata() returns a meaningful value.
+    void build_cas_result_set_metadata();
+
+    void set_executor(const modification_executor& e) { _executor = &e; }
 };
 
 }
