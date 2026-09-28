@@ -177,6 +177,42 @@ execute_with_condition(const modification_statement& stmt, query_processor& qp, 
 
 } // namespace
 
+future<utils::chunked_vector<mutation>>
+get_mutations(const modification_statement& stmt, query_processor& qp, const query_options& options,
+        db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs,
+        modification_spec&& spec) {
+    auto cl = options.get_consistency();
+    auto f = make_ready_future<update_parameters::prefetch_data>(stmt.s);
+
+    if (stmt.is_counter()) {
+        db::validate_counter_for_write(*stmt.s, cl);
+    } else {
+        db::validate_for_write(cl);
+    }
+
+    if (stmt.requires_read()) {
+        lw_shared_ptr<query::read_command> cmd = stmt.read_command(qp, spec.ranges, cl);
+        // FIXME: ignoring "local"
+        f = qp.proxy().query(stmt.s, cmd, dht::partition_range_vector(spec.keys), cl,
+                {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
+
+                [&stmt, cmd] (auto cqr) {
+
+            return update_parameters::build_prefetch_data(stmt.s, *cqr.query_result, cmd->slice);
+        });
+    }
+
+    return f.then([&stmt, spec = std::move(spec), &options, now] (auto rows) {
+
+        update_parameters params(stmt.s, options, stmt.get_timestamp(now, options),
+                stmt.get_time_to_live(options), std::move(rows));
+
+        utils::chunked_vector<mutation> mutations = stmt.apply_updates(spec, params);
+
+        return make_ready_future<utils::chunked_vector<mutation>>(std::move(mutations));
+    });
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_executor::commit(const modification_statement& stmt, query_processor& qp, service::query_state& qs,
         const query_options& options) const {
