@@ -3718,7 +3718,9 @@ void storage_proxy::update_fence_version(locator::token_metadata::version_t fenc
         _stale_pending_writes = when_all_succeed(std::move(futures));
     }
 
-    slogger.info("update_fence_version: new fence_version {} is set, prev fence_version {}, pending stale writes {}",
+    // Runs on every shard per barrier; pending stale writes are the signal worth info on any shard.
+    const auto level = this_shard_id() == 0 || stale_writes_count > 0 ? logging::log_level::info : logging::log_level::debug;
+    slogger.log(level, "update_fence_version: new fence_version {} is set, prev fence_version {}, pending stale writes {}",
         fence_version, prev, stale_writes_count);
 }
 
