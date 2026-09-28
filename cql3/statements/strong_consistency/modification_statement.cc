@@ -16,6 +16,7 @@
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/error_injection.hh"
+#include "cql3/statements/strong_consistency/modification_executor.hh"
 
 namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
@@ -35,42 +36,38 @@ future<shared_ptr<result_message>> modification_statement::execute(query_process
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<result_message>>);
 }
 
-mutation modification_statement::get_mutation(const query_options& options, api::timestamp_type ts,
-        base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const {
-    const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
-    const auto ttl = _statement->get_time_to_live(options);
-    const auto params = update_parameters(_statement->s, options, ts, ttl, prefetch_data);
-    // Recomputes the caller's keys; a later patch builds the spec only once.
-    const modification_spec spec(*_statement, options);
-    auto muts = _statement->apply_updates(spec, params);
+mutation get_mutation(const cql3::statements::modification_statement& stmt, const query_options& options,
+        api::timestamp_type ts, const modification_spec& spec) {
+    const auto prefetch_data = update_parameters::prefetch_data(stmt.s);
+    const auto ttl = stmt.get_time_to_live(options);
+    const auto params = update_parameters(stmt.s, options, ts, ttl, prefetch_data);
+    auto muts = stmt.apply_updates(spec, params);
     if (muts.size() != 1) {
         on_internal_error(logger, ::format("statement '{}' has unexpected number of mutations {}",
-            raw_cql_statement.linearize(), muts.size()));
+            stmt.raw_cql_statement.linearize(), muts.size()));
     }
     return std::move(*muts.begin());
 }
 
-future<shared_ptr<result_message>> modification_statement::execute_without_checking_exception_message(
-        query_processor& qp, service::query_state& qs, const query_options& options,
-        std::optional<service::group0_guard> guard) const
-{
+future<::shared_ptr<result_message>>
+modification_executor::commit(const cql3::statements::modification_statement& stmt, query_processor& qp, service::query_state& qs,
+        const query_options& options) const {
     validate_write_consistency_level(options.get_consistency());
-    _statement->validate_primary_key(options);
+    stmt.validate_primary_key(options);
 
-    auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
-    auto json_cache = _statement->maybe_prepare_json_cache(options);
-    const auto keys = _statement->build_partition_keys(options, json_cache);
-    if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
+    auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
+    const modification_spec spec(stmt, options);
+    if (spec.keys.size() != 1 || !query::is_single_partition(spec.keys[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
     }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
-    const auto token = keys[0].start()->value().token();
+    const auto token = spec.keys[0].start()->value().token();
 
-    auto mutate_result = co_await coordinator.get().mutate(_statement->s,
+    auto mutate_result = co_await coordinator.get().mutate(stmt.s,
         token,
         [&](api::timestamp_type ts) {
-            return get_mutation(options, ts, json_cache, keys);
+            return get_mutation(stmt, options, ts, spec);
         }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));
 
     using namespace service::strong_consistency;
@@ -87,6 +84,18 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         result->add_tablet_info_v2(std::move(*routing_info));
     }
     co_return std::move(result);
+}
+
+const modification_executor& modification_executor::instance() {
+    static const modification_executor the_instance;
+    return the_instance;
+}
+
+future<shared_ptr<result_message>> modification_statement::execute_without_checking_exception_message(
+        query_processor& qp, service::query_state& qs, const query_options& options,
+        std::optional<service::group0_guard> guard) const
+{
+    return modification_executor::instance().commit(*_statement, qp, qs, options);
 }
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {

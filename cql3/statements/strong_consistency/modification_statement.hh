@@ -37,9 +37,6 @@ public:
         service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const override;
 
-    mutation get_mutation(const query_options& options, api::timestamp_type ts,
-            base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const;
-
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     void validate(query_processor& qp, const service::client_state& state) const override;
