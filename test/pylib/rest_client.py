@@ -129,9 +129,11 @@ class RESTClient(metaclass=ABCMeta):
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
                      port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                     json: Optional[Mapping] = None, timeout: Optional[float] = None) -> None:
-        await self._fetch("DELETE", resource_uri, host = host, port = port, params = params,
-                          json = json, timeout = timeout)
+                     json: Optional[Mapping] = None, response_type: Optional[str] = None,
+                     timeout: Optional[float] = None) -> Any:
+        ret = await self._fetch("DELETE", resource_uri, response_type = response_type, host = host,
+                                port = port, params = params, json = json, timeout = timeout)
+        return ret
 
 
 class TCPRESTClient(RESTClient):
@@ -506,6 +508,11 @@ class ScyllaRESTAPIClient:
         if tables:
             params['table'] = ','.join(tables)
         return await self.client.post_json("/storage_service/tablets/backup", host=node_ip, params=params, json=locations)
+
+    async def clear_cluster_snapshot(self, node_ip: str, tag: str) -> str:
+        """Clear a cluster snapshot; returns the task id"""
+        return await self.client.delete("/storage_service/tablets/snapshots", response_type="json",
+                                        host=node_ip, params={"tag": tag})
 
     async def backup_cluster_snapshot(self, node_ip: str, ks: str, snapshot: str, datacenter: str, endpoint: str, bucket: str, prefix: str, tables: list[str] = None) -> str:
         """Backup cluster snapshot"""
