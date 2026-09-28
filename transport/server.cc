@@ -10,8 +10,6 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/strong_consistency/batch_executor.hh"
-#include "cql3/statements/eventual_consistency/batch_executor.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
@@ -1960,17 +1958,14 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     size_t batch_size = 0;
-    std::vector<cql3::statements::batch_statement::single_statement> modifications; // used only for EC batches
-    std::vector<cql3::statements::batch_statement::single_statement> sc_modifications; // used only for SC batches
+    std::vector<cql3::statements::batch_statement::single_statement> modifications;
     std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> values;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
 
     modifications.reserve(n.assume_value());
-    sc_modifications.reserve(n.assume_value());
     batch_audit_infos.reserve(n.assume_value());
     values.reserve(n.assume_value());
-    bool is_sc = false;
 
     if (init_trace && trace_state) {
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
@@ -2033,10 +2028,6 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         if (!modif_statement_ptr) {
             return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
-        // Strongly and eventually consistent modifications still take separate
-        // batch paths here; a later patch unifies them.
-        const bool statement_is_sc = modif_statement_ptr->is_strongly_consistent();
-        is_sc |= statement_is_sc;
         if (init_trace && trace_state) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
@@ -2045,11 +2036,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             batch_audit_infos.emplace_back(*inner_ai);
         }
 
-        if (statement_is_sc) {
-            sc_modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
-        } else {
-            modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
-        }
+        modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
         ++batch_size;
 
         std::vector<cql3::raw_value_view> tmp;
@@ -2094,18 +2081,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     if (ai) {
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
-    ::shared_ptr<cql3::cql_statement> statement;
-    if (is_sc) {
-        if (sc_modifications.size() != batch_size) {
-            return make_exception_future<cql_server::process_fn_return_type>(
-                exceptions::invalid_request_exception("Cannot mix strongly consistent and eventually consistent statements in a batch"));
-        }
-        statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(sc_modifications), cql3::attributes::none(), qp.local().get_cql_stats(),
-                cql3::statements::strong_consistency::batch_executor::instance());
-    } else {
-        statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats(),
-                cql3::statements::eventual_consistency::batch_executor::instance());
-    }
+    ::shared_ptr<cql3::cql_statement> statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     statement->set_audit_info(std::move(ai));
 
     auto execute_fut = reclassifying_control_connection_needs_user_service_level(*statement, query_state)
