@@ -8,6 +8,9 @@
 
 #include "replica/logstor/ondisk.hh"
 
+#include <stdexcept>
+#include <fmt/format.h>
+
 #include "utils/crc.hh"
 
 namespace replica::logstor::ondisk {
@@ -43,13 +46,9 @@ bool validate_header(const buffer_header& bh) {
     return bh.calculate_crc() == bh.crc;
 }
 
-bool validate_record_frame_header(const record_frame_header& frame_header) {
-    // A record always carries an encoded value, so a zero value_size cannot come from a record
-    // this code wrote. It is what a scan sees in the zero-filled tail of a torn
-    // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
-    // zero-length records. The key bound rejects a corrupt header before its key_size is
-    // trusted to size a read or an allocation.
-    return frame_header.value_size != 0 && frame_header.key_size <= max_key_size;
+void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size) {
+    throw std::runtime_error(fmt::format("Invalid record frame: key_size {} and value_size {} in a frame of {} bytes",
+            frame_header.key_size, frame_header.value_size, frame_size));
 }
 
 } // namespace replica::logstor::ondisk

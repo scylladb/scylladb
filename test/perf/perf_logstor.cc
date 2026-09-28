@@ -105,7 +105,8 @@
 //   index-lookup     look one key up in the primary index, which hashes the key first
 //   index-insert     point the index of one key at a record, which is what a write does once its
 //                    record is in a segment. Includes the lookup
-//   deserialize      read one record frame from a buffer, which copies out the bytes of its value
+//   deserialize      read one record frame from a buffer, which checks its frame header and
+//                    copies out the bytes of its value
 //   decode           decode the value of one record into the mutation a read returns
 //   build-mutation   build the mutation one write is given. Not a step of a write: a node is handed
 //                    it by the layer above logstor, and only the `write` test builds one per
@@ -802,8 +803,8 @@ public:
         }
     }
 
-    // What a read pays once the record is in memory: its frame is read, which copies the bytes of
-    // its value out of the buffer read from the segment.
+    // What a read pays once the record is in memory: its frame is read, which checks the frame
+    // header and copies the bytes of its value out of the buffer read from the segment.
     void do_deserialize(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             auto in = simple_memory_input_stream(_serialized_record.begin(), _serialized_record.size());
