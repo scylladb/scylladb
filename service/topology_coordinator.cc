@@ -67,6 +67,7 @@
 
 #include "idl/join_node.dist.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include "service/strong_consistency/serving_set.hh"
 #include "idl/storage_service.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
@@ -2210,29 +2211,35 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto do_config_sync = [&] {
                 return advance_in_background(gid, tablet_state.config_sync[trinfo.stage], "config_sync", [&] {
                     auto group_id = tmap.get_tablet_raft_info(gid.tablet).group_id;
-                    // The hosts that run a raft server for the group at the stages
-                    // which drive a configuration change: the old replicas plus the
-                    // pending one. Kept in sync with hosts_raft_group() in
-                    // groups_manager.cc. An excluded node is skipped, as it is by the
-                    // barrier - it may be down, and waiting for it would turn a node
-                    // that is already being removed into a reason to fail migrations.
-                    std::unordered_set<locator::host_id> hosts;
-                    for (const auto& r : tmap.get_tablet_info(gid.tablet).replicas) {
-                        hosts.insert(r.host);
-                    }
-                    if (trinfo.pending_replica) {
-                        hosts.insert(trinfo.pending_replica->host);
-                    }
-                    std::erase_if(hosts, [&] (locator::host_id h) { return is_excluded(raft::server_id(h.uuid())); });
+                    // The stage's serving set: every replica that can be elected at the
+                    // stage, and every one whose configuration has to be checked. The
+                    // others can't lead and have nothing to attest: the pending replica
+                    // before it joins or after it is removed, and the leaving one once it
+                    // is demoted. An excluded node is skipped, as it is by the barrier -
+                    // it may be down, and waiting for it would turn a node that is
+                    // already being removed into a reason to fail migrations.
+                    locator::tablet_replica_set replicas;
+                    strong_consistency::serving_replicas(tmap.get_tablet_info(gid.tablet), &trinfo).for_each(
+                            [&] (const locator::tablet_replica& r) {
+                        if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                            replicas.push_back(r);
+                        }
+                    });
 
                     rtlogger.debug("Syncing raft config of {} (group {}) at stage {} on {}",
-                            gid, group_id, trinfo.stage, hosts);
-                    // All the RPCs are sent before parallel_for_each() returns, so the
-                    // hosts need not outlive it.
-                    return seastar::parallel_for_each(std::move(hosts), [this, gid, group_id] (locator::host_id host) {
+                            gid, group_id, trinfo.stage, replicas);
+                    // The session identifies the migration, and with the stage lets a
+                    // replica refuse a sync that arrives after the tablet left the stage
+                    // it was sent for, possibly in an earlier migration. All the RPCs are
+                    // sent before parallel_for_each() returns, so the replicas need not
+                    // outlive it.
+                    return seastar::parallel_for_each(std::move(replicas),
+                            [this, gid, group_id, session = trinfo.session_id,
+                                    stage = locator::tablet_transition_stage_to_string(trinfo.stage)]
+                            (const locator::tablet_replica& r) {
                         return ser::groups_manager_rpc_verbs::send_sync_raft_group_config(&_messaging,
-                                host, lowres_clock::now() + tablet_config_sync_timeout, _as,
-                                raft::server_id(host.uuid()), gid, group_id);
+                                r.host, lowres_clock::now() + tablet_config_sync_timeout, _as,
+                                raft::server_id(r.host.uuid()), gid, group_id, r.shard, session, stage);
                     });
                 });
             };
@@ -2282,6 +2289,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
                             transition_to(rollback_stage);
+                            if (is_strong_consistency) {
+                                // The session identifies the migration to the rollback's
+                                // syncs; see do_config_sync.
+                                get_mutation_builder()
+                                    .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
+                            }
                             break;
                         }
                     }
@@ -2399,9 +2412,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                         if (rollback) {
                             rtlogger.debug("Will set tablet {} stage to {}: {}", gid, rollback_stage, *rollback);
-                            get_mutation_builder()
-                                .set_stage(last_token, rollback_stage)
-                                .del_session(last_token);
+                            // A strongly consistent migration keeps its session to the end;
+                            // see do_config_sync.
+                            if (is_strong_consistency) {
+                                transition_to(rollback_stage);
+                            } else {
+                                get_mutation_builder()
+                                    .set_stage(last_token, rollback_stage)
+                                    .del_session(last_token);
+                            }
                             break;
                         }
                     }
@@ -2436,15 +2455,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     })) {
                         if (is_strong_consistency) {
-                            // The barrier fences off stale snapshot transfer RPCs, so the
-                            // session guarding them is not needed anymore. Deleting it here
-                            // keeps the invariant the non-SC path has below: no migration
-                            // session outlives the snapshot transfer / streaming stage.
+                            // The barrier fences off stale snapshot transfer RPCs. The
+                            // session stays nonetheless: a strongly consistent migration
+                            // keeps it to the end, as it identifies the migration to its
+                            // syncs (see do_config_sync).
                             if (do_barrier()) {
-                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::sc_become_voter);
-                                get_mutation_builder()
-                                    .set_stage(last_token, locator::tablet_transition_stage::sc_become_voter)
-                                    .del_session(last_token);
+                                transition_to(locator::tablet_transition_stage::sc_become_voter);
                             }
                         } else {
                             rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);

@@ -473,7 +473,7 @@ void groups_manager::init_messaging_service() {
     );
     ser::groups_manager_rpc_verbs::register_sync_raft_group_config(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet,
-                raft::group_id group_id) -> future<> {
+                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage_name) -> future<> {
             if (_raft_gr.get_my_raft_id() != dst_id) {
                 throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
             }
