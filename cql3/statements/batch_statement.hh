@@ -86,14 +86,12 @@ public:
     batch_statement(int bound_terms, type type_,
                     std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
-                    cql_stats& stats,
-                    const batch_executor& executor);
+                    cql_stats& stats);
 
     batch_statement(type type_,
                     std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
-                    cql_stats& stats,
-                    const batch_executor& executor);
+                    cql_stats& stats);
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 

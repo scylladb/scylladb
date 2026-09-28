@@ -9,6 +9,7 @@
  */
 
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
+#include "cql3/statements/eventual_consistency/batch_executor.hh"
 
 #include "transport/cql_protocol_extension.hh"
 #include "transport/messages/result_message.hh"
@@ -297,6 +298,10 @@ modification_executor::commit(const modification_statement& stmt, query_processo
     }
 
     co_return std::move(result);
+}
+
+const cql3::statements::batch_executor& modification_executor::for_batch() const {
+    return batch_executor::instance();
 }
 
 const modification_executor& modification_executor::instance() {

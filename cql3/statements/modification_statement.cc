@@ -227,10 +227,6 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
-bool modification_statement::is_strongly_consistent() const {
-    return executor().is_strongly_consistent();
-}
-
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     return executor().commit(*this, qp, qs, options);

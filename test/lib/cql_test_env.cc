@@ -23,7 +23,6 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
-#include "cql3/statements/eventual_consistency/batch_executor.hh"
 #include "cql3/cql_config.hh"
 #include "timeout_config.hh"
 #include <fmt/ranges.h>
@@ -1338,8 +1337,7 @@ public:
             batch_type,
             std::move(modifications),
             cql3::attributes::none(),
-            local_qp().get_cql_stats(),
-            cql3::statements::eventual_consistency::batch_executor::instance());
+            local_qp().get_cql_stats());
         auto qs = make_query_state();
         auto& lqo = *qo;
         return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, batch->get_statements().size(), {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
