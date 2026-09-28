@@ -24,6 +24,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
 #include "cql3/statements/strong_consistency/batch_statement.hh"
+#include "cql3/statements/eventual_consistency/batch_executor.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -52,14 +53,19 @@ db::timeout_clock::duration batch_statement::get_timeout(const service::client_s
 batch_statement::batch_statement(int bound_terms, type type_,
                                  std::vector<single_statement> statements,
                                  std::unique_ptr<attributes> attrs,
-                                 cql_stats& stats)
+                                 cql_stats& stats,
+                                 const batch_executor& executor)
     : cql_statement(timeout_for_type(type_))
     , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
     , _has_conditions(std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
+    , _executor(&executor)
 {
-    validate();
+    // What a batch may contain depends on how it is committed, so the executor
+    // says: a strongly consistent one is stricter about counters, timestamps and
+    // how many tables it spans.
+    _executor->validate(*this);
     if (has_conditions()) {
         // A batch can be created not only by raw::batch_statement::prepare, but also by
         // cql_server::connection::process_batch, which doesn't call any methods of
@@ -73,8 +79,9 @@ batch_statement::batch_statement(int bound_terms, type type_,
 batch_statement::batch_statement(type type_,
                                  std::vector<single_statement> statements,
                                  std::unique_ptr<attributes> attrs,
-                                 cql_stats& stats)
-    : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats)
+                                 cql_stats& stats,
+                                 const batch_executor& executor)
+    : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats, executor)
 {
 }
 
@@ -168,7 +175,17 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
+        query_processor& qp,
+        service::query_state& query_state, const query_options& options,
+        bool local, api::timestamp_type now) const
+{
+    return executor().commit(*this, qp, query_state, options, local, now);
+}
+
 namespace eventual_consistency {
+
+namespace {
 
 future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& batch,
         query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
@@ -312,54 +329,57 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     });
 }
 
-}
+} // namespace
 
-void batch_statement::validate()
-{
-    if (_attrs->is_time_to_live_set()) {
+void batch_executor::validate(const batch_statement& batch) const {
+    const auto& attrs = batch.get_attrs();
+    const auto& statements = batch.get_statements();
+    const auto type = batch.batch_type();
+
+    if (attrs.is_time_to_live_set()) {
         throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
     }
 
-    bool timestamp_set = _attrs->is_timestamp_set();
+    bool timestamp_set = attrs.is_timestamp_set();
     if (timestamp_set) {
-        if (_has_conditions) {
+        if (batch.has_conditions()) {
             throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional BATCH");
         }
-        if (_type == type::COUNTER) {
+        if (type == batch_statement::type::COUNTER) {
             throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter BATCH");
         }
     }
 
-    bool has_counters = std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
-    bool has_non_counters = !std::ranges::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_counters = std::ranges::any_of(statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_non_counters = !std::ranges::all_of(statements, [] (auto&& s) { return s.statement->is_counter(); });
     if (timestamp_set && has_counters) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for a BATCH containing counters");
     }
-    if (timestamp_set && std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
+    if (timestamp_set && std::ranges::any_of(statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
         throw exceptions::invalid_request_exception("Timestamp must be set either on BATCH or individual statements");
     }
-    if (_type == type::COUNTER && has_non_counters) {
+    if (type == batch_statement::type::COUNTER && has_non_counters) {
         throw exceptions::invalid_request_exception("Cannot include non-counter statement in a counter batch");
     }
-    if (_type == type::LOGGED && has_counters) {
+    if (type == batch_statement::type::LOGGED && has_counters) {
         throw exceptions::invalid_request_exception("Cannot include a counter statement in a logged batch");
     }
     if (has_counters && has_non_counters) {
         throw exceptions::invalid_request_exception("Counter and non-counter mutations cannot exist in the same batch");
     }
 
-    if (_has_conditions
-            && !_statements.empty()
-            && (std::ranges::distance(_statements
+    if (batch.has_conditions()
+            && !statements.empty()
+            && (std::ranges::distance(statements
                             | std::views::transform([] (auto&& s) { return s.statement->keyspace(); })
                             | utils::views::unique) != 1
-                || (std::ranges::distance(_statements
+                || (std::ranges::distance(statements
                         | std::views::transform([] (auto&& s) { return s.statement->column_family(); })
                         | utils::views::unique) != 1))) {
         throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
     }
     std::optional<bool> raw_counter;
-    for (auto& s : _statements) {
+    for (auto& s : statements) {
         if (raw_counter && s.statement->is_raw_counter_shard_write() != *raw_counter) {
             throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
         }
@@ -367,11 +387,9 @@ void batch_statement::validate()
     }
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
-        query_processor& qp,
-        service::query_state& query_state, const query_options& options,
-        bool local, api::timestamp_type now) const
-{
+future<::shared_ptr<cql_transport::messages::result_message>>
+batch_executor::commit(const batch_statement& batch, query_processor& qp, service::query_state& query_state,
+        const query_options& options, bool local, api::timestamp_type now) const {
     // FIXME: we don't support nulls here
 #if 0
     if (options.get_consistency() == null)
@@ -391,14 +409,15 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
                                "set in the configuration.", cl, cl)));
     }
 
-    for (size_t i = 0; i < _statements.size(); ++i) {
-        _statements[i].statement->validate_primary_key(options.for_statement(i));
+    const auto& statements = batch.get_statements();
+    for (size_t i = 0; i < statements.size(); ++i) {
+        statements[i].statement->validate_primary_key(options.for_statement(i));
     }
 
-    if (_has_conditions) {
-        ++_stats.cas_batches;
-        _stats.statements_in_cas_batches += _statements.size();
-        return eventual_consistency::execute_with_conditions(*this, qp, options, query_state).then([guardrail_state, cl] (auto result) {
+    if (batch.has_conditions()) {
+        ++batch.stats().cas_batches;
+        batch.stats().statements_in_cas_batches += statements.size();
+        return execute_with_conditions(batch, qp, options, query_state).then([guardrail_state, cl] (auto result) {
             if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
                 result->add_warning(format("Using write consistency level {} listed on the "
                                            "write_consistency_levels_warned is not recommended.", cl));
@@ -407,15 +426,15 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         });
     }
 
-    ++_stats.batches;
-    _stats.statements_in_batches += _statements.size();
+    ++batch.stats().batches;
+    batch.stats().statements_in_batches += statements.size();
 
-    auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    auto timeout = db::timeout_clock::now() + batch.get_timeout(query_state.get_client_state(), options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
 
-    return eventual_consistency::get_mutations(*this, qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(batch, qp, options, timeout, local, now, query_state).then([&batch, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
                     permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
-        return eventual_consistency::execute_without_conditions(*this, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
+        return execute_without_conditions(batch, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
     }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
@@ -431,6 +450,13 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         }
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
+}
+
+const batch_executor& batch_executor::instance() {
+    static const batch_executor the_instance;
+    return the_instance;
+}
+
 }
 
 void batch_statement::build_cas_result_set_metadata() {
@@ -519,7 +545,8 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         }) | std::ranges::to<std::vector>();
         statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(sc_statements), std::move(prep_attrs));
     } else {
-        statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
+        statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats,
+                eventual_consistency::batch_executor::instance());
     }
 
     auto ai = audit_info();
