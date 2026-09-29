@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/util/closeable.hh>
@@ -657,7 +658,7 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr) {
         // outcome here, not worth a real C++ throw/catch.
         if (auto f = co_await coroutine::as_future(reader_opt->fast_forward_to(pr)); f.failed()) {
             co_await reader_opt->close();
-            co_await std::move(f);
+            co_await coroutine::return_exception_ptr(f.get_exception());
         }
         _range_override.reset();
         maybe_pause(std::move(*reader_opt));
@@ -886,7 +887,7 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                     // outcome here, not worth a real C++ throw/catch.
                     if (auto f = co_await coroutine::as_future(underlying_reader.fast_forward_to(*new_pr)); f.failed()) {
                         co_await underlying_reader.close();
-                        co_await std::move(f);
+                        co_await coroutine::return_exception_ptr(f.get_exception());
                     }
                     _lifecycle_policy->update_read_range(new_pr);
                     _pr = make_foreign(std::move(new_pr));
@@ -903,7 +904,7 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                 auto f = co_await coroutine::as_future(fill_reader_buffer(*rreader, hint));
                 if (f.failed()) {
                     co_await rreader->close();
-                    co_await std::move(f);
+                    co_await coroutine::return_exception_ptr(f.get_exception());
                 }
                 co_return reader_and_buffer_fill_result{std::move(rreader), f.get()};
             })));
