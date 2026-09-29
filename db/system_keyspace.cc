@@ -3120,8 +3120,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         co_return ret;
     }
 
-    const bool tablet_balancing_not_supported = _db.features().strongly_consistent_tables;
-
     for (auto& row : *rs) {
         if (!row.has("host_id")) {
             // There are no clustering rows, only the static row.
@@ -3374,9 +3372,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.session = service::session_id(some_row.get_as<utils::UUID>("session"));
         }
 
-        if (tablet_balancing_not_supported) {
-            ret.tablet_balancing_enabled = false;
-        } else if (some_row.has("tablet_balancing_enabled")) {
+        if (some_row.has("tablet_balancing_enabled")) {
             ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
         } else {
             ret.tablet_balancing_enabled = true;
