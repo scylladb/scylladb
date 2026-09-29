@@ -43,6 +43,7 @@ from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
+from test.pylib import sched_dir
 from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
@@ -428,6 +429,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
+        sched_dir.prepare()
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
@@ -504,6 +506,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # resort for what they leave behind, and it must not overlap with a
     # manager whose operations are still in flight.
     if session.config.getoption("--collect-only"):
+        if not xdist.is_xdist_worker(request_or_session=session):
+            sched_dir.remove()
         return
 
     swept = asyncio.run(recycle_leftover_clusters(session))
@@ -531,6 +535,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     except Exception:
         logger.exception("Could not summarize the resource utilization of this run")
 
+    sched_dir.remove()
+
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")
 
@@ -541,6 +547,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
+    sched_dir.configure(config.getoption("--tmpdir"))
     log_file_format = config.getini("log_file_format") or config.getini("log_format") or "%(asctime)s %(levelname)s %(name)s> %(message)s"
     log_file_level = config.getini("log_file_level") or config.getini("log_level") or "INFO"
 
