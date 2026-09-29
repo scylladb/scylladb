@@ -58,6 +58,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
@@ -2125,6 +2126,36 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
             });
+
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
+            scrub_period_registrations.start(std::nullopt).get();
+            auto stop_scrub_period_registrations = defer_verbose_shutdown("auto scrub config callbacks", [] {
+                scrub_period_registrations.stop().get();
+            });
+
+            const auto& scrub_period_opt = *db::cluster_config_registry::find("auto_scrub_period_seconds");
+            cluster_config_manager.invoke_on_all([&db, &scrub_period_opt] (db::cluster_config_manager& ccm) {
+                scrub_period_registrations.local() = ccm.register_config_callback(
+                        sstring(scrub_period_opt.name),
+                        [&db, &scrub_period_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    const auto& tables = db.local().get_tables_metadata();
+                    auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
+                    if (!id) {
+                        return make_ready_future<>();
+                    }
+                    auto t = tables.get_table_if_exists(id);
+                    if (!t) {
+                        return make_ready_future<>();
+                    }
+                    auto seconds = std::chrono::seconds(db::cluster_config_registry::to_integer(scrub_period_opt, value));
+                    std::optional<std::chrono::seconds> period;
+                    if (seconds > std::chrono::seconds(0)) {
+                        period = seconds;
+                    }
+                    t->set_scrub_period(period);
+                    return make_ready_future<>();
+                });
+            }).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();
