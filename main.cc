@@ -2076,6 +2076,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
+            // Must stop before cluster_config_manager, which the registrations point to.
+            sharded<db::cluster_config_manager::config_callback_registration> background_reclaim_goal_registrations;
+            background_reclaim_goal_registrations.start().get();
+            auto stop_background_reclaim_goal_registrations = defer([&] () noexcept {
+                background_reclaim_goal_registrations.stop().get();
+            });
+            background_reclaim_goal_registrations.invoke_on_all([] (db::cluster_config_manager::config_callback_registration& registration) {
+                registration = cluster_config_manager.local().register_config_callback(
+                        sstring(db::cluster_config_registry::option_name::lsa_background_reclaim_goal_in_mb),
+                        [] (const db::cluster_config_registry::option& opt, const db::cluster_config_manager::lookup_context&, std::optional<sstring> value) {
+                    logalloc::shard_tracker().set_background_reclaim_goal_in_mb(db::cluster_config_registry::to_integer(opt, value));
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             auto repair_config = sharded_parameter([&] {
