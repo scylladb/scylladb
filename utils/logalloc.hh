@@ -31,7 +31,7 @@ constexpr size_t segment_size = 1 << segment_size_shift;
 constexpr size_t max_zone_segments = 256;
 constexpr size_t max_managed_object_size = segment_size * 0.1;
 
-constexpr size_t background_reclaim_free_memory_threshold = 60'000'000;
+constexpr size_t default_background_reclaim_goal = 60 * 1024 * 1024;
 
 //
 // Frees some amount of objects from the region to which it's attached.
@@ -65,6 +65,9 @@ public:
         bool sanitizer_report_backtrace = false; // Better reports but slower
         size_t lsa_reclamation_step;
         scheduling_group background_reclaim_sched_group;
+        // Amount of free memory the background reclaimer tries to maintain.
+        // Zero disables background reclaiming.
+        size_t background_reclaim_goal = default_background_reclaim_goal;
         std::chrono::nanoseconds background_reclaim_shares_adjust_period = std::chrono::milliseconds(50);
     };
 
@@ -111,6 +114,10 @@ public:
 
     void configure(const config& cfg);
     future<> stop();
+
+    // Sets the amount of free memory the background reclaimer tries to maintain.
+    // Zero disables background reclaiming.
+    void set_background_reclaim_goal(size_t goal) noexcept;
 
 private:
     std::unique_ptr<impl> _impl;
