@@ -327,15 +327,19 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
     }
 }
 
-future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const {
+tasks::task_manager::task::progress get_compaction_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor, bool done) {
     if (cdata.compaction_size == 0) {
-        co_return tasks::task_manager::task::progress{};
+        return tasks::task_manager::task::progress{};
     }
 
-    co_return tasks::task_manager::task::progress{
-        .completed = is_done() ? cdata.compaction_size : progress_monitor.get_progress(),   // Consider tasks which skip all files.
+    return tasks::task_manager::task::progress{
+        .completed = done ? cdata.compaction_size : progress_monitor.get_progress(),   // Consider tasks which skip all files.
         .total = cdata.compaction_size
     };
+}
+
+future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const {
+    co_return get_compaction_progress(cdata, progress_monitor, is_done());
 }
 
 tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {

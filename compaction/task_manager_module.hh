@@ -25,6 +25,9 @@ class reshard_shard_descriptor;
 
 namespace compaction {
 
+// The progress of a compaction, which is complete once done is set.
+tasks::task_manager::task::progress get_compaction_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor, bool done);
+
 class compaction_task_impl : public tasks::task_manager::task::impl {
 public:
     compaction_task_impl(tasks::task_manager::module_ptr module,
