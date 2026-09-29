@@ -19,6 +19,10 @@
 #include "utils/memory_limit_reached.hh"
 #include "utils/abstract_formatter.hh"
 
+namespace db {
+class cluster_config_manager;
+}
+
 namespace logalloc {
 
 struct occupancy_stats;
@@ -31,7 +35,7 @@ constexpr size_t segment_size = 1 << segment_size_shift;
 constexpr size_t max_zone_segments = 256;
 constexpr size_t max_managed_object_size = segment_size * 0.1;
 
-constexpr size_t background_reclaim_free_memory_threshold = 60'000'000;
+constexpr size_t default_background_reclaim_goal = 60 * 1024 * 1024;
 
 //
 // Frees some amount of objects from the region to which it's attached.
@@ -111,6 +115,16 @@ public:
 
     void configure(const config& cfg);
     future<> stop();
+
+    // Sets the amount of free memory the background reclaimer tries to maintain.
+    // Zero disables background reclaiming.
+    void set_background_reclaim_goal(size_t goal) noexcept;
+
+    // Makes the background reclaimer follow lsa_background_reclaim_goal_in_mb from
+    // cluster config. `mgr` is this shard's instance and must outlive the registration,
+    // so call unregister_config() before stopping it.
+    void register_config(db::cluster_config_manager& mgr);
+    void unregister_config() noexcept;
 
 private:
     std::unique_ptr<impl> _impl;

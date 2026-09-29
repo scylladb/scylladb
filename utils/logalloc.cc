@@ -26,6 +26,8 @@
 #include <seastar/util/later.hh>
 #include <seastar/core/on_internal_error.hh>
 
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "utils/log.hh"
@@ -405,13 +407,28 @@ class background_reclaimer {
     timer<lowres_clock> _adjust_shares_timer;
     // If engaged, main loop is not running, set_value() to wake it.
     promise<>* _main_loop_wait = nullptr;
-    future<> _done;
     bool _stopping = false;
-    static constexpr size_t free_memory_threshold = background_reclaim_free_memory_threshold;
+    // Amount of free memory to maintain. Zero means don't reclaim at all.
+    size_t _goal = default_background_reclaim_goal;
+    db::cluster_config_manager::config_callback_registration _config_registration;
+    // Starts the main loop, so must be initialized last.
+    future<> _done;
 private:
+    static constexpr std::string_view goal_config_name = "lsa_background_reclaim_goal_in_mb";
+
+    static size_t goal_from_config(const std::optional<sstring>& value) {
+        const auto& opt = *db::cluster_config_registry::find(goal_config_name);
+        auto goal_in_mb = db::cluster_config_registry::to_integer(opt, value);
+        if (goal_in_mb < 0) {
+            llogger.warn("Ignoring negative {} {}, using the default", goal_config_name, goal_in_mb);
+            return default_background_reclaim_goal;
+        }
+        // Capping at shard memory also keeps the conversion to bytes from overflowing.
+        return std::min<uint64_t>(goal_in_mb, memory::stats().total_memory() >> 20) << 20;
+    }
     bool have_work() const {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
-        return memory::free_memory() < free_memory_threshold;
+        return memory::free_memory() < _goal;
 #else
         return false;
 #endif
@@ -437,14 +454,14 @@ private:
             if (_stopping) {
                 break;
             }
-            _reclaim(free_memory_threshold - memory::free_memory());
+            _reclaim(_goal - memory::free_memory());
             co_await coroutine::maybe_yield();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
     }
     void adjust_shares() {
         if (have_work()) {
-            auto shares = 1 + (1000 * (free_memory_threshold - memory::free_memory())) / free_memory_threshold;
+            auto shares = 1 + (1000 * (_goal - memory::free_memory())) / _goal;
             _sg.set_shares(shares);
             llogger.trace("background_reclaimer::adjust_shares: {}", shares);
             if (_main_loop_wait) {
@@ -461,6 +478,21 @@ public:
         if (sg != default_scheduling_group()) {
             _adjust_shares_timer.arm_periodic(adjust_shares_period);
         }
+    }
+    void set_goal(size_t goal) noexcept {
+        _goal = goal;
+        if (have_work()) {
+            main_loop_wake();
+        }
+    }
+    void register_config(db::cluster_config_manager& mgr) {
+        _config_registration = mgr.connect_config(sstring(goal_config_name), [this] (std::optional<sstring> value) {
+            set_goal(goal_from_config(value));
+            llogger.info0("Set background reclaim goal to {} MiB", _goal >> 20);
+        });
+    }
+    void unregister_config() noexcept {
+        _config_registration.unregister();
     }
     future<> stop() {
         _stopping = true;
@@ -557,6 +589,21 @@ public:
         _background_reclaimer.emplace(sg, adjust_shares_period, [this] (size_t target) {
             reclaim(target, is_preemptible::yes);
         });
+    }
+    void set_background_reclaim_goal(size_t goal) noexcept {
+        if (_background_reclaimer) {
+            _background_reclaimer->set_goal(goal);
+        }
+    }
+    void register_config(db::cluster_config_manager& mgr) {
+        if (_background_reclaimer) {
+            _background_reclaimer->register_config(mgr);
+        }
+    }
+    void unregister_config() noexcept {
+        if (_background_reclaimer) {
+            _background_reclaimer->unregister_config();
+        }
     }
     // const bool&, so interested parties can save a reference and see updates.
     const bool& sanitizer_report_backtrace() const { return _sanitizer_report_backtrace; }
@@ -2410,6 +2457,18 @@ void tracker::configure(const config& cfg) {
     }
     _impl->setup_background_reclaim(cfg.background_reclaim_sched_group, cfg.background_reclaim_shares_adjust_period);
     _impl->set_sanitizer_report_backtrace(cfg.sanitizer_report_backtrace);
+}
+
+void tracker::set_background_reclaim_goal(size_t goal) noexcept {
+    _impl->set_background_reclaim_goal(goal);
+}
+
+void tracker::register_config(db::cluster_config_manager& mgr) {
+    _impl->register_config(mgr);
+}
+
+void tracker::unregister_config() noexcept {
+    _impl->unregister_config();
 }
 
 memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {
