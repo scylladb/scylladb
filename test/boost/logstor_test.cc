@@ -921,6 +921,26 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_largest_accepted_record_can_be_separated) 
     assert_that(*actual).is_equal_to(expected);
 }
 
+// A read after stop() returns a failed future. It does not throw from read(). read_from_segment()
+// takes the gate in a coroutine, so the exception goes into the future.
+SEASTAR_THREAD_TEST_CASE(test_logstor_read_after_stop_fails_the_future) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+
+    test_logstor_group cg(schema, ls);
+    auto m = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
+    ls.write(m, write_target(&cg, {}), db::no_timeout).get();
+    ls.stop().get();
+
+    auto f = ls.read(schema, cg.logstor_index(), m.decorated_key(), schema->full_slice());
+    BOOST_REQUIRE_THROW(f.get(), gate_closed_exception);
+}
+
 // Checks that a record that does not fit a segment of either kind is rejected by the write path,
 // rather than accepted into a mixed segment that the separator would then not be able to split.
 SEASTAR_THREAD_TEST_CASE(test_logstor_rejects_record_that_does_not_fit_a_segment_of_either_kind) {
