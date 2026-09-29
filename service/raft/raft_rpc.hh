@@ -47,10 +47,9 @@ protected:
 
     lw_shared_ptr<stats> _stats;
 
-    // A null `stats` gives this instance counters of its own.
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
              shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id,
-             lw_shared_ptr<stats> stats = nullptr);
+             lw_shared_ptr<stats> stats);
 
 private:
     enum class one_way_kind { request, reply };
