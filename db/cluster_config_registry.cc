@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -55,6 +56,10 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// Defined below, with the other parsers and validators.
+// Declared here so that the automatic scrub period option may take their address.
+config_value parse_auto_scrub_period_seconds(std::string_view value);
+
 constexpr std::array registry_options = {
     option{
         .name = "auto_repair_enabled",
@@ -62,6 +67,16 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    option{
+        .name = "auto_scrub_period_seconds",
+        .description = "If set to a positive value, every sstable which was written or validated more than this "
+                "many seconds ago will be scheduled for automatic scrub. Set to 0 to disable automatic scrub",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .custom_parser = parse_auto_scrub_period_seconds,
+        .custom_expected_description = "0 or an integer from 3600 to 4294967295",
     },
 };
 
@@ -147,6 +162,17 @@ std::optional<seastar::sstring> validate_floating_point(std::string_view value) 
 
 std::optional<seastar::sstring> validate_boolean(std::string_view value) {
     return validate_with(parse_boolean, "'true' or 'false'", value);
+}
+
+config_value parse_auto_scrub_period_seconds(std::string_view value) {
+    constexpr int64_t min_auto_scrub_period_seconds = 3600;
+    constexpr int64_t max_auto_scrub_period_seconds = std::numeric_limits<uint32_t>::max();
+
+    auto parsed = parse_integer(value);
+    if (parsed != 0 && (parsed < min_auto_scrub_period_seconds || parsed > max_auto_scrub_period_seconds)) {
+        throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
+    }
+    return parsed;
 }
 
 static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {
