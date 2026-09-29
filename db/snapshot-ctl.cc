@@ -343,7 +343,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
-                .set_progress_fn([state] {
+                .set_progress_fn([state] (const tasks::task_manager::task::impl&) {
                     return state->get_progress().finally([state] {});
                 });
     auto task = co_await std::move(task_builder).build([state] (tasks::task_manager::task::impl& self) {

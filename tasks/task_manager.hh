@@ -277,7 +277,7 @@ public:
     class generic_task_impl : public task::impl {
     public:
         using action_fn = noncopyable_function<future<> (task::impl&)>;
-        using progress_fn = noncopyable_function<future<task::progress> ()>;
+        using progress_fn = noncopyable_function<future<task::progress> (const task::impl&)>;
         using workload_fn = noncopyable_function<future<std::optional<double>> ()>;
         using abort_fn = noncopyable_function<void (seastar::abort_source&) noexcept>;
         using finalize_fn = noncopyable_function<future<> () noexcept>;
