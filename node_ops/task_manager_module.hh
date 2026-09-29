@@ -44,14 +44,12 @@ public:
 class streaming_task_impl : public tasks::task_manager::task::impl {
 private:
     streaming::stream_reason _reason;
-    std::optional<shared_future<>>& _result;
-    std::function<future<>()> _action;
+    noncopyable_function<future<>()> _action;
 public:
     streaming_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id parent_id,
             streaming::stream_reason reason,
-            std::optional<shared_future<>>& result,
-            std::function<future<>()> action) noexcept;
+            noncopyable_function<future<>()> action) noexcept;
 
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;

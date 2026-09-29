@@ -182,11 +182,9 @@ future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
 streaming_task_impl::streaming_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id parent_id,
         streaming::stream_reason reason,
-        std::optional<shared_future<>>& result,
-        std::function<future<>()> action) noexcept
+        noncopyable_function<future<>()> action) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", "", "", "", parent_id)
     , _reason(reason)
-    , _result(result)
     , _action(std::move(action))
 {}
 
@@ -196,6 +194,10 @@ std::string streaming_task_impl::type() const {
 
 tasks::is_internal streaming_task_impl::is_internal() const noexcept {
     return tasks::is_internal::no;
+}
+
+future<> streaming_task_impl::run() {
+    return _action();
 }
 
 task_manager_module::task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept

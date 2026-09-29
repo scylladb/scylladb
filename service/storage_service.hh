@@ -148,6 +148,7 @@ class node_ops_meta_data;
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
 using wait_balancer = seastar::bool_class<class wait_balancer_tag>;
+using reset_streaming_result = seastar::bool_class<class reset_streaming_result_tag>;
 using remove_unset = seastar::bool_class<class remove_unset_tag>;
 
 struct token_metadata_change {
@@ -934,6 +935,17 @@ private:
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const;
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd);
+
+    // The topology coordinator may resend the streaming request, in which case the operation
+    // tracked by result is joined instead of being started, and no new task is created.
+    // A previous attempt which failed is retried with a new task.
+    // With reset_streaming_result::yes, a successful result is forgotten, so that the
+    // operation is streamed again when it is requested once more.
+    future<> do_streaming_operation(std::optional<shared_future<>>& result,
+            streaming::stream_reason reason,
+            tasks::task_info parent_info,
+            noncopyable_function<future<>()> action,
+            reset_streaming_result reset_result = reset_streaming_result::no);
 
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
