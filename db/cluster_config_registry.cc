@@ -191,6 +191,16 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
         return std::get<T>(opt.default_value);
     }
     try {
+        if (opt.custom_parser) {
+            auto parsed = opt.custom_parser(*value);
+            auto* typed = std::get_if<T>(&parsed);
+            if (!typed) {
+                utils::on_internal_error(fmt::format(
+                        "cluster config '{}' has a custom parser returning a type other than the one it declares",
+                        opt.name));
+            }
+            return *typed;
+        }
         return parse(*value);
     } catch (const marshal_exception& e) {
         cluster_config_registry_logger.warn(
@@ -234,6 +244,12 @@ std::optional<version> current_version(const gms::feature_service& features) {
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
+    // An option that declares its own validation accepts something other than exactly what its
+    // registry type would, so its validator replaces the type's rather than adding to it.
+    if (opt.custom_validator) {
+        return opt.custom_validator(value);
+    }
+
     switch (opt.type()) {
     case value_type::text:
         return validate_text(value);
