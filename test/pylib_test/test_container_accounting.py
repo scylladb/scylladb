@@ -16,6 +16,7 @@ import pytest
 import test.pylib.container_accounting as ca
 from test.pylib import sched_dir
 from test.pylib.dockerized_service import register_container
+from test.pylib.dynamic_scheduler import CgroupReader
 from test.pylib.resource_gather import ResourceGatherOn
 
 
@@ -73,6 +74,16 @@ def test_nothing_is_recorded_outside_a_worker_or_without_a_registry(world, monke
     monkeypatch.setattr(sched_dir, "_root", None)
     ca.register_container_pid(4242, worker="gw0")
     assert ca.container_cgroups("gw0") == []
+
+
+def test_the_scheduler_sees_a_workers_containers(world, monkeypatch):
+    """What the forecast and the tests' total are measured from includes the Cassandra JVM."""
+    monkeypatch.setattr(ca, "cgroup_of_pid", lambda pid: world.jvm)
+    ca.register_container_pid(4242, worker="gw1")
+    reader = CgroupReader(world.tests)
+    reader.refresh(["gw0", "gw1"])
+    assert reader.memory("gw0") == pytest.approx(1_000)
+    assert reader.memory("gw1") == pytest.approx(2_000 + 800_000), "anonymous, like the peaks the profile learns"
 
 
 def test_a_tests_anonymous_peak_includes_its_workers_containers(world, monkeypatch):
