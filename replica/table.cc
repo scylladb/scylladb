@@ -3319,6 +3319,9 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
+    std::optional<std::chrono::hours> scrub_period() const noexcept override {
+        return _t.scrub_period();
+    }
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }
@@ -5307,6 +5310,18 @@ table::disable_auto_compaction() {
         co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
             return get_logstor_compaction_manager().stop_ongoing_compactions(cg.as_logstor_group());
         });
+    }
+}
+
+void table::set_scrub_period(std::optional<std::chrono::hours> period) {
+    if (period == _scrub_period) {
+        return;
+    }
+    _scrub_period = period;
+    if (period) {
+        tlogger.info0("Automatic scrub period for {}.{} set to {}", _schema->ks_name(), _schema->cf_name(), *period);
+    } else {
+        tlogger.info0("Automatic scrub disabled for {}.{}", _schema->ks_name(), _schema->cf_name());
     }
 }
 
