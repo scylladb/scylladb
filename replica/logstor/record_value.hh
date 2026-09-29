@@ -14,13 +14,17 @@ class mutation;
 
 namespace replica::logstor {
 
-// The two functions that know what the bytes of a record_value mean. Everything else in logstor
-// treats a value as bytes, so changing the encoding is a change to these two alone.
+// The functions that know what the bytes of a record_value mean. Everything else in logstor
+// treats a value as bytes, so changing the encoding is a change to this file alone.
 //
 // The value holds the partition of the mutation and nothing the record_header already
 // carries, which is why decoding takes the header: the key and the table of the record come
 // from it. The layout of the value is described in replica/logstor/record_value.cc, next to
 // the encoder.
+
+// Returns the timestamp of the record that stores m: the timestamp of the row marker, or of the
+// partition tombstone if there is no marker. Throws if m has neither.
+api::timestamp_type record_timestamp(const mutation& m);
 
 // Encodes the partition of m as the value of a record whose header is built from m.
 record_value encode_record_value(const mutation& m);

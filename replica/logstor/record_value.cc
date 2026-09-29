@@ -77,6 +77,25 @@ public:
 
 } // anonymous namespace
 
+api::timestamp_type record_timestamp(const mutation& m) {
+    const auto& partition = m.partition();
+
+    for (const auto& row_entry : partition.clustered_rows()) {
+        if (row_entry.dummy()) {
+            continue;
+        }
+        if (!row_entry.row().marker().is_missing()) {
+            return row_entry.row().marker().timestamp();
+        }
+    }
+
+    if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
+        return partition_tombstone.timestamp;
+    }
+
+    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+}
+
 record_value encode_record_value(const mutation& m) {
     bytes_ostream out;
     write_record_value(out, *m.schema(), m.partition());

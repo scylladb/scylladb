@@ -59,25 +59,6 @@ primary_index_key::primary_index_key(const dht::decorated_key& dk)
     : primary_index_key(dk.token(), compute_key_hash(dk.key())) {
 }
 
-static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
-    const auto& partition = m.partition();
-
-    for (const auto& row_entry : partition.clustered_rows()) {
-        if (row_entry.dummy()) {
-            continue;
-        }
-        if (!row_entry.row().marker().is_missing()) {
-            return row_entry.row().marker().timestamp();
-        }
-    }
-
-    if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
-        return partition_tombstone.timestamp;
-    }
-
-    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
-}
-
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
     , _write_buffer(buffered_writer_config{
@@ -160,7 +141,7 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
     table_id table = m.schema()->id();
     auto& index = cg.logstor_index();
 
-    const auto ts = extract_logstor_record_timestamp(m);
+    const auto ts = record_timestamp(m);
 
     log_record record {
         .header = {
