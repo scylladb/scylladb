@@ -2217,10 +2217,7 @@ static uint64_t total_bytes_on_disk(const std::vector<sstables::shared_sstable>&
     return std::ranges::fold_left(sstables | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
 }
 
-// For compactions bypassing the `compaction` class, like scrub in validate
-// mode or component rewrite. Must be called before the input sstables are
-// replaced or moved.
-static compaction_result initialize_compaction_result(const compaction_descriptor& descriptor) {
+compaction_result initialize_compaction_result(const compaction_descriptor& descriptor) {
     return compaction_result {
         .shard_id = this_shard_id(),
         .type = descriptor.options.type(),
@@ -2232,11 +2229,7 @@ static compaction_result initialize_compaction_result(const compaction_descripto
     };
 }
 
-// For compactions bypassing the `compaction` class.
-// `bloom_filter_checks`, `reader_statistics` and `tombstone_purge_stats` are
-// default initialized, as neither scrub validate nor component rewrite would
-// populate them.
-static compaction_result finalize_compaction_result(compaction_result result) {
+compaction_result finalize_compaction_result(compaction_result result) {
     result.sstables_out = extract_basic_info_from_sstables(result.new_sstables);
     result.stats.end_size = total_bytes_on_disk(result.new_sstables);
     result.stats.ended_at = db_clock::now();
