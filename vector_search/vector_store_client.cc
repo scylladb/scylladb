@@ -43,6 +43,7 @@ using namespace std::chrono_literals;
 
 using ann_error = vector_search::vector_store_client::ann_error;
 using fts_error = vector_search::vector_store_client::fts_error;
+using like_error = vector_search::vector_store_client::like_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
 using vs_vector = vector_search::vector_store_client::vs_vector;
@@ -344,6 +345,14 @@ auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::
     return read_primary_keys_json(json, schema, "scores");
 }
 
+auto write_like_json(query_string pattern, limit limit) -> json_content {
+    return seastar::format(R"({{"pattern":{},"limit":{}}})", rjson::from_string(pattern), limit);
+}
+
+auto read_like_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, like_error> {
+    return read_primary_keys_json(json, schema, std::nullopt);
+}
+
 auto write_highlight_json(query_string query, documents docs) -> json_content {
     auto quoted_docs = docs | std::views::transform([](auto const& doc) {
         return rjson::quote_json_string(doc);
@@ -592,6 +601,22 @@ struct vector_store_client::impl {
         }
     }
 
+    auto like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, like_error>> {
+        auto content = co_await post_to_index("like", format("/api/v1/indexes/{}/{}/like", keyspace, name),
+                write_like_json(std::move(pattern), limit), as);
+        if (!content) {
+            co_return std::unexpected{content.error()};
+        }
+
+        try {
+            co_return read_like_json(rjson::parse(std::move(*content)), schema);
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
+
     auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents docs, abort_source& as)
             -> future<std::expected<highlights, fts_error>> {
         auto documents_sent = docs.size();
@@ -667,6 +692,11 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, fts_error>> {
     return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
+}
+
+auto vector_store_client::like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
+        -> future<std::expected<primary_keys, like_error>> {
+    return _impl->like(std::move(keyspace), std::move(name), schema, std::move(pattern), limit, as);
 }
 
 auto vector_store_client::highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents documents, abort_source& as)
