@@ -14,10 +14,19 @@ on:
     branches:
       - master
       - enterprise
+    # The docs build also consumes sources outside docs/ (see docs/_ext/):
+    # scylladb_metrics parses metrics from every *.cc file, scylladb_cc_properties
+    # reads db/config.*, and scylladb_swagger reads api/. Changes to any of them
+    # can break the build, so they must trigger it too.
     paths:
       - "docs/**"
       - "db/config.hh"
       - "db/config.cc"
+      - "**/*.cc"
+      - "api/**"
+      - "scripts/get_description.py"
+      - "scripts/metrics-config.yml"
+      - ".github/workflows/docs-pr.yaml"
 jobs:
   build:
     runs-on: ubuntu-latest
