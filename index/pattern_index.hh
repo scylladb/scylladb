@@ -37,6 +37,7 @@ public:
     static bool has_index(const schema& s) {
         return has_index_impl<pattern_index>(s);
     }
+    static bool has_index_on_column(const schema& s, const sstring& column);
     static void check_cdc_options(const schema& s) {
         check_cdc_options_impl<pattern_index>(s);
     }

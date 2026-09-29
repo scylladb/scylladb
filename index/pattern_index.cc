@@ -87,6 +87,14 @@ void pattern_index::validate(const schema& schema, const cql3::statements::index
     check_index_options(properties);
 }
 
+bool pattern_index::has_index_on_column(const schema& s, const sstring& column) {
+    return std::ranges::any_of(s.indices(), [&] (const index_metadata& im) {
+        auto target_it = im.options().find(cql3::statements::index_target::target_option_name);
+        return target_it != im.options().end() && secondary_index_manager::is_custom_index<pattern_index>(im)
+                && cql3::statements::index_target::column_name_from_target_string(target_it->second) == column;
+    });
+}
+
 std::unique_ptr<secondary_index::custom_index> pattern_index_factory() {
     return std::make_unique<pattern_index>();
 }
