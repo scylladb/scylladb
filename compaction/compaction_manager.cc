@@ -2421,6 +2421,9 @@ public:
             finish_compaction(state::failed);
             auto_scrub_permit.return_all();
             maintenance_permit.return_all();
+            if (utils::get_local_injector().enter("automatic_scrub_retry_immediately")) {
+                continue;
+            }
             if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
                 co_return std::nullopt;
             }
