@@ -6,9 +6,16 @@
 
 import hashlib
 import socket
+import sys
 import time
 import os
 from pathlib import Path
+
+# The Cassandra driver imports numpy if it can find it, to offer a numpy protocol
+# handler that nothing in this suite asks for (no test imports numpy).  That costs
+# about 22 MB in every worker process, and there is one worker per half core.  Refuse
+# the import; the driver's own try/except then takes its ordinary path.
+sys.modules.setdefault("numpy", None)
 
 __all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR",
            "asan_options", "path_to", "ubsan_options"]
