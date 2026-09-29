@@ -346,8 +346,6 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         return;
     }
 
-    init_messaging_service();
-
     auto ls = {
         sm::make_counter("cql-connections", _stats.connects,
                         sm::description("Counts a number of client connections.")),
@@ -418,19 +416,40 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
 
 cql_server::~cql_server() = default;
 
-future<> cql_server::stop() {
-    co_await when_all_succeed(uninit_messaging_service(), server::stop()).discard_result();
+future<> cql_server::shutdown() {
+    auto f = co_await coroutine::as_future(server::shutdown());
+    // Requests may outlive shutdown and delay stop(); free the metric names so a
+    // restarted server can register them.
+    _metrics.clear();
+    co_await std::move(f);
 }
 
-void cql_server::init_messaging_service() {
+future<> cql_server::stop() {
+    auto f = co_await coroutine::as_future(server::stop());
+    // The controller detached the forward_cql handler already; wait for requests it routed here.
+    co_await _forward_gate.close();
+    co_await std::move(f);
+}
+
+cql_server& forward_cql_handler::server() {
+    if (!_server) {
+        throw std::runtime_error("CQL server is not running");
+    }
+    return *_server;
+}
+
+future<> forward_cql_handler::register_verbs() {
     ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req) -> future<forward_cql_execute_response> {
+            auto& srv = server();
+            auto holder = srv._forward_gate.hold();
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forwarded CQL request from {} on shard {}", src_host, shard);
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            co_return co_await srv.container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+                auto shard_holder = shard_svc._forward_gate.hold();
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -473,10 +492,12 @@ void cql_server::init_messaging_service() {
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<rpc::tuple<bytes, std::optional<forward_cql_prepare_error>>> {
+            auto& srv = server();
+            auto holder = srv._forward_gate.hold();
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
-            service::client_state cs(_auth_service, &_sl_controller, std::move(req.client_state));
+            service::client_state cs(srv._auth_service, &srv._sl_controller, std::move(req.client_state));
             tracing::trace_state_ptr trace_state_ptr;
             if (req.trace_info) {
                 trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*req.trace_info);
@@ -484,12 +505,12 @@ void cql_server::init_messaging_service() {
             }
             service::query_state qs(cs, trace_state_ptr, empty_service_permit());
 
-            auto f = co_await coroutine::as_future(_query_processor.invoke_on_all(
+            auto f = co_await coroutine::as_future(srv._query_processor.invoke_on_all(
                 [&] (cql3::query_processor& qp) {
                     return qp.prepare(req.query_string, qs.get_client_state(), req.dialect).discard_result();
                 }));
             if (f.failed()) {
-                auto response = handle_exception(0, f.get_exception(), qs.get_trace_state(), req.cql_version, cs);
+                auto response = srv.handle_exception(0, f.get_exception(), qs.get_trace_state(), req.cql_version, cs);
                 clogger.trace("Preparation of forwarded statement failed with an error");
                 tracing::trace(qs.get_trace_state(), "Preparation of forwarded statement failed with an error");
 
@@ -499,14 +520,15 @@ void cql_server::init_messaging_service() {
                     .response_flags = flags,
                 }));
             }
-            auto prepare_id = _query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
+            auto prepare_id = srv._query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
             clogger.trace("Successfully prepared statement {} from forward request", prepare_id);
             co_return rpc::tuple(std::move(prepare_id), std::optional<forward_cql_prepare_error>());
         });
+    return make_ready_future<>();
 }
 
-future<> cql_server::uninit_messaging_service() {
-    co_await ser::forward_cql_rpc_verbs::unregister(&_ms);
+future<> forward_cql_handler::stop() {
+    return ser::forward_cql_rpc_verbs::unregister(&_ms);
 }
 
 future<forward_cql_execute_response> cql_server::handle_forward_execute(
