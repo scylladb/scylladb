@@ -86,7 +86,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
-    parser.addoption("--dynamic-scheduler", action=BooleanOptionalAction, default=False,
+    parser.addoption("--dynamic-scheduler", action=BooleanOptionalAction, default=True,
                      help="Start a test only when its CPU and memory fit the machine, using the costs "
                           "in <tmpdir>/profile.json if there is one and built-in estimates otherwise "
                           "(see test/pylib/dynamic_scheduler.py).  --no-dynamic-scheduler restores "
