@@ -17,7 +17,7 @@ from glob import glob
 from pathlib import Path
 from pprint import pformat
 from time import sleep
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
 import boto3
@@ -31,7 +31,9 @@ from google.api_core.exceptions import Conflict
 from google.api_core.page_iterator import HTTPIterator
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import storage
-from mypy_boto3_s3 import S3Client
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client
 
 from test.cluster.dtest.ccmlib.ccm_parity import runs_as_upstream
 from test.pylib.object_storage import S3MockWrapper, Storage, StorageFactory

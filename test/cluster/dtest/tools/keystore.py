@@ -7,11 +7,14 @@
 import json
 import logging
 import os
+from typing import TYPE_CHECKING
 
 import boto3
 from botocore.exceptions import ClientError
 from cloud_detect import provider
-from mypy_boto3_s3 import S3ServiceResource
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3ServiceResource
 
 logger = logging.getLogger(__name__)
 
