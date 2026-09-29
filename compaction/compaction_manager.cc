@@ -371,6 +371,18 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return std::nullopt;
 }
 
+// The progress of a compaction, which is complete once done is set.
+static tasks::task_manager::task::progress get_compaction_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor, bool done) {
+    if (cdata.compaction_size == 0) {
+        return tasks::task_manager::task::progress{};
+    }
+
+    return tasks::task_manager::task::progress{
+        .completed = done ? cdata.compaction_size : progress_monitor.get_progress(),   // Consider tasks which skip all files.
+        .total = cdata.compaction_size
+    };
+}
+
 future<tasks::task_manager::task_ptr> compaction_manager::start_compaction_task(shared_ptr<compaction_task_executor> executor, task_params params, tasks::task_info parent_info) {
     auto schema = executor->compacting_table()->schema();
     tasks::task_manager::task_builder task_builder{_task_manager_module, std::move(params.type)};
