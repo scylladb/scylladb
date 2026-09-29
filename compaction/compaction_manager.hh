@@ -674,8 +674,6 @@ public:
         return _compaction_data.abort.abort_requested();
     }
 
-    void abort(abort_source& as) noexcept;
-
     void stop_compaction(sstring reason) noexcept;
 
     compaction_stopped_exception make_compaction_stopped_exception() const;

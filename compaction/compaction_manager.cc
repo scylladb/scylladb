@@ -1057,13 +1057,6 @@ void compaction_task_executor::finish_compaction(state finish_state) noexcept {
     _compaction_state.compaction_done.signal();
 }
 
-void compaction_task_executor::abort(abort_source& as) noexcept {
-    if (!as.abort_requested()) {
-        as.request_abort();
-        stop_compaction("user requested abort");
-    }
-}
-
 void compaction_task_executor::stop_compaction(sstring reason) noexcept {
     _compaction_data.stop(std::move(reason));
 }
