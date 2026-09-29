@@ -7,6 +7,7 @@ target_sources(index
     secondary_index_manager.cc
     external_index.cc
     fulltext_index.cc
+    pattern_index.cc
     index_option_utils.cc
     vector_index.cc)
 target_include_directories(index
