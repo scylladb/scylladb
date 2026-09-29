@@ -818,7 +818,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
         // Background reclaim is supposed to eventually ensure a certain amount of free memory.
-        while (memory::free_memory() < background_reclaim_free_memory_threshold) {
+        while (memory::free_memory() < default_background_reclaim_goal) {
             seastar::sleep(std::chrono::milliseconds(1)).get();
         }
 
