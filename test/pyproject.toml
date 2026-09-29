@@ -46,6 +46,7 @@ dependencies = [
     "ldap3==2.9.1",
     "cloud-detect==0.0.15",
     "google-cloud-storage==3.14.1",
+    "ruamel.yaml==0.19.1",
 ]
 
 [dependency-groups]
