@@ -218,6 +218,8 @@ class ScyllaClusterManager:
         self.ccluster: CassandraCluster | None = None
         self.cql: CassandraSession | None = None
         self.exclusive_clusters: list[CassandraCluster] = []
+        # Clusters handed to the test by con_gen(); closed when the test ends.
+        self.test_clusters: list[CassandraCluster] = []
         self.ignore_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for errors
         self.ignore_cores_log_patterns: list[str] = []  # patterns to ignore in server logs when checking for core files
 
@@ -245,6 +247,7 @@ class ScyllaClusterManager:
         """
         self.logger.info("ScyllaManager stopping for test %s", self.test_name)
         self.driver_close()
+        self.close_test_clusters()
         self.thread_pool.shutdown(wait=False)
         if self.cluster:
             self.logger.info("ScyllaManager: stopping Scylla cluster %s after %s", self.cluster, self.test_name)
@@ -748,7 +751,32 @@ class ScyllaClusterManager:
         connection when no query pool is usable. queries_only_via_control_connection
         always uses it. Both are harness flags translated to a driver option when
         the installed driver supports it.
+
+        The test need not shut it down: it is shut down when the test ends
+        (close_test_clusters()), so a test that drops it does not leave its
+        control connection reconnecting to the test's nodes for the rest of the
+        worker's life.
         """
+        cluster = self._new_cluster(hosts, port, use_ssl, auth_provider, load_balancing_policy,
+                                    control_connection_fallback, queries_only_via_control_connection)
+        self.test_clusters.append(cluster)
+        return cluster
+
+    def close_test_clusters(self) -> None:
+        """Shut down the clusters con_gen() gave the test."""
+
+        for cluster in self.test_clusters:
+            safe_driver_shutdown(cluster)
+        self.test_clusters.clear()
+
+    def _new_cluster(self,
+                     hosts: list[IPAddress | EndPoint],
+                     port: int = 9042,
+                     use_ssl: bool = False,
+                     auth_provider: AuthProvider | None = None,
+                     load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy(),
+                     control_connection_fallback: bool = False,
+                     queries_only_via_control_connection: bool = False) -> CassandraCluster:
         assert hosts, "python driver connection needs at least one host to connect to"
         ssl_context = None
         if use_ssl:
@@ -833,7 +861,7 @@ class ScyllaClusterManager:
         # avoids leaking connections if driver wasn't closed before
         self.driver_close()
         self.logger.debug("driver connecting to %s", servers)
-        self.ccluster = self.con_gen(
+        self.ccluster = self._new_cluster(
             hosts=servers,
             port=self.port,
             use_ssl=self.use_ssl,
@@ -872,9 +900,9 @@ class ScyllaClusterManager:
     async def get_cql_exclusive(self,
                                 server: ServerInfo,
                                 auth_provider: AuthProvider | None = None) -> CassandraSession:
-        cluster = self.con_gen([server.ip_addr], self.port, self.use_ssl,
-                               auth_provider if auth_provider else self.auth_provider,
-                               WhiteListRoundRobinPolicy([server.ip_addr]))
+        cluster = self._new_cluster([server.ip_addr], self.port, self.use_ssl,
+                                    auth_provider if auth_provider else self.auth_provider,
+                                    WhiteListRoundRobinPolicy([server.ip_addr]))
         self.exclusive_clusters.append(cluster)
         cql = cluster.connect()
         await wait_for_cql_and_get_hosts(cql, [server], time() + 60)
