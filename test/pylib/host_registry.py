@@ -60,7 +60,9 @@ class HostRegistry:
         # the subnet is ours for as long as this process runs; children that outlive
         # it are on their own (see ldap_server.kill_leaked_toxiproxy).
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
-        second_octet = int(worker_id[2:]) + 1
+        # Wrapped into 1..254: a scheduler that replaces workers during the run numbers them
+        # past 254 (gw270 in a debug run), and 127.256.x.y is not an address.
+        second_octet = int(worker_id[2:]) % 254 + 1
         # Try the worker-derived octet first, so xdist workers of the same run never clash, then
         # every other octet once in random order, to find a subnet not used by another test.py
         # invocation on the same machine. Avoid 127.0.*.* since CCM (a different test framework)
