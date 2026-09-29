@@ -15,6 +15,7 @@
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
+#include <ranges>
 
 namespace db {
 class system_keyspace;
@@ -248,9 +249,12 @@ struct keyspace_rf_change_plan {
 
 class migration_plan {
 public:
-    using migrations_vector = utils::chunked_vector<tablet_migration_info>;
+    /// Migrations which were planned and load-checked together, e.g. for co-located sibling tablets.
+    using migration_group = utils::small_vector<tablet_migration_info, 2>;
+    using migration_groups = utils::chunked_vector<migration_group>;
 private:
-    migrations_vector _migrations;
+    migration_groups _migration_groups; // Holds no empty groups.
+    size_t _migration_count = 0;
     table_resize_plan _resize_plan;
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
@@ -263,9 +267,9 @@ public:
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
     bool requires_schema_changes() const { return _rf_change_plan.size() > 0; }
 
-    const migrations_vector& migrations() const { return _migrations; }
+    auto migrations() const { return _migration_groups | std::views::join; }
     bool empty() const { return !size(); }
-    size_t size() const { return _migrations.size()
+    size_t size() const { return _migration_count
                                + _resize_plan.size()
                                + _repair_plan.size()
                                + _rack_list_colocation_plan.size()
@@ -273,7 +277,7 @@ public:
                                + _rf_change_plan.size()
                                + _restore_completions.size();
                         }
-    size_t tablet_migration_count() const { return _migrations.size(); }
+    size_t tablet_migration_count() const { return _migration_count; }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
     size_t tablet_rack_list_colocation_count() const { return _rack_list_colocation_plan.size(); }
@@ -281,13 +285,22 @@ public:
     const std::vector<drain_failure>& drain_failures() const { return _drain_failures; }
 
     void add(tablet_migration_info info) {
-        _migrations.emplace_back(std::move(info));
+        add(migration_group{std::move(info)});
     }
 
-    void add(migrations_vector migrations) {
-        for (auto&& mig : migrations) {
-            add(std::move(mig));
+    void add(migration_group group) {
+        if (group.empty()) {
+            return;
         }
+        _migration_count += group.size();
+        _migration_groups.emplace_back(std::move(group));
+    }
+
+    /// Removes all tablet migrations from the plan and returns them grouped as they were added.
+    /// Other parts of the plan are left intact.
+    migration_groups take_migration_groups() {
+        _migration_count = 0;
+        return std::exchange(_migration_groups, {});
     }
 
     void add(drain_failure failure) {
@@ -295,7 +308,8 @@ public:
     }
 
     void merge(migration_plan&& other) {
-        std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
+        std::move(other._migration_groups.begin(), other._migration_groups.end(), std::back_inserter(_migration_groups));
+        _migration_count += std::exchange(other._migration_count, 0);
         std::move(other._drain_failures.begin(), other._drain_failures.end(), std::back_inserter(_drain_failures));
         std::move(other._restore_completions.begin(), other._restore_completions.end(), std::back_inserter(_restore_completions));
         _has_nodes_to_drain |= other._has_nodes_to_drain;

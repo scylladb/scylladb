@@ -2896,7 +2896,7 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
         topology.paused_rf_change_requests.insert(id);
         migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
 
-        BOOST_REQUIRE_EQUAL(plan.migrations().size(), 2);
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
         // A and B both move host2 -> host1. They must land on different shards
         // so that host1's shards are loaded evenly. Count migrations per shard.
         std::unordered_map<shard_id, unsigned> shard_migrations;
@@ -2978,6 +2978,141 @@ SEASTAR_THREAD_TEST_CASE(test_rf_change_respects_source_streaming_concurrency) {
             }
         }
         BOOST_REQUIRE_EQUAL(rebuilds, 1);
+    }).get();
+}
+
+// Rebuilds of two racks extended at once compete for the streaming caps of the same sources.
+SEASTAR_THREAD_TEST_CASE(test_concurrent_rack_rebuilds_share_streaming_caps) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack_s1 = topo.rack();
+        auto host_s1 = topo.add_node(node_state::normal, 2);
+        auto rack_s2 = topo.start_new_rack();
+        auto host_s2 = topo.add_node(node_state::normal, 2);
+        auto rack_t1 = topo.start_new_rack();
+        [[maybe_unused]] auto host_t1 = topo.add_node(node_state::normal, 4);
+        auto rack_t2 = topo.start_new_rack();
+        [[maybe_unused]] auto host_t2 = topo.add_node(node_state::normal, 4);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack_s1.rack, rack_s2.rack}}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            shard_id shard = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host_s1, shard},
+                        tablet_replica{host_s2, shard},
+                    }
+                });
+                shard = (shard + 1) % 2;
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc, rack_s1.rack, dc, rack_s2.rack);
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        e.local_db().find_keyspace(ks_name).metadata()->set_next_strategy_options(locator::replication_strategy_config_options{
+            {dc, locator::rack_list{rack_s1.rack, rack_s2.rack, rack_t1.rack, rack_t2.rack}}});
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.ongoing_rf_changes.insert(id);
+        auto stats_before = *talloc.stats().for_dc(dc);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+        auto stats = *talloc.stats().for_dc(dc) - stats_before;
+
+        // Each source shard admits one rebuild per round, and each rack wants one per shard.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_map<sstring, unsigned> rebuilds_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == tablet_transition_kind::rebuild_v2);
+            BOOST_REQUIRE(mig.dst);
+            rebuilds_per_rack[stm.get()->get_topology().get_rack(mig.dst->host)]++;
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack_t1.rack], 1);
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack_t2.rack], 1);
+        BOOST_REQUIRE_EQUAL(stats.migrations_produced, 2);
+        BOOST_REQUIRE_EQUAL(stats.rebuilds_produced, 2);
+    }).get();
+}
+
+// Rebuilds of two racks, each losing a node to removenode, compete for the streaming caps of the same source node.
+SEASTAR_THREAD_TEST_CASE(test_concurrent_removenodes_share_streaming_caps) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack1 = topo.rack();
+        auto host1 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 4);
+        auto rack2 = topo.start_new_rack();
+        auto host2 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 4);
+        auto rack3 = topo.start_new_rack();
+        auto host3 = topo.add_node(node_state::normal, 2);
+        // Only one node can be in a transition state, so concurrent removenodes are
+        // represented by remove requests of excluded nodes.
+        e.get_storage_service().local().mark_excluded({host1, host2}).get();
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack, rack3.rack}}}, 8);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Every tablet loses its rack1 and rack2 replicas, so all rebuilds stream from host3.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(8);
+            shard_id shard = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host1, 0},
+                        tablet_replica{host2, 0},
+                        tablet_replica{host3, shard},
+                    }
+                });
+                shard = (shard + 1) % 2;
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto stats_before = *talloc.stats().for_dc(dc);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+        auto stats = *talloc.stats().for_dc(dc) - stats_before;
+
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_map<sstring, unsigned> rebuilds_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == tablet_transition_kind::rebuild_v2);
+            BOOST_REQUIRE(mig.dst);
+            rebuilds_per_rack[stm.get()->get_topology().get_rack(mig.dst->host)]++;
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack1.rack], 1);
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack2.rack], 1);
+        BOOST_REQUIRE_EQUAL(stats.migrations_produced, 2);
+        BOOST_REQUIRE_EQUAL(stats.rebuilds_produced, 2);
     }).get();
 }
 
@@ -5309,7 +5444,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats)
         {
             auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
-            BOOST_REQUIRE(!plan.migrations().empty());
+            BOOST_REQUIRE_NE(plan.tablet_migration_count(), 0);
             for (auto&& mig : plan.migrations()) {
                 BOOST_REQUIRE(mig.src);
                 BOOST_REQUIRE_EQUAL(mig.src->host, host2);
