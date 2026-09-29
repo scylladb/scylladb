@@ -8,6 +8,9 @@ import os
 import asyncio
 import logging
 import threading
+import yaml
+import json
+
 from enum import Enum
 from functools import cached_property
 
@@ -15,6 +18,7 @@ from test import TEST_DIR
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.kmip_wrapper import KMIPServerWrapper
 from test.pylib.azure_vault_server_mock import MockAzureVaultServer
+from test.pylib.gcp_kms_server_mock import MockGcpKmsServer
 
 import boto3
 
@@ -26,6 +30,7 @@ class KeyProvider(Enum):
     kmip = "KmipKeyProviderFactory"
     kms = "KmsKeyProviderFactory"
     azure = "AzureKeyProviderFactory"
+    gcp = "GcpKeyProviderFactory"
 
 class KeyProviderFactory:
     """Base class for provider factories"""
@@ -286,6 +291,93 @@ class AzureKeyProviderFactory(KeyProviderFactory):
     def require_restart(self):
         return True
 
+
+class GcpKeyProviderFactory(KeyProviderFactory):
+    gcp_project_id = "scylla-kms-test"
+    gcp_location = "global"
+    gcp_keyring = "test-ring"
+    gcp_keyname = "test-key"
+
+    """GcpKeyProviderFactory proxy"""
+    def __init__(self, tmpdir):
+        super(GcpKeyProviderFactory, self).__init__(KeyProvider.gcp, tmpdir)
+        self.tmpdir = tmpdir
+        self.gcp_server = None
+        self.gcp_host = "gcp_test"
+        self.gcp_port = 0
+        self.gcp_credentials_file = os.path.join(tmpdir, "creds.json")
+        self.gcp_server = None
+        self.gcp_user = "user1@apa.org"
+
+    def configuration_parameters(self) -> dict[str, str]:
+        """scylla.conf entries for provider"""
+        options = {
+            self.gcp_host: {
+                "master_key": f"{self.gcp_keyring}/{self.gcp_keyname}",
+                "gcp_project_id": self.gcp_project_id,
+                "gcp_location": self.gcp_location,
+                "gcp_credentials_file": self.gcp_credentials_file,
+                "endpoint": "http://127.0.0.1:" + str(self.gcp_port),
+            }
+        }
+        return super().configuration_parameters() | { "gcp_hosts": options } 
+
+    async def __aenter__(self):
+        self.gcp_server = MockGcpKmsServer("127.0.0.1", 0)
+        seed = { "projects":
+                { self.gcp_project_id:
+                 { "locations":
+                  { self.gcp_location:
+                   { "keyRings":
+                    { self.gcp_keyring:
+                     { "cryptoKeys":
+                      { self.gcp_keyname:
+                       { "purpose": 'ENCRYPT_DECRYPT',
+                         "versions": [{}],
+                         "users": [ self.gcp_user ]
+                       }
+                      }
+                     }
+                    }
+                   }
+                  }
+                 }
+                }
+            }
+        self.gcp_server.load_seed(yaml.safe_dump(seed))
+        self.gcp_port = self.gcp_server.server_address[1]
+        await self.gcp_server.start()
+
+        with open(self.gcp_credentials_file, "w", encoding='utf-8') as f:
+            creds = {
+                "type": "service_account",
+                "project_id": self.gcp_project_id,
+                "private_key_id": "c68de079f19d430a742bf18fed675a00caac13a2",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDCZ+yap8UNnxeR\nM1Ho10jx6JnpXdktDrBhF/vK/ENYmjiIjV1RsULtqJDHDrVJhK+k7chiA64M70XT\nOP/ABlvoNqPmX90WWroQd4HbEPnXMEMJYBiKg1vUtsUImB8soxKxCp0uY3sn+6cx\n8LNjvmI4waCclTTPIoLeh9s8USu5gr/ZrBQUjUlKLqSdoQfw4Tt1XRY0z4NDT3iX\naIrFeuwrXvnHKLFJ9j+jkdZm5qtjtBDR5C0tQbzUeD0xX0XTrPmgF8yt0JgmqUxs\nfp4/yGAOpuFpj5w11mRo6e4Kq2xvlxRJaBqoyd/70EgccwwBQ4gAN187CYp7PSuG\nFdD4MvAdAgMBAAECggEACVewNbB5VlG+crJqLcvmzAVXHDFv5evuSwQ5jAQ6glAL\nBnjwsqPXqQ8wQfixeqJ/RGhO+HLf0uxOyTtUgxhrI0o47zHNMK1UgsUTfwEeWJqP\npiwxkbqFV8Ae0O5qlR0TIWH2ssuCGCZOXyaHoHP+SWb4vn2nJ4srieEyhoAKH2SV\nOLlhB80QUd1xqVB9D6N6Ee13JQyWbDTqZPd8rSHJ3EmR9qxZtpxdtTKobpGNoFlH\nOXL26LAUMJ+N4A0Z6/RX5i/HJax5k2lrguawRzWibj8JtoH3V7iqpDmtSShpZdY4\n888EMePBo5AN0v01UYpOUQwUuMrPMp0EVUTjnDvnoQKBgQDon5tPo+axMvBImlA6\nZNoI5dnws3x4wZKHbhgGryU4kW9iGHKNU8sTVkvja40bJMNaPT+7wtuB+nOuLNjX\nZNOM4wRcqBgXPQ6elgrBwY5Pf2TVmiqdjvNLNWaI+3lRNiDg6Gf6TRQJ/0wa9IIt\nwlAgenpS1lI4I67oehjEwTYw0QKBgQDV8SWOFoAjNkWsN8/mCxxQZi1YwLS+xJsz\nlDYBlAAxVuyGJXCnJ7Q7AkKbIy365ZPh4sfFnLbfT5LNt//UUP87rpfcVeVuwUnP\nGM2+1Umo2j5ur9edlca97fMywj7c+3lOe/LBTkMP9KgnOAhAqLrsrOzSH77ChLtB\nmePcIER9jQKBgAMbFmzCyHK3NmQRw150OEEEKJvBGblXBEjQnHuCXSHbNzx9DRJ7\n+usgLNU1e2XQYNdUmAQ+vsWGfYLm0GJX00c/RLCkAeZVh1twr2YU2nyPO95qN4Vx\nAiiP5vWPPfhqm5fFIpZB7zGO+gomF5La1E0KtZVjjSd4un4aGziNR9bxAoGAFaB/\n/GIX5/dXibZGpOmgnhwGH3+zhclYKxmjb/tnHZW86T6lqbAgzwpGc2pV/pPwpBgJ\nu9dAwUhI/dTI3sylUIIwxcxFGjId5PqL6euju5b8UrIh6MM4SQDh4dKzCiG9vIpZ\nGuNvchB4YyaN5wNnif9dHUyqOv2x9Eq7NwhoBA0CgYEA1TeeQvYZgRK42jT5yC/R\nuPS+Eb8IhpeWHU52T+1SgSUFYmgNAbE7n0nHVzYE64IvsPmVZLrLhhXADjRHICvK\nhTtML1lBustG7Z9Tu66EZdQkvnJDwmVSZqVr2FmoOlXVS/qj4Tcc5kWvVp5ogI3u\npF0cRpeqEwY4dSWhiCznRkA=\n-----END PRIVATE KEY-----\n",
+                "client_email": self.gcp_user,
+                "client_id": "100849414604266807639",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": f"http://127.0.0.1:{self.gcp_port}/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/test1-262%40scylla-kms-test.iam.gserviceaccount.com",
+                "universe_domain": "googleapis.com"
+            }
+            json.dump(creds, f)
+
+        return self
+
+    async def __aexit__(self, exception_type, exception_value, exception_traceback):
+        # pylint: disable=bare-except
+        if self.gcp_server is not None:
+            await self.gcp_server.stop()
+
+    def additional_cf_options(self):
+        return super().additional_cf_options() | {"gcp_host": self.gcp_host}
+
+    def require_restart(self):
+        return True
+
+
 def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
     """Create key provider factory for enum"""
     res = None
@@ -299,6 +391,8 @@ def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
         res = KMSKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.azure:
         res = AzureKeyProviderFactory(tmpdir)
+    elif provider == KeyProvider.gcp:
+        res = GcpKeyProviderFactory(tmpdir)
     else:
         raise RuntimeError(f'Unknown key_provider: {provider}')
 

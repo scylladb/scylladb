@@ -39,6 +39,7 @@
 #include "test/lib/proc_utils.hh"
 #include "test/lib/aws_kms_fixture.hh"
 #include "test/lib/azure_kms_fixture.hh"
+#include "test/lib/gcp_kms_fixture.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
@@ -319,21 +320,28 @@ class fake_proxy {
     bool _do_proxy = true;
     future<> _f;
 
-    future<> run(std::string dst_addr) {
-        uint16_t port = 443u;
-        auto i = dst_addr.find_last_of(':');
-        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
-            port = std::stoul(dst_addr.substr(i + 1));
-            dst_addr = dst_addr.substr(0, i);
-        }
-
-        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
+    future<> run(std::string dst_endpoint) {
+        auto info = utils::http::parse_simple_url(dst_endpoint);
+        auto port = info.port;
+        auto dst_addr = info.host;
+        auto addr = co_await seastar::net::dns::resolve_name(dst_addr, seastar::net::inet_address::family::INET);
         std::vector<future<>> work;
+
+        testlog.debug("Proxy {} -> {} ({}:{}/{}:{})", _address, dst_endpoint, dst_addr, port, addr, port);
+
+        shared_ptr<seastar::tls::certificate_credentials> creds;
+        if (info.is_https()) {
+            creds = make_shared<seastar::tls::certificate_credentials>();
+            co_await creds->set_system_trust();
+        }
 
         while (_go_on) {
             try {
                 auto client = co_await _socket.accept();
-                auto dst = co_await seastar::connect(socket_address(addr, port));
+                auto dst = co_await (info.is_https()
+                    ? seastar::tls::connect(creds, socket_address(addr, port), seastar::tls::tls_options{ .server_name = info.host })
+                    : seastar::connect(socket_address(addr, port))
+                );
 
                 testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
 
@@ -391,10 +399,10 @@ class fake_proxy {
         }
     }
 public:
-    fake_proxy(std::string dst)
+    fake_proxy(std::string endpoint)
         : _socket(seastar::listen(socket_address(0x7f000001, 0)))
         , _address(_socket.local_address())
-        , _f(run(std::move(dst)))
+        , _f(run(std::move(endpoint)))
     {}
 
     const socket_address& address() const {
@@ -417,8 +425,8 @@ public:
  * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
  * exception, i.e. an eventual write error.
  */
-static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
-    fake_proxy proxy(host);
+static future<> network_error_test_helper(const tmpdir& tmp, const std::string& endpoint, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
+    fake_proxy proxy(endpoint);
     std::exception_ptr p;
     try {
         auto [scopts, yaml] = make_opts(proxy);
@@ -858,7 +866,7 @@ SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("
      * Pretend to have failover by using a local proxy.
     */
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        fake_proxy proxy(info.host);
+        fake_proxy proxy("kmip://" + info.host);
 
         auto host2 = boost::lexical_cast<std::string>(proxy.address());
 
@@ -909,7 +917,8 @@ SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_r
 
 SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
+        // fake an URI here. 
+        co_await network_error_test_helper(tmp, "kmip://" + info.host, [&](const auto& proxy) {
             auto yaml = fmt::format(R"foo(
                 kmip_hosts:
                     kmip_test:
@@ -1052,7 +1061,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider, local_aws_kms_wrapper, *check_run_t
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1071,7 +1080,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_master_key_in_cf, local_aws_kms
             kms_test:
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1110,7 +1119,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_broken_algo, local_aws_kms_wrap
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1135,7 +1144,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, l
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1145,15 +1154,17 @@ SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, l
 
 SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
     tmpdir tmp;
-    std::string host, scheme;
+    std::string host;
 
     if (endpoint.empty()) { 
-        host = make_aws_host(kms_aws_region, "kms");
-        scheme = "https://";
+        host = "https://" + make_aws_host(kms_aws_region, "kms");
+        // TODO: cannot run a proxy here, because REST calls to
+        // AWS are dependent on proper HTTP host headers (for virt host resolve)
+        // Need to build a real http proxy for this to work
+        BOOST_TEST_MESSAGE("Cannot run network proxy for actual AWS endpoint. Skipping test.");
+        co_return;
     } else {
-        auto info = utils::http::parse_simple_url(endpoint);
-        host = info.host + ":" + std::to_string(info.port);
-        scheme = info.scheme;
+        host = endpoint;
     }
 
     co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
@@ -1163,10 +1174,10 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
-                    endpoint: {3}://{4}
+                    endpoint: http://{3}
                     key_cache_expiry: 1ms
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
+            , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
         );
         return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
     });
@@ -1269,37 +1280,9 @@ SEASTAR_TEST_CASE(test_user_info_encryption_dont_allow_per_table_encryption) {
     * GCP_LOCATION - set to test location
 */
 
-struct gcp_test_env {
-    std::string key_name;
-    std::string location;
-    std::string project_id; 
-    std::string user_1_creds;
-    std::string user_2_creds;
-};
-
-static future<> gcp_test_helper(std::function<future<>(const tmpdir&, const gcp_test_env&)> f) {
-    gcp_test_env env {
-        .key_name = get_var_or_default("GCP_KEY_NAME", "test_ring/test_key"),
-        .location = get_var_or_default("GCP_LOCATION", "global"),
-        .project_id = get_var_or_default("GCP_PROJECT_ID", "scylla-kms-test"),
-        .user_1_creds = get_var_or_default("GCP_USER_1_CREDENTIALS", ""),
-        .user_2_creds = get_var_or_default("GCP_USER_2_CREDENTIALS", ""),
-    };
-
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
     tmpdir tmp;
-
-    if (env.user_1_creds.empty()) {
-        BOOST_ERROR("No 'GCP_USER_1_CREDENTIALS' provided");
-    }
-    if (env.user_2_creds.empty()) {
-        BOOST_ERROR("No 'GCP_USER_2_CREDENTIALS' provided");
-    }
-
-    co_await f(tmp, env);
-}
-
-SEASTAR_TEST_CASE(test_gcp_provider, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
@@ -1307,24 +1290,27 @@ SEASTAR_TEST_CASE(test_gcp_provider, *check_run_test_decorator("ENABLE_GCP_TEST"
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_1_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
         );
 
         co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_gcp_provider_with_master_key_in_cf, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_master_key_in_cf, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_1_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
         );
 
         // should fail
@@ -1345,18 +1331,19 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_master_key_in_cf, *check_run_test_decor
         }
 
         // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", gcp.key_name)
+        co_await test_provider(fmt::format("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", gcp_key_name)
             , tmp, yaml
             );
-    });
+    }
 }
 
 /**
  * Verify that trying to access key materials with a user w/o permissions to encrypt/decrypt using cloudkms
  * fails.
 */
-SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_invalid_user, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
@@ -1364,8 +1351,9 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_2_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_2_credentials, endpoint
         );
 
         // should fail
@@ -1373,16 +1361,17 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator
             co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
             , std::exception
         );
-    });
+    }
 }
 
 /**
  * Verify that impersonation of an allowed service account works. User1 can encrypt, but we run 
  * as User2. However, impersonating user1 will allow us do it ourselves.
 */
-SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
-        auto buf = co_await read_text_file_fully(sstring(gcp.user_1_creds));
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_impersonated_user, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
+        auto buf = co_await read_text_file_fully(sstring(gcp_user_1_credentials));
         auto json = rjson::parse(std::string_view(buf.begin(), buf.end()));
         auto user1 = rjson::get<std::string>(json, "client_email");
 
@@ -1394,11 +1383,45 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_deco
                     gcp_location: {2}
                     gcp_credentials_file: {3}
                     gcp_impersonate_service_account: {4}
+                    gcp_iam_endpoint_override: '{5}'
+                    endpoint: '{6}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_2_creds, user1
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_2_credentials, user1, gcp_iam_endpoint_override, endpoint
         );
 
         co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    }
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_network_error, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    std::string host;
+
+    if (endpoint.empty()) { 
+        host = "https://cloudkms.googleapis.com";
+        // TODO: cannot run a proxy here, because REST calls to
+        // GCP are dependent on proper HTTP host headers (for virt host resolve)
+        // Need to build a real http proxy for this to work
+        BOOST_TEST_MESSAGE("Cannot run network proxy for actual GCP endpoint. Skipping test.");
+        co_return;
+    } else {
+        host = endpoint;
+    }
+
+    co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
+        auto yaml = fmt::format(R"foo(
+            gcp_hosts:
+                gcp_test:
+                    master_key: {0}
+                    gcp_project_id: {1}
+                    gcp_location: {2}
+                    gcp_credentials_file: {3}
+                    endpoint: http://{4}
+                    key_cache_expiry: 1ms
+                    )foo"
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, proxy.address()
+        );
+        return std::make_tuple(scopts_map({ { "key_provider", "GcpKeyProviderFactory" }, { "gcp_host", "gcp_test" } }), yaml);
     });
 }
 
@@ -1723,10 +1746,8 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_both_secret_and_cert_real, re
 
 SEASTAR_FIXTURE_TEST_CASE(test_azure_network_error, fake_azure, *check_azure_mock_test_decorator()) {
     tmpdir tmp;
-    auto info = utils::http::parse_simple_url(imds_endpoint);
-    auto host_endpoint = fmt::format("{}:{}", info.host, info.port);
     auto key = key_name.substr(key_name.find_last_of('/') + 1);
-    co_await network_error_test_helper(tmp, host_endpoint, [&](const auto& proxy) {
+    co_await network_error_test_helper(tmp, imds_endpoint, [&](const auto& proxy) {
         auto yaml = fmt::format(R"foo(
             azure_hosts:
                 azure_test:
