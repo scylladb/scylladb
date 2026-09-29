@@ -13,6 +13,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/pattern_indexed_table_select_statement.hh"
 #include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -2158,11 +2159,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
 
     // The external search that serves the query, if any. Each kind has its own statement.
-    enum class external_search { ann, bm25 };
+    enum class external_search { ann, bm25, pattern };
     std::optional<external_search> search;
     auto set_search = [&] (external_search s) {
         if (search && *search != s) {
-            throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
+            throw exceptions::invalid_request_exception("No two of BM25, ANN and LIKE can be combined in the same query");
         }
         search = s;
     };
@@ -2259,6 +2260,31 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         return fun && fun->family() == functions::search_family::bm25;
     })) {
         set_search(external_search::bm25);
+    }
+
+    std::optional<secondary_index::index> pattern_idx;
+    if (restrictions->uses_secondary_indexing()) {
+        auto idx = restrictions->find_idx(db.find_column_family(schema).get_index_manager());
+        if (idx && secondary_index::secondary_index_manager::is_custom_index<secondary_index::pattern_index>(idx->metadata())) {
+            set_search(external_search::pattern);
+            pattern_idx = std::move(idx);
+        }
+    }
+    if (!pattern_idx) {
+        // Reject a `LIKE` on a pattern-indexed column that index selection did not route to the
+        // index, rather than leave it to filtering.
+        for (const auto& [column, restriction] : restrictions->get_non_pk_restriction()) {
+            if (expr::find(restriction, expr::oper_t::LIKE) && secondary_index::pattern_index::has_index_on_column(*schema, column->name_as_text())) {
+                // A filtered `LIKE` paged before the index was created.
+                if (_pinned_plan) {
+                    external_index_select_statement::throw_cannot_continue_paged_query(
+                            secondary_index::pattern_index::INDEX_TYPE_NAME, secondary_index::pattern_index::SEARCH_TYPE_NAME);
+                }
+                // Otherwise the query has another restriction next to the `LIKE`.
+                throw exceptions::invalid_request_exception(
+                        seastar::format("Pattern search queries support exactly one LIKE restriction, on the indexed column {}, and no other WHERE restrictions", column->name_as_text()));
+            }
+        }
     }
 
     // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
@@ -2415,6 +2441,22 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             prepare_limit(db, ctx, _per_partition_limit),
             stats,
             std::move(bm25_ordering_info_opt),
+            std::move(prepared_attrs));
+    } else if (search == external_search::pattern) {
+        stmt = pattern_indexed_table_select_statement::prepare(
+            db,
+            schema,
+            ctx.bound_variables_size(),
+            _parameters,
+            std::move(selection),
+            std::move(restrictions),
+            std::move(group_by_cell_indices),
+            is_reversed_,
+            std::move(ordering_comparator),
+            prepare_limit(db, ctx, _limit),
+            prepare_limit(db, ctx, _per_partition_limit),
+            stats,
+            *pattern_idx,
             std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
