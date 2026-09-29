@@ -83,3 +83,29 @@ class Test:
     mode: str
     run_id: int
     test_name: str
+
+
+@define
+class SchedulerMetric:
+    """What the dynamic scheduler saw and booked, sampled on the controller."""
+    host_id: str
+    ncpus: int
+    measured_cores: float
+    estimated_cores: float
+    booked_cores: float
+    cpu_target: float
+    cpu_ceiling: float
+    psi_cpu: float
+    psi_mem: float
+    mem_stall: float
+    mem_available: int
+    mem_booked: int
+    mem_forecast_growth: int
+    workers: int
+    draining: int
+    spawning: int
+    running: int
+    held: int
+    pending: int
+    stats: str
+    timestamp: datetime

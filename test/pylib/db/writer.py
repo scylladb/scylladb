@@ -21,6 +21,7 @@ METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
 HOST_INFO_TABLE = 'host_info'
+SCHEDULER_METRICS_TABLE = 'scheduler_metrics'
 RESOURCE_UTILIZATION_TABLE = 'resource_utilization'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
@@ -110,6 +111,33 @@ create_table = [
     );
     ''',
 
+    f'''
+    CREATE TABLE IF NOT EXISTS {SCHEDULER_METRICS_TABLE} (
+        id INTEGER PRIMARY KEY,
+        host_id VARCHAR(5) NOT NULL,
+        ncpus INTEGER,
+        measured_cores REAL,
+        estimated_cores REAL,
+        booked_cores REAL,
+        cpu_target REAL,
+        cpu_ceiling REAL,
+        psi_cpu REAL,
+        psi_mem REAL,
+        mem_stall REAL,
+        mem_available INTEGER,
+        mem_booked INTEGER,
+        mem_forecast_growth INTEGER,
+        workers INTEGER,
+        draining INTEGER,
+        spawning INTEGER,
+        running INTEGER,
+        held INTEGER,
+        pending INTEGER,
+        stats TEXT,
+        timestamp DATETIME,
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+    );
+    ''',
     f'''
     CREATE TABLE IF NOT EXISTS {CGROUP_MEMORY_METRICS_TABLE} (
         id INTEGER PRIMARY KEY,

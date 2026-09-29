@@ -32,6 +32,7 @@ if TEST_RUNNER == "runpy":
         return None
 else:
     pytest_plugins.append("test.pylib.runner")
+    pytest_plugins.append("test.pylib.dynamic_scheduler")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
