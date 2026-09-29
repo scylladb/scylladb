@@ -47,3 +47,18 @@ def boost_list_cache() -> Path | None:
 def containers() -> Path | None:
     """The cgroups of the containers each worker started, one file per worker."""
     return _path("containers")
+
+
+def evictions() -> Path | None:
+    """Flags telling a worker to skip the test it holds, one file per worker.
+
+    When no waiting test fits in memory, the dynamic scheduler sends an idle worker home to
+    free what that worker holds.  But an idle xdist worker already has its next test, and
+    the controller cannot take a test back: the shutdown that ends the worker is also what
+    makes it run the test it holds.  So before the shutdown the controller writes the held
+    test's node id to a file named after the worker.  The worker finds it before running
+    that test, skips it without reporting anything, and exits; the controller then queues
+    the test again for a worker that has room.  Killing the worker instead would make
+    xdist count a crash and start a replacement.
+    """
+    return _path("evictions")
