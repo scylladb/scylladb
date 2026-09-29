@@ -739,7 +739,7 @@ future<tasks::task_manager::task_ptr> repair::task_manager_module::start_shard_r
                 .set_keyspace(rstate->get_keyspace())
                 .set_progress_units("ranges")
                 .set_parent_info(parent_data)
-                .set_progress_fn([rstate] {
+                .set_progress_fn([rstate] (const tasks::task_manager::task::impl&) {
                     return make_ready_future<tasks::task_manager::task::progress>(tasks::task_manager::task::progress{
                         .completed = rstate->_ranges_complete,
                         .total = rstate->ranges_size()

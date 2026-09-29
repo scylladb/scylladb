@@ -331,7 +331,7 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
-                .set_progress_fn([progress] {
+                .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
                     return make_ready_future<tasks::task_manager::task::progress>(*progress);
                 });
     auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), ks_tables = std::move(ks_tables), locations = std::move(locations), move_files, progress] (tasks::task_manager::task::impl& self) mutable {
