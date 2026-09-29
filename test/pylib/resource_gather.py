@@ -160,6 +160,22 @@ class ResourceGatherOn(ResourceGatherRecord):
         self.cgroup_path = CGROUP_TESTS / self.worker_id
         self._memory_peak_fd: IO | None = None
         self._cpu_stat_start: dict[str, float] | None = None
+        self.anon_samples: list[int] = []
+
+    @property
+    def anon_peak(self) -> int | None:
+        """Peak anonymous (non page-cache) memory of the worker cgroup seen during the test."""
+        return max(self.anon_samples) if self.anon_samples else None
+
+    def _read_anon_memory(self) -> int | None:
+        """Anonymous memory of the worker cgroup, plus that of the containers the worker started.
+
+        A container lives in its own cgroup (see test/pylib/container_accounting.py), so
+        without adding it a test's peak would leave out, say, the Cassandra JVM it ran.
+        """
+        from test.pylib.container_accounting import worker_anon
+        anon_memory = worker_anon(self.cgroup_path, worker=self.worker_id)
+        return None if anon_memory is None else int(anon_memory)
 
     def stop_monitoring(self) -> None:
         self.stop_event.set()
@@ -171,15 +187,20 @@ class ResourceGatherOn(ResourceGatherRecord):
         self.future = self.pool.submit(self._monitor_cgroup)
 
     def _monitor_cgroup(self) -> None:
-        """Continuously monitors cgroup memory utilization every second."""
+        """Every second: the cgroup's memory, and its anonymous part for the test's peak."""
         memory_current = self.cgroup_path / 'memory.current'
         sqlite_writer = SQLiteWriter(self.db_path)
         try:
             while not self.stop_event.is_set():
                 try:
+                    memory_current_now = int(memory_current.read_text().strip())
+                    anon_memory = self._read_anon_memory()  # kept for the footprint-to-anonymous ratio
+                    if anon_memory is not None:
+                        self.anon_samples.append(anon_memory)
+                    # the shared metrics table keeps its original meaning: memory.current
                     timeline_record = CgroupMetric(
                         test_id=self.test_id,
-                        memory=int(memory_current.read_text().strip()),
+                        memory=memory_current_now,
                         timestamp=datetime.now()
                     )
                     sqlite_writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
@@ -228,6 +249,9 @@ class ResourceGatherOn(ResourceGatherRecord):
 
     def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         test_metrics = super().get_test_metrics(seastar_io)
+        anon_memory = self._read_anon_memory()
+        if anon_memory is not None:
+            self.anon_samples.append(anon_memory)
         if self._memory_peak_fd is not None:
             try:
                 self._memory_peak_fd.seek(0)
