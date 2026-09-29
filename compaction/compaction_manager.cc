@@ -659,13 +659,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
         executor.switch_state(compaction_task_executor::state::none);
     });
 
-    tasks::task_manager::task_ptr task;
-    if constexpr (std::is_base_of_v<compaction_task_impl, TaskExecutor>) {
-        task = co_await get_task_manager_module().make_task(task_executor, parent_info);
-        task->start();
-    } else {
-        task = co_await start_compaction_task(task_executor, std::move(params), parent_info);
-    }
+    auto task = co_await start_compaction_task(task_executor, std::move(params), parent_info);
     co_await task->done();
     co_return task_executor->get_stats();
 }
