@@ -23,7 +23,7 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -38,46 +38,21 @@ def is_table_deleted(dynamodb, table_name: str) -> bool:
             return True
         raise
 
-# Helper to get the table ARN from a table object.
-def get_table_arn(table):
-    desc = table.meta.client.describe_table(TableName=table.name)
-    return desc['Table']['TableArn']
-
-
-# Helper to create a unique S3 bucket name.
+# Bucket names allow neither uppercase letters nor underscores, so
+# unique_table_name() cannot be used.
 def unique_bucket_name():
     return f"alternator-export-test-{uuid.uuid4().hex[:12]}"
 
-
-# Create an S3 client using the same endpoint configuration as the DynamoDB
-# fixture where possible. On AWS, the default S3 client is used. On Scylla,
-# we will use MinIo (or something similar capable of pretending S3).
-# The code has branch to handle both cases, but the MinIo path is not covered as
-# Scylla implementation is not ready - it's here as a placeholder.
+# An S3 client in the "dynamodb" fixture's region. DynamoDB allows a bucket
+# in another region, but keeping it in the table's region saves cost and
+# latency. Local testing does not run an S3 server (such as MinIO) yet.
 def make_s3_client(dynamodb):
     if is_aws(dynamodb):
-        return boto3.client('s3')
-    # Placeholder for MinIo configuration for local Scylla testing.
-    assert False, "MinIo S3 client configuration for local Scylla testing is not implemented yet"
+        return boto3.client('s3', region_name=dynamodb.meta.client.meta.region_name)
+    raise NotImplementedError(
+        'local testing does not run an S3 server (such as MinIO) yet')
 
-
-# Attach an explicit Deny on PutObject so an in-progress DynamoDB export
-# cannot recreate objects while we purge the bucket. Delete/List are left
-# alone, so cleanup still works with our own credentials.
-def block_bucket_writes_on_s3(s3_client, bucket_name):
-    policy = {
-        'Version': '2012-10-17',
-        'Statement': [{
-            'Sid': 'BlockWrites',
-            'Effect': 'Deny',
-            'Principal': '*',
-            'Action': ['s3:PutObject', 's3:PutObjectAcl'],
-            'Resource': f'arn:aws:s3:::{bucket_name}/*',
-        }],
-    }
-    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-
-# Context manager that creates a uniquely-named S3 bucket and deletes it (including all objects) on exit.
+# Create an S3 bucket and delete it, with its contents, on exit.
 @contextmanager
 def new_s3_bucket(s3_client, bucket_name=None):
     if bucket_name is None:
@@ -92,36 +67,47 @@ def new_s3_bucket(s3_client, bucket_name=None):
     try:
         yield bucket_name
     finally:
-        # We will try hard to cleanup on AWS (leftovers are costly)
-        # We don't care for local (Minio or similar) - cleanup is not critical there.
-        if is_aws(s3_client):
-            # An export may still be running and writing into this bucket; deny
-            # further writes first so the purge below cannot race with it.
-            try:
-                block_bucket_writes_on_s3(s3_client, bucket_name)
-            except ClientError as ce:
-                logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
-                # Not yet fatal - fall through to the retry loop below.
+        # We try hard to clean up: a bucket left behind on AWS costs money.
+        # DynamoDB cannot cancel an export. An export the test did not wait
+        # for keeps writing, so delete_bucket would fail with BucketNotEmpty
+        # and leak the bucket. Denying Put makes the export's next write
+        # fail, so DynamoDB ends the export as FAILED and stops writing.
+        # Delete/List stay allowed for our cleanup.
+        policy = {
+            'Version': '2012-10-17',
+            'Statement': [{
+                'Sid': 'BlockWrites',
+                'Effect': 'Deny',
+                'Principal': '*',
+                'Action': ['s3:PutObject', 's3:PutObjectAcl'],
+                'Resource': f'arn:aws:s3:::{bucket_name}/*',
+            }],
+        }
+        try:
+            s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+        except ClientError as ce:
+            logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
+            # Not yet fatal - fall through to the retry loop below.
 
-            # Delete all objects before deleting the bucket
-            deadline = time.time() + 60 # 60-second timeout for bucket deletion
-            while time.time() < deadline:
-                paginator = s3_client.get_paginator('list_objects_v2')
-                for page in paginator.paginate(Bucket=bucket_name):
-                    if 'Contents' in page:
-                        s3_client.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
-                        )
-                try:
-                    s3_client.delete_bucket(Bucket=bucket_name)
-                    break
-                except ClientError as ce:
-                    if ce.response['Error']['Code'] != 'BucketNotEmpty':
-                        raise
-                    time.sleep(2)
-            else:
-                assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
+        # Delete all objects, then the bucket.
+        deadline = time.time() + 60 # 60-second timeout for bucket deletion
+        while time.time() < deadline:
+            paginator = s3_client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=bucket_name):
+                if 'Contents' in page:
+                    s3_client.delete_objects(
+                        Bucket=bucket_name,
+                        Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
+                    )
+            try:
+                s3_client.delete_bucket(Bucket=bucket_name)
+                break
+            except ClientError as ce:
+                if ce.response['Error']['Code'] != 'BucketNotEmpty':
+                    raise
+                time.sleep(2)
+        else:
+            assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
 
 
 # This creates an empty table with string partition key and no sort key. We do
@@ -1245,7 +1231,7 @@ def test_list_exports_summary_fields(dynamodb, test_table_s):
 # In future it will be updated to use a minio bucket and `scylla_only` marker will be removed.
 def test_export_table_basic(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
     client_token = random_string(20)
 
     response = client.export_table_to_point_in_time(
@@ -1270,7 +1256,7 @@ def test_export_table_basic(test_table_s_for_export_only, scylla_only):
 # Test that non-DYNAMODB_JSON format (ION) is rejected.
 def test_export_table_unsupported_format_ion(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[eE]xportFormat'):
         client.export_table_to_point_in_time(
@@ -1294,7 +1280,7 @@ def test_update_continuous_backups_rejected(test_table_s_for_export_only, scylla
 # Test that incremental export is rejected.
 def test_export_table_unsupported_incremental(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[eE]xportType'):
         client.export_table_to_point_in_time(
@@ -1307,7 +1293,7 @@ def test_export_table_unsupported_incremental(test_table_s_for_export_only, scyl
 # Test that IncrementalExportSpecification is rejected.
 def test_export_table_unsupported_incremental_spec(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[iI]ncrementalExportSpecification'):
         client.export_table_to_point_in_time(
@@ -1328,7 +1314,7 @@ def test_export_table_unsupported_incremental_spec(test_table_s_for_export_only,
 ])
 def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scylla_only, unsupported_parameter, value):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match=f'ValidationException.*{unsupported_parameter}'):
         client.export_table_to_point_in_time(
@@ -1343,7 +1329,7 @@ def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scyll
 # For performance reasons in test we don't want to follow the suit with it.
 def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     response = client.export_table_to_point_in_time(
         TableArn=table_arn,
@@ -1356,7 +1342,7 @@ def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only)
 # Test that ExportTime in the past (more than 5 minutes) is rejected.
 def test_export_table_invalid_export_time_before_now(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
         client.export_table_to_point_in_time(
@@ -1369,7 +1355,7 @@ def test_export_table_invalid_export_time_before_now(test_table_s_for_export_onl
 # We add additional time (1 minute) to avoid a race (where enough time will pass before the request is processed).
 def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
         client.export_table_to_point_in_time(
