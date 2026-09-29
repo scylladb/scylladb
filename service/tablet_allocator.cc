@@ -1544,6 +1544,14 @@ public:
                 continue;
             }
 
+            // The sketch throws when picking a shard on a node without complete load stats
+            // (one which (re)joined since the last refresh); leave the rack for the next round.
+            if (auto it = std::ranges::find_if(nodes_by_load_dst, [&] (host_id h) { return !_load_sketch->has_complete_data(h); });
+                    it != nodes_by_load_dst.end()) {
+                lblogger.info("Skipping RF change colocation plan in dc {}, rack {} until node {} has reported load stats", dc, rack, *it);
+                continue;
+            }
+
             auto nodes_cmp = nodes_by_load_cmp(nodes);
             auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
                 return nodes_cmp(b, a);
