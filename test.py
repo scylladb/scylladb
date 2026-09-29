@@ -182,6 +182,12 @@ def parse_cmd_line() -> argparse.Namespace:
                         help='Verbose reporting')
     parser.add_argument('--quiet', '-q', action='store_true', default=False,
                         help='Quiet reporting')
+    parser.add_argument('--dynamic-scheduler', action=argparse.BooleanOptionalAction, default=False,
+                        help="Start a test only when its CPU and memory fit the machine. Test costs come "
+                             "from <tmpdir>/profile.json, learned from earlier runs; without a profile the "
+                             "scheduler starts from built-in estimates and learns during the run. The pool "
+                             "starts at --jobs workers, by default one per CPU, and grows and shrinks with "
+                             "the load. --no-dynamic-scheduler restores the fixed-size worksteal scheduling.")
     threads = parser.add_mutually_exclusive_group(required=False)
     threads.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
@@ -189,7 +195,8 @@ def parse_cmd_line() -> argparse.Namespace:
                          dest="threads_multiplier", action="store",
                          help="Multiplier for the number of threads to use for running the tests. Default is) 1.0, "
                               "which means no change. Use a value less than 1.0 to reduce the number of threads, or a"
-                              "value greater than 1.0 to increase the number of threads.")
+                              "value greater than 1.0 to increase the number of threads. "
+                              "Ignored with --dynamic-scheduler.")
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
                         help="Save test log output on success and skip cleanup before the run.")
@@ -291,7 +298,14 @@ def parse_cmd_line() -> argparse.Namespace:
             nr_cpus = int(subprocess.check_output(
                 ['taskset', '-c', args.cpus, 'python3', '-c',
                  'import os; print(len(os.sched_getaffinity(0)))']))
-        args.jobs = ThreadsCalculator(args.modes, args.threads_multiplier).get_number_of_threads(nr_cpus)
+        if args.dynamic_scheduler:
+            # One worker per CPU to start with; the dynamic scheduler adds workers while every
+            # one of them is busy and the machine has CPU and memory to spare, up to three per
+            # CPU, and drains idle ones.  It sizes the pool itself, so --threads-multiplier
+            # does not apply.
+            args.jobs = nr_cpus
+        else:
+            args.jobs = ThreadsCalculator(args.modes, args.threads_multiplier).get_number_of_threads(nr_cpus)
 
     if not args.coverage_modes and args.coverage:
         args.coverage_modes = list(args.modes)
@@ -416,6 +430,10 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.dynamic_scheduler:
+        args.append('--dynamic-scheduler')
+    else:
+        args.append('--no-dynamic-scheduler')
     if options.coverage:
         args.append('--coverage')
         args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
