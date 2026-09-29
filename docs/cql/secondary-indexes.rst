@@ -398,6 +398,68 @@ The analyzers differ in how they tokenize and normalize text:
   ``Hello,`` and ``World!``). It does not apply lowercasing, stemming,
   or stop-word removal.
 
+.. _create-pattern-index-statement:
+
+Pattern Index :label-note:`ScyllaDB Cloud`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. note::
+
+   Pattern indexes are supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   For the full description, see the :doc:`Pattern Search documentation </features/pattern-search>`.
+
+A pattern index serves ``LIKE`` restrictions on a text column. Such a query does not need
+``ALLOW FILTERING``; if it is given, it is ignored and the index is still used.
+Instead of tokenizing the text into words, as a :ref:`full-text index <create-fulltext-index-statement>`
+does, it matches the whole value against the pattern, so a pattern such as ``'%abc%'`` is an index
+lookup rather than a scan of the table. Which patterns are supported depends on the index node. It is
+meant for values searched by any part of them, such as codes, identifiers and tags.
+
+A pattern index is a custom index created using the ``CUSTOM`` keyword and the index type
+``pattern_index``. CDC is enabled automatically on the base table when a pattern index is created.
+
+**Column restrictions:**
+
+* The indexed column must be of type ``text``, ``varchar``, or ``ascii``. Other types are rejected.
+* The indexed column must be a regular column. Primary-key and static columns cannot be indexed.
+* The table must use tablets (not vnodes).
+
+Example::
+
+   CREATE CUSTOM INDEX ON parts (code) USING 'pattern_index';
+
+   CREATE CUSTOM INDEX ON parts (supplier) USING 'pattern_index'
+       WITH OPTIONS = {'case_sensitive': 'false'};
+
+.. warning::
+
+   Creating a pattern index changes the meaning of every ``LIKE`` on its column, for every application
+   that queries the column, not only the one the index was created for. Once the index exists, a
+   ``LIKE`` on the column is served by the index, even with ``ALLOW FILTERING``:
+
+   * Queries that worked by filtering start failing. The ``LIKE`` must be the only restriction in the
+     ``WHERE`` clause, and the query needs a ``LIMIT`` of at most 1000, so for example a ``LIKE``
+     together with a restriction on the partition key, or a ``LIKE`` without a ``LIMIT``, is rejected.
+   * Queries that still succeed can return different rows, without any error. The index is eventually
+     consistent, so a recent write may be missed, and the rows are neither paged nor ordered. With
+     ``'case_sensitive': 'false'``, matching ignores letter case, so a ``LIKE`` returns rows that a
+     filtered ``LIKE`` does not.
+   * When the index node is unavailable, every ``LIKE`` on the column fails.
+
+   ``CREATE INDEX`` returns a warning that summarizes these changes. To restore filtered ``LIKE``, drop the
+   index with :ref:`DROP INDEX <drop-index-statement>`. For all the differences from a filtered
+   ``LIKE``, see :ref:`Indexed vs. Filtered LIKE <pattern-search-indexed-vs-filtered>`.
+
+The following options are supported for pattern indexes:
+
++--------------------+---------------------------------------------------------------------------------------+-------------------+
+| Option             | Description                                                                           | Default Value     |
++====================+=======================================================================================+===================+
+| ``case_sensitive`` | Whether matching distinguishes letter case, as ``LIKE`` does. With ``false`` both the | ``true``          |
+|                    | indexed values and the patterns are lowercased, so ``'%ab-%'`` matches                |                   |
+|                    | ``AB-1024-XL``. Supported values: ``true``, ``false``, in any letter case.            |                   |
++--------------------+---------------------------------------------------------------------------------------+-------------------+
+
 .. _drop-index-statement:
 
 DROP INDEX
@@ -414,6 +476,10 @@ name, which may optionally specify the keyspace of the index.
 
 If the index is currently being built, the ``DROP INDEX`` can still be executed. Once the ``DROP INDEX`` command is issued,
 the system stops the build process and cleans up any partially built data associated with the index.
+
+Dropping a :ref:`pattern index <create-pattern-index-statement>` restores filtered ``LIKE`` on its
+column: from then on, a ``LIKE`` on the column is a filter again, requires ``ALLOW FILTERING``, and
+follows the rules of :ref:`LIKE Operator <like-operator>`.
 
 .. If the index does not exists, the statement will return an error, unless ``IF EXISTS`` is used in which case the
 .. operation is a no-op.
