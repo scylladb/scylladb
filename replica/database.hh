@@ -575,6 +575,7 @@ private:
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
+    std::optional<std::chrono::seconds> _scrub_period;
     bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
@@ -1350,6 +1351,12 @@ public:
     bool is_auto_compaction_disabled_by_user() const {
       return _compaction_disabled_by_user;
     }
+
+    std::optional<std::chrono::seconds> scrub_period() const noexcept {
+        return _scrub_period;
+    }
+
+    void set_scrub_period(std::optional<std::chrono::seconds> period);
 
     utils::phased_barrier::operation write_in_progress() {
         return _pending_writes_phaser.start();
