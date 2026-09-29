@@ -24,12 +24,22 @@ class Request:
 
 @dataclass
 class Response:
+    """The reply names the key columns of the queried table, so the default fits a table keyed ((pk1, pk2), ck1, ck2).
+
+    A test on another table that lets an ANN request happen has to set a reply with its key columns.
+    """
+
     status: int = 200
     body: str = '{"primary_keys":{"pk1":[],"pk2":[],"ck1":[],"ck2":[]},"similarity_scores":[]}'
 
 
 @dataclass
 class BM25Response:
+    """The reply names the key columns of the queried table, so the default, which names none, fits no table.
+
+    A test that lets a BM25 request happen has to set a reply with its table's key columns.
+    """
+
     status: int = 200
     body: str = '{"primary_keys":{},"scores":[]}'
 
