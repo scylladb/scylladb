@@ -1387,6 +1387,30 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
 }
 
 
+// Repair fences/resumes are topology_change commands without tablet mutations; they must not rebuild tablet maps.
+SEASTAR_TEST_CASE(test_topology_change_without_tablet_mutations_keeps_tablet_metadata) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto table = add_table(e).get();
+        auto& client = e.get_raft_group0_client();
+        auto disable_balancing = [&] {
+            abort_source as;
+            auto guard = client.start_operation(as).get();
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_tablet_balancing_enabled(false);
+            auto cmd = client.prepare_command(topology_change{{builder.build()}}, guard, "test: disable tablet balancing");
+            client.add_entry(std::move(cmd), std::move(guard), as).get();
+        };
+        // The first command stops the balancer from replacing tablet maps under the test.
+        disable_balancing();
+        auto map_before = e.local_token_metadata_ptr()->tablets().all_tables_ungrouped().at(table).get();
+        disable_balancing();
+
+        auto tm = e.local_token_metadata_ptr();
+        BOOST_REQUIRE_EQUAL(tm->tablets(), read_tablet_metadata(e.local_qp()).get());
+        BOOST_REQUIRE(tm->tablets().all_tables_ungrouped().at(table).get() == map_before);
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_get_shard) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
