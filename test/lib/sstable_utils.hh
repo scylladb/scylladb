@@ -308,3 +308,10 @@ std::unique_ptr<sstable_stream_source> make_corrupted_sstable_stream_source(std:
 
 void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type component = component_type::Data);
 void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data);
+
+class simple_schema;
+
+// Adds count same-size sstables to cf, so STCS puts them in one bucket.
+// Must be called in a seastar thread.
+std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstables::sstable_version_types version,
+        uint32_t count);

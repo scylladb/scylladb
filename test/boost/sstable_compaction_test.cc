@@ -255,21 +255,6 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    });
 }
 
-// Adds count same-size sstables to cf, so STCS puts them in one bucket.
-static std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstable_version_types version,
-        uint32_t count) {
-    auto s = cf.schema();
-    std::vector<shared_sstable> ssts;
-    for (uint32_t i = 0; i < count; ++i) {
-        mutation m(s, ss.make_pkey(i));
-        ss.add_row(m, ss.make_ckey(0), "v");
-        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
-        column_family_test(cf).add_sstable(sst).get();
-        ssts.push_back(std::move(sst));
-    }
-    return ssts;
-}
-
 static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
     sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
     simple_schema ss;
