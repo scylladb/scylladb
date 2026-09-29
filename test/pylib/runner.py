@@ -38,7 +38,7 @@ from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
-    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, summarize_resource_utilization
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
@@ -435,20 +435,23 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             save_log_on_success=session.config.getoption("--save-log-on-success"),
             toxiproxy_byte_limit= session.config.getoption("--byte-limit"),
         )
+        # System-wide resource metrics (CPU%, memory) come from psutil and need no
+        # cgroup access, so they are gathered regardless of --gather-metrics.  They
+        # are identical from any process, so only the master records them.
+        system_resource_monitor = SystemResourceMonitor(temp_dir)
+        system_resource_monitor.start()
+
+        async def stop_resource_monitor() -> None:
+            system_resource_monitor.stop()
+
+        artifacts.add_exit_artifact(stop_resource_monitor)
+
     if gather_metrics:
         # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
         # Workers inherit SCYLLA_TEST_CGROUP_BASE_ENV from the master via environment inheritance.
         if not is_xdist_worker and SCYLLA_TEST_CGROUP_BASE_ENV not in os.environ:
             setup_cgroup(is_required=True)
         setup_worker_cgroup()
-        # System-wide resource metrics (CPU%, memory) are identical from any process.
-        # Only the master needs to record them.
-        if not is_xdist_worker:
-            system_resource_monitor = SystemResourceMonitor(temp_dir)
-            system_resource_monitor.start()
-            async def stop_resource_monitor() -> None:
-                system_resource_monitor.stop()
-            artifacts.add_exit_artifact(stop_resource_monitor)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -519,6 +522,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
     if xdist.is_xdist_worker(request_or_session=session):
         return
+
+    # The summary is telemetry, and it reads a database that a killed run may have left
+    # half written. An exception raised from this hook would cost the session the exit
+    # status set below - and a passing run its zero exit code - so it stays in here.
+    try:
+        summarize_resource_utilization(pathlib.Path(session.config.getoption("--tmpdir")).absolute())
+    except Exception:
+        logger.exception("Could not summarize the resource utilization of this run")
 
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")
