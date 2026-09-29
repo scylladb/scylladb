@@ -4993,6 +4993,29 @@ future<> storage_service::local_topology_barrier() {
     });
 }
 
+} // namespace service
+
+future<> node_ops::streaming_task_impl::run() {
+    // If no operation was previously started - start it now
+    // If previous operation still running - wait for it an return its result
+    // If previous operation completed successfully - return immediately
+    // If previous operation failed - restart it
+    if (!_result || _result->failed()) {
+        if (_result) {
+            service::rtlogger.info("retry streaming after previous attempt failed with {}", _result->get_future().get_exception());
+        } else {
+            service::rtlogger.info("start streaming");
+        }
+        _result = _action();
+    } else {
+        service::rtlogger.debug("already streaming");
+    }
+    co_await _result.value().get_future();
+    service::rtlogger.info("streaming completed");
+}
+
+namespace service {
+
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
     raft_topology_cmd_result result;
     rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);

@@ -198,25 +198,6 @@ tasks::is_internal streaming_task_impl::is_internal() const noexcept {
     return tasks::is_internal::no;
 }
 
-future<> streaming_task_impl::run() {
-    // If no operation was previously started - start it now
-    // If previous operation still running - wait for it an return its result
-    // If previous operation completed successfully - return immediately
-    // If previous operation failed - restart it
-    if (!_result || _result->failed()) {
-        if (_result) {
-            service::rtlogger.info("retry streaming after previous attempt failed with {}", _result->get_future().get_exception());
-        } else {
-            service::rtlogger.info("start streaming");
-        }
-        _result = _action();
-    } else {
-        service::rtlogger.debug("already streaming");
-    }
-    co_await _result.value().get_future();
-    service::rtlogger.info("streaming completed");
-}
-
 task_manager_module::task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept
     : tasks::task_manager::module(tm, "node_ops")
     , _ss(ss)
