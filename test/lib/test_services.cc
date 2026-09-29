@@ -63,6 +63,9 @@ public:
     unsigned min_compaction_threshold() const noexcept override {
         return schema()->min_compaction_threshold();
     }
+    std::optional<std::chrono::seconds> scrub_period() const noexcept override {
+        return table().scrub_period();
+    }
     bool compaction_enforce_min_threshold() const noexcept override {
         return true;
     }
