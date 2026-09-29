@@ -900,14 +900,9 @@ def test_export_client_token_doesnt_work_on_two_tables(dynamodb, test_table_s, t
             )
 
 # Test that exporting a nonexistent table returns TableNotFoundException.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
 def test_export_nonexistent_table(dynamodb, test_table_s):
     client = dynamodb.meta.client
-    s3 = make_s3_client(dynamodb)
-    region = dynamodb.meta.client.meta.region_name
-    table_arn = get_table_arn(test_table_s)
-    account_id = table_arn.split(':')[4]
-    fake_arn = f'arn:aws:dynamodb:{region}:{account_id}:table/alternator_keyspace@nonexistent_table_xyz'
+    fake_arn = get_table_arn(test_table_s) + '_nonexistent'
 
     with pytest.raises(ClientError, match='TableNotFoundException.*not found'):
         client.export_table_to_point_in_time(
