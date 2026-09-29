@@ -221,6 +221,10 @@ class ResourceGatherOn(ResourceGatherRecord):
         if cpu_stat_path.exists():
             with open(cpu_stat_path, 'r') as f:
                 self._cpu_stat_start = self._read_cpu_stat(f)
+        # CPU pressure of this worker's cgroup: stall time tells whether the test
+        # wanted more CPU than it got (contention), which cpu.stat cannot show.
+        self._cpu_stall_start = self._read_cpu_stall()
+        self.cpu_stall_sec: float | None = None
 
     def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         test_metrics = super().get_test_metrics(seastar_io)
@@ -239,6 +243,9 @@ class ResourceGatherOn(ResourceGatherRecord):
                 start_val = self._cpu_stat_start.get(stat, 0.0)
                 end_val = cpu_stat_end.get(stat, 0.0)
                 setattr(test_metrics, attr, end_val - start_val)
+        stall_end = self._read_cpu_stall()
+        if stall_end is not None and getattr(self, "_cpu_stall_start", None) is not None:
+            self.cpu_stall_sec = max(0.0, stall_end - self._cpu_stall_start)
 
         return test_metrics
 
@@ -256,6 +263,17 @@ class ResourceGatherOn(ResourceGatherRecord):
         'system_usec': 'system_sec',
         'usage_usec': 'usage_sec',
     }
+
+    def _read_cpu_stall(self) -> float | None:
+        """Seconds this cgroup's tasks spent runnable but waiting for a CPU (PSI 'some total')."""
+        try:
+            with open(self.cgroup_path / 'cpu.pressure', 'r') as f:
+                for line in f:
+                    if line.startswith('some'):
+                        return int(line.split('total=')[1].split()[0]) / 1_000_000
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _read_cpu_stat(file: TextIO) -> dict[str, float]:
