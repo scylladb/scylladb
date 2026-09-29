@@ -139,7 +139,7 @@ public:
     //
     // It does _not_ wait for any internal activity started by the established connections
     // to finish. It's the .stop() method that does it
-    future<> shutdown();
+    virtual future<> shutdown();
     future<> stop();
 
     future<> listen(socket_address addr,
