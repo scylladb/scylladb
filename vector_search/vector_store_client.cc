@@ -253,7 +253,7 @@ auto read_column_values(std::span<result_column const> columns, std::size_t idx)
     return values;
 }
 
-auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name,
+auto read_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::optional<std::string_view> score_field_name,
         const std::vector<std::string>& return_columns = {}) -> std::expected<primary_keys, ann_error> {
     if (!json.IsObject()) {
         vslogger.error("Vector Store returned invalid JSON: the reply is not an object");
@@ -269,21 +269,37 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
         return std::unexpected{service_reply_format_error{}};
     }
 
-    auto const* score_json = rjson::find(json, score_field_name);
-    if (score_json == nullptr) {
-        vslogger.error("Vector Store returned invalid JSON: missing '{}'", score_field_name);
+    auto const first_key_column_name = schema->partition_key_columns().begin()->name_as_text();
+    auto const* first_key_json = rjson::find(keys_json, first_key_column_name);
+    if (first_key_json == nullptr) {
+        vslogger.error("Vector Store returned invalid JSON: missing key column '{}'", first_key_column_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    if (!score_json->IsArray()) {
-        vslogger.error("Vector Store returned invalid JSON: '{}' is not an array", score_field_name);
+    if (!first_key_json->IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: key column '{}' is not an array", first_key_column_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& score_arr = score_json->GetArray();
-
-    // We assume that the score_arr, and all the key arrays in keys_json
+    // We assume that the score array, if any, and all the key arrays in keys_json
     // have the same length, which is the number of results returned
     // by the vector store.
-    auto size = score_arr.Size();
+    auto size = first_key_json->GetArray().Size();
+
+    rjson::value const* score_json = nullptr;
+    if (score_field_name) {
+        score_json = rjson::find(json, *score_field_name);
+        if (score_json == nullptr) {
+            vslogger.error("Vector Store returned invalid JSON: missing '{}'", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+        if (!score_json->IsArray()) {
+            vslogger.error("Vector Store returned invalid JSON: '{}' is not an array", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+        if (score_json->Size() != size) {
+            vslogger.error("Vector Store returned invalid JSON: '{}' array size differs from the key columns", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+    }
 
     auto columns = result_columns_from_json(json, return_columns, size);
     if (!columns) {
@@ -301,13 +317,14 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
         if (!ck) {
             return std::unexpected{ck.error()};
         }
-        auto const& score_val = score_arr[idx];
         float score = 0;
-        if (score_val.IsNumber()) {
+        if (score_json) {
+            auto const& score_val = score_json->GetArray()[idx];
+            if (!score_val.IsNumber()) {
+                vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", *score_field_name, idx, rjson::print(score_val));
+                return std::unexpected{service_reply_format_error{}};
+            }
             score = score_val.GetFloat();
-        } else {
-            vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", score_field_name, idx, rjson::print(score_val));
-            return std::unexpected{service_reply_format_error{}};
         }
         keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, score, read_column_values(*columns, idx)});
     }
@@ -316,7 +333,7 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
 
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema, const std::vector<std::string>& return_columns)
         -> std::expected<primary_keys, ann_error> {
-    return read_scored_primary_keys_json(json, schema, "similarity_scores", return_columns);
+    return read_primary_keys_json(json, schema, "similarity_scores", return_columns);
 }
 
 auto write_bm25_json(query_string query, limit limit) -> json_content {
@@ -324,7 +341,7 @@ auto write_bm25_json(query_string query, limit limit) -> json_content {
 }
 
 auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, fts_error> {
-    return read_scored_primary_keys_json(json, schema, "scores");
+    return read_primary_keys_json(json, schema, "scores");
 }
 
 auto write_highlight_json(query_string query, documents docs) -> json_content {
