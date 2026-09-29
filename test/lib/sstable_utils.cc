@@ -16,6 +16,7 @@
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/boost/sstable_test.hh"
+#include "test/lib/simple_schema.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
@@ -285,4 +286,18 @@ void corrupt_sstable(sstables::shared_sstable sst, component_type type) {
     auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, type, open_flags::wo, {}).get());
     auto close_os = deferred_close(os);
     os.write(std::move(wbuf)).get();
+}
+
+std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstable_version_types version,
+        uint32_t count) {
+    auto s = cf.schema();
+    std::vector<shared_sstable> ssts;
+    for (uint32_t i = 0; i < count; ++i) {
+        mutation m(s, ss.make_pkey(i));
+        ss.add_row(m, ss.make_ckey(0), "v");
+        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+        column_family_test(cf).add_sstable(sst).get();
+        ssts.push_back(std::move(sst));
+    }
+    return ssts;
 }
