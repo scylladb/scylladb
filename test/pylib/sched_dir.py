@@ -42,3 +42,8 @@ def _path(name: str) -> Path | None:
 def boost_list_cache() -> Path | None:
     """Listings of the boost test binaries, shared by the workers."""
     return _path("boost_list_cache")
+
+
+def containers() -> Path | None:
+    """The cgroups of the containers each worker started, one file per worker."""
+    return _path("containers")
