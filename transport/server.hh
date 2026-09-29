@@ -253,6 +253,7 @@ public:
             maintenance_socket_enabled used_by_maintenance_socket,
             netw::messaging_service& ms);
     ~cql_server();
+    future<> shutdown();
     future<> stop();
 
 public:
