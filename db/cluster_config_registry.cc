@@ -27,6 +27,7 @@
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
 #include "utils/log.hh"
+#include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db::cluster_config_registry {
@@ -45,8 +46,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -80,6 +80,12 @@ constexpr std::array registry_options = {
         .description = "Discard the regular hints a repair gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write acknowledged at consistency level ANY that only hints hold is lost. View hints are never discarded",
         .scopes = scope_set::of<scope::cluster>(),
         .default_value = true,
+    },
+    option{
+        .name = option_name::lsa_background_reclaim_goal_in_mb,
+        .description = "Amount of free memory per shard, in MiB, which the background reclaimer tries to maintain. 0 disables background reclaiming",
+        .scopes = node_oriented_scopes,
+        .default_value = int64_t(logalloc::default_background_reclaim_goal >> 20),
     },
 };
 

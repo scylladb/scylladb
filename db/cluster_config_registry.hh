@@ -65,6 +65,7 @@ namespace option_name {
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
+inline constexpr std::string_view lsa_background_reclaim_goal_in_mb = "lsa_background_reclaim_goal_in_mb";
 
 }
 

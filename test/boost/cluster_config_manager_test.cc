@@ -29,6 +29,7 @@
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
+#include "utils/logalloc.hh"
 
 BOOST_AUTO_TEST_SUITE(cluster_config_manager_test)
 
@@ -288,6 +289,39 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_node_oriented_waterfall) 
             mgr.local().refresh().get();
             BOOST_REQUIRE(!manager.resolve_config("test_node_only_option", ctx).has_value());
             BOOST_REQUIRE_EQUAL(manager.resolve_integer_config(opt, ctx), 0);
+        });
+    });
+}
+
+// lsa_background_reclaim_goal_in_mb resolves through the node-oriented chain and is not
+// a keyspace or table property.
+SEASTAR_TEST_CASE(test_lsa_background_reclaim_goal_is_node_oriented) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto* opt = db::cluster_config_registry::find(db::cluster_config_registry::option_name::lsa_background_reclaim_goal_in_mb);
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::is_table_oriented(*opt));
+        BOOST_REQUIRE_EQUAL(std::get<int64_t>(opt->default_value), int64_t(logalloc::default_background_reclaim_goal >> 20));
+
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER KEYSPACE ks_cfg WITH lsa_background_reclaim_goal_in_mb = 10").get(),
+            exceptions::syntax_exception);
+
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        db::cluster_config_manager::lookup_context ctx;
+        ctx.dc_name = topo.get_datacenter();
+        ctx.rack_name = topo.get_rack();
+        ctx.node_uuid = topo.my_host_id().uuid();
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), std::get<int64_t>(opt->default_value));
+        });
+
+        e.execute_cql("ALTER CLUSTER WITH lsa_background_reclaim_goal_in_mb = 10").get();
+        e.execute_cql(seastar::format("ALTER NODE {} WITH lsa_background_reclaim_goal_in_mb = 0", *ctx.node_uuid)).get();
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 0);
         });
     });
 }
