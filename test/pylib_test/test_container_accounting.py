@@ -16,6 +16,7 @@ import pytest
 import test.pylib.container_accounting as ca
 from test.pylib import sched_dir
 from test.pylib.dockerized_service import register_container
+from test.pylib.resource_gather import ResourceGatherOn
 
 
 def _cgroup(path: Path, anon: int, mapped: int = 0) -> Path:
@@ -72,6 +73,16 @@ def test_nothing_is_recorded_outside_a_worker_or_without_a_registry(world, monke
     monkeypatch.setattr(sched_dir, "_root", None)
     ca.register_container_pid(4242, worker="gw0")
     assert ca.container_cgroups("gw0") == []
+
+
+def test_a_tests_anonymous_peak_includes_its_workers_containers(world, monkeypatch):
+    """A learned peak must include the JVM, or the profile prices a migration test at its worker alone."""
+    monkeypatch.setattr(ca, "cgroup_of_pid", lambda pid: world.jvm)
+    ca.register_container_pid(4242, worker="gw1")
+    gatherer = SimpleNamespace(cgroup_path=world.tests / "gw1", worker_id="gw1")
+    assert ResourceGatherOn._read_anon_memory(gatherer) == 2_000 + 800_000
+    other = SimpleNamespace(cgroup_path=world.tests / "gw0", worker_id="gw0")
+    assert ResourceGatherOn._read_anon_memory(other) == 1_000
 
 
 def test_a_container_dockerized_server_starts_is_registered(world, monkeypatch, tmp_path):
