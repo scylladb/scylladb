@@ -25,31 +25,6 @@ class reshard_shard_descriptor;
 
 namespace compaction {
 
-// The progress of a compaction, which is complete once done is set.
-tasks::task_manager::task::progress get_compaction_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor, bool done);
-
-class compaction_task_impl : public tasks::task_manager::task::impl {
-public:
-    compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : tasks::task_manager::task::impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        _status.progress_units = "bytes";
-    }
-
-    virtual std::string type() const override = 0;
-    virtual tasks::is_abortable is_abortable() const noexcept override;
-protected:
-    virtual future<> run() override = 0;
-    future<tasks::task_manager::task::progress> get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const;
-};
-
 using current_task_type = tasks::task_manager::task_ptr;
 
 // The state through which a task waits for its turn among its siblings.
