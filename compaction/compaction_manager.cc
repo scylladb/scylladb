@@ -189,6 +189,10 @@ static inline int calculate_weight(const compaction_descriptor& descriptor) {
 
 static future<std::vector<sstables::shared_sstable>> get_all_sstables(compaction_group_view& t);
 
+static bool automatic_scrub_enabled(const compaction_group_view& t) noexcept {
+    return t.scrub_period().has_value();
+}
+
 unsigned compaction_manager::current_compaction_fan_in_threshold() const {
     if (_tasks.empty()) {
         return 0;
@@ -777,6 +781,9 @@ compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
+            if (_cm._awaiting_automatic_scrub.contains(_table) && automatic_scrub_enabled(*_table)) {
+                _cm.reevaluate_automatic_scrub();
+            }
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
                     *_table, std::current_exception());
@@ -1120,6 +1127,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
+    , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), _cfg.max_shares.get(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -1153,6 +1161,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
+    , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
@@ -1215,8 +1224,16 @@ void compaction_manager::enable() {
 
     _compaction_submission_timer.cancel();
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
+    // Unlike the periodic compaction submission timer, this one keeps running after the
+    // compaction manager is drained and submission is guarded instead in the callback.
+    if (!_automatic_scrub_submission_timer.armed()) {
+        _automatic_scrub_submission_timer.arm_periodic(automatic_scrub_submission_interval());
+    }
+
     throwing_assert(!_waiting_reevaluation);
     _waiting_reevaluation.emplace(postponed_compactions_reevaluation());
+    throwing_assert(!_waiting_automatic_scrub_reevaluation);
+    _waiting_automatic_scrub_reevaluation.emplace(automatic_scrub_reevaluation());
     cmlog.info("Enabled");
 }
 
@@ -1230,6 +1247,59 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
         }
         reevaluate_postponed_compactions();
     };
+}
+
+std::function<void()> compaction_manager::automatic_scrub_submission_callback() {
+    return [this] mutable {
+        // The timer is independent of enable()/drain(), so a tick landing while the manager
+        // is disabled must do nothing: the reevaluation fiber only runs while it is enabled.
+        if (is_disabled()) {
+            return;
+        }
+        for (auto& [table, state] : _compaction_state) {
+            if (automatic_scrub_enabled(*table)) {
+                schedule_table_for_automatic_scrub(table);
+            }
+        }
+        reevaluate_automatic_scrub();
+    };
+}
+
+future<> compaction_manager::do_one_automatic_scrub_reevaluation() {
+    try {
+        if (!_awaiting_automatic_scrub.empty()) {
+            cmlog.debug("Running automatic scrub");
+        }
+
+        auto candidates = std::exchange(_awaiting_automatic_scrub, {});
+
+        for (auto it = candidates.begin(); it != candidates.end();) {
+            auto t = *it;
+            if (is_disabled() || !_compaction_state.contains(t) || !automatic_scrub_enabled(*t)) {
+                it = candidates.erase(it);
+                continue;
+            }
+
+            co_await submit_automatic_scrub(*t);
+            it = candidates.erase(it);
+            co_await coroutine::maybe_yield();
+        }
+    } catch (...) {
+        cmlog.warn("Automatic scrub submission failed: {}", std::current_exception());
+    }
+}
+
+future<> compaction_manager::automatic_scrub_reevaluation() {
+    while (true) {
+        co_await _automatic_scrub_reevaluation.when();
+
+        if (is_disabled()) {
+            _awaiting_automatic_scrub.clear();
+            co_return;
+        }
+
+        co_await do_one_automatic_scrub_reevaluation();
+    }
 }
 
 future<> compaction_manager::postponed_compactions_reevaluation() {
@@ -1264,6 +1334,10 @@ void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
 }
 
+void compaction_manager::reevaluate_automatic_scrub() noexcept {
+    _automatic_scrub_reevaluation.signal();
+}
+
 future<> compaction_manager::stop_postponed_compactions() noexcept {
     auto waiting_reevaluation = std::exchange(_waiting_reevaluation, std::nullopt);
     if (!waiting_reevaluation) {
@@ -1276,6 +1350,16 @@ future<> compaction_manager::stop_postponed_compactions() noexcept {
 
 void compaction_manager::postpone_compaction_for_table(compaction_group_view* t) {
     _postponed.insert(t);
+}
+
+future<> compaction_manager::stop_automatic_scrub() noexcept {
+    auto waiting_reevaluation = std::exchange(_waiting_automatic_scrub_reevaluation, std::nullopt);
+    if (!waiting_reevaluation) {
+        return make_ready_future();
+    }
+    // Trigger a signal to properly exit from automatic_scrub_reevaluation() fiber
+    reevaluate_automatic_scrub();
+    return std::move(*waiting_reevaluation);
 }
 
 void compaction_manager::schedule_table_for_automatic_scrub(compaction_group_view* t) {
@@ -1397,9 +1481,13 @@ future<> compaction_manager::drain() {
     ++_disabled_state_count;
 
     _compaction_submission_timer.cancel();
+
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
-    co_await stop_postponed_compactions();
+    co_await coroutine::all(
+        [this] { return stop_postponed_compactions(); },
+        [this] { return stop_automatic_scrub(); }
+    );
     cmlog.info("Drained");
 }
 
@@ -1443,10 +1531,14 @@ future<> compaction_manager::really_do_stop() noexcept {
     if (!_tasks.empty()) {
         on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
     }
-    co_await stop_postponed_compactions();
+    co_await coroutine::all(
+        [this] { return stop_postponed_compactions(); },
+        [this] { return stop_automatic_scrub(); }
+    );
     co_await _sys_ks.close();
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
+    _automatic_scrub_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
@@ -2984,11 +3076,13 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     // a table being removed.
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(&t);
+    _awaiting_automatic_scrub.erase(&t);
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
+        utils::get_local_injector().enter("compaction_manager_remove_wait_for_tasks");
         co_await stop_ongoing_compactions(reason, &t);
         // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
         co_await c_state.incremental_repair_lock.write_lock();

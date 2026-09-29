@@ -137,6 +137,12 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
+    // Fiber which waits for a signal and reevaluates automatic scrub.
+    std::optional<future<>> _waiting_automatic_scrub_reevaluation;
+
+    // Used to signal that automatic scrub reevaluation is needed.
+    condition_variable _automatic_scrub_reevaluation;
+
     // Compaction groups views which should be considered for automatic scrub.
     std::unordered_set<compaction::compaction_group_view*> _awaiting_automatic_scrub;
 
@@ -155,10 +161,19 @@ private:
 
     std::function<void()> compaction_submission_callback();
 
+    // Register all tables as candidates and initiate reevaluation.
+    std::function<void()> automatic_scrub_submission_callback();
     void schedule_table_for_automatic_scrub(compaction::compaction_group_view* t);
+    void reevaluate_automatic_scrub() noexcept;
 
     using for_regular_compaction = bool_class<struct for_regular_compaction_tag>;
     static bool should_be_automatically_scrubbed(const compaction::compaction_group_view& t, const sstables::shared_sstable&, for_regular_compaction = for_regular_compaction::no);
+
+    // Fiber waiting for signal and reevaluating automatic scrub.
+    future<> automatic_scrub_reevaluation();
+    future<> do_one_automatic_scrub_reevaluation();
+
+    future<> stop_automatic_scrub() noexcept;
 
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
@@ -168,6 +183,8 @@ private:
 
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
+    timer<lowres_clock> _automatic_scrub_submission_timer;
+
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
