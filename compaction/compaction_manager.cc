@@ -371,6 +371,35 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return std::nullopt;
 }
 
+future<tasks::task_manager::task_ptr> compaction_manager::start_compaction_task(shared_ptr<compaction_task_executor> executor, task_params params, tasks::task_info parent_info) {
+    auto schema = executor->compacting_table()->schema();
+    tasks::task_manager::task_builder task_builder{_task_manager_module, std::move(params.type)};
+    task_builder.set_scope("compaction group")
+                .set_keyspace(schema->ks_name())
+                .set_table(schema->cf_name())
+                .set_entity(std::move(params.entity))
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_is_abortable(tasks::is_abortable{!parent_info})
+                .set_abort_fn([executor] (abort_source&) noexcept {
+                    executor->stop_compaction("user requested abort");
+                });
+    if (!parent_info) {
+        task_builder.set_sequence_number(_task_manager_module->new_sequence_number());
+    }
+    if (params.internal) {
+        task_builder.set_is_internal(*params.internal);
+    }
+    if (params.reports_progress) {
+        task_builder.set_progress_fn([executor] (const tasks::task_manager::task::impl& self) {
+            return make_ready_future<tasks::task_manager::task::progress>(get_compaction_progress(executor->_compaction_data, executor->_progress_monitor, self.is_done()));
+        });
+    }
+    co_return co_await std::move(task_builder).build([executor] (tasks::task_manager::task::impl&) {
+        return executor->perform();
+    });
+}
+
 future<> compaction_manager::on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy) {
     auto& cs = get_compaction_state(&t);
     auto new_sstables = desc.new_sstables | std::ranges::to<std::unordered_set>();
@@ -646,7 +675,6 @@ protected:
 
 template<typename TaskExecutor, typename... Args>
 requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
-        std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
 requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
     {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
 }
@@ -654,12 +682,20 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, do_throw_if_stopping, std::forward<Args>(args)...);
     _tasks.push_back(*task_executor);
     auto unregister_task = defer([task_executor] noexcept {
-        task_executor->unlink();
-        task_executor->switch_state(compaction_task_executor::state::none);
+        // Through the base, as the executors' own overrides of release() are not accessible here.
+        compaction_task_executor& executor = *task_executor;
+        executor.release();
+        executor.unlink();
+        executor.switch_state(compaction_task_executor::state::none);
     });
 
-    auto task = co_await get_task_manager_module().make_task(task_executor, parent_info);
-    task->start();
+    tasks::task_manager::task_ptr task;
+    if constexpr (std::is_base_of_v<compaction_task_impl, TaskExecutor>) {
+        task = co_await get_task_manager_module().make_task(task_executor, parent_info);
+        task->start();
+    } else {
+        task = co_await start_compaction_task(task_executor, std::move(params), parent_info);
+    }
     co_await task->done();
     co_return task_executor->get_stats();
 }
@@ -970,6 +1006,9 @@ future<> sstables_task_executor::release_resources() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
     _sstables = {};
     return make_ready_future();
+}
+
+void compaction_task_executor::release() noexcept {
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
@@ -2048,8 +2087,7 @@ protected:
 };
 
 template<typename TaskType, typename... Args>
-requires std::derived_from<TaskType, compaction_task_executor> &&
-         std::derived_from<TaskType, compaction_task_impl>
+requires std::derived_from<TaskType, compaction_task_executor>
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(task_params params, sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                                                                                get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args) {
     auto gh = start_compaction(t);

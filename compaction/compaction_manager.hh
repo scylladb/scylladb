@@ -187,12 +187,14 @@ private:
         bool reports_progress = true;
     };
 
+    // Starts a task that runs the executor.
+    future<tasks::task_manager::task_ptr> start_compaction_task(shared_ptr<compaction::compaction_task_executor> executor, task_params params, tasks::task_info parent_info);
+
     // Return nullopt if compaction cannot be started
     std::optional<gate::holder> start_compaction(compaction_group_view& t);
 
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
-            std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
@@ -257,8 +259,7 @@ private:
     // Guarantees that a maintenance task, e.g. cleanup, will be performed on all files available at the time
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
-    requires std::derived_from<TaskType, compaction_task_executor> &&
-            std::derived_from<TaskType, compaction_task_impl>
+    requires std::derived_from<TaskType, compaction_task_executor>
 
     future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(task_params params, sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                                                                get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args);
@@ -596,6 +597,10 @@ protected:
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
 
+    // Called once the executor won't run any more, whether it ran or not,
+    // before its state is reset.
+    virtual void release() noexcept;
+
     state switch_state(state new_state);
 
     future<semaphore_units<named_semaphore_exception_factory>> acquire_semaphore(named_semaphore& sem, size_t units = 1);
@@ -678,12 +683,12 @@ public:
 
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
-            std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(compaction_manager::task_params params, throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
+    friend future<tasks::task_manager::task_ptr> compaction_manager::start_compaction_task(shared_ptr<compaction_task_executor> executor, compaction_manager::task_params params, tasks::task_info parent_info);
     friend fmt::formatter<compaction_task_executor>;
     friend void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept;
     friend future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>>, bool task_stopped) const noexcept;
