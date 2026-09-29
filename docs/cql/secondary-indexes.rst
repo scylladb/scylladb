@@ -398,6 +398,48 @@ The analyzers differ in how they tokenize and normalize text:
   ``Hello,`` and ``World!``). It does not apply lowercasing, stemming,
   or stop-word removal.
 
+.. _create-pattern-index-statement:
+
+Pattern Index :label-note:`ScyllaDB Cloud`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. note::
+
+   Pattern indexes are supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   For the full description, see the :doc:`Pattern Search documentation </features/pattern-search>`.
+
+A pattern index answers ``LIKE`` filters on a text column without ``ALLOW FILTERING``.
+Instead of tokenizing the text into words, as a :ref:`full-text index <create-fulltext-index-statement>`
+does, it matches the whole value against the pattern, so a pattern such as ``'%keyword%'`` is an
+index lookup rather than a scan of the table. It is meant for values searched by any part of them, such
+as codes, identifiers and tags.
+
+A pattern index is a custom index created using the ``CUSTOM`` keyword and the index type
+``pattern_index``. CDC is enabled automatically on the base table when a pattern index is created.
+
+**Column restrictions:**
+
+* The indexed column must be of type ``text``, ``varchar``, or ``ascii``. Other types are rejected.
+* The indexed column must be a regular column. Primary-key and static columns cannot be indexed.
+* The table must use tablets (not vnodes).
+
+Example::
+
+   CREATE CUSTOM INDEX ON parts (code) USING 'pattern_index';
+
+   CREATE CUSTOM INDEX ON parts (supplier) USING 'pattern_index'
+       WITH OPTIONS = {'case_sensitive': 'false'};
+
+The following options are supported for pattern indexes:
+
++--------------------+---------------------------------------------------------------------------------------+-------------------+
+| Option             | Description                                                                           | Default Value     |
++====================+=======================================================================================+===================+
+| ``case_sensitive`` | Whether matching distinguishes letter case, as ``LIKE`` does. With ``false`` both the | ``true``          |
+|                    | indexed values and the patterns are lowercased, so ``'ab-%'`` matches ``AB-1024-XL``. |                   |
+|                    | Supported values: ``true``, ``false`` (case-insensitive).                             |                   |
++--------------------+---------------------------------------------------------------------------------------+-------------------+
+
 .. _drop-index-statement:
 
 DROP INDEX
