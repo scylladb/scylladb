@@ -95,6 +95,18 @@ public:
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+
+    void trigger_auto_scrub_timer();
+    future<> submit_automatic_scrub(compaction::compaction_group_view& t);
+    future<> reevaluate_automatic_scrub();
+
+    std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
+        return _cm._compaction_state;
+    }
+
+    std::unordered_set<compaction::compaction_group_view*>& get_awaiting_automatic_scrub() {
+        return _cm._awaiting_automatic_scrub;
+    }
 };
 
 struct test_env_config {

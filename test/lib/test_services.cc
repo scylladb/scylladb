@@ -639,6 +639,18 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
     co_await task->run_compaction();
 }
 
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
+future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {
+    return _cm.submit_automatic_scrub(t);
+}
+
+future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
+    return _cm.do_one_automatic_scrub_reevaluation();
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {
