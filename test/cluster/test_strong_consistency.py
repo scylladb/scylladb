@@ -9,11 +9,11 @@ from datetime import datetime
 from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import gather_safely, unique_name, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table
+from test.pylib.util import gather_safely, unique_name, wait_for, wait_for_cql_and_get_hosts, Host
+from test.cluster.util import create_new_test_keyspace, ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
-from cassandra.cluster import ConsistencyLevel
+from cassandra.cluster import ConsistencyLevel, NoHostAvailable
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
@@ -1199,9 +1199,7 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
     requests on the followers to simulate a hanging call to
     raft_server::add_entry.
 
-    The read path is more difficult to verify and it's under active
-    work, so we skip it. It uses the same abortion mechanisms
-    as the write path, though.
+    The read path is covered by test_graceful_shutdown_with_read_in_flight.
 
     We test writes sent to both the coordinator and a follower.
     """
@@ -1275,6 +1273,81 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
                 follower.ip_addr,
                 "avoid_being_raft_leader"
             )) for follower in followers])
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_graceful_shutdown_with_read_in_flight(manager: ScyllaClusterManager):
+    """A graceful stop must abort a QUORUM read stuck in the raft read barrier.
+
+    Read-path twin of test_queries_when_shutting_down; not a regression test.
+    Expected: the read is aborted, the client gets NoHostAvailable, and the
+    restarted node serves the read again.
+
+    How the read gets stuck: a new leader serves reads only after it commits an
+    entry of its own term. We move leadership to `target` while the other two
+    drop its AppendEntries, so it never commits.
+    """
+    DROP_APPEND_ENTRIES = "raft_drop_incoming_append_entries_for_specified_group"
+    PAUSE_BEFORE_READ_BARRIER = "sc_coordinator_wait_before_query_read_barrier"
+    config = DEFAULT_CONFIG | {'request_timeout_on_shutdown_in_seconds': 1, 'read_request_timeout_in_ms': 60000}
+    # trace: the abort line we wait for is logged at trace (last level given wins).
+    # One shard: another shard may forward the read to the old leader from a stale cache.
+    cmdline = DEFAULT_CMDLINE + ['--smp', '1', '--logger-log-level', 'sc_coordinator=trace']
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='dc1')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [str(await manager.get_host_id(s.server_id)) for s in servers]
+
+    # Never dropped: the cluster is killed after the test anyway.
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+                                             " AND tablets = {'initial': 1} AND consistency = 'global'")
+    table = f"{ks}.t"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int)")
+    group_id = await get_table_raft_group_id(manager, ks, "t")
+    leader = servers[host_ids.index(await wait_for_leader(manager, servers[0], group_id))]
+    i = next(i for i, s in enumerate(servers) if s is not leader)
+    target, target_host, target_id = servers[i], hosts[i], host_ids[i]
+    others = [s for s in servers if s is not target]
+    quorum_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM)
+
+    await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)")
+
+    # Only `target` may lead, and its appends never reach the others.
+    for s in others:
+        await manager.api.enable_injection(s.ip_addr, "avoid_being_raft_leader", one_shot=False)
+        await manager.api.enable_injection(s.ip_addr, DROP_APPEND_ENTRIES, one_shot=False, parameters={'value': group_id})
+    await trigger_stepdown(manager, leader, group_id, target_host_id=target_id)
+    await wait_for_leader(manager, target, group_id, expected_host_id=target_id)
+    logger.info(f"group {group_id}: leadership moved from {leader.ip_addr} to {target.ip_addr}")
+
+    # Hold the read just before the barrier, then let it in.
+    log = await manager.server_open_log(target.server_id)
+    mark = await log.mark()
+    await manager.api.enable_injection(target.ip_addr, PAUSE_BEFORE_READ_BARRIER, one_shot=True)
+    read = cql.run_async(quorum_read, host=target_host)
+    paused = asyncio.ensure_future(log.wait_for(f"{PAUSE_BEFORE_READ_BARRIER}: waiting", from_mark=mark, timeout=60))
+    done, _ = await asyncio.wait({read, paused}, return_when=asyncio.FIRST_COMPLETED)
+    if read in done:
+        paused.cancel()
+        pytest.fail(f"the read ended before reaching the barrier: {read.exception() or read.result()}")
+    await paused
+    await manager.api.message_injection(target.ip_addr, PAUSE_BEFORE_READ_BARRIER)
+
+    # The abort comes ~6 s into the stop. The read's own 60 s timeout logs the same line,
+    # so wait at most 30 s. Don't bound the stop itself: its flush can be slow in CI.
+    stop = asyncio.ensure_future(manager.server_stop_gracefully(target.server_id))
+    try:
+        await log.wait_for(r"query\(\): request timed out with error Aborted while waiting to apply entry", from_mark=mark, timeout=30)
+    finally:
+        await stop
+    # NoHostAvailable, not ReadTimeout: the CQL server closes connections before aborting requests.
+    with pytest.raises(NoHostAvailable):
+        await asyncio.wait_for(read, timeout=60)
+
+    for s in others:
+        await manager.api.disable_injection(s.ip_addr, DROP_APPEND_ENTRIES)
+    await manager.server_start(target.server_id)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 120)
+    assert [r.c for r in await cql.run_async(quorum_read, host=hosts[i])] == [1]
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
