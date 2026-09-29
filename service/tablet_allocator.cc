@@ -1509,6 +1509,15 @@ public:
                 continue;
             }
 
+            // A target without complete load stats cannot be given a shard: the sketch throws.
+            // Such a node has (re)joined since the last stats refresh; leave this rack for the
+            // next round rather than failing the request.
+            if (auto it = std::ranges::find_if(nodes_by_load_dst, [&] (host_id h) { return !_load_sketch->has_complete_data(h); });
+                    it != nodes_by_load_dst.end()) {
+                lblogger.debug("Skipping RF change colocation plan in dc {}, rack {} until node {} has reported load stats", dc, rack, *it);
+                continue;
+            }
+
             auto nodes_cmp = nodes_by_load_cmp(nodes);
             auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
                 return nodes_cmp(b, a);
@@ -1810,6 +1819,9 @@ public:
         if (has_extending) {
             // Check that all normal, non-excluded nodes in the target dc/rack are present in the
             // balanced node set. If any such node is missing, extending cannot safely proceed.
+            // A node without complete load stats -- one which (re)joined after the last stats
+            // refresh, typically -- counts as missing too: picking a target shard on it would
+            // throw out of the sketch, and the next refresh brings the stats within a minute.
             const auto& topo = _tm->get_topology();
             const auto& dc_rack_nodes = topo.get_datacenter_rack_nodes();
             bool missing_node = false;
@@ -1819,7 +1831,10 @@ public:
                 if (rack_it != dc_it->second.end()) {
                     for (const auto& node_ref : rack_it->second) {
                         const auto& node = node_ref.get();
-                        if (node.is_normal() && !node.is_excluded() && !nodes.contains(node.host_id())) {
+                        if (node.is_normal() && !node.is_excluded()
+                                && (!nodes.contains(node.host_id()) || !_load_sketch->has_complete_data(node.host_id()))) {
+                            lblogger.debug("Node {} in dc {}, rack {} is not available for RF change extending plan (in node set: {}, load stats complete: {})",
+                                    node.host_id(), dc, rack, nodes.contains(node.host_id()), _load_sketch->has_complete_data(node.host_id()));
                             missing_node = true;
                             break;
                         }
