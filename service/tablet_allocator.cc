@@ -1952,8 +1952,10 @@ public:
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         // The node being shrunk may be excluded/down and lack complete tablet stats.
                         // Since we're removing a replica (not placing one), accurate load data isn't needed.
+                        // A dead node which is not (yet) excluded has no load stats either, and
+                        // unload() throws on such a node, so ask the sketch rather than the topology.
                         auto* rep_node = topo.find_node(replica->host);
-                        if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
+                        if (_load_sketch->has_complete_data(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
                         if (can_accept_load(nodes, mig_streaming_info)) {
