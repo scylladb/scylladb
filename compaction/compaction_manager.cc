@@ -1648,6 +1648,50 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+private:
+    future<> maybe_validate_component_digests(std::span<const sstables::shared_sstable> sstables) {
+        compaction_group_view& t = *_compacting_table;
+        if (!automatic_scrub_enabled(t)) {
+            co_return;
+        }
+
+        co_await coroutine::parallel_for_each(sstables, [this, &t] (const sstables::shared_sstable& sst) -> future<> {
+            if (!compaction_manager::should_be_automatically_scrubbed(t, sst, compaction_manager::for_regular_compaction::yes)) {
+                co_return;
+            }
+
+            std::exception_ptr ex;
+            try {
+                co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes);
+            } catch (const sstables::malformed_sstable_exception&) {
+                ex = std::current_exception();
+            }
+
+            if (ex) [[unlikely]] {
+                co_await quarantine_sstables_and_abort(std::span{&sst, 1}, std::move(ex));
+            }
+        });
+    }
+
+    future<> quarantine_sstables_and_abort(std::span<const sstables::shared_sstable> sstables, std::exception_ptr ex) {
+        _cm._validation_errors++;
+
+        for (const auto& sst : sstables) {
+            try {
+                utils::get_local_injector().inject("maybe_validate_component_digests_quarantine_fail", [] {
+                    throw std::runtime_error{"maybe_validate_component_digests_quarantine_fail"};
+                });
+                co_await sst->change_state(sstables::sstable_state::quarantine);
+            } catch (...) {
+                cmlog.error("Failed to quarantine invalid sstable {}: {}", sst, std::current_exception());
+            }
+        }
+
+        auto s = _compacting_table->schema();
+        throw compaction_aborted_exception(s->ks_name(), s->cf_name(),
+            fmt::format("digest mismatch in one of the compacting sstables: {}", ex));
+    }
+
 protected:
     virtual future<> run() override {
         return perform();
@@ -1718,7 +1762,28 @@ protected:
             std::exception_ptr ex;
 
             try {
-                compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
+                // The scrub time will be updated by creating new sstables.
+                co_await maybe_validate_component_digests(descriptor.sstables);
+                utils::get_local_injector().enter("compaction_regular_compaction_validation_done");
+
+                compaction_result res;
+                std::exception_ptr malformed_sstable_ex;
+                try {
+                    res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
+                } catch (const sstables::malformed_sstable_exception&) {
+                    malformed_sstable_ex = std::current_exception();
+                }
+                if (malformed_sstable_ex) [[unlikely]] {
+                    // FIXME distinguish the sstable with the corruption and quarantine only it.
+                    std::vector<sstables::shared_sstable> still_compacting;
+                    for (const auto& sst : old_sstables) {
+                        if (_cm._compacting_sstables.contains(sst)) {
+                            still_compacting.push_back(sst);
+                        }
+                        co_await coroutine::maybe_yield();
+                    }
+                    co_await quarantine_sstables_and_abort(still_compacting, std::move(malformed_sstable_ex));
+                }
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
                 finish_compaction();
