@@ -281,10 +281,6 @@ storage_service::storage_service(abort_source& abort_source,
 
 storage_service::~storage_service() = default;
 
-node_ops::task_manager_module& storage_service::get_node_ops_module() noexcept {
-    return *_node_ops_module;
-}
-
 auth::cache& storage_service::auth_cache() noexcept {
     return _auth_cache;
 }
@@ -5018,8 +5014,11 @@ future<> storage_service::do_streaming_operation(std::optional<shared_future<>>&
         bool action_started = false;
         result = p.get_future();
         try {
-            auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                    parent_info.get_id(), reason, [&p, &action_started, action = std::move(action)] {
+            tasks::task_manager::task_builder task_builder{_node_ops_module, node_ops::streaming_task_type(reason)};
+            task_builder.set_scope("node")
+                        .set_is_internal(tasks::is_internal::no)
+                        .set_parent_info(parent_info);
+            auto task = co_await std::move(task_builder).build([&p, &action_started, action = std::move(action)] (tasks::task_manager::task::impl&) {
                 action_started = true;
                 return futurize_invoke(action).then_wrapped([&p] (future<> f) {
                     if (f.failed()) {
@@ -5239,9 +5238,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
                         co_await do_streaming_operation(_decommission_result, streaming::stream_reason::decommission, parent_info,
                                 [this] (this auto) -> future<> {
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
+                            co_await utils::get_local_injector().inject("decommission_streaming_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_done_wait", utils::wait_for_message(5min));
+                            co_await utils::get_local_injector().inject("decommission_streaming_done_wait", utils::wait_for_message(5min));
                         });
                         result.status = raft_topology_cmd_result::command_status::success;
                     }

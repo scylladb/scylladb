@@ -290,7 +290,6 @@ public:
         strong_consistency::groups_manager& groups_manager);
     ~storage_service();
 
-    node_ops::task_manager_module& get_node_ops_module() noexcept;
     // Needed by sharded<>
     future<> stop();
     void init_messaging_service();
