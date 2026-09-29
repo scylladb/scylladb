@@ -35,6 +35,18 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 
 %undefine _missing_build_ids_terminate_build
 
+# rpmbuild generates a /usr/lib/.build-id/xx/yyyy... link for every ELF file
+# in the buildroot. The files under /opt/scylladb/libreloc and the distro
+# commands under /opt/scylladb/libexec (gawk, gzip, ifconfig, ethtool,
+# netstat, hwloc-distrib, hwloc-calc, lscpu, lsblk) are byte-for-byte copies
+# bundled from Fedora packages and keep their original build-id, so those
+# generated links collide with the same paths owned by the very same Fedora
+# package when the RPM is built and installed on the same Fedora release
+# (https://github.com/scylladb/scylladb/issues/21057, SCYLLADB-4841). rpm has
+# no per-file opt-out for this, so link generation is disabled entirely and
+# recreated by hand below only for the binaries we actually build.
+%global _build_id_links none
+
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
@@ -64,6 +76,15 @@ This package installs all required packages for ScyllaDB,  including
 
 %install
 ./install.sh --packaging --root "$RPM_BUILD_ROOT" --p11-trust-paths /etc/pki/ca-trust/source:/usr/share/pki/ca-trust-source
+
+# See the _build_id_links comment above: recreate links only for our own binaries.
+for bin in scylla iotune; do
+    id=$(eu-readelf -n "$RPM_BUILD_ROOT/opt/scylladb/libexec/$bin" | sed -n 's/^ *Build ID: \([0-9a-f]*\)$/\1/p')
+    [[ "$id" =~ ^[0-9a-f]{32,40}$ ]] || { echo "error: no build-id found for $bin" >&2; exit 1; }
+    install -d -m755 "$RPM_BUILD_ROOT%{_prefix}/lib/.build-id/${id:0:2}"
+    ln -sr "$RPM_BUILD_ROOT/opt/scylladb/libexec/$bin" \
+           "$RPM_BUILD_ROOT%{_prefix}/lib/.build-id/${id:0:2}/${id:2}"
+done
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -153,6 +174,8 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 /opt/scylladb/libreloc/.*.hmac
 /opt/scylladb/libexec/*
 %{_prefix}/lib/scylla/*
+%dir %{_prefix}/lib/.build-id
+%{_prefix}/lib/.build-id/*
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
