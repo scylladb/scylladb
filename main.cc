@@ -60,6 +60,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
@@ -2140,6 +2141,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
             });
+
+            // Must stop before cluster_config_manager, which the registrations point to.
+            sharded<db::cluster_config_manager::config_callback_registration> background_reclaim_goal_registrations;
+            background_reclaim_goal_registrations.start().get();
+            auto stop_background_reclaim_goal_registrations = defer([&] () noexcept {
+                background_reclaim_goal_registrations.stop().get();
+            });
+            background_reclaim_goal_registrations.invoke_on_all([] (db::cluster_config_manager::config_callback_registration& registration) {
+                registration = cluster_config_manager.local().connect_node_config("lsa_background_reclaim_goal_in_mb",
+                        [] (const db::cluster_config_registry::option& opt, std::optional<sstring> value) {
+                    logalloc::shard_tracker().set_background_reclaim_goal_in_mb(db::cluster_config_registry::to_integer(opt, value));
+                });
+            }).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();
