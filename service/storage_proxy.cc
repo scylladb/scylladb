@@ -1086,7 +1086,8 @@ private:
                 co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
                     auto s = _sp._db.local().find_schema(id);
                     db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
-                    co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
+                    auto cl = object_storage_table ? db::consistency_level::EACH_QUORUM : db::consistency_level::LOCAL_QUORUM;
+                    co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e, cl);
                 });
             } catch (const replica::no_such_column_family&) {
                 // Dropped since the operation was created.
