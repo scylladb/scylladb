@@ -1713,6 +1713,31 @@ private:
         }
     }
 
+    future<> maybe_validate_component_digests(std::span<const sstables::shared_sstable> sstables) {
+        compaction_group_view& t = *_compacting_table;
+        if (!automatic_scrub_enabled(t)) {
+            co_return;
+        }
+
+        co_await coroutine::parallel_for_each(sstables, [this, &t] (const sstables::shared_sstable& sst) -> future<> {
+            if (!compaction_manager::should_be_automatically_scrubbed(t, sst, compaction_manager::for_regular_compaction::yes)) {
+                co_return;
+            }
+
+            std::exception_ptr ex;
+            try {
+                co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes);
+            } catch (const sstables::malformed_sstable_exception&) {
+                ex = std::current_exception();
+            }
+
+            if (ex) [[unlikely]] {
+                _cm._validation_errors++;
+                co_await coroutine::return_exception_ptr(sstables::maybe_attribute_malformed_sstable_exception(std::move(ex), sst->generation()));
+            }
+        });
+    }
+
 protected:
     virtual future<> run() override {
         return perform();
@@ -1791,6 +1816,9 @@ protected:
             std::exception_ptr ex;
 
             try {
+                // The scrub time will be updated by creating new sstables.
+                co_await maybe_validate_component_digests(descriptor.sstables);
+
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
