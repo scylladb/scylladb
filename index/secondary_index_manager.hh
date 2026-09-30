@@ -153,6 +153,11 @@ public:
     std::optional<sstring> custom_index_class(const schema& s) const;
     static std::optional<std::function<std::unique_ptr<custom_index>()>> get_custom_class_factory(const sstring& class_name);
     static std::optional<std::unique_ptr<custom_index>> get_custom_class(const index_metadata& im);
+    template <typename T>
+    static bool is_custom_index(const index_metadata& im) {
+        auto custom_class = get_custom_class(im);
+        return custom_class && dynamic_cast<T*>(custom_class->get()) != nullptr;
+    }
 private:
     void add_index(const index_metadata& im);
 };
