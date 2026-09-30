@@ -4,6 +4,12 @@ on:
   pull_request:
     branches:
       - master
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.rst'
+      - 'docs/**'
+      - '.github/**'
+      - 'licenses/**'
 
 env:
   BUILD_TYPE: RelWithDebInfo
