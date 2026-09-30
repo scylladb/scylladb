@@ -90,6 +90,12 @@ public:
     virtual schema_ptr get_table_schema(data_dictionary::table t) const override {
         return unwrap(t).schema();
     }
+    virtual std::optional<data_dictionary::keyspace> get_table_keyspace(data_dictionary::table t) const override {
+        if (auto* ks = unwrap(t).get_keyspace()) {
+            return wrap(*ks);
+        }
+        return std::nullopt;
+    }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
         return unwrap(t).views();
     }

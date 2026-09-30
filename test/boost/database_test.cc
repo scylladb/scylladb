@@ -2444,11 +2444,14 @@ SEASTAR_TEST_CASE(test_table_links_to_its_keyspace) {
         auto& table = db.find_column_family("ks", "cf");
 
         BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
-        BOOST_REQUIRE(table.get_keyspace()->metadata()->durable_writes());
+        auto ks = table.as_data_dictionary().keyspace();
+        BOOST_REQUIRE(ks);
+        BOOST_REQUIRE_EQUAL(ks->metadata()->name(), "ks");
+        BOOST_REQUIRE(ks->metadata()->durable_writes());
 
         e.execute_cql("alter keyspace ks with durable_writes = false;").get();
         BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
-        BOOST_REQUIRE(!table.get_keyspace()->metadata()->durable_writes());
+        BOOST_REQUIRE(!table.as_data_dictionary().keyspace()->metadata()->durable_writes());
     });
 }
 
@@ -2458,11 +2461,12 @@ SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table ks.cf (k int primary key, v int);").get();
         auto table = e.local_db().find_column_family("ks", "cf").shared_from_this();
-        BOOST_REQUIRE(table->get_keyspace());
+        BOOST_REQUIRE(table->as_data_dictionary().keyspace());
 
         e.execute_cql("drop table ks.cf;").get();
 
         BOOST_REQUIRE(!table->get_keyspace());
+        BOOST_REQUIRE(!table->as_data_dictionary().keyspace());
     });
 }
 
