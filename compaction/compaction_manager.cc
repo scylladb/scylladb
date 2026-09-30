@@ -432,8 +432,13 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
             cmlog.info("split_pause_before_replacer: released");
         }).get();
-        t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
-        _cm.propagate_replacement(t, desc.old_sstables, desc.new_sstables);
+        // Everything that tracks a replacement has to see the garbage
+        // collected sstables as well as the regular outputs, since both are
+        // attached to the sstable set and both come back as old_sstables when
+        // released. See compaction_completion_desc::all_new_sstables().
+        auto added = desc.all_new_sstables();
+        t.get_compaction_strategy().notify_completion(t, desc.old_sstables, added);
+        _cm.propagate_replacement(t, desc.old_sstables, added);
         // Hold sstable_set_lock while mutating the sstable set and deregistering
         // old sstables.  This serializes with regular compaction's snapshot +
         // filter + registration, preventing the stale-snapshot race.
@@ -451,7 +456,12 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // window, where the sstables:
         // - are still in the main set
         // - are not being compacted.
-        on_replace.on_addition(desc.new_sstables);
+        //
+        // This has to cover the garbage collected sstables too. The regular
+        // outputs are shielded twice over, since they carry the output run
+        // identifier this task advertises and get_candidates() filters on it,
+        // but a garbage collected sstable gets a run identifier of its own.
+        on_replace.on_addition(added);
         auto old_sstables = desc.old_sstables;
         _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
@@ -1239,11 +1249,11 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 }
 
 std::vector<shared_ptr<compaction_task_executor>>
-compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
+compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type_set> types_opt) noexcept {
     auto ongoing_compactions = get_compactions(filter).size();
     auto tasks = _tasks
-            | std::views::filter([&filter, type_opt] (const auto& task) {
-                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
+            | std::views::filter([&filter, types_opt] (const auto& task) {
+                return filter(task.compacting_table()) && (!types_opt || types_opt->contains(task.compaction_type()));
             })
             | std::views::transform([] (auto& task) { return task.shared_from_this(); })
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
@@ -1256,8 +1266,8 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
                 scope = fmt::format(" for table {}", *t);
             }
         }
-        if (type_opt) {
-            scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
+        if (types_opt) {
+            scope += fmt::format(" {} types={}", scope.size() ? "and" : "for", fmt::join(*types_opt, ","));
         }
         cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
     }
@@ -1265,13 +1275,9 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
     return tasks;
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type> type_opt) noexcept {
-    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, type_opt);
-}
-
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type> type_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::optional<compaction_type_set> types_opt, std::function<bool(const compaction_group_view*)> filter) noexcept {
     try {
-        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), type_opt);
+        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), types_opt);
         bool task_stopped = true;
         co_await await_tasks(std::move(tasks), task_stopped);
     } catch (...) {
@@ -1353,7 +1359,13 @@ void compaction_manager::do_stop() noexcept {
         // Possible when the node shuts down before enable() is called,
         // e.g. due to an early startup failure. The task manager module
         // was registered in the constructor and must be unregistered.
-        _stop_future = _task_manager_module->stop();
+        // The static shares action was subscribed to static_shares config
+        // updates in the constructor too, so it can have an invocation in
+        // flight, which touches this object after it completes. It has to be
+        // drained as well, just like really_do_stop() does.
+        _stop_future = _task_manager_module->stop().then([this] {
+            return _update_compaction_static_shares_action.join();
+        });
         return;
     }
 
@@ -2611,25 +2623,6 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
         // compaction_state::compaction_disabled()
         return true;
     }
-}
-
-future<> compaction_manager::stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter) {
-    compaction_type target_type;
-    try {
-        target_type = to_compaction_type(type);
-    } catch (...) {
-        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
-    }
-    switch (target_type) {
-    case compaction_type::Validation:
-    case compaction_type::Index_build:
-        throw std::runtime_error(format("Compaction type {} is unsupported", type.c_str()));
-    case compaction_type::Reshard:
-        throw std::runtime_error(format("Stopping compaction of type {} is disallowed", type.c_str()));
-    default:
-        break;
-    }
-    return stop_ongoing_compactions("user request", std::move(filter), target_type);
 }
 
 void compaction_manager::propagate_replacement(compaction_group_view& t,

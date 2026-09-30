@@ -248,6 +248,66 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_s
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_backup_waits_for_sstable_deletion_notification(manager: ManagerClient, object_storage):
+    '''a backup worker must outlive the sstable-deletion notifications it started
+
+    The sstables_manager signal has a void result, so the slot's future is dropped and
+    worker::deleted_sstable() runs detached. sharded<worker>::stop() therefore destroys
+    the worker while a notification is still on its way to the backup shard, and the
+    cross-shard continuation dereferences freed memory (CUSTOMER-714, SCYLLADB-3029).
+    '''
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+        snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+        assert len(files) > 0
+
+        # Keep the upload loop parked so the workers stay alive and subscribed,
+        # and park the first deletion notification that refers to a snapshot sstable.
+        await manager.api.enable_injection(server.ip_addr, "backup_task_pre_upload", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "backup_task_deleted_sstable", one_shot=True)
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        prefix = unique_name('backup_')
+        tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_pre_upload")
+
+        # Retire the snapshotted sstables: add a second one and compact them together.
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('3', 'three'), ('4', 'four')]))
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.keyspace_compaction(server.ip_addr, ks, cf)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_deleted_sstable")
+
+        # Tear the backup down while that notification is still in flight.
+        await manager.api.abort_task(server.ip_addr, tid)
+        await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+
+        # Wait until the task is about to destroy its workers, rather than sleeping.
+        # From here on, stopping the workers must wait for the parked notification.
+        await log.wait_for('backup_task: stopping workers', from_mark=mark)
+        status = await manager.api.get_task_status(server.ip_addr, tid)
+        assert status['state'] == 'running', \
+            f"backup task reached {status['state']} while a deletion notification was still in flight"
+
+        await manager.api.message_injection(server.ip_addr, "backup_task_deleted_sstable")
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'failed')
+
+
+
 @pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
 async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt, do_abort):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
@@ -1754,3 +1814,64 @@ async def test_backup_after_schema_dropped(manager: ManagerClient, object_storag
         for f in files:
             assert f'{prefix}/{f}' in objects, f"{f} was not uploaded to the backup"
 
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_queued_backup_task_is_abortable(manager: ManagerClient, object_storage):
+    """A backup task waiting for the snapshot lock must honour abort_task.
+
+    backup_task_impl::run() takes snapshot_ctl's write lock around the whole
+    upload, and only subscribes to the task's abort_source afterwards, inside
+    do_backup(). A task still waiting for that lock therefore ignores
+    abort_task: the call answers 200 and the task stays running.
+    """
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        for cf in ['cf1', 'cf2']:
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+            await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');")
+                                   for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+        snap_name, _ = await take_snapshot_on_one_server(ks, server, manager, logger)
+
+        await manager.api.enable_injection(server.ip_addr, "backup_task_pre_upload", one_shot=True)
+
+        # cf1's task takes the write lock and parks before uploading anything
+        holder = await manager.api.backup(server.ip_addr, ks, 'cf1', snap_name, object_storage.address,
+                                          object_storage.bucket_name, unique_name('backup_'))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_pre_upload")
+
+        # cf2's task cannot get the lock, exactly as the tasks Scylla Manager
+        # fires for every table of a keyspace at once
+        queued = await manager.api.backup(server.ip_addr, ks, 'cf2', snap_name, object_storage.address,
+                                          object_storage.bucket_name, unique_name('backup_'))
+
+        status = await manager.api.get_task_status(server.ip_addr, queued)
+        logger.info(f'queued task {queued}: {status}')
+        assert status['state'] == 'running'
+        assert status['progress_total'] == 0 and status['progress_completed'] == 0
+        assert status['is_abortable']
+
+        await manager.api.abort_task(server.ip_addr, queued)
+
+        async def task_stopped_running():
+            s = await manager.api.get_task_status(server.ip_addr, queued)
+            return s if s['state'] != 'running' else None
+
+        status = await wait_for(task_stopped_running, time.time() + 60,
+                                label=f'backup task {queued} to honour abort')
+        logger.info(f'aborted task {queued}: {status}')
+        assert status['state'] == 'failed'
+        # seastar::semaphore_aborted derives from abort_requested_exception, so
+        # the lock wait and the upload path word the same abort differently
+        assert 'abort' in status['error'].lower(), status['error']
+
+        # release the lock holder so the keyspace can be dropped
+        await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+        await manager.api.wait_task(server.ip_addr, holder)

@@ -593,10 +593,19 @@ async def test_data_resurrection_from_repair_range_spanning_replica_sets(manager
 
         # Make the excluded replica reject the delete, so it keeps the live row and never
         # sees a tombstone. The other two replicas satisfy CL=TWO, so the delete succeeds.
+        excluded_log = await manager.server_open_log(by_ip[excluded_ip].server_id)
+        mark = await excluded_log.mark()
         await manager.api.enable_injection(excluded_ip, "database_apply", one_shot=False,
                                            parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
         cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE pk = {pk} AND ck = 0",
                                     consistency_level=ConsistencyLevel.TWO))
+        # The delete returns once the two dc1 replicas ack it, which can be before its
+        # mutation reaches the excluded replica; disabling the injection at that point
+        # would let the late mutation apply the tombstone after all. Wait for the
+        # rejection instead. The excluded replica logs it as a replica, or as a
+        # coordinator when the driver routed the delete through it; both messages
+        # carry the injected error text.
+        await excluded_log.wait_for(f"injected error for {ks}.tbl", from_mark=mark)
         await manager.api.disable_injection(excluded_ip, "database_apply")
 
         # Verify the injection produced the hazardous state: the excluded replica

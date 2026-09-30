@@ -1657,6 +1657,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
         _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
+
+        // The destination sstable is fully linked but not sealed yet: it has a
+        // TemporaryTOC and no TOC. Let tests hold the directory in that state.
+        utils::get_local_injector().inject("pause_sstable_component_rewrite",
+                utils::wait_for_message(std::chrono::minutes{5})).get();
+
         new_sst->copy_components(*this).get();
 
         new_sst->_metadata_size_on_disk = _metadata_size_on_disk;

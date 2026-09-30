@@ -399,6 +399,7 @@ add_scylla_test(combined_tests
     sstable_compressor_factory_test.cc
     sstable_compression_config_test.cc
     sstable_directory_test.cc
+    sstables_manager_subscription_test.cc
     sstable_set_test.cc
     sstable_tablet_streaming_test.cc
     statement_restrictions_test.cc

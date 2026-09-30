@@ -8,6 +8,7 @@
 import base64
 import http.client
 import json
+import time
 import urllib.parse
 
 import pytest
@@ -648,6 +649,20 @@ def test_write_malformed_value(dynamodb, test_table_s, op):
         # returned map will fail, causing the following call to fail.
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
+# A config_value_context() which retries the restore: at
+# max_concurrent_requests_per_shard=0 the CQL server sheds any request made
+# while another one is in flight on the same shard, the restore included.
+class retrying_config_value_context(config_value_context):
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                return super().__exit__(exc_type, exc_value, exc_traceback)
+            except Exception:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+
 # A test which verifies that a request rejected with RequestLimitExceeded
 # on a keep-alive connection does not break the connection. Until
 # SCYLLADB-3786 was solved the rejection was sent without reading the
@@ -681,10 +696,11 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
         # Careful: this test works only because the two servers gate on the same
         # config item but not by the same condition - Alternator sheds on '>=',
         # CQL on '>' (transport/server.cc). A limit of 0 thus rejects every
-        # Alternator request, while a CQL one still passes and can put the
-        # original limit back. Aligning the two would have broken this test: the
-        # CQL restore would be shed too, leaving the limit at 0 for later tests.
-        with config_value_context(cql, 'max_concurrent_requests_per_shard', '0'):
+        # Alternator request, while a CQL one passes as long as no other request
+        # is in flight on the same shard - hence the retry above. Aligning the
+        # two conditions would break this test for good: the CQL restore would
+        # be shed unconditionally, leaving the limit at 0 for later tests.
+        with retrying_config_value_context(cql, 'max_concurrent_requests_per_shard', '0'):
             # The interesting part: each rejection must leave the connection
             # usable. Before the fix the server closed it right after the
             # first one, so the next do_request() raised an exception

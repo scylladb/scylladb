@@ -23,6 +23,7 @@
 #include "sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "utils/s3/client.hh"
@@ -344,14 +345,30 @@ future<> sstable_directory::process_sstable_dir(process_flags flags) {
     return _lister->process(*this, flags);
 }
 
-future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {
+future<> sstable_directory::scan_sstable_dir() {
+    return _lister->scan(*this);
+}
+
+future<> sstable_directory::filesystem_components_lister::scan(sstable_directory& directory) {
     if (directory._state == sstable_state::quarantine) {
         if (!co_await file_exists(_directory.native())) {
             co_return;
         }
     }
 
-    dirlog.debug("Start processing directory {} for SSTables", _directory);
+    static const auto* injection_name = "sstable_directory_pause_scan";
+    co_await utils::get_local_injector().inject(injection_name, [] (auto& handler) -> future<> {
+        // Only park the shard the test asked for, so that the other shards can go
+        // on and process what they found while this one is still listing.
+        if (std::atoll(handler.get("shard")->data()) != this_shard_id()) {
+            co_return;
+        }
+        dirlog.info("{}: hit", injection_name);
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dirlog.info("{}: continue", injection_name);
+    });
+
+    dirlog.debug("Start scanning directory {} for SSTables", _directory);
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -396,8 +413,15 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
         _state->descriptors.erase(desc.generation);
     }
 
-    auto msg = format("After {} scanned, {} descriptors found, {} different files found",
+    dirlog.debug("After {} scanned, {} descriptors found, {} different files found",
             _directory, _state->descriptors.size(), _state->generations_found.size());
+
+    // Lets tests wait until the listing is over on every shard.
+    utils::get_local_injector().inject("sstable_directory_scan_done", [] { });
+}
+
+future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {
+    dirlog.debug("Start processing directory {} for SSTables", _directory);
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
@@ -424,6 +448,12 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     }
 }
 
+future<> sstable_directory::sstables_registry_components_lister::scan(sstable_directory& directory) {
+    // Nothing to scan: the components are enumerated from the sstables registry
+    // by process() below, not from a directory that process() also writes to.
+    return make_ready_future<>();
+}
+
 future<> sstable_directory::sstables_registry_components_lister::process(sstable_directory& directory, process_flags flags) {
     dirlog.debug("Start processing registry entry {}.{} (state {})", _table_id, _node_owner, directory._state);
     return _sstables_registry.sstables_registry_list(_table_id, _node_owner, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
@@ -442,6 +472,11 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
         return directory.process_descriptor(std::move(desc), flags,
                                             [&directory] { return *directory._storage_opts; });
     });
+}
+
+future<> sstable_directory::restore_components_lister::scan(sstable_directory& directory) {
+    // Nothing to scan: the components to process are given upfront in _toc_filenames.
+    return make_ready_future<>();
 }
 
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {

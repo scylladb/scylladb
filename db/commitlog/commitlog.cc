@@ -57,6 +57,7 @@
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/labels.hh"
+#include "utils/error_injection.hh"
 
 static logging::logger clogger("commitlog");
 

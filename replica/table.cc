@@ -2692,6 +2692,12 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
+    // desc.new_gc_sstables are deliberately left out. They hold only data this
+    // compaction is dropping, they exist just long enough to keep a crash from
+    // resurrecting it, and they are released by the same compaction that
+    // created them. Their large-partition, large-row and large-collection
+    // records describe garbage, so feeding them to the guardrail would report
+    // limit violations for data that is on its way out.
     for (auto& sst : desc.new_sstables) {
         _t._large_data_guardrail->register_sstable(sst);
     }
@@ -5484,7 +5490,8 @@ table::disable_auto_compaction() {
     auto holder = _async_gate.hold();
 
     co_await parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+        return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view,
+                compaction::compaction_type_set::of<compaction::compaction_type::Compaction>());
     });
 
     if (uses_logstor()) {
@@ -5524,11 +5531,42 @@ table::make_mutation_reader_excluding_staging(schema_ptr s,
     return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
+// Returns the sstable the table currently holds for the data of `sst`: `sst` itself if it is
+// still in the sstable set, the sstable it was cloned into by a component rewrite (incremental
+// repair marking, tablet merge) if that one is, or nullptr if the data is gone from the table
+// (tablet cleanup, already moved out of staging, or rewritten more than once since the caller
+// took its reference).
+static sstables::shared_sstable current_generation_of(const sstable_list& all, const sstables::shared_sstable& sst) {
+    if (all.contains(sst)) {
+        return sst;
+    }
+    const auto& clone = sst->cloned_to_sstable_filename();
+    if (!clone) {
+        return nullptr;
+    }
+    auto it = std::ranges::find_if(all, [&] (const sstables::shared_sstable& s) {
+        return s->component_basename(sstables::component_type::Data) == *clone;
+    });
+    return it != all.end() ? *it : nullptr;
+}
+
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto permit = co_await get_sstable_list_permit();
+    auto all = get_sstables();
     sstables::delayed_commit_changes delay_commit;
     std::unordered_set<compaction_group*> compaction_groups_to_notify;
-    for (auto sst : sstables) {
+    for (auto& registered : sstables) {
+        auto sst = current_generation_of(*all, registered);
+        if (!sst) {
+            tlogger.warn("Not moving sstable {} from staging: it is no longer part of the table", registered->get_filename());
+            continue;
+        }
+        if (sst != registered) {
+            tlogger.info("Sstable {} was rewritten into {} while in staging, moving the latter", registered->get_filename(), sst->get_filename());
+        }
+        if (!sst->requires_view_building()) {
+            continue;
+        }
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
             // completed first.

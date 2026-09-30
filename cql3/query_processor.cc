@@ -1288,7 +1288,7 @@ future<> query_processor::query_internal(
 future<> query_processor::query_internal(
         const sstring& query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
+    return query_internal(query_string, db::consistency_level::ONE, {}, default_internal_page_size, std::move(f));
 }
 
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {

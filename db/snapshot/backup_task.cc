@@ -147,6 +147,7 @@ future<> backup_task_impl::do_backup() {
 
     co_await abort_gate.close();
     abort_sub = {};
+    snap_log.debug("backup_task: stopping workers");
     co_await _sharded_worker.stop();
 
     if (_ex) {
@@ -324,19 +325,27 @@ future<> backup_task_impl::worker::deleted_sstable(sstables::generation_type gen
     // created on `backup_shard`, since it is immutable after `process_snapshot_dir` is done.
     if (_task._sstables_in_snapshot.contains(gen)) {
         snap_log.debug("SSTable with generation {} was deleted from the table", gen);
-        return smp::submit_to(_task._backup_shard, [this, gen] {
+        // Break point for testing that the worker outlives the notifications it started.
+        co_await utils::get_local_injector().inject("backup_task_deleted_sstable", utils::wait_for_message(std::chrono::minutes(2)));
+        co_await smp::submit_to(_task._backup_shard, [this, gen] {
             _task.on_sstable_deletion(gen);
         });
     }
-    return make_ready_future();
 }
 
 future<> backup_task_impl::run() {
+    // Passing the abort source below requires this task to run on shard 0,
+    // where the snapshot lock lives. snapshot_ctl::start_backup() creates the
+    // task there; keep it that way, or the wait stops being abortable.
+    if (this_shard_id() != 0) {
+        throw std::runtime_error("backup task must run on shard 0");
+    }
+
     // do_backup() removes a file once it is fully uploaded, so we are actually
     // mutating snapshots.
     co_await _snap_ctl.run_snapshot_modify_operation([this] {
         return do_backup();
-    });
+    }, &_as);
     snap_log.info("Finished backup");
 }
 

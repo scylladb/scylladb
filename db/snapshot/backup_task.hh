@@ -72,6 +72,14 @@ class backup_task_impl : public tasks::task_manager::task::impl {
         worker(const replica::database& db, backup_task_impl& task);
         ~worker();
 
+        // Called by sharded<worker>::stop() before the worker is destroyed.
+        // Unsubscribes from the sstables_manager and waits for in-flight
+        // sstable deletion notifications, which hop to the backup shard using
+        // smp::submit_to and would otherwise outlive the worker.
+        future<> stop() noexcept {
+            return sstables::sstables_manager_event_handler::stop();
+        }
+
         future<> start_uploading();
 
         void abort();
