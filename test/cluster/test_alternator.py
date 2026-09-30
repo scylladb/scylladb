@@ -29,7 +29,7 @@ import threading
 import random
 import re
 
-from test.cluster.util import get_replication
+from test.cluster.util import get_replication, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -2094,4 +2094,42 @@ async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp
         alternator_bad.meta.client.list_tables()
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """The Alternator TTL expiration service is stopped only after drain, so
+       an expiration delete can reach a table after drain has flushed it. On
+       object storage the table is then flushed again when it is closed, with
+       no sstables registry to record the sstable, and the node aborts
+       (SCYLLADB-4366). The delete must be rejected instead.
+    """
+    # Alternator tables cannot be on object storage yet: with the mixed-storage
+    # guardrail on, CreateTable refuses an object-storage keyspace.
+    cfg = storage_config.get_cluster_cfg(alternator_config | {'restrict_mixed_storage_clusters': 'false'})
+    [server] = await manager.servers_add(1, config=cfg)
+    table_name = f'ttl_drain_{int(time.time() * 1000)}'
+    # Alternator puts the table in an existing keyspace of the expected name,
+    # which is how the test places it on the storage under test.
+    cql = manager.get_cql()
+    await cql.run_async(storage_config.get_keyspace_opts(
+        f"CREATE KEYSPACE alternator_{table_name} WITH replication = "
+        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"))
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=table_name,
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    await manager.api.enable_injection(server.ip_addr, 'alternator_ttl_before_expire_item', one_shot=False,
+                                       parameters={'cf_name': table_name})
+    table.meta.client.update_time_to_live(TableName=table_name,
+        TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    table.put_item(Item={'p': 1, 'expiration': int(time.time()) - 60})
+    await manager.api.wait_for_injection_enter(server.ip_addr, 'alternator_ttl_before_expire_item')
+
+    await manager.api.enable_injection(server.ip_addr, 'database_drain_after_user_flush', one_shot=False)
+    stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+    await manager.api.wait_for_injection_enter(server.ip_addr, 'database_drain_after_user_flush')
+    await manager.api.message_injection(server.ip_addr, 'alternator_ttl_before_expire_item')
+    await manager.api.message_injection(server.ip_addr, 'database_drain_after_user_flush')
+    await stop_task
 
