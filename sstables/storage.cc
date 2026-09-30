@@ -105,7 +105,7 @@ public:
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
@@ -641,7 +641,7 @@ bool filesystem_storage::operator==(const storage& other) const noexcept {
     return other_fs && sstable_directory::compare_sstable_storage_prefix(_base_dir.native(), other_fs->_base_dir.native());
 }
 
-future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
@@ -731,7 +731,7 @@ public:
     future<> destroy(const sstable& sst) override;
     std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     bool operator==(const storage&) const noexcept override;
-    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
@@ -1142,7 +1142,7 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _prefix == other_object->_prefix;
 }
 
-future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
     if (!desc.sid) {
         on_internal_error(sstlog, fmt::format("Cannot remove SSTable on object storage with generation={} from registry: has no sstable_id", desc.generation));
     }
