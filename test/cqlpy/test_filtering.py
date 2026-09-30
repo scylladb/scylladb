@@ -486,3 +486,41 @@ def test_selecting_a_regular_column_does_not_poison_filtering_of_a_static_row(cq
         cql.execute(f"INSERT INTO {table} (a, s) VALUES (1, 2)")
         res = cql.execute(f"SELECT a, b, c, s FROM {table} WHERE s = 2 ALLOW FILTERING")
         assert list(res) == [(1, None, None, 2)]
+
+# A tuple range on descending clustering columns keeps its CQL meaning when
+# the query also needs filtering.
+# Reproduces #31631
+def test_multi_column_slice_with_filtering_on_desc_clustering(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema,
+            'WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC)') as table:
+        for i in range(1, 6):
+            cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES (1, {i}, {i}, {i % 2})")
+        assert list(cql.execute(f"SELECT c1, c2 FROM {table} WHERE p = 1 AND (c1, c2) < (4, 4) AND v = 1 ALLOW FILTERING")) == [(3, 3), (1, 1)]
+        assert list(cql.execute(f"SELECT c1, c2 FROM {table} WHERE p = 1 AND (c1, c2) > (2, 2) AND v = 1 ALLOW FILTERING")) == [(5, 5), (3, 3)]
+        assert list(cql.execute(f"SELECT c1, c2 FROM {table} WHERE p = 1 AND (c1) < (4) AND v = 1 ALLOW FILTERING")) == [(3, 3), (1, 1)]
+
+# The descending column of a mixed-order clustering key is only a tie-break
+# in a tuple comparison.
+# Reproduces #31631
+def test_multi_column_slice_with_filtering_on_mixed_clustering_order(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema,
+            'WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)') as table:
+        for c1 in range(1, 3):
+            for c2 in range(1, 4):
+                cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES (1, {c1}, {c2}, 1)")
+        assert list(cql.execute(f"SELECT c1, c2 FROM {table} WHERE p = 1 AND (c1, c2) < (2, 2) AND v = 1 ALLOW FILTERING")) == [(1, 3), (1, 2), (1, 1), (2, 1)]
+
+# A tuple range on descending clustering columns keeps its CQL meaning when an
+# index, rather than a clustering range, picks the rows to filter.
+# Reproduces #31631
+def test_multi_column_slice_with_filtering_on_indexed_column(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema,
+            'WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC)') as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        for i in range(1, 6):
+            cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES (1, {i}, {i}, {i % 2})")
+        assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) < (4, 4) AND v = 1 ALLOW FILTERING")) == {(3, 3), (1, 1)}
+        assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) > (2, 2) AND v = 1 ALLOW FILTERING")) == {(5, 5), (3, 3)}
