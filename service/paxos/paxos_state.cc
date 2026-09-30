@@ -315,7 +315,8 @@ future<> paxos_state::prune(paxos_store& paxos_store, schema_ptr schema, const p
         tracing::trace_state_ptr tr_state) {
     logger.debug("Delete paxos state for ballot {}", ballot);
     tracing::trace(tr_state, "Delete paxos state for ballot {}", ballot);
-    return paxos_store.delete_paxos_decision(*schema, key, ballot, timeout);
+    co_await utils::get_local_injector().inject("paxos_state_prune_wait", utils::wait_for_message(5min));
+    co_return co_await paxos_store.delete_paxos_decision(*schema, key, ballot, timeout);
 }
 
 static int32_t paxos_ttl_sec(const schema& s) {
