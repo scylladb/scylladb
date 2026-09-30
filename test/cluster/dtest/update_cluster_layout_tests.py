@@ -57,7 +57,7 @@ from tools.docker_utils import running_in_podman
 from tools.files import wipe_node_data_directories
 from tools.group0_and_token_ring import find_and_clean_garbage_from_group0, verify_group0_and_token_ring_members, wait_for_token_ring_and_group0_consistency
 from tools.iptables import IPTable, IPTableRule
-from tools.marks import issue_open, with_feature
+from tools.marks import with_feature
 from tools.rackdc import update_properties
 from tools.schema import change_schema_safely, describe_rf, get_replication_options
 from tools.status import (
@@ -142,7 +142,7 @@ class TestUpdateClusterLayout(Tester):
         if restart:
             self.cluster.start_nodes()
 
-    @pytest.mark.parametrize("test_stream_plan_ranges_fraction", [pytest.param(False), pytest.param(True, marks=pytest.mark.skip_if(with_feature("tablets") & issue_open("https://github.com/scylladb/scylladb/issues/23457")))])
+    @pytest.mark.parametrize("test_stream_plan_ranges_fraction", [pytest.param(False), pytest.param(True, marks=pytest.mark.skip_if(with_feature("tablets")))])
     def test_simple_add_node(self, test_stream_plan_ranges_fraction):
         """
         Test bootstrapped node streams all data
@@ -2161,7 +2161,7 @@ class TestUpdateClusterLayout(Tester):
         logger.debug("Check rows on node1")
         self.check_rows_on_node(node1, nr_rows, ks=ks, cf=tbl, timeout=timeout)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_increment_decrement_counters_in_threads_nodes_restarted(self):  # noqa: PLR0915
         """
         increment/decrement 2 counters(2 inc vs 1 dec) * 1000 times * 120 threads
@@ -2677,7 +2677,7 @@ class TestUpdateClusterLayout(Tester):
         node4.start(wait_for_binary_proto=True)
         logger.info("done")
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("https://github.com/scylladb/scylladb/issues/23525"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_decommission_after_decreasing_rf(self, dtest_config):  # noqa: PLR0915
         """
         Test a node decommission after altering a keyspace to a lower replication-factor value.
@@ -2885,7 +2885,6 @@ class TestUpdateClusterLayout(Tester):
 
         return iptables_obj
 
-    @pytest.mark.require("jira:SCYLLADB-608")
     @pytest.mark.skipif(condition=running_in_podman(), reason="can't use iptables within podman")
     def test_decommission_node_while_gossip_partly_blocked(self, ip_tables):
         """reproducer scylladb/scylla-operator#982 and scylladb/scylladb#11302
@@ -2956,8 +2955,8 @@ class TestUpdateClusterLayout(Tester):
         node4.start(wait_for_binary_proto=True)
         logger.info("done")
 
-    @pytest.mark.require("jira:SCYLLADB-608")
-    @pytest.mark.require("scylladb/scylladb#12892")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/12892",
+                          reason="removenode fails with a raft quorum timeout, not the expected error, while gossip is partly blocked")
     @pytest.mark.skipif(condition=running_in_podman(), reason="can't use iptables within podman")
     def test_removenode_while_gossip_partly_blocked(self, ip_tables):
         """
@@ -3179,7 +3178,6 @@ class TestStopNodeEarly(Tester):
 @pytest.mark.dtest_heavy
 class TestLargeScaleCluster(Tester):
     @pytest.mark.timeout(4200)
-    @pytest.mark.require("#22244")
     def test_add_many_nodes_under_load(self):  # noqa: PLR0915
         """
         Test large scale cluster (40 nodes cluster, or 12 in debug mode).

@@ -48,7 +48,7 @@ from tools.data import (
     rows_to_list,
     wait_for_schema_agreement,
 )
-from tools.marks import issue_open, unmark, unmark_if, with_feature
+from tools.marks import unmark, unmark_if, with_feature
 from tools.misc import generate_random_text, remove_node
 from tools.retrying import retrying
 from tools.tables_view_manager import (
@@ -588,7 +588,10 @@ class TestSecondaryIndexes(SecondaryIndexesHelpers):
 
         session.shutdown()
 
-    @pytest.mark.require("#7432")
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/7432",
+        reason="some queries with secondary indexes return too large pages",
+    )
     def test_filter_by_index_with_paging(self):
         """
         Create the index on the populated table and read the data that was inserted before index
@@ -789,7 +792,10 @@ class TestSecondaryIndexes(SecondaryIndexesHelpers):
             assert_all(session, "select count(*) from {}.{} WHERE {}='asdf'".format(ks_name, table_name, index["index_column"]), expected=[[10]], cl=ConsistencyLevel.QUORUM, num_attempts=60, sleep_time=1)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.skip_if(issue_open("#8627"))
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/8627",
+        reason="updates with indexed values over 64k are not cleanly rejected",
+    )
     def test_oversize_indexed_values(self):
         """
         Reject inserts & updates where values of any indexed column is > 64k
@@ -1151,14 +1157,14 @@ class TestSecondaryIndexes(SecondaryIndexesHelpers):
         """
         self._node_action_after_index_build(node_action="stop", nodes=4, rf=3, num_rows=1000)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#22394"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_remove_node_after_index_build(self):
         """
         Remove one node after index building and read data by index
         """
         self._node_action_after_index_build(node_action="remove", nodes=4, rf=3, num_rows=1000)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#22394"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_decommission_node_after_index_build(self):
         """
         Decommission one node after index building and read data by index
@@ -1749,14 +1755,14 @@ class TestLocalIndexes(SecondaryIndexesHelpers):
         """
         self._node_action_after_index_build(node_action="stop", nodes=4, rf=3, num_rows=1000)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#22394"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_remove_node_after_local_index_build(self):
         """
         Remove one node after index building and read data by index
         """
         self._node_action_after_index_build(node_action="remove", nodes=4, rf=3, num_rows=1000)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#22394"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_decommission_node_after_local_index_build(self):
         """
         Decommission one node after index building and read data by index

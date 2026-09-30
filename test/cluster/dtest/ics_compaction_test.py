@@ -16,7 +16,7 @@ from dtest_class import Tester, create_cf, create_ks, wait_for
 from tools.assertions import assert_row_count
 from tools.cluster_topology import generate_cluster_topology_based_rf
 from tools.files import get_node_cf_dir, get_sstables_files
-from tools.marks import issue_open, unmark, unmark_if, with_feature
+from tools.marks import unmark
 from tools.scylla_defines import (
     FULL_TABLE_NAME,
     KB,
@@ -441,7 +441,6 @@ class TestIcsCompaction(Tester):
         self._read_generated_sstables_data(increasing_write_size=True)
 
     @pytest.mark.single_node
-    @unmark_if("next_gating", condition=with_feature("tablets") & issue_open("scylladb/scylla-enterprise#4640"))
     def test_ics_refresh_with_big_sstable_files(self):
         """
 

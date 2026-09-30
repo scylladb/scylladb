@@ -363,7 +363,6 @@ class UpgradeTester(Tester):
 class BaseTests(UpgradeTester):
     __test__ = False
 
-    @pytest.mark.require("jira:SCYLLADB-1884")
     @pytest.mark.no_boot_speedups
     def test_cluster_upgrade(self, dtest_config):
         """
@@ -442,7 +441,6 @@ class BaseTests(UpgradeTester):
 
         session.cluster.shutdown()
 
-    @pytest.mark.require("jira:SCYLLADB-1884")
     def test_upgrade_cluster_nodes_with_twcs(self, dtest_config):
         """
         Test upgrade all nodes in the cluster sequentially.

@@ -47,7 +47,7 @@ from tools.data import (
     get_rows_set_from_res,
     rows_to_list,
 )
-from tools.marks import issue_open, unmark, with_feature
+from tools.marks import unmark, with_feature
 from tools.metrics import get_node_metrics
 from tools.retrying import retrying
 from tools.stress import format_cs_output
@@ -802,7 +802,8 @@ class TestCQL(Tester):
         rows_list = rows_to_list(res)
         assert rows_list == [[0, 0, 0, 0, 0], [0, 0, 1, 1, 0], [0, 0, 1, 1, -1], [0, 0, 1, 0, 2], [0, -1, 2, 2, 2]], rows_list
 
-    @pytest.mark.require("#64")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/64",
+                          reason="multi-column restrictions are allowed only on a clustering key prefix")
     @pytest.mark.single_node
     def test_simple_tuple_query(self):
         """
@@ -866,7 +867,8 @@ class TestCQL(Tester):
         invalid_values = (160616626311127, 16061662631112228)
         self.query_coloumn_timeuuid(invalid_values, subtests)
 
-    @pytest.mark.require("#7691")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/7691",
+                          reason="mintimeuuid() of an out-of-range timestamp overflows instead of being rejected")
     def test_query_coloumn_timeuuid_with_invalid_values_issue7691(self, subtests):
         """Test time functions combination and invalid time values issue #7691"""
         invalid_values = (16061662631112223339,)
@@ -909,7 +911,7 @@ class TestCQL(Tester):
         assert len(res) == 4, list(res)
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_filter_by_counter(self, subtests):
         session = self.prepare()
 
@@ -970,7 +972,7 @@ class TestCQL(Tester):
             assert_all(session=session, query="select * from clicks where c1 = 0 ALLOW FILTERING", expected=[[1, 0, 0, 0, None], [0, 0, 0, None, None]])
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_counters(self):
         """
         Validate counter support.
@@ -1625,7 +1627,7 @@ class TestCQL(Tester):
         assert rows_to_list(res) == [[2]], list(res)
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_reserved_keyword(self):
         session = self.prepare()
 
@@ -2976,7 +2978,7 @@ class TestCQL(Tester):
         res = session.execute("SELECT blog_id, timestamp FROM test WHERE author = 'bob'")
         assert rows_to_list(res) == [[1, 0], [1, 3], [0, 0]], list(res)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     @pytest.mark.single_node
     def test_validate_counter_regular(self):
         """
@@ -6887,7 +6889,8 @@ class TestsCQLAdditional(Tester):
         num_rows = int(re.search(regex, out).group(1))
         assert num_rows == 100
 
-    @pytest.mark.require("2251")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2251",
+                          reason="timestamps before year 1400 cannot be parsed from a string literal")
     @pytest.mark.single_node
     def test_limit_date_value_out_of_range_lower_limit(self):
         cluster = self.prepare()
@@ -7038,7 +7041,7 @@ class TestsCQLAdditional(Tester):
         assert r_explicitly == r_implicitly
 
     @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/14806
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_create_100tables(self):
         """
         The scenario referenced https://github.com/scylladb/scylla/issues/2923

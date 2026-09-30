@@ -33,7 +33,6 @@ NetworkTopologyStrategy, or other, the upgrade should not be performed.
 """
 
 
-@pytest.mark.require("scylladb/scylla-enterprise#3399")
 @pytest.mark.next_gating
 class TestAuditTableMigration(UpgradeTester):
     __test__ = True

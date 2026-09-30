@@ -20,7 +20,7 @@ from alternator_utils import (
     StreamsTable,
 )
 from tools.cluster import new_node
-from tools.marks import issue_open, unmark, with_feature
+from tools.marks import unmark, with_feature
 from tools.retrying import retrying
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.dtest_full
 @pytest.mark.next_gating
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#23838"))
+@pytest.mark.skip_if(with_feature("tablets"))
 class TestAlternatorStreams(BaseAlternatorStream):
     def test_verify_all_nodes_have_same_stream(self):
         num_of_items = NUM_OF_ITEMS
@@ -231,7 +231,8 @@ class TestAlternatorStreams(BaseAlternatorStream):
         decommission_thread.join()
 
     @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/15260
-    @pytest.mark.skip_if(issue_open("jira:DTEST-200") | (with_feature("tablets") & issue_open("scylladb/scylla-dtest#7189")))
+    @pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/DTEST-200",
+                          reason="no joining node is found after the bootstrap error handling change")
     def test_sequence_numbers_during_add_decommission_node(self):
         """
         Verify shards sequence numbers on topology changes.

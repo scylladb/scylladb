@@ -289,7 +289,6 @@ class RollingUpgradeBase(UpgradeTester):
 
 
 @pytest.mark.dtest_full
-@pytest.mark.require("jira:SCYLLADB-2062")
 class TestRollingUpgrade(RollingUpgradeBase):
     __test__ = True
     _multiprocess_can_split_ = False

@@ -184,7 +184,6 @@ class TestSLA(SLATester):
         node1.stress(cmd.format(user=user, password=password).split())
         node1.stress(cmd.format(user=entity.name, password=entity.password).split())
 
-    @pytest.mark.require("scylladb/scylla-enterprise#2163")
     def test_sla_no_shares(self):
         """
         1. Create SL without specifying the number of shares.
@@ -234,7 +233,6 @@ class TestSLA(SLATester):
         self.validate_sl_list(session=session, expected_service_levels=sls)
         self.validate_attached_slas_list(session=session, entity=entity, expected_service_levels=[sl_300])
 
-    @pytest.mark.require("scylladb/scylla-enterprise#2163")
     @pytest.mark.parametrize(argnames=["entity_class", "entity_name"], argvalues=[[Role, "test_role"], [User, "test_user"]], ids=["with_role", "with_user"])
     def test_update_assigned_sla_service_shares(self, entity_class, entity_name: str):
         """
@@ -482,7 +480,8 @@ class TestSLATimeouts(SLATester):
 
         assert query_result
 
-    @pytest.mark.require("scylladb/scylladb#10285")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/10285",
+                          reason="the service level timeout is overridden by the configured timeout")
     @pytest.mark.parametrize(
         argnames=("scylla_yaml_timeout", "sl_timeout", "query_timeout"),
         argvalues=[

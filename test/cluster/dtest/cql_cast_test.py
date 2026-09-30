@@ -9,7 +9,7 @@ import logging
 import pytest
 
 from cqlsh_tests.cqlsh_copy_tests import CqlshPrepare
-from tools.marks import require, unmark
+from tools.marks import unmark
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,8 @@ class TestCQLCast(CqlshPrepare):
     COLUMN_NAME_TEMPLATE = "{}_clmn"
     KEYSPACE_NAME = "ks"
 
-    @require("#3108")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/3108",
+                          reason="the error for an invalid cast names internal types (e.g. Int32Type) instead of the function signatures")
     def test_cast_negative(self):
         """Function performs positive tests CAST scalar function for user-defined type"""
         test_from = ["text", "date"]
@@ -117,7 +118,8 @@ class TestCQLCast(CqlshPrepare):
         test_from = ["timeuuid"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
-    @require("#13601")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/13601",
+                          reason="avg() of decimals differs from Cassandra's rounding (-2110054580.3 vs -2110054581)")
     def test_avg_cast_from_varint_to_decimal(self):
         # To remove the case from issue test, go to TestData.POSITIVE_VALUES and remove comment simbol "#" from relavant type
         # seems like cassandra bug: https://issues.apache.org/jira/browse/CASSANDRA-18470

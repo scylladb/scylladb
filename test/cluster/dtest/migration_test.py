@@ -44,7 +44,7 @@ from tools.files import (
     get_sstables_files,
     safe_mkdtemp,
 )
-from tools.marks import issue_open, with_feature
+from tools.marks import with_feature
 from tools.misc import ImmutableMapping
 from tools.retrying import retrying
 from tools.stress import create_stress_compatible_table
@@ -571,7 +571,7 @@ class MigrationTestBase(BaseHelpers):
         expected_message = "Direct loading non-Scylla SSTables containing counters is not supported."
         self.load_migrated_tables_expect_fail(node1, "with_counter", message=expected_message)
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_migrate_sstable_with_counter(self):
         """
         https://github.com/scylladb/scylla/issues/2119
@@ -708,7 +708,7 @@ class TestMigration(MigrationTestBase):
                 assert message in str(error), error
 
     @pytest.mark.dtest_debug
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_migrate_sstable_with_counter(self):
         super().test_migrate_sstable_with_counter()
 
@@ -809,7 +809,7 @@ class TestTTLWithMigrate(Tester):
     # timeuuid based identifier was introduced in Cassandra 4.1. so we cannot test it with
     # Cassandra 3.x. see @jira_ticket CASSANDRA-17048
     @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("jira:DTEST-58"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
     def test_big_table_with_ttls(self, request):  # noqa: PLR0915
         """

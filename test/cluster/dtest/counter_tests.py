@@ -15,14 +15,14 @@ from cassandra.query import UNSET_VALUE
 from dtest_class import Tester, create_ks
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import rows_to_list
-from tools.marks import issue_open, with_feature
+from tools.marks import with_feature
 
 logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.next_gating
 
 
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+@pytest.mark.skip_if(with_feature("tablets"))
 @pytest.mark.dtest_full
 class TestCounters(Tester):
     @pytest.mark.single_node
@@ -142,7 +142,7 @@ class TestCounters(Tester):
 
 
 @pytest.mark.dtest_full
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+@pytest.mark.skip_if(with_feature("tablets"))
 class TestCountersStress(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def setup(self):

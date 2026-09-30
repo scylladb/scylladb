@@ -571,7 +571,6 @@ class TestLdapSaslAuth(TestLdap):
         ret = self.test_ldap_docker.delete_ldap_object(f"uid={username},ou=Person,dc=scylladb,dc=com")
         assert ret["description"] == expected_descritpion
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_drop_cassandra_role(self):
         self.prepare()
         su_name, su_pasword = self._create_new_superuser()
@@ -582,7 +581,6 @@ class TestLdapSaslAuth(TestLdap):
                 session2 = self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra")
             session.execute(f"DROP ROLE 'cassandra'")
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_drop_role_from_ldap_twice(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
@@ -592,7 +590,6 @@ class TestLdapSaslAuth(TestLdap):
             self._remove_user_from_ldap(test_user)
             self._remove_user_from_ldap(test_user, expected_descritpion="noSuchObject")
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_recreate_role_after_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
@@ -606,7 +603,6 @@ class TestLdapSaslAuth(TestLdap):
             session.execute(f"CREATE ROLE 'no_ldap_user'")
             session.execute(f"DROP ROLE 'no_ldap_user'")
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_block_current_role_drop(self):
         self.prepare()
         su_name, su_pasword = self._create_new_superuser()
@@ -614,14 +610,12 @@ class TestLdapSaslAuth(TestLdap):
             with pytest.raises(InvalidRequest, match=r"Cannot DROP primary role for current login"):
                 session.execute(f"DROP ROLE '{su_name}'")
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_block_not_existing_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
             with pytest.raises(InvalidRequest, match=r"Role not_existing_role doesn't exist."):
                 session.execute(f"DROP ROLE 'not_existing_role'")
 
-    @pytest.mark.require("scylladb/scylladb#25571")
     def test_existing_session_after_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
