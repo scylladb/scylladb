@@ -8,7 +8,10 @@
 
 #include "values_provider.hh"
 
+#include <algorithm>
 #include <cmath>
+#include <span>
+#include <utility>
 
 #include "keys/keys.hh"
 #include "query/query-request.hh"
@@ -29,6 +32,152 @@ std::optional<float> similarity_at(const vector_search::vector_store_client::pri
     return std::isfinite(similarity) ? std::optional(similarity) : std::nullopt;
 }
 
+/// The next cell of `iter`, as a value or nothing where the row has none for the column. The
+/// iterator moves past the cell either way, so it stays aligned with the columns it is read
+/// against; a cell whose value is not wanted has to be stepped over rather than left unread.
+managed_bytes_opt next_value(query::result_row_view::iterator_type& iter, const column_definition& column) {
+    if (column.type->is_multi_cell()) {
+        auto cell = iter.next_collection_cell();
+        return cell ? managed_bytes_opt(managed_bytes(*cell)) : std::nullopt;
+    }
+    auto cell = iter.next_atomic_cell();
+    return cell ? managed_bytes_opt(managed_bytes(cell->value())) : std::nullopt;
+}
+
+/// Reads a fixed list of columns out of every row walked, in the order asked; see
+/// joined_row::columns. Unlike the result set builder, which reads every selected column, this
+/// reads a few columns out of what can be a large selection, so where each of them is found is
+/// worked out once per read. Walking a row then does no matching, and stops after the last value
+/// wanted.
+class column_reader {
+    const schema& _schema;
+    const query::partition_slice& _slice;
+
+    /// A column asked for: where its value is found in a row - a component of the key, or a cell
+    /// among the cells of its kind the slice asked for - and the slot of the row's values it fills.
+    struct wanted_column {
+        column_kind kind;
+        size_t position;
+        size_t slot;
+    };
+
+    /// One entry per column asked for, ordered by kind and then by position, which is the order a
+    /// row's values are met in.
+    std::vector<wanted_column> _wanted;
+
+    /// The entries of one kind, in position order.
+    std::span<const wanted_column> wanted_of(column_kind kind) const {
+        const auto [begin, end] = std::ranges::equal_range(_wanted, kind, {}, &wanted_column::kind);
+        return {begin, end};
+    }
+
+    /// The position of `column` among the cells the slice asked for, counting only its own kind,
+    /// which is the order they arrive in.
+    size_t cell_position_of(const column_definition& column) const {
+        const auto& ids = column.is_static() ? _slice.static_columns : _slice.regular_columns;
+        const auto it = std::ranges::find(ids, column.id);
+        // A column is read from the cells the slice asked for, so it has to be one of them:
+        // whoever built the read has to have asked for it, the way the highlighted column is asked
+        // for with add_column_for_post_processing().
+        throwing_assert(it != ids.end());
+        return std::distance(ids.begin(), it);
+    }
+
+    /// Reads the cells `ids` names, in the order they arrive, keeping the ones of `kind` asked for
+    /// and stepping over the rest - the iterator only moves forward, so every cell up to the last
+    /// one wanted has to be passed.
+    void read_cells(query::result_row_view::iterator_type iter, const query::column_id_vector& ids, column_kind kind,
+            std::vector<managed_bytes_opt>& values) const {
+        const auto wanted = wanted_of(kind);
+        auto next = wanted.begin();
+        for (size_t position = 0; next != wanted.end(); ++position) {
+            const auto& column = _schema.column_at(kind, ids[position]);
+            if (position == next->position) {
+                values[next->slot] = next_value(iter, column);
+                ++next;
+            } else {
+                iter.skip(column);
+            }
+        }
+    }
+
+    /// The key's components are views over its own storage, so walking them copies nothing but the
+    /// values wanted. A component the key does not have - the clustering key of a partition
+    /// holding nothing but a static row, say - is never reached, and its value is left absent.
+    template <typename Key>
+    void read_key_components(const Key& key, column_kind kind, std::vector<managed_bytes_opt>& values) const {
+        const auto wanted = wanted_of(kind);
+        auto next = wanted.begin();
+        size_t position = 0;
+        for (const managed_bytes_view component : key.components()) {
+            if (next == wanted.end()) {
+                return;
+            }
+            if (position == next->position) {
+                values[next->slot] = managed_bytes(component);
+                ++next;
+            }
+            ++position;
+        }
+    }
+
+public:
+    column_reader(const schema& schema, const query::partition_slice& slice, std::span<const column_definition* const> columns)
+        : _schema(schema)
+        , _slice(slice) {
+        _wanted.reserve(columns.size());
+        for (size_t slot = 0; slot < columns.size(); ++slot) {
+            const auto& column = *columns[slot];
+            const auto position = column.is_primary_key() ? column.component_index() : cell_position_of(column);
+            _wanted.push_back(wanted_column{.kind = column.kind, .position = position, .slot = slot});
+        }
+        const auto location = [] (const wanted_column& w) { return std::pair(w.kind, w.position); };
+        std::ranges::sort(_wanted, {}, location);
+        // One position fills one slot: the walk reads each value once, so a column asked for twice
+        // would leave one of its slots unfilled.
+        throwing_assert(std::ranges::adjacent_find(_wanted, {}, location) == _wanted.end());
+    }
+
+    bool reads_partition_key() const {
+        return !wanted_of(column_kind::partition_key).empty();
+    }
+
+    bool reads_clustering_key() const {
+        return !wanted_of(column_kind::clustering_key).empty();
+    }
+
+    /// The values the rows of a partition start from: the partition-key columns asked for, which
+    /// every row of it shares, and nothing else yet.
+    std::vector<managed_bytes_opt> partition_values(const partition_key* key) const {
+        if (_wanted.empty()) {
+            return {};
+        }
+        auto values = std::vector<managed_bytes_opt>(_wanted.size());
+        if (reads_partition_key()) {
+            throwing_assert(key);
+            read_key_components(*key, column_kind::partition_key, values);
+        }
+        return values;
+    }
+
+    /// Adds what a row of that partition gives: its clustering key and its cells. `key` is null
+    /// where the slice left the clustering key out, `row` for the row emitted for a partition
+    /// holding nothing but a static row.
+    void read_row(std::vector<managed_bytes_opt>& values, const clustering_key_prefix* key,
+            const query::result_row_view& static_row, const query::result_row_view* row) const {
+        if (values.empty()) {
+            return;
+        }
+        if (key) {
+            read_key_components(*key, column_kind::clustering_key, values);
+        }
+        read_cells(static_row.iterator(), _slice.static_columns, column_kind::static_column, values);
+        if (row) {
+            read_cells(row->iterator(), _slice.regular_columns, column_kind::regular_column, values);
+        }
+    }
+};
+
 /// Matches each row the result set will be built from to the external result that names it.
 ///
 /// Which rows those are, and in what order, is decided by the walk of the base-table read: one
@@ -47,6 +196,18 @@ class joining_visitor {
 
     uint64_t _rows_in_partition = 0;
 
+    // Reads the columns asked for out of every row. The values of the partition being walked are
+    // what its rows start from: a partition-key column has one value for all of them.
+    column_reader _columns;
+    std::vector<managed_bytes_opt> _partition_values;
+
+    std::vector<managed_bytes_opt> read_columns(const clustering_key_prefix* key,
+            const query::result_row_view& static_row, const query::result_row_view* row) const {
+        auto values = _partition_values;
+        _columns.read_row(values, key, static_row, row);
+        return values;
+    }
+
     std::vector<joined_row> _rows;
 
     // Whether the result matched to a row has a similarity to report; see joined_row::dropped. A
@@ -58,8 +219,8 @@ class joining_visitor {
         return result && similarity_at(*_external_results, *result).has_value();
     }
 
-    void add_row(std::optional<size_t> result) {
-        _rows.push_back(joined_row{.external_result = result, .dropped = !has_similarity(result)});
+    void add_row(std::optional<size_t> result, std::vector<managed_bytes_opt> columns) {
+        _rows.push_back(joined_row{.external_result = result, .dropped = !has_similarity(result), .columns = std::move(columns)});
     }
 
     // Steps over this partition's results whose row the base table no longer has.
@@ -73,9 +234,11 @@ class joining_visitor {
     }
 
 public:
-    joining_visitor(const schema& schema, const vector_search::vector_store_client::primary_keys* external_results)
+    joining_visitor(const schema& schema, const query::partition_slice& slice,
+            const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns)
         : _schema(schema)
-        , _external_results(external_results) {
+        , _external_results(external_results)
+        , _columns(schema, slice, columns) {
     }
 
     std::vector<joined_row> rows() && {
@@ -85,6 +248,7 @@ public:
     // query::ResultVisitor, called by query::result_view::consume().
 
     void accept_new_partition(const partition_key& key, uint64_t row_count) {
+        _partition_values = _columns.partition_values(&key);
         _rows_in_partition = row_count;
         _partition_end = _next_result;
         if (!_external_results || row_count == 0) {
@@ -104,26 +268,32 @@ public:
     }
 
     void accept_new_partition(uint64_t row_count) {
-        // Called when the slice left out the partition key, which matching compares.
+        // Called when the slice left out the partition key, which matching compares and a
+        // partition-key column is read from.
         throwing_assert(!_external_results);
+        throwing_assert(!_columns.reads_partition_key());
+        _partition_values = _columns.partition_values(nullptr);
         _rows_in_partition = row_count;
         _partition_end = _next_result;
     }
 
-    void accept_new_row(const clustering_key& key, const query::result_row_view&, const query::result_row_view&) {
-        add_row(match(key));
+    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) {
+        add_row(match(key), read_columns(&key, static_row, &row));
     }
 
-    void accept_new_row(const query::result_row_view&, const query::result_row_view&) {
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
         // Called when the slice left out the clustering key, which matching compares unless the
         // table has none.
         throwing_assert(!_external_results || _schema.clustering_key_size() == 0);
-        add_row(match(clustering_key_prefix::make_empty()));
+        throwing_assert(!_columns.reads_clustering_key());
+        add_row(match(clustering_key_prefix::make_empty()), read_columns(nullptr, static_row, &row));
     }
 
-    void accept_partition_end(const query::result_row_view&) {
+    void accept_partition_end(const query::result_row_view& static_row) {
         if (_rows_in_partition == 0) {
-            add_row(std::nullopt);
+            // The row emitted for a partition holding nothing but a static row: it has no cells of
+            // its own, so only the static columns and the partition key can be read from it.
+            add_row(std::nullopt, read_columns(nullptr, static_row, nullptr));
         }
     }
 };
@@ -131,8 +301,8 @@ public:
 } // anonymous namespace
 
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const vector_search::vector_store_client::primary_keys* external_results) {
-    auto visitor = joining_visitor(schema, external_results);
+        const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns) {
+    auto visitor = joining_visitor(schema, slice, external_results, columns);
     query::result_view::consume(table_results, slice, visitor);
     return std::move(visitor).rows();
 }
