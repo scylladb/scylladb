@@ -136,7 +136,7 @@ public:
     virtual future<> destroy(const sstable& sst) = 0;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
     virtual bool operator==(const storage&) const noexcept = 0;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) = 0;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
