@@ -1225,8 +1225,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
             utils::directories::verify_owner_and_mode_of_data_dir(data_dir_set).get();
 
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory(), &cfg->extensions()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory(), &cfg->extensions()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
