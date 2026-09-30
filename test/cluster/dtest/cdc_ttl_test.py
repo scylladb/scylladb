@@ -16,6 +16,7 @@ from ccmlib.scylla_node import ScyllaNode
 from cdc_test import CDCInitializeHelper, CdcLogOperations
 from dtest_class import Tester, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
+from test.pylib.skip_types import skip_env
 from tools.cluster import new_node
 from tools.misc import ImmutableMapping
 
@@ -33,7 +34,7 @@ class TestCDCTTLFunctionality(Tester, CDCInitializeHelper):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
         if not dtest_config.is_scylla:
-            pytest.skip("CDC tests are intended for Scylla only")
+            skip_env("CDC tests are intended for Scylla only")
         dtest_setup_overrides = DTestSetupOverrides()
         dtest_setup_overrides.cluster_options = ImmutableMapping({"experimental_features": ["cdc"]})
         return dtest_setup_overrides

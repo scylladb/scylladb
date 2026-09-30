@@ -513,11 +513,11 @@ class TestUpgradeFullPath(BaseTests):
     upgrade_path = upgrade_matrix_full_path
     init_version = upgrade_path[0]
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_one_node_upgrade(self):
         pass
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_upgrade_cluster_nodes_with_twcs(self):
         pass
 
@@ -529,11 +529,11 @@ class TestUpgradeOneNode(BaseTests):
     upgrade_path = upgrade_matrix_from_last_release_version
     init_version = upgrade_path[0]
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_cluster_upgrade(self):
         pass
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_upgrade_cluster_nodes_with_twcs(self):
         pass
 
@@ -545,10 +545,10 @@ class TestUpgradeClusterWithEnableDisableTWCSQueries(BaseTests):
     upgrade_path = upgrade_matrix_from_last_release_version
     init_version = upgrade_path[0]
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_cluster_upgrade(self):
         pass
 
-    @pytest.mark.skip("skip the test for this matrix")
+    @pytest.mark.skip_env(reason="this upgrade-matrix variant does not exercise this test method (see the sibling class that does)")
     def test_one_node_upgrade(self):
         pass

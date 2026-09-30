@@ -396,7 +396,7 @@ class TestUserTypes(Tester):
         assert first_name == "Nero"
         assert like == "arson"
 
-    @pytest.mark.skip("Secondary indexes not implemented yet")
+    @pytest.mark.skip_env(reason="Secondary indexes not implemented yet")
     def test_type_secondary_indexing(self):  # noqa: PLR0915
         """
         Confirm that user types are secondary-indexable

@@ -225,7 +225,7 @@ class TestScyllaMgmtRestore(TestScyllaMgmtRestoreBase):
         self._add_new_node_and_wait_up_normal(healthy_node=node1, datacenter="dc2", rack="rack3")
         self.restore_and_verify(mgr_cluster, backup_task, node1)
 
-    @pytest.mark.xfail(reason="https://github.com/scylladb/scylla-manager/issues/3896")
+    @pytest.mark.xfail(reason="https://github.com/scylladb/scylla-manager/issues/3896", strict=False)
     def test_restore_after_remove_dc(self):
         topology_layout = {"dc1": {"rack1": 1, "rack2": 1}, "dc2": {"rack3": 1}}
         node1, _node2, node3 = self.config_and_create_cluster(topology=topology_layout)

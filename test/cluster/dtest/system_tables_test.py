@@ -859,7 +859,7 @@ class TestRuntimeInfoTable(SystemTableBase):
         assert metrics_after_request["requests_total"] == metrics_after_request["hits"] + metrics_after_request["misses"]
 
     @unmark.next_gating
-    @pytest.mark.xfail(reason="https://github.com/scylladb/scylla/issues/10340")
+    @pytest.mark.xfail(reason="https://github.com/scylladb/scylla/issues/10340", strict=False)
     @pytest.mark.single_node
     def test_memtable_metrics(self):
         """

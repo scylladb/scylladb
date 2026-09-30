@@ -54,11 +54,11 @@ class TestAggregatePaging(BasePagingTester, PageAssertionMixin):
             assert rows_count == [1], f"Expected 1 row, but got {rows_count}"
             assert all_data == [{"count": 5001}], f'Expected "{"count": 5001}", but got {all_data}'
 
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="debug mode is too slow for this many rows; see test_paged_count_with_limit_debug")
     def test_paged_count_with_limit(self):
         self._test_paged_count_with_limit([10, 100, 1000, 3000, 5000])
 
-    @pytest.mark.scylla_mode("debug")
+    @pytest.mark.skip_mode(mode=["release", "dev", "sanitize", "coverage"], reason="smaller row counts are only needed to keep this test fast in debug mode")
     def test_paged_count_with_limit_debug(self):
         self._test_paged_count_with_limit([10, 100, 250])
 

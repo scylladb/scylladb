@@ -512,7 +512,7 @@ class Process(_mp_fork.Process):
 @pytest.mark.dtest_full
 @pytest.mark.dtest_heavy
 @pytest.mark.dtest_debug
-@pytest.mark.scylla_mode("!release")
+@pytest.mark.skip_mode(mode="release", reason="heavy nemesis/consistency load test only meant to run with debug-mode assertions enabled")
 class TestLWTBankingLoad(Tester):
     """Emulate a series of money transfers and perform validation"""
 

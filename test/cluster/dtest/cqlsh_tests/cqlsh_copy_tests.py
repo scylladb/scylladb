@@ -337,7 +337,7 @@ class TestCqlshCopy(CqlshPrepare):
         # into a bare function if cqlshlib is made easier to interact with.
         return [[self.format_for_csv(v) for v in row] for row in result]
 
-    @pytest.mark.skip("#2393")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_list_data(self):
         """
@@ -368,7 +368,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
-    @pytest.mark.skip("#2393")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_tuple_data(self):
         """
@@ -1002,7 +1002,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.data_validation_on_read_template("test", expect_invalid=True)
 
-    @pytest.mark.skip("#2393")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_all_datatypes_write(self):
         """
@@ -1031,7 +1031,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
-    @pytest.mark.skip("#2393")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_all_datatypes_read(self):
         """
@@ -1437,7 +1437,7 @@ class TestCqlshCopy(CqlshPrepare):
 
     @pytest.mark.single_node
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     @unmark.next_gating  # unmark cause of: https://github.com/scylladb/scylla-cqlsh/issues/37
     @pytest.mark.use_cassandra_stress
     def test_copy_to_with_child_process_crashing(self):

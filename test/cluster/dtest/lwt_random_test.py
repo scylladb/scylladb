@@ -76,7 +76,7 @@ class TestRandomPaxos(Tester):
             report.nodeid = docstring
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_add_decommission_reboot(self, request: pytest.FixtureRequest):
         """
         Test on add, decommission and reboot node
@@ -101,7 +101,7 @@ class TestRandomPaxos(Tester):
     # Reason for unmark: this test ran more than 40 minutes on several occasions
     # this test is very heavy and might fail in debug, running in dev and release mode gives us a good picture of this scenario
     @unmark.next_gating
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_grow(self, request: pytest.FixtureRequest):
         """
         Test on add nodes to the cluster, covers following cases:
@@ -152,7 +152,7 @@ class TestRandomPaxos(Tester):
         test_info.execute(tester=self)
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_replace(self, request: pytest.FixtureRequest):
         """
         Test on node replacing
