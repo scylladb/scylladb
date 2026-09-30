@@ -2841,7 +2841,12 @@ async def test_pending_replica_skips_start_migration(manager: ScyllaClusterManag
                 assert len(rows) == 1 and rows[0].v == pk
 
 
-async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaClusterManager):
+@pytest.mark.parametrize("leader", [
+    "any",
+    pytest.param("on_src", marks=pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")),
+    pytest.param("on_src_parked", marks=pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")),
+])
+async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaClusterManager, leader: str):
     """A migrated-away tablet's raft group must be torn down before its storage is
     cleaned up.
 
@@ -2849,6 +2854,10 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
     after that kills the raft server's applier fiber, which is a fatal background
     error. The teardown therefore has to complete first - see
     test_late_raft_apply_after_tablet_cleanup for the failure it prevents.
+
+    on_src pins the leader on the leaving replica, which then drives its own
+    removal and hands leadership to dst. on_src_parked also holds the move while
+    dst is still a non-voter, when src has to keep leading.
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
@@ -2858,10 +2867,14 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
         {'dc': 'dc1', 'rack': 'rack3'},
         {'dc': 'dc1', 'rack': 'rack3'},
     ])
-    cql, _ = await manager.get_ready_cql(servers)
+    cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
     await manager.disable_tablet_balancing()
+    if leader != "any":
+        # Only rack3 can lead: the replica there before the move, dst after it.
+        for s in servers[:2]:
+            await manager.api.enable_injection(s.ip_addr, "avoid_being_raft_leader", one_shot=False)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2882,13 +2895,32 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
             src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h in rack3)
             dst_host_id = next(h for h in rack3 if h != src_host_id)
             src_server = next(s for s, h in zip(servers, host_ids) if h == src_host_id)
+            dst_server = next(s for s, h in zip(servers, host_ids) if h == dst_host_id)
+            if leader != "any":
+                await wait_for_leader(manager, src_server, group_id, expected_host_id=src_host_id)
 
             src_log = await manager.server_open_log(src_server.server_id)
             mark = await src_log.mark()
 
-            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
-            await manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
-                                          src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0 (leader={leader})")
+            if leader == "on_src_parked":
+                dst_log = await manager.server_open_log(dst_server.server_id)
+                dst_mark = await dst_log.mark()
+                await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+                move = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                                                   src_host_id, src_shard, dst_host_id, 0, tablet_token))
+                try:
+                    await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=dst_mark, timeout=60)
+                    parked_leader = await manager.api.get_raft_leader(src_server.ip_addr, group_id)
+                    assert parked_leader == src_host_id, f"Leader moved to {parked_leader} while dst is a non-voter"
+                    stage = (await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)).stage
+                    assert stage == "streaming", f"Expected stage streaming while parked, got {stage}"
+                finally:
+                    await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+                    await asyncio.wait_for(move, 300)
+            else:
+                await manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                              src_host_id, src_shard, dst_host_id, 0, tablet_token)
             await manager.api.quiesce_topology(servers[0].ip_addr)
 
             # Both events happen on the leaving replica, so their order in its log is
@@ -2899,6 +2931,15 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
             assert len(matches) == 2, f"Expected a teardown and a cleanup on {src_host_id}, got {[m[0] for m in matches]}"
             assert "is destroyed" in matches[0][0], \
                 f"The raft group was torn down after the tablet cleanup: {[m[0] for m in matches]}"
+
+            if leader != "any":
+                # Takes an election timeout: src may hand over to a follower-only voter first.
+                await wait_for_leader(manager, dst_server, group_id, expected_host_id=dst_host_id)
+                # src is no longer a replica, so it coordinates as a non-replica.
+                for server in (dst_server, src_server):
+                    for i in range(10):
+                        rows = await cql.run_async(f"SELECT c FROM {table} WHERE pk = {i}", host=hosts[servers.index(server)])
+                        assert [r.c for r in rows] == [i + 1], f"pk={i} through {server}: {rows}"
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
