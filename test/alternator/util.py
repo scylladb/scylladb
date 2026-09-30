@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import botocore
 import pytest
 import requests
-from alternator import Auth, Config as AlternatorConfig, RetryConfig, TLS, TimeoutConfig, close_resource, create_resource
+from alternator import Auth, Config as AlternatorConfig, RequestCompressionConfig, RetryConfig, TLS, TimeoutConfig, close_resource, create_resource
 from botocore import UNSIGNED
 from botocore.hooks import HierarchicalEmitter
 from botocore.validate import ParamValidationDecorator
@@ -627,7 +627,7 @@ def new_role(cql, login=True, superuser=False):
     finally:
         cql.execute(f'DROP ROLE "{role}"')
 
-def alternator_config(url, verify=True, client_cert_file=None, client_key_file=None):
+def alternator_config(url, verify=True, client_cert_file=None, client_key_file=None, request_compression=None):
     try:
         endpoint = urlparse(url)
         host = endpoint.hostname
@@ -658,6 +658,8 @@ def alternator_config(url, verify=True, client_cert_file=None, client_key_file=N
         retries=RetryConfig(max_attempts=1),
         timeouts=TimeoutConfig(connect_seconds=60, read_seconds=300),
         tls=tls,
+        request_compression=(request_compression
+            if request_compression is not None else RequestCompressionConfig()),
     )
 
 
@@ -675,8 +677,8 @@ def configure_alternator_resource(resource):
     return resource
 
 
-def create_alternator_resource(url, auth, verify=True, client_cert_file=None, client_key_file=None):
-    config = alternator_config(url, verify, client_cert_file, client_key_file)
+def create_alternator_resource(url, auth, verify=True, client_cert_file=None, client_key_file=None, request_compression=None):
+    config = alternator_config(url, verify, client_cert_file, client_key_file, request_compression)
     return configure_alternator_resource(create_resource(config, auth=auth, verify=verify))
 
 
