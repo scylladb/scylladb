@@ -295,6 +295,11 @@ class ScyllaRESTAPIClient:
     async def quiesce_topology(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/quiesce_topology", host=node_ip)
 
+    async def quiesce_auto_rf(self, node_ip: str) -> None:
+        """Wait until the automatic replication of audit and system_traces has nothing
+        left to do, without waiting for the tablet load balancer."""
+        await self.client.post(f"/storage_service/quiesce_topology", host=node_ip, params={"auto_rf_only": "true"})
+
     async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/add_replica", host=node_ip, params={
             "ks": ks,
