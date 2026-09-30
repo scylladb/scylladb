@@ -620,7 +620,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                     }
                 }();
                 options = data_dictionary::make_object_storage_options(endpoint, type, bucket, prefix.string(), nullptr,
-                        data_dictionary::storage_options::object_storage_layout::live);
+                        data_dictionary::storage_options::object_storage_layout::unified);
 
                 auto toc_object = parent / "TOC.txt";
                 auto attributes = co_await sstm.get_endpoint_client(endpoint)->get_object_metadata(sstables::object_name(bucket, toc_object.string()));
