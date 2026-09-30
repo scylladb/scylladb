@@ -1427,7 +1427,7 @@ table_id database::find_uuid(const schema_ptr& schema) const {
 
 keyspace& database::find_keyspace(std::string_view name) {
     try {
-        return _keyspaces.at(name);
+        return *_keyspaces.at(name);
     } catch (std::out_of_range&) {
         throw no_such_keyspace(name);
     }
@@ -1435,7 +1435,7 @@ keyspace& database::find_keyspace(std::string_view name) {
 
 const keyspace& database::find_keyspace(std::string_view name) const {
     try {
-        return _keyspaces.at(name);
+        return *_keyspaces.at(name);
     } catch (std::out_of_range&) {
         throw no_such_keyspace(name);
     }
@@ -1478,7 +1478,7 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
     for (auto const& i : _keyspaces) {
-        if (!i.second.get_replication_strategy().is_local()) {
+        if (!i.second->get_replication_strategy().is_local()) {
             res.push_back(i.first);
         }
     }
@@ -1489,7 +1489,7 @@ std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() co
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
-        auto&& rs = ks.get_replication_strategy();
+        auto&& rs = ks->get_replication_strategy();
         if (!rs.is_local() && rs.is_vnode_based()) {
             res.push_back(name);
         }
@@ -1501,9 +1501,9 @@ std::unordered_map<sstring, locator::static_effective_replication_map_ptr> datab
     std::unordered_map<sstring, locator::static_effective_replication_map_ptr> res;
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
-        auto&& rs = ks.get_replication_strategy();
+        auto&& rs = ks->get_replication_strategy();
         if (!rs.is_local() && !rs.is_per_table()) {
-            res.emplace(name, ks.get_static_effective_replication_map());
+            res.emplace(name, ks->get_static_effective_replication_map());
         }
     }
     return res;
@@ -1513,7 +1513,7 @@ std::vector<sstring> database::get_tablets_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
-        auto&& rs = ks.get_replication_strategy();
+        auto&& rs = ks->get_replication_strategy();
         if (rs.is_per_table()) {
             res.emplace_back(name);
         }
@@ -1699,7 +1699,7 @@ void database::insert_keyspace(std::unique_ptr<keyspace> ks) {
     if (_keyspaces.contains(name)) {
         return;
     }
-    _keyspaces.emplace(name, std::move(*ks));
+    _keyspaces.emplace(name, std::move(ks));
 }
 
 future<database::created_keyspace_per_shard> database::prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata, const locator::pending_token_metadata& pending_token_metadata) {
@@ -3785,9 +3785,9 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
 
     for (const auto& [name, info] : keyspaces) {
         try {
-            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy());
         } catch (const std::invalid_argument&) {
-            if (enforce_rf_rack_validity_for_keyspace(info)) {
+            if (enforce_rf_rack_validity_for_keyspace(*info)) {
                 throw;
             }
 
@@ -3824,9 +3824,9 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
 
     for (const auto& [name, info] : keyspaces) {
         try {
-            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(), change);
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy(), change);
         } catch (const std::invalid_argument&) {
-            if (enforce_rf_rack_validity_for_keyspace(info)) {
+            if (enforce_rf_rack_validity_for_keyspace(*info)) {
                 valid = false;
             }
 
@@ -3862,7 +3862,7 @@ void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
     std::vector<std::string_view> invalid_keyspaces{};
 
     for (const auto& [name, info] : keyspaces) {
-        if (info.uses_tablets() && !locator::uses_rack_list_exclusively(info.get_replication_strategy().get_config_options())) {
+        if (info->uses_tablets() && !locator::uses_rack_list_exclusively(info->get_replication_strategy().get_config_options())) {
             if (enforce_rack_list) {
                 throw std::invalid_argument(std::format(
                     "The option `enforce_rack_list` is enabled. It requires that all tablet keyspaces use rack lists exclusively. "
