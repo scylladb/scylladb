@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 namespace cql3 {
 namespace functions {
@@ -46,6 +47,20 @@ const external_search_function* as_external_search_function(const expr::function
     return dynamic_cast<const external_search_function*>(std::get<shared_ptr<function>>(fc.func).get());
 }
 
+namespace {
+
+const function_name& score_function_name(search_family family) {
+    switch (family) {
+    case search_family::ann:
+        return ANN_SCORE_FUNCTION_NAME;
+    case search_family::bm25:
+        return BM25_SCORE_FUNCTION_NAME;
+    }
+    std::unreachable();
+}
+
+} // anonymous namespace
+
 expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data_dictionary::database db, const schema& table_schema) {
     const auto* fc = expr::as_if<expr::function_call>(&lhs);
     const auto* fun = fc ? as_external_search_function(*fc) : nullptr;
@@ -69,9 +84,8 @@ expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data
     for (const auto& arg : fc->args) {
         provided_args.push_back(expr::as_assignment_testable(arg, expr::type_of(arg)));
     }
-    const auto& score_name = fun->family() == search_family::bm25 ? BM25_SCORE_FUNCTION_NAME : ANN_SCORE_FUNCTION_NAME;
     return expr::function_call{
-        .func = instance().get(db, table_schema.ks_name(), score_name, provided_args, table_schema.ks_name(), table_schema.cf_name(), nullptr),
+        .func = instance().get(db, table_schema.ks_name(), score_function_name(fun->family()), provided_args, table_schema.ks_name(), table_schema.cf_name(), nullptr),
         .args = fc->args,
         .lwt_cache_id = fc->lwt_cache_id,
     };
