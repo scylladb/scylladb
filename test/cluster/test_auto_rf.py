@@ -652,6 +652,410 @@ async def test_auto_rf_no_expansion_without_user_tablet_keyspace(manager: Scylla
         f"keyspace, no rack should be eligible.")
 
 
+@pytest.mark.asyncio
+async def test_auto_rf_deferred_while_a_node_is_dead(manager: ScyllaClusterManager):
+    """
+    Auto-RF must not schedule an RF change while a normal node is dead.
+
+    An RF change is carried out by tablet migrations, and every migration
+    passes through global_tablet_token_metadata_barrier(), which drains all
+    normal nodes. With a dead node the barrier cannot pass; the coordinator
+    retries the migration once a second and does nothing else meanwhile (no
+    resize decisions, no load balancing, no other requests). An operator can
+    choose to ALTER KEYSPACE into that situation, auto-RF must not.
+
+    Scenario:
+      1. Three nodes, one per rack, audit enabled, no user tablets keyspace,
+         so nothing is eligible and audit stays at dc1:['r1'].
+      2. Stop node 3 and wait until the others see it down.
+      3. Create a user keyspace with RF 3. The test framework enables
+         rack-list expansion, so it becomes dc1:['r1','r2','r3'], dead rack
+         included, and every live rack becomes eligible for auto-RF. Without
+         the deferral auto-RF would immediately schedule audit r1 -> r1+r2
+         and wedge on the barrier. Assert no keyspace_rf_change task is
+         scheduled for audit.
+      4. Restart node 3. Auto-RF must now expand audit to all three racks.
+    """
+    ks = AUDIT_KS
+    tables = AUDIT_TABLES
+    cfg_audit = {"audit": "table"}
+
+    logger.info("Start cluster with three nodes in dc1/r1, r2, r3, audit enabled")
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(
+        manager, servers, host_to_dc_rack, 3,
+        [{"dc": "dc1", "rack": "r1"},
+         {"dc": "dc1", "rack": "r2"},
+         {"dc": "dc1", "rack": "r3"}],
+        cfg_audit)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    server0, server1, server2 = servers
+
+    logger.info("Without a user tablets keyspace nothing is eligible; audit must stay at dc1:['r1']")
+    await wait_for_auto_rf_settled(manager, time.time() + 120, ks=ks, server=server0, count_tasks=True)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, ks, tables, {'dc1': ['r1']}, timeout=0)
+
+    logger.info("Stop node 3 and wait until the other nodes see it down")
+    await manager.server_stop(server2.server_id, convict=True)
+    await manager.server_not_sees_other_server(server0.ip_addr, server2.ip_addr)
+    await manager.server_not_sees_other_server(server1.ip_addr, server2.ip_addr)
+
+    logger.info("Create a user keyspace covering all three racks: all live racks become eligible")
+    before_tasks = {t.task_id for t in await _list_rf_change_tasks(manager, server0, ks)}
+    before_requests = await count_rf_change_requests(cql, ks)
+    user_ks = await create_new_test_keyspace(
+        cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async(f"CREATE TABLE {user_ks}.t (pk int PRIMARY KEY, c int)")
+
+    logger.info("Give the coordinator several iterations; it must defer, not schedule")
+    await asyncio.sleep(10)
+    await wait_for_auto_rf_settled(manager, time.time() + 120, ks=ks, server=server0, count_tasks=True)
+    after_tasks = {t.task_id for t in await _list_rf_change_tasks(manager, server0, ks)}
+    new_tasks = after_tasks - before_tasks
+    assert not new_tasks, (
+        f"auto-RF scheduled {len(new_tasks)} keyspace_rf_change task(s) for {ks} "
+        f"while a node was dead (task ids: {new_tasks})")
+    # system.topology_requests is group0 state, so this check does not depend
+    # on which node is the coordinator.
+    new_requests = await count_rf_change_requests(cql, ks) - before_requests
+    assert new_requests == 0, (
+        f"auto-RF scheduled {new_requests} keyspace_rf_change request(s) for {ks} while a node was dead")
+    await verify_schema(cql, manager, [server0, server1], host_to_dc_rack, ks, tables, {'dc1': ['r1']}, timeout=0)
+
+    deferred = False
+    for s in (server0, server1):
+        log = await manager.server_open_log(s.server_id)
+        if await log.grep("auto-rf: deferring RF changes .* until dead node\\(s\\) .* are alive again"):
+            deferred = True
+    assert deferred, "no node logged the auto-RF deferral"
+
+    logger.info("Restart node 3; auto-RF must now expand audit to all three racks")
+    await manager.server_start(server2.server_id)
+    await manager.server_sees_other_server(server0.ip_addr, server2.ip_addr)
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await wait_for_rf_change_task(manager, server0, ks, after_tasks)
+    await wait_for_auto_rf_settled(manager, time.time() + 120, ks=ks, server=server0, count_tasks=True)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, ks, tables, {'dc1': ['r1', 'r2', 'r3']}, timeout=120)
+
+    await cql.run_async(f"DROP KEYSPACE {user_ks}")
+
+
 # ---------------------------------------------------------------------------
 # Bounded scheduling.
 # ---------------------------------------------------------------------------
+
+
+async def count_rf_change_requests(cql, ks: str) -> int:
+    """Return the number of keyspace_rf_change requests ever scheduled for `ks`.
+
+    system.topology_requests rows are written with a one month TTL, so this
+    counts completed (including failed) requests as well as pending ones.
+    """
+    return len(await rf_change_requests(cql, ks, pending_only=False))
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_auto_rf_rejected_change_is_not_rescheduled_in_a_loop(manager: ScyllaClusterManager):
+    """
+    Regression test for the auto-RF scheduling loop.
+
+    A keyspace_rf_change which the request handler rejects is dropped without
+    leaving a trace in group0: the request is removed from the queue and marked
+    done with the error. service::ongoing_rf_change() therefore finds nothing
+    pending on the coordinator's next iteration,
+    get_keyspaces_that_require_auto_rf_change() re-detects the same shortfall,
+    and the very same request is scheduled again. For a rejection which is
+    persistent this used to be an unbounded loop: 3480 requests at ~50 ms
+    intervals were observed in one run, starving every other topology operation.
+
+    The rejection is driven here by the keyspace_rf_change_fail injection. The
+    tablet state which makes the real rejection persistent (a tablet holding
+    fewer replicas than the keyspace's RF while every rack in the RF is still
+    placeable) is transient and could not be constructed synthetically, and the
+    defect is the unbounded re-issue rather than any particular rejection.
+
+    Two things are asserted: that only a handful of requests are scheduled over
+    a fixed window, and that auto-RF still converges once the rejection is gone.
+    """
+    ks = AUDIT_KS
+    tables = AUDIT_TABLES
+    cfg_audit = {"audit": "table"}
+
+    # Long enough to leave the unfixed coordinator no excuse - at ~50 ms per
+    # iteration it would schedule hundreds of requests in this window - while
+    # the backoff (1s, doubling) allows at most six.
+    window = 30
+    max_scheduled = 10
+
+    logger.info("Start cluster with 1 node in dc1/r1, audit enabled")
+    servers = []
+    host_to_dc_rack = {}
+    await add_server_and_update_map(manager, servers, host_to_dc_rack, {"dc": "dc1", "rack": "r1"}, cfg_audit)
+    cql = manager.get_cql()
+    server0 = servers[0]
+
+    logger.info("Create a rack-list anchor keyspace pinned to dc1:['r1'] and let auto-RF settle")
+    anchor_ks = await create_rack_anchor_keyspace(cql, {'dc1': ['r1']})
+    await wait_for_auto_rf_settled(manager, time.time() + 120, ks=ks, server=server0, count_tasks=True)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, ks, tables, {'dc1': ['r1']}, timeout=120)
+
+    logger.info("Add a node in dc1/r2, still ineligible for auto-RF")
+    await add_server_and_update_map(manager, servers, host_to_dc_rack, {"dc": "dc1", "rack": "r2"}, cfg_audit)
+
+    # The injection is keyspace-filtered because user ALTERs go through the same
+    # request handler: the anchor ALTER below has to keep working. Every node
+    # gets it - the coordinator may move.
+    logger.info(f"Make every keyspace_rf_change for {ks} fail")
+    injection = "keyspace_rf_change_fail"
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, injection, one_shot=False, parameters={"keyspace": ks})
+
+    before = await count_rf_change_requests(cql, ks)
+
+    logger.info(f"Make r2 eligible, so that auto-RF wants to expand {ks} into it")
+    await set_anchor_racks(cql, anchor_ks, {'dc1': ['r1', 'r2']})
+
+    logger.info(f"Let the coordinator run for {window}s with the RF change failing")
+    await asyncio.sleep(window)
+    scheduled = await count_rf_change_requests(cql, ks) - before
+
+    logger.info(f"auto-RF scheduled {scheduled} keyspace_rf_change request(s) for {ks} in {window}s")
+    assert scheduled >= 2, (
+        f"auto-RF scheduled {scheduled} keyspace_rf_change request(s) for {ks}, expected it to "
+        f"attempt and retry the expansion into r2 - the test is not exercising the loop")
+    assert scheduled <= max_scheduled, (
+        f"auto-RF re-scheduled a rejected keyspace_rf_change for {ks} {scheduled} times in "
+        f"{window}s, expected at most {max_scheduled}: failed requests are not being backed off")
+
+    logger.info("Stop failing the RF change and verify auto-RF still converges")
+    for s in servers:
+        await manager.api.disable_injection(s.ip_addr, injection)
+    # The coordinator has to come back on its own once the backoff elapses:
+    # disabling an injection is not a topology event.
+    await verify_schema(cql, manager, servers, host_to_dc_rack, ks, tables, {'dc1': ['r1', 'r2']}, timeout=180)
+
+
+async def _rack_list_sizes(cql) -> dict[str, int]:
+    """Size of the dc1 rack list of every auto-RF keyspace, 0 for a numeric RF."""
+    sizes = {}
+    for ks, _, _ in AUTO_RF_KEYSPACES:
+        rf = (await _replication(cql, ks)).get('dc1')
+        sizes[ks] = len(rf) if isinstance(rf, list) else 0
+    return sizes
+
+
+@pytest.mark.asyncio
+async def test_quiesce_topology_waits_for_auto_rf(manager: ScyllaClusterManager):
+    """
+    A single quiesce_topology() issued right after the racks became eligible must not
+    return before auto-RF has reached its goal, and must not be starved by a client that
+    keeps resubmitting it: the reconciler only runs on an empty request queue, so the
+    quiesce handler has to schedule the pending change itself.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(manager, servers, host_to_dc_rack, 3,
+                                     [{"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"}, {"dc": "dc1", "rack": "r3"}],
+                                     cfg_audit)
+    cql = manager.get_cql()
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+    assert await _rack_list_sizes(cql) == {AUDIT_KS: 1, SYSTEM_TRACES_KS: 1}
+
+    logger.info("Make all three racks eligible and quiesce immediately")
+    await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2', 'r3']})
+    start = time.time()
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+    logger.info(f"quiesce_topology returned after {time.time() - start:.1f}s")
+
+    # Nothing may be left for auto-RF to do once quiesce has returned.
+    await wait_for_auto_rf_settled(manager, time.time() + 1)
+    assert await _rack_list_sizes(cql) == {AUDIT_KS: 3, SYSTEM_TRACES_KS: 2}, "quiesce returned before auto-RF reached its goal"
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2', 'r3']}, timeout=0)
+
+
+@pytest.mark.asyncio
+async def test_auto_rf_expansion_is_bounded(manager: ScyllaClusterManager):
+    """
+    Guard against the reconciler doing more than it should: expanding two keyspaces
+    from one rack to their goals takes exactly one keyspace_rf_change per added rack
+    (audit 1->3: two, system_traces 1->2: one), and a bounded amount of group0 traffic.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = await manager.servers_add(3, config=cfg_audit, property_file=[
+        {"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"}, {"dc": "dc1", "rack": "r3"}])
+    cql = manager.get_cql()
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+
+    async def topology_version() -> int:
+        return (await cql.run_async("SELECT version FROM system.topology WHERE key='topology'"))[0].version
+
+    before = {ks: await count_rf_change_requests(cql, ks) for ks, _, _ in AUTO_RF_KEYSPACES}
+    version_before = await topology_version()
+
+    await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2', 'r3']})
+    await wait_for_auto_rf_settled(manager, time.time() + 300)
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+    await wait_for_auto_rf_settled(manager, time.time() + 300)
+
+    requests = {ks: await count_rf_change_requests(cql, ks) - before[ks] for ks, _, _ in AUTO_RF_KEYSPACES}
+    version_bumps = await topology_version() - version_before
+    logger.info(f"keyspace_rf_change requests: {requests}, topology version bumps: {version_bumps}")
+    assert requests == {AUDIT_KS: 2, SYSTEM_TRACES_KS: 1}
+    # Measured 36 in dev on a three-node cluster; the bound only has to catch a
+    # reconciler that re-issues changes or a step that is retried in a loop.
+    assert version_bumps <= 120, f"{version_bumps} topology version bumps for three RF-change steps"
+    assert await _rack_list_sizes(cql) == {AUDIT_KS: 3, SYSTEM_TRACES_KS: 2}
+
+
+@pytest.mark.asyncio
+async def test_auto_rf_gives_up_racks_which_stop_being_eligible(manager: ScyllaClusterManager):
+    """
+    Auto-RF follows the non-auto-RF tablets keyspaces in both directions: a rack
+    which none of them uses any more is dropped from the auto-RF keyspaces again,
+    and the freed RF slot is left empty when no other rack is eligible. Dropping
+    the last such keyspace altogether says nothing about where the operator wants
+    the system keyspaces, so it leaves them alone.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(manager, servers, host_to_dc_rack, 3, [
+        {"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"}, {"dc": "dc1", "rack": "r3"}], cfg_audit)
+    cql = manager.get_cql()
+
+    logger.info("Anchor on all three racks and let auto-RF expand into them")
+    anchor_ks = await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2', 'r3']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2', 'r3']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    traces_racks = set((await _replication(cql, SYSTEM_TRACES_KS))['dc1'])
+    assert len(traces_racks) == 2, f"system_traces expected on two racks, got {traces_racks}"
+
+    logger.info("Drop r2 from the anchor: audit has to give it up, system_traces has to leave it if it was there")
+    await set_anchor_racks(cql, anchor_ks, {'dc1': ['r1', 'r3']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r3']}, timeout=120)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, SYSTEM_TRACES_KS, SYSTEM_TRACES_TABLES, {'dc1': ['r1', 'r3']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await assert_no_pending_rf_change(cql, AUDIT_KS)
+    await assert_no_pending_rf_change(cql, SYSTEM_TRACES_KS)
+
+    logger.info("Drop the anchor altogether: with nothing eligible the auto-RF keyspaces are left alone")
+    await cql.run_async(f"DROP KEYSPACE {anchor_ks}")
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await asyncio.sleep(5)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r3']}, timeout=0)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, SYSTEM_TRACES_KS, SYSTEM_TRACES_TABLES, {'dc1': ['r1', 'r3']}, timeout=0)
+    await assert_no_pending_rf_change(cql, AUDIT_KS)
+    await assert_no_pending_rf_change(cql, SYSTEM_TRACES_KS)
+
+
+@pytest.mark.asyncio
+async def test_auto_rf_lets_a_lost_rack_be_removed(manager: ScyllaClusterManager):
+    """
+    The rack-loss recovery procedure: the nodes of a lost rack are excluded, the
+    rack is dropped from the keyspaces, and then the nodes are removed. The
+    auto-RF keyspaces have to drop the rack on their own, while its nodes are
+    dead, or the removenode cannot drain them ("No candidate nodes in dc1/r3 to
+    drain ...") and fails. This is dtest's test_rack_loss_recovery in small.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(manager, servers, host_to_dc_rack, 3, [
+        {"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"}, {"dc": "dc1", "rack": "r3"}], cfg_audit)
+    cql = manager.get_cql()
+    live = servers[0]
+    lost = servers[2]
+
+    logger.info("Anchor on all three racks and let auto-RF expand into them")
+    anchor_ks = await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2', 'r3']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2', 'r3']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120, server=live)
+
+    logger.info("Lose r3 for good: stop its node and exclude it")
+    lost_host_id = await manager.get_host_id(lost.server_id)
+    await manager.server_stop(lost.server_id, convict=True)
+    await manager.api.exclude_node(live.ip_addr, [lost_host_id])
+
+    logger.info("Drop r3 from the anchor: the auto-RF keyspaces have to follow although r3's node is dead")
+    await set_anchor_racks(cql, anchor_ks, {'dc1': ['r1', 'r2']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120, server=live)
+    traces_racks = set((await _replication(cql, SYSTEM_TRACES_KS))['dc1'])
+    assert 'r3' not in traces_racks, f"system_traces still replicates to the lost rack: {traces_racks}"
+
+    logger.info("Remove the lost node: nothing may reference r3 any more, so the drain has nothing to do")
+    await manager.remove_node(live.server_id, lost.server_id)
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2']}, timeout=0)
+
+
+@pytest.mark.asyncio
+async def test_auto_rf_decommission_right_after_the_anchor_drops_the_rack(manager: ScyllaClusterManager):
+    """
+    An operator who drops a rack from their keyspace and decommissions its last
+    node right away races the reconciler: the auto-RF keyspaces still name the
+    rack for a moment, and the decommission used to be rejected up front with
+    "its removal would make some existing keyspace RF-rack-invalid". The removal
+    has to wait for auto-RF to give the rack up instead. This is dtest's
+    test_decommission_after_decreasing_rf in small.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(manager, servers, host_to_dc_rack, 3, [
+        {"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"}, {"dc": "dc1", "rack": "r3"}], cfg_audit)
+    cql = manager.get_cql()
+    anchor_ks = await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2', 'r3']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2', 'r3']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+
+    logger.info("Drop r3 from the anchor and decommission its node without waiting for auto-RF")
+    await set_anchor_racks(cql, anchor_ks, {'dc1': ['r1', 'r2']})
+    await manager.decommission_node(servers[2].server_id)
+    servers.pop()
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2']}, timeout=60)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    traces_racks = set((await _replication(cql, SYSTEM_TRACES_KS))['dc1'])
+    assert 'r3' not in traces_racks, f"system_traces still replicates to the decommissioned rack: {traces_racks}"
+
+
+@pytest.mark.asyncio
+async def test_auto_rf_shrinks_a_dc_no_eligible_keyspace_uses_to_one_rack(manager: ScyllaClusterManager):
+    """
+    When the last non-auto-RF tablets keyspace stops replicating to a DC, the
+    auto-RF keyspaces give that DC's racks up down to one: DCs are never dropped
+    automatically, but everything beyond the last rack is, exactly as for a rack
+    that stops being eligible in a DC which is still in use.
+    """
+    cfg_audit = {"audit": "table"}
+    servers = []
+    host_to_dc_rack = {}
+    await add_servers_and_update_map(manager, servers, host_to_dc_rack, 4, [
+        {"dc": "dc1", "rack": "r1"}, {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc2", "rack": "r1"}, {"dc": "dc2", "rack": "r2"}], cfg_audit)
+    cql = manager.get_cql()
+
+    logger.info("Anchor on both racks of both DCs and let auto-RF expand into them")
+    anchor_ks = await create_rack_anchor_keyspace(cql, {'dc1': ['r1', 'r2'], 'dc2': ['r1', 'r2']})
+    await verify_schema(cql, manager, servers, host_to_dc_rack, AUDIT_KS, AUDIT_TABLES, {'dc1': ['r1', 'r2'], 'dc2': ['r1', 'r2']}, timeout=120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+
+    logger.info("Take the anchor out of dc2: audit keeps one rack there, system_traces too")
+    await set_anchor_racks(cql, anchor_ks, {'dc1': ['r1', 'r2'], 'dc2': 0})
+
+    async def one_rack_left_in_dc2():
+        audit = await _replication(cql, AUDIT_KS)
+        traces = await _replication(cql, SYSTEM_TRACES_KS)
+        return True if len(audit['dc2']) == 1 and len(traces['dc2']) == 1 else None
+    from test.pylib.util import wait_for
+    await wait_for(one_rack_left_in_dc2, time.time() + 120)
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    audit = await _replication(cql, AUDIT_KS)
+    assert sorted(audit['dc1']) == ['r1', 'r2'], f"dc1 must be untouched: {audit}"
+    assert len(audit['dc2']) == 1, f"dc2 must keep exactly one rack: {audit}"
+    await assert_no_pending_rf_change(cql, AUDIT_KS)
+    await assert_no_pending_rf_change(cql, SYSTEM_TRACES_KS)
