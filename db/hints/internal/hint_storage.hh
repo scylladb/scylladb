@@ -46,6 +46,7 @@ using hint_entry_reader = commitlog_entry_reader;
 /// \return A future that resolves when the operation is complete.
 future<> rebalance_hints(std::filesystem::path hint_directory);
 
+<<<<<<< HEAD
 class hint_directory_manager {
 private:
     std::map<locator::host_id, gms::inet_address> _mappings;
@@ -82,5 +83,20 @@ public:
     void clear() noexcept;
 };
 
+||||||| parent of d4d4d67b3a (db/hints: Remove hint directories together with leftover files)
+=======
+/// \brief Remove a hint directory together with its contents, unless it still contains hint segments.
+///
+/// Files that are not hint segments (e.g. files left behind by commitlog file extensions)
+/// don't prevent the removal. If there are hint segments, nothing is removed and an error
+/// is logged: they may still contain hints, and the other files may be needed to read them
+/// (e.g. to decrypt them).
+///
+/// \param dir The directory to remove. It must be a directory storing hint segments directly
+///            (e.g. the hint directory of an endpoint): its subdirectories are not searched.
+/// \return A future that resolves to true if the directory has been removed and to false otherwise.
+future<bool> remove_hint_directory(std::filesystem::path dir);
+
+>>>>>>> d4d4d67b3a (db/hints: Remove hint directories together with leftover files)
 } // namespace internal
 } // namespace db::hints
