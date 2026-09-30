@@ -7,6 +7,8 @@
 #
 # This file tests the pattern_index custom index class: schema and options
 # validation, and the prepare-time validation of the LIKE queries it serves.
+# Queries that reach the Vector Store are covered by
+# test_pattern_search_with_mock.py.
 ###############################################################################
 
 import pytest
