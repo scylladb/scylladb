@@ -349,3 +349,82 @@ async def test_row_ttl_multi_dc(manager: ScyllaClusterManager):
                     time.sleep(0.1)
             for dc in range(2):
                 assert 0 == len(list(await cql_dc[dc].run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+
+async def test_row_ttl_multi_dc_simple_strategy(manager: ScyllaClusterManager):
+    """Check that per-row TTL expires all rows of a SimpleStrategy table in
+       a multi-DC cluster. With one node in dc1 and two in dc2, RF=3 puts
+       every row on all three nodes, but the dc1 node is the only replica in
+       its DC. That node scans the token ranges it is the primary replica of,
+       and a DC-local quorum (two replicas in dc1) cannot be reached there,
+       so if the scanner used LOCAL_QUORUM, the rows in those ranges would
+       never expire.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    servers = []
+    for dc, rack in [('dc1', 'rack1'), ('dc2', 'rack1'), ('dc2', 'rack2')]:
+        servers.extend(await manager.servers_add(1, config=config, property_file={'dc': dc, 'rack': rack}))
+    cql = manager.get_cql()
+    # SimpleStrategy ignores the DC layout and places each range on three
+    # consecutive nodes in the ring - i.e., on all three nodes. Tablets
+    # don't support SimpleStrategy, so this keyspace must be vnode-based.
+    ksdef = "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 3 } AND TABLETS = { 'enabled': false }"
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint ttl') as table:
+            # Insert 50 rows in different partitions, so that each node is
+            # the primary replica of some of them. All are marked to expire
+            # 10 seconds in the past.
+            e = int(time.time()) - 10
+            for p in range(50):
+                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.QUORUM))
+            # Expect that after a short delay, all the rows will have expired
+            # - including those whose primary replica is the lone dc1 node.
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                time.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
+
+
+async def test_row_ttl_multi_dc_rf_above_dc_node_count(manager: ScyllaClusterManager):
+    """Check that per-row TTL expires all rows of a NetworkTopologyStrategy
+       table whose RF in one of the DCs is higher than the number of nodes in
+       that DC - as happens, for example, for the RF=3 system_distributed
+       keyspace in a DC with fewer than three nodes. Here dc1 holds a single
+       node but the keyspace asks for two replicas in dc1, so a DC-local
+       quorum can never be reached there. That node is still the primary
+       replica of part of the token range, so if the scanner insisted on
+       LOCAL_QUORUM, the rows in those ranges would never expire.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    servers = []
+    for dc, rack in [('dc1', 'rack1'), ('dc2', 'rack1'), ('dc2', 'rack2')]:
+        servers.extend(await manager.servers_add(1, config=config, property_file={'dc': dc, 'rack': rack}))
+    cql = manager.get_cql()
+    # Tablets don't allow an RF higher than the number of racks in the DC,
+    # so this keyspace must be vnode-based.
+    ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 2 } AND TABLETS = { 'enabled': false }"
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint ttl') as table:
+            # Insert 50 rows in different partitions, so that each node is
+            # the primary replica of some of them. All are marked to expire
+            # 10 seconds in the past. The total RF is 4 while the cluster has
+            # only three nodes, so CL=QUORUM here means all three of them -
+            # i.e., when this loop is done, every row is known to also be on
+            # the lone dc1 node.
+            e = int(time.time()) - 10
+            for p in range(50):
+                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.QUORUM))
+            # Expect that after a short delay, all the rows will have expired
+            # - including those whose primary replica is the lone dc1 node.
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                time.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
