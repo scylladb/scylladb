@@ -14,6 +14,7 @@
 #include "dht/token.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/types.hh"
 #include "sstables/version.hh"
 #include "utils/log.hh"
 
@@ -29,9 +30,19 @@ struct minimal_sst_info {
     sstables::generation_type generation;
     sstables::sstable_version_types version;
     sstables::sstable_format_types format;
+    // The sstable_id of the restored sstable. Set only for a table on object storage.
+    // There the sstable_id is the prefix of the object names, so attach_sstable()
+    // needs it to open the sstable. For a table on filesystem, the sstable_id comes
+    // from the streamed Scylla.db.
+    optimized_optional<sstables::sstable_id> sid;
+    // The sstable_id of the backup sstable. It is the key of the rows in
+    // system_distributed.snapshot_sstables, which a retried restore reads to skip the
+    // sstables which are already restored.
+    sstables::sstable_id source_sid;
 };
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
+future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
 
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
 seastar::future<std::tuple<std::vector<T>, std::vector<T>>>
