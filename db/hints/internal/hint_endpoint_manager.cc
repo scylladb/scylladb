@@ -321,7 +321,11 @@ future<> hint_endpoint_manager::flush_current_hints() noexcept {
     if (_hints_store_anchor) {
         return futurize_invoke([this] {
             return with_lock(file_update_mutex(), [this]() -> future<> {
-                return get_or_load().then([] (hints_store_ptr cptr) {
+                // Holding the exclusive lock blocks every do_store_hint() for this endpoint,
+                // so stalling here lets tests fill the budget of in-flight hints.
+                return utils::get_local_injector().inject("hints_flush_stall_under_lock", utils::wait_for_message(std::chrono::minutes(5))).then([this] {
+                    return get_or_load();
+                }).then([] (hints_store_ptr cptr) {
                     return cptr->shutdown().finally([cptr] {
                         return cptr->release();
                     }).finally([cptr] {});
