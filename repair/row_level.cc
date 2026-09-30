@@ -1422,6 +1422,12 @@ private:
                     // master shard, we call next_partition(), which effectively clears
                     // the buffer until the next partition is reached.
 
+                    if (utils::get_local_injector().enter("repair_reader_force_multishard_split")) {
+                        rlogger.debug("repair_reader: meta_id={}, read_strategy {} is forced by error injection",
+                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                        return repair_reader::read_strategy::multishard_split;
+                    }
+
                     if (!_local_range_estimation) {
                         // this should not normally happen since the master
                         // calls get_estimated_partitions before get_sync_boundary
