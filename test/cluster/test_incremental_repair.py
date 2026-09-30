@@ -9,7 +9,8 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
+from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace, \
+    quiesce_and_disable_tablet_balancing
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
 
@@ -356,7 +357,7 @@ async def do_tablet_rebuild_incremental_repair(manager: ScyllaClusterManager, co
     cmdline = ['--logger-log-level', 'compaction=debug']
     servers = [await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": rack}) for rack in ["r1", "r1", "r2"]]
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
     cql = manager.get_cql()
 
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
