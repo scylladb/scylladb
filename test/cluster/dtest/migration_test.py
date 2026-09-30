@@ -26,6 +26,7 @@ from ccmlib.scylla_node import ScyllaNode
 
 from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
+from test.pylib.skip_types import skip_env
 from tools.assertions import assert_one
 from tools.cassandra_helpers import CassandraCluster, java_version_exist
 from tools.cluster_topology import generate_cluster_topology
@@ -243,7 +244,7 @@ class MigrationTestBase(BaseHelpers):
 
     def test_migrate_sstable_with_range_boundary_tombstone(self):
         if self.version in ("2_1_x", "2_2_x"):
-            pytest.skip("Test not supported in version 2.1.x or 2.2.x")
+            skip_env("Test not supported in version 2.1.x or 2.2.x")
 
         node1 = self.start_cluster_and_get_node1()
 
@@ -281,7 +282,7 @@ class MigrationTestBase(BaseHelpers):
 
     def test_migrate_sstable_with_clustering_key_range_tombstone(self):
         if self.version in ("2_1_x", "2_2_x"):
-            pytest.skip("Test not supported in version 2.1.x or 2.2.x")
+            skip_env("Test not supported in version 2.1.x or 2.2.x")
 
         node1 = self.start_cluster_and_get_node1()
 
@@ -522,7 +523,7 @@ class MigrationTestBase(BaseHelpers):
 
     def migrate_sstable_with_old_format_counter_test_expect_fail(self):
         if self.version != "2_1_x":
-            pytest.skip("Test only relevant to old-format counters")
+            skip_env("Test only relevant to old-format counters")
 
         """
         create cassandra cluster version 2.0.x
@@ -727,17 +728,17 @@ class TestMigrationUpgradeSSTables(TestMigration):
     def select_version(self, request):
         self.version = request.param
 
-    @pytest.mark.skip("test isn't relevant when using nodetool upgradesstables")
+    @pytest.mark.skip_env(reason="test isn't relevant when using nodetool upgradesstables")
     def test_migrate_sstable_with_row_tombstone(self):
         # since the row tombstone data doesn't create files on disk
         pass
 
-    @pytest.mark.skip("test isn't relevant when using nodetool upgradesstables")
+    @pytest.mark.skip_env(reason="test isn't relevant when using nodetool upgradesstables")
     def test_migrate_sstable_to_check_consistency(self):
         # since this test load multiple versions, that conflicts with version created upgradesstables
         pass
 
-    @pytest.mark.skip("test isn't relevant when using nodetool upgradesstables")
+    @pytest.mark.skip_env(reason="test isn't relevant when using nodetool upgradesstables")
     def test_migrate_sstable_with_expired_ttl(self):
         # since expired ttl data doens't create files on disk
         pass

@@ -56,7 +56,7 @@ class TestScyllaManagerTask(Tester, ScyllaManagerMixin):
         query = SimpleStatement("INSERT INTO cf (name, pet, age) VALUES ('nadav', 'adamdami', 1)", consistency_level=ConsistencyLevel.ALL)
         session.execute(query)
 
-    @pytest.mark.skip("Should be rewritten with cron time")
+    @pytest.mark.skip_env(reason="Should be rewritten with cron time")
     def test_task_next_run(self):
         self._initiate_cluster()
         node1, _node2, _node3 = self.cluster.nodelist()

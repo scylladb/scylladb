@@ -2326,7 +2326,7 @@ class TestPagingWithDeletions(BasePagingTester, PageAssertionMixin):
         time.sleep(ttl_seconds + 1)
         self.check_all_paging_results([], 0, [])
 
-    @pytest.mark.skip(reason="test doesn't behave as expected - tombstone_failure_threshold supported ?")
+    @pytest.mark.skip_env(reason="test doesn't behave as expected - tombstone_failure_threshold supported ?")
     def test_failure_threshold_deletions(self, fixture_dtest_setup):
         """Test that paging throws a failure in case of tombstone threshold"""
         self.cluster.set_configuration_options(values={"tombstone_failure_threshold": 500})

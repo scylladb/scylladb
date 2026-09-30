@@ -79,7 +79,7 @@ class TestCassandraStress(Tester):
             result = cassandra_stress_docker.wait_for_stress_results()
             assert result.rc == 0, result.stderr
 
-    @pytest.mark.skip(reason="internal validation test for docker resource limits, not a real dtest")
+    @pytest.mark.skip_env(reason="internal validation test for docker resource limits, not a real dtest")
     @pytest.mark.tools_unittest
     def test_cassandra_stress_docker_resource_limits(self):
         """

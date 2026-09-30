@@ -295,7 +295,7 @@ class TestBootstrap(Tester):
         current_rows = list(session.execute("SELECT * FROM %s" % stress_table))
         assert original_rows == current_rows
 
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test is too slow in debug mode")
     @pytest.mark.next_gating
     @pytest.mark.use_cassandra_stress
     def test_local_quorum_bootstrap(self, tmp_path):

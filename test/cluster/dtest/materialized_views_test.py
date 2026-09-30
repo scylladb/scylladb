@@ -1089,7 +1089,7 @@ class TestMaterializedViews(CommonUtils):
         )
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_multi_mvs_on_different_base_tables(self):
         """Few keyspaces and every keyspace has a few tables and every table has a few MVs.
         MVs are created on the empty base tables
@@ -2903,7 +2903,7 @@ class TestMaterializedViews(CommonUtils):
         assert result1 == result2, "expecting same results on both nodes"
 
     @pytest.mark.dtest_debug
-    @pytest.mark.scylla_mode("!release")
+    @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
     def test_injected_noncritical_errors(self):
         self.fixture_dtest_setup.ignore_log_patterns += [r".*std::runtime_error.*view.*"]
         cluster = self.cluster

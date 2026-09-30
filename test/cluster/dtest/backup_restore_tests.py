@@ -512,7 +512,7 @@ class TestBackupRestore(Tester):
             test_dir = self.get_snapshot_dir(f"snapshot{i}")
             assert test_dir is None, f"'snapshot{i}' has not been deleted!"
 
-    @pytest.mark.skip("#7022")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/7022", reason="nodetool won't fail in refreshing in main SSTable directory, no db error raised")
     @pytest.mark.use_cassandra_stress
     @pytest.mark.single_node
     # nodetool refresh does not examine the main directory since

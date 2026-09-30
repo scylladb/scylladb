@@ -389,7 +389,7 @@ class TestCdc(Tester, CDCInitializeHelper):
 
     @pytest.mark.next_gating
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     # the test is not relevant for tablets - cluster reduction doesn't affect CDC streams of tablets-based keyspaces
     @pytest.mark.required_features("!tablets")
     def test_cluster_reduction_with_cdc(self, request, cluster_config):

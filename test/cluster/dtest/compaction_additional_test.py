@@ -35,6 +35,7 @@ from deepdiff import DeepDiff
 
 from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
+from test.pylib.skip_types import skip_env
 from tools.assertions import assert_all, assert_none, assert_row_count
 from tools.cluster import new_node, run_rest_api
 from tools.cluster_topology import generate_cluster_topology
@@ -748,7 +749,7 @@ class TestCompactionAdditional(CompactionAdditionalTester):
         """
 
         if multiprocessing.cpu_count() < 3:
-            pytest.skip("This test requires a minimum of 3 cpus")
+            skip_env("This test requires a minimum of 3 cpus")
 
         cluster = self.cluster
         cluster.populate(1)

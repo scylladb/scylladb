@@ -31,7 +31,7 @@ class RollingUpgradeBase(UpgradeTester):
     __test__ = False
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
-    @pytest.mark.scylla_mode("!debug")
+    @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     @pytest.mark.use_cassandra_stress
     def test_rolling_upgrade(self, dtest_config):
         self.clone_upgrade_path(dtest_config)

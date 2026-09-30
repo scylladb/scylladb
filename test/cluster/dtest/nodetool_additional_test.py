@@ -992,7 +992,7 @@ class TestNodetool(Tester):
     def test_general_ring(self):
         self.check_ring()
 
-    @pytest.mark.skip("#1057")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/1057", reason="Call to service::get_local_storage_service().effective_ownership fails")
     @pytest.mark.use_cassandra_stress
     def test_keyspace_ring(self):
         self.check_ring("keyspace1")
@@ -1509,7 +1509,7 @@ class TestNodetool(Tester):
             res["streams"].append(stream)
         return res
 
-    @pytest.mark.skip("bootstrap using streaming")
+    @pytest.mark.skip_env(reason="bootstrap using streaming")
     @pytest.mark.use_cassandra_stress
     def test_netstats(self):
         """Testwing the `nodetool netstats` command
@@ -1652,7 +1652,7 @@ class TestNodetool(Tester):
         node.nodetool("refresh -- ks cf")
         node.watch_log_for(f"Loading new SSTables for keyspace=ks, table=cf, load_and_stream={load_and_stream}, primary_replica_only=false", timeout=10)
 
-    @pytest.mark.skip("scylla-tools-java:#282")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylla-tools-java/issues/282", reason="Nodetool refresh --load-and-stream doesn't support --primary-replica-only")
     @pytest.mark.single_node
     def test_nodetool_refresh_with_load_and_stream_with_primary_replica_only(self):
         """
@@ -1949,12 +1949,12 @@ class TestNodetool(Tester):
     # corruption, but that is not implemented yet.
     # TODO: re-enable and refactor this test once the above is implemented.
     # See https://github.com/scylladb/scylladb/issues/15693
-    @pytest.mark.skip
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/15693", reason="scrub can't recover arbitrary corruptions yet")
     def test_scrub_with_one_node_expect_data_loss(self):
         self._scrub_with_one_node_expect_data_loss(mode="SEGREGATE")
 
     # See test_scrub_with_one_node_expect_data_loss.
-    @pytest.mark.skip
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/15693", reason="scrub can't recover arbitrary corruptions yet")
     def test_scrub_with_multi_nodes_expect_data_rebuild(self):
         cluster = self.run_cluster(nodes=3)
         node = cluster[0]

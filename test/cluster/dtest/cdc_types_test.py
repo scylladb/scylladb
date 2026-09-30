@@ -16,6 +16,7 @@ from cassandra.util import OrderedMapSerializedKey, Time, uuid_from_time
 from cdc_test import CDCInitializeHelper, CdcLogOperations, wait_for
 from dtest_class import Tester, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
+from test.pylib.skip_types import skip_env
 from tools.cdc_utils import mkident
 from tools.misc import ImmutableMapping
 
@@ -1051,7 +1052,7 @@ class TestCdcUDT(CdcTools):
 
     def _skip_test_if_frozen_is_used(self):
         if self.columns_data["cl_type"]["frozen"]:
-            pytest.skip("Update UDT field for frozen UDT is not supported")
+            skip_env("Update UDT field for frozen UDT is not supported")
 
     def parse_udt_type_name(self):
         self.udt_name = self.columns_data["cl_type"]["udt_name"]

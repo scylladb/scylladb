@@ -21,6 +21,7 @@ from packaging.version import Version
 from dtest_class import Tester, create_ks, is_autocompaction_enabled, retry_till_success
 from dtest_setup_overrides import DTestSetupOverrides
 from repair_additional_test import parallel_repair_on_nodes
+from test.pylib.skip_types import skip_env
 from tools.assertions import assert_none, assert_one
 from tools.cluster import run_rest_api
 from tools.cluster_topology import generate_cluster_topology
@@ -791,7 +792,7 @@ class TestCompaction(Tester):
         9. Assert that the Reshape compaction ran.
         """
         if self.strategy != "LeveledCompactionStrategy":
-            pytest.skip("Skipping redundant runs as this test does not depend on preset compaction strategy.")
+            skip_env("Skipping redundant runs as this test does not depend on preset compaction strategy.")
 
         TWCS = {"class": "TimeWindowCompactionStrategy", "compaction_window_size": 1, "compaction_window_unit": "MINUTES", "max_threshold": 2, "min_threshold": 2}
         STCS = {"class": "SizeTieredCompactionStrategy", "bucket_high": 1.5, "bucket_low": 0.5, "min_sstable_size": 1, "max_threshold": 2, "min_threshold": 2}
@@ -875,7 +876,7 @@ class TestCompaction(Tester):
 
     def skip_if_no_major_compaction(self):
         if Version(self.cluster.version()) < Version("2.2") and self.strategy == "LeveledCompactionStrategy":
-            pytest.skip("major compaction not implemented for LCS in this version of Cassandra")
+            skip_env("major compaction not implemented for LCS in this version of Cassandra")
 
     def last_compaction_timestamp(self, session, cf_name, since_timestamp=None):
         timestamp_filter = f"AND compacted_at > {since_timestamp} " if since_timestamp else ""

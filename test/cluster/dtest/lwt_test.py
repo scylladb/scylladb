@@ -857,7 +857,7 @@ error_injections = [
 @pytest.mark.lwt
 class TestLwtReadLinearizability(Tester):
     @pytest.mark.dtest_debug
-    @pytest.mark.scylla_mode("!release")
+    @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
     def test_read_linearizability(self):
         """Consider 3 nodes A, B and C and a LWT failed write operation that managed to get V
         accepted on A. The value is read twice without writes in the middle. First read access

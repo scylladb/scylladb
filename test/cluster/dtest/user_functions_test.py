@@ -167,7 +167,7 @@ class TestUserFunctions(Tester):
         # should now work - unambiguous
         session.execute("DROP FUNCTION overloaded")
 
-    @pytest.mark.skip(reason="Language 'javascript' is not supported")
+    @pytest.mark.skip_env(reason="Language 'javascript' is not supported")
     @pytest.mark.single_node
     def test_udf_scripting(self):
         session = self.prepare()

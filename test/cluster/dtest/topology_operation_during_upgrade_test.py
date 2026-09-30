@@ -33,7 +33,8 @@ class TopologyOperationWithMixedCLusterTest(RollingUpgradeBase):
     init_version = upgrade_path[0]
     row_end_index = 100
 
-    @pytest.mark.skip
+    @pytest.mark.skip_env(reason="this class only exercises test_add_remove_node/test_trigger_snapshot_transfer; the "
+                                  "inherited test_rolling_upgrade is a no-op here (was already an unconditional skip upstream)")
     def test_rolling_upgrade(self, dtest_config: DTestConfig):
         """Skip test"""
 

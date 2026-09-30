@@ -275,7 +275,7 @@ class TestVariousNotifications(Tester):
     Tests for various notifications/messages from Cassandra.
     """
 
-    @pytest.mark.skip("Scylla doesn't support `tombstone_failure_threshold', read railure won't be triggered")
+    @pytest.mark.skip_env(reason="Scylla doesn't support tombstone_failure_threshold, read failure won't be triggered")
     def test_tombstone_failure_threshold_message(self):
         """
         Ensure nodes return an error message in case of TombstoneOverwhelmingExceptions rather
