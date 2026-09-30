@@ -26,6 +26,25 @@ logger = logging.getLogger(__name__)
 @pytest.mark.dtest_full
 @pytest.mark.next_gating
 class TestScyllaTop(Tester):
+    @pytest.fixture(autouse=True)
+    def stop_scyllatop(self):
+        """Kill the scyllatop processes a test leaves running.
+
+        A test that fails or times out never reaches its own cleanup, and the
+        scyllatop it started would keep writing its DEBUG log until the worker exits.
+        """
+        self.scyllatop_processes = []
+        yield
+        for p in self.scyllatop_processes:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+
+    def _start(self, cmd):
+        p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        self.scyllatop_processes.append(p)
+        return p
+
     def get_cli(self):
         node = self.cluster.nodelist()[0]
         # In tree, scyllatop is always at tools/scyllatop/scyllatop.py under the
@@ -35,7 +54,8 @@ class TestScyllaTop(Tester):
         if not cli.exists():
             raise OSError("Didn't found scyllatop cli ")
 
-        t = tempfile.mkstemp(prefix="scyllatop.log.")
+        # With the test's other files, not in /tmp: a failed test keeps it there.
+        t = tempfile.mkstemp(prefix="scyllatop.log.", dir=self.cluster.get_path())
         os.close(t[0])
         logfile = t[1]
         cli = f"{cli} -L {logfile} -p http://{node.address()}:9180/metrics -v DEBUG"
@@ -47,7 +67,7 @@ class TestScyllaTop(Tester):
         """
         (cmd, logfile) = self.get_cli()
         logger.debug(cmd)
-        p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        p = self._start(cmd)
         if not wait:
             return (p, logfile)
         time.sleep(sleep_time)
@@ -66,7 +86,7 @@ class TestScyllaTop(Tester):
         (cmd, logfile) = self.get_cli()
         cmd = f"{cmd} -b -n {n}"
         logger.debug(cmd)
-        p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        p = self._start(cmd)
         if not wait:
             return (p, logfile)
         out, err = p.communicate()
@@ -87,7 +107,7 @@ class TestScyllaTop(Tester):
         (cmd, logfile) = self.get_cli()
         cmd = "%s --help" % cmd
         logger.debug(cmd)
-        p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        p = self._start(cmd)
         out, err = p.communicate()
         logger.debug(out[0:40] + "...")
         assert p.returncode == 0, err
@@ -105,7 +125,7 @@ class TestScyllaTop(Tester):
         (cmd, logfile) = self.get_cli()
         cmd = "%s --list" % cmd
         logger.debug(cmd)
-        p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        p = self._start(cmd)
         out, err = p.communicate()
         logger.debug(out[0:40] + "...")
         assert p.returncode == 0, err
