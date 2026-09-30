@@ -6,6 +6,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.milestone.number }}
+  cancel-in-progress: false
+
 jobs:
   sync-milestone-to-jira:
     uses: scylladb/github-automation/.github/workflows/main_sync_milestone_to_jira_release.yml@main
