@@ -705,8 +705,20 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
             }
 
             return ep_man.with_file_update_mutex([&ep_man] -> future<> {
+<<<<<<< HEAD
                 return remove_file(ep_man.hints_dir().native()).then([&ep_man] {
                     manager_logger.debug("Removed hint directory for {}", ep_man.end_point_key());
+||||||| parent of ed6cc38e45 (db/hints: Remove hint directories together with leftover files)
+                return remove_file(ep_man.hints_dir().native()).then([&ep_man] {
+                    manager_logger.info("Removed hint directory for {}", ep_man.end_point_key());
+=======
+                // All hint segments have been sent or dropped by now, but there may still be files that
+                // commitlog or its extensions left behind. Remove them along with the directory.
+                return remove_hint_directory(ep_man.hints_dir()).then([&ep_man] (bool removed) {
+                    if (removed) {
+                        manager_logger.info("Removed hint directory for {}", ep_man.end_point_key());
+                    }
+>>>>>>> ed6cc38e45 (db/hints: Remove hint directories together with leftover files)
                 });
             });
         });
