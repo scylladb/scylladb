@@ -10,7 +10,8 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table, DEFAULT_CMDLINE, wait_for_leader, get_table_raft_group_id, \
+    FeatureConfigurations
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -31,31 +32,9 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+SC_CONFIG = FeatureConfigurations.STRONG_CONSISTENCY.value
+DEFAULT_CONFIG = SC_CONFIG.get_cluster_cfg()
 
-DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
-DEFAULT_CMDLINE = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-
-
-async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
-                          expected_host_id: str | None = None):
-    """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
-    reports that one.
-
-    current_leader() on a follower is the last leader it heard from, so a replica that a
-    migration has just removed keeps being reported until the follower's election timeout
-    fires. A caller that knows which node has to end up leading must wait that window out
-    instead of asserting on the first reading.
-    """
-    async def get_leader_host_id():
-        result = await manager.api.get_raft_leader(s.ip_addr, group_id)
-        if uuid.UUID(result).int == 0:
-            return None
-        return result if expected_host_id is None or result == expected_host_id else None
-    label = f"group {group_id} to be led by {expected_host_id}" if expected_host_id else f"a leader of group {group_id}"
-    return await wait_for(get_leader_host_id, time.time() + 60, label=label)
 
 async def collect_all_raft_state(cql, host):
     state = {}
@@ -124,11 +103,6 @@ async def assert_no_cross_shard_routing(manager: ScyllaClusterManager, server: S
             f"Sharder routed token {token} to shard {shard}, "
             f"but partitioner computed shard {shard_from_partitioner}."
         )
-
-async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
-    table_id = await manager.get_table_id(ks, table)
-    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
-    return str(rows[0].raft_group_id)
 
 async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
