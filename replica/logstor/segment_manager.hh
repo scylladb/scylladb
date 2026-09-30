@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
@@ -114,6 +115,9 @@ public:
 
     future<> do_recovery(replica::database&);
     future<> do_recovery_for_test();
+
+    // The index a record found on disk goes into, or nullptr to drop the record.
+    using index_resolver = std::function<primary_index*(const record_header&)>;
 
     future<> start();
     future<> stop();
