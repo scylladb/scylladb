@@ -1467,6 +1467,12 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
         seastar::future<> before_delete(const seastar::sstring&) override {
             co_return;
         }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
     };
 
     auto ep = std::make_unique<myext>(do_file_delete);
@@ -1596,6 +1602,12 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
             deleted.emplace_back(filename);
             co_return;
         }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
     };
 
     auto ep = std::make_unique<myext>();
@@ -1675,6 +1687,12 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
                 BOOST_REQUIRE(!f.available());
                 waiters.emplace_back(std::move(f));
             }
+            co_return;
+        }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
             co_return;
         }
     };
@@ -2105,6 +2123,12 @@ SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
             co_return make_shared<my_file_impl>(std::move(f), _promise, _signal);
         }
         seastar::future<> before_delete(const seastar::sstring& filename) override {
+            return make_ready_future<>();
+        }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            return make_ready_future<>();
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
             return make_ready_future<>();
         }
     };
@@ -2628,4 +2652,965 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
     });
 }
 
+<<<<<<< HEAD
+||||||| parent of 7a5e832b81 (db/commitlog: Let file extensions follow renamed segments)
+// Helper: verify column mapping is included in the first entry for a schema
+// version within a chunk, and omitted in subsequent entries.
+// `use_variant_format`: if true, use variant entry format with descriptor_tag;
+//                        if false, use legacy/non-variant format.
+static future<> do_test_schema_mapping_included_when_unknown(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            constexpr int n = 3;
+            utils::chunked_vector<frozen_mutation> mutations;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+
+            for (int i = 0; i < n; ++i) {
+                mutations.emplace_back(freeze(gen(1).front()));
+                writers.emplace_back(s, mutations.back(), commitlog::force_sync::no);
+            }
+
+            auto handles = log.add_entries(std::move(writers), db::timeout_clock::now() + 60s).get();
+            std::vector<replay_position> rps;
+            for (auto& h : handles) {
+                rps.emplace_back(h.rp());
+            }
+
+            log.sync_all_segments().get();
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            size_t entry_idx = 0;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    std::optional<column_mapping> mapping;
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        mapping = std::get<mutation_entry>(cer.entry().item).mapping();
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        mapping = cer.get_column_mapping();
+                    }
+
+                    if (entry_idx == 0) {
+                        BOOST_CHECK_MESSAGE(mapping.has_value(),
+                            "First entry should include column mapping");
+                    } else {
+                        BOOST_CHECK_MESSAGE(!mapping.has_value(),
+                            fmt::format("Entry {} should not include column mapping", entry_idx));
+                    }
+                    ++entry_idx;
+                    return make_ready_future<>();
+                }).get();
+            }
+            BOOST_CHECK_EQUAL(entry_idx, size_t(n));
+        });
+    });
+}
+
+// Helper: verify that after a sync boundary the column mapping is re-included.
+static future<> do_test_schema_mapping_reincluded_after_sync(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            // First batch: 2 entries.
+            utils::chunked_vector<frozen_mutation> mutations1;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers1;
+            for (int i = 0; i < 2; ++i) {
+                mutations1.emplace_back(freeze(gen(1).front()));
+                writers1.emplace_back(s, mutations1.back(), commitlog::force_sync::no);
+            }
+            auto handles1 = log.add_entries(std::move(writers1), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            // Second batch: 2 entries after sync boundary.
+            utils::chunked_vector<frozen_mutation> mutations2;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers2;
+            for (int i = 0; i < 2; ++i) {
+                mutations2.emplace_back(freeze(gen(1).front()));
+                writers2.emplace_back(s, mutations2.back(), commitlog::force_sync::no);
+            }
+            auto handles2 = log.add_entries(std::move(writers2), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            std::vector<replay_position> rps;
+            for (auto& h : handles1) { rps.emplace_back(h.rp()); }
+            for (auto& h : handles2) { rps.emplace_back(h.rp()); }
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            std::vector<bool> has_mapping;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        has_mapping.push_back(std::get<mutation_entry>(cer.entry().item).mapping().has_value());
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        has_mapping.push_back(cer.get_column_mapping().has_value());
+                    }
+                    return make_ready_future<>();
+                }).get();
+            }
+
+            BOOST_REQUIRE_EQUAL(has_mapping.size(), 4u);
+            BOOST_CHECK_MESSAGE(has_mapping[0], "First entry in batch 1 should include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[1], "Second entry in batch 1 should not include column mapping");
+            BOOST_CHECK_MESSAGE(has_mapping[2], "First entry in batch 2 should re-include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[3], "Second entry in batch 2 should not include column mapping");
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(true);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(true);
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_standard_format) {
+    // Standard format without tag: CommitLog-<ver>-<id>.log
+    using descriptor = db::commitlog::descriptor;
+
+    // Standard format without tag: CommitLog-4-12345.log
+    {
+        descriptor d("CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Older version
+    {
+        descriptor d("CommitLog-2-99999.log");
+        BOOST_CHECK_EQUAL(d.id, 99999);
+        BOOST_CHECK_EQUAL(d.ver, 2);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // With full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_tagged_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Tagged format: CommitLog-4-12345.variant.log
+    {
+        descriptor d("CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    // Different tag
+    {
+        descriptor d("CommitLog-4-12345.custom.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "custom");
+    }
+
+    // Tagged with full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_recycled_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Recycled without tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Recycled with tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_invalid_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Missing .log extension
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345"), std::domain_error);
+
+    // Wrong prefix
+    BOOST_CHECK_THROW(descriptor("WrongPrefix-4-12345.log"), std::domain_error);
+
+    // Numeric tag (tags must be alphabetic)
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345.123.log"), std::domain_error);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_filename_generation) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Without tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, {});
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.log");
+    }
+
+    // With tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.variant.log");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Generate filename with tag, parse it back
+    {
+        descriptor d1(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 12345);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "variant");
+    }
+
+    // Generate filename without tag, parse it back
+    {
+        descriptor d1(67890, descriptor::FILENAME_PREFIX, 4, {}, {});
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 67890);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 32;
+
+    co_await cl_test(cfg, [](commitlog& log) -> future<> {
+        using force_sync = commitlog_mutation_entry_writer::force_sync;
+
+        constexpr auto n = 10;
+
+        utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+        utils::chunked_vector<frozen_mutation> mutations;
+        std::vector<replay_position> rps;
+
+        writers.reserve(n);
+        mutations.reserve(n);
+
+        // create multiple actual mutation writers
+        for (auto i = 0; i < n; ++i) {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            mutations.emplace_back(gen(1).front());
+            writers.emplace_back(gen.schema(), mutations.back(), force_sync(false));
+        }
+
+        db::replay_position first_rp, check_rp;
+        for (;;) {
+            auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 60s);
+            // we assume all entries goes into one single segment (no large entries)
+            auto i = std::ranges::adjacent_find(res, [](const db::replay_position& rp1, const db::replay_position& rp2) {
+                return rp1.base_id() != rp2.base_id();
+            });
+            if (i != res.end()) {
+                BOOST_ERROR("All entries should be in same segment");
+            }
+            db::replay_position new_rp;
+            for (auto& h : res) {
+                new_rp = h.release(); // keep data
+            }
+            if (first_rp == db::replay_position{}) {
+                first_rp = new_rp;
+            } else if (first_rp.base_id() != new_rp.base_id()) {
+                // we wrote into a new segment. This will almost
+                // certainly mean we first did a check into the previous one
+                BOOST_TEST_MESSAGE("Reached new segment");
+                check_rp = new_rp;
+                break;
+            }
+        }
+
+        co_await log.sync_all_segments();
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        bool found = false;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                commitlog_entry_reader r(buf_rp.buffer);
+                BOOST_REQUIRE(std::holds_alternative<mutation_entry>(r.entry().item));
+                const auto& mut_entry = std::get<mutation_entry>(r.entry().item);
+                auto& rp = buf_rp.position;
+                if (rp == check_rp) {
+                    // our (last) mutation entry in the new segment must have schema
+                    BOOST_REQUIRE(mut_entry.mapping().has_value());
+                    found = true;
+                }
+                co_return;
+            });
+        }
+        BOOST_REQUIRE(found);
+
+    });
+}
+
+=======
+// Helper: verify column mapping is included in the first entry for a schema
+// version within a chunk, and omitted in subsequent entries.
+// `use_variant_format`: if true, use variant entry format with descriptor_tag;
+//                        if false, use legacy/non-variant format.
+static future<> do_test_schema_mapping_included_when_unknown(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            constexpr int n = 3;
+            utils::chunked_vector<frozen_mutation> mutations;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+
+            for (int i = 0; i < n; ++i) {
+                mutations.emplace_back(freeze(gen(1).front()));
+                writers.emplace_back(s, mutations.back(), commitlog::force_sync::no);
+            }
+
+            auto handles = log.add_entries(std::move(writers), db::timeout_clock::now() + 60s).get();
+            std::vector<replay_position> rps;
+            for (auto& h : handles) {
+                rps.emplace_back(h.rp());
+            }
+
+            log.sync_all_segments().get();
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            size_t entry_idx = 0;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    std::optional<column_mapping> mapping;
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        mapping = std::get<mutation_entry>(cer.entry().item).mapping();
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        mapping = cer.get_column_mapping();
+                    }
+
+                    if (entry_idx == 0) {
+                        BOOST_CHECK_MESSAGE(mapping.has_value(),
+                            "First entry should include column mapping");
+                    } else {
+                        BOOST_CHECK_MESSAGE(!mapping.has_value(),
+                            fmt::format("Entry {} should not include column mapping", entry_idx));
+                    }
+                    ++entry_idx;
+                    return make_ready_future<>();
+                }).get();
+            }
+            BOOST_CHECK_EQUAL(entry_idx, size_t(n));
+        });
+    });
+}
+
+// Helper: verify that after a sync boundary the column mapping is re-included.
+static future<> do_test_schema_mapping_reincluded_after_sync(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            // First batch: 2 entries.
+            utils::chunked_vector<frozen_mutation> mutations1;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers1;
+            for (int i = 0; i < 2; ++i) {
+                mutations1.emplace_back(freeze(gen(1).front()));
+                writers1.emplace_back(s, mutations1.back(), commitlog::force_sync::no);
+            }
+            auto handles1 = log.add_entries(std::move(writers1), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            // Second batch: 2 entries after sync boundary.
+            utils::chunked_vector<frozen_mutation> mutations2;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers2;
+            for (int i = 0; i < 2; ++i) {
+                mutations2.emplace_back(freeze(gen(1).front()));
+                writers2.emplace_back(s, mutations2.back(), commitlog::force_sync::no);
+            }
+            auto handles2 = log.add_entries(std::move(writers2), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            std::vector<replay_position> rps;
+            for (auto& h : handles1) { rps.emplace_back(h.rp()); }
+            for (auto& h : handles2) { rps.emplace_back(h.rp()); }
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            std::vector<bool> has_mapping;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        has_mapping.push_back(std::get<mutation_entry>(cer.entry().item).mapping().has_value());
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        has_mapping.push_back(cer.get_column_mapping().has_value());
+                    }
+                    return make_ready_future<>();
+                }).get();
+            }
+
+            BOOST_REQUIRE_EQUAL(has_mapping.size(), 4u);
+            BOOST_CHECK_MESSAGE(has_mapping[0], "First entry in batch 1 should include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[1], "Second entry in batch 1 should not include column mapping");
+            BOOST_CHECK_MESSAGE(has_mapping[2], "First entry in batch 2 should re-include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[3], "Second entry in batch 2 should not include column mapping");
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(true);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(true);
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_standard_format) {
+    // Standard format without tag: CommitLog-<ver>-<id>.log
+    using descriptor = db::commitlog::descriptor;
+
+    // Standard format without tag: CommitLog-4-12345.log
+    {
+        descriptor d("CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Older version
+    {
+        descriptor d("CommitLog-2-99999.log");
+        BOOST_CHECK_EQUAL(d.id, 99999);
+        BOOST_CHECK_EQUAL(d.ver, 2);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // With full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_tagged_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Tagged format: CommitLog-4-12345.variant.log
+    {
+        descriptor d("CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    // Different tag
+    {
+        descriptor d("CommitLog-4-12345.custom.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "custom");
+    }
+
+    // Tagged with full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_recycled_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Recycled without tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Recycled with tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_invalid_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Missing .log extension
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345"), std::domain_error);
+
+    // Wrong prefix
+    BOOST_CHECK_THROW(descriptor("WrongPrefix-4-12345.log"), std::domain_error);
+
+    // Numeric tag (tags must be alphabetic)
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345.123.log"), std::domain_error);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_filename_generation) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Without tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, {});
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.log");
+    }
+
+    // With tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.variant.log");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Generate filename with tag, parse it back
+    {
+        descriptor d1(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 12345);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "variant");
+    }
+
+    // Generate filename without tag, parse it back
+    {
+        descriptor d1(67890, descriptor::FILENAME_PREFIX, 4, {}, {});
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 67890);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+SEASTAR_TEST_CASE(test_oversized_entry_forced_sync_retry) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 512 * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 5;
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false;
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    std::unordered_map<db::replay_position, fragmented_temporary_buffer> rp2buf;
+    sstring write_error;
+
+    utils::get_local_injector().enable("commitlog_segment_force_oversized_sync");
+    utils::get_local_injector().set_parameter("commitlog_segment_force_oversized_sync", "param", "true");
+
+    {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto uuid = make_table_id();
+        const auto size = log.max_record_size() * 6;
+
+        for (size_t n = 0; n < 3; ++n) {
+            // Position dependent bytes, so a shifted fragment is visible.
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+            auto out = buf.get_ostream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = static_cast<char>((i * 31 + n * 7) & 0xff);
+                out.write(&c, 1);
+            }
+            try {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no,
+                        [&buf](db::commitlog::output& dst) {
+                            for (auto& tmp : buf) {
+                                dst.write(tmp.get(), tmp.size());
+                            }
+                        });
+                rp2buf.emplace(h.release(), std::move(buf));
+            } catch (const std::exception& e) {
+                write_error = e.what();
+                BOOST_TEST_MESSAGE(fmt::format("add_mutation of entry {} failed: {}", n, write_error));
+                break;
+            }
+        }
+        co_await log.sync_all_segments();
+        co_await log.release();
+        co_await log.shutdown();
+    }
+
+    utils::get_local_injector().disable("commitlog_segment_force_oversized_sync");
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+    commitlog::replay_state state;
+    size_t found = 0;
+    size_t mismatched = 0;
+
+    for (auto& f : replay_set) {
+        co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            auto it = rp2buf.find(buf_rp.position);
+            if (it == rp2buf.end()) {
+                co_return;
+            }
+            ++found;
+            fragmented_temporary_buffer::view expected(it->second);
+            fragmented_temporary_buffer::view actual(buf_rp.buffer);
+            if (expected != actual) {
+                ++mismatched;
+                BOOST_TEST_MESSAGE(fmt::format("entry at {} read back corrupted ({} vs {} bytes)",
+                        buf_rp.position, actual.size_bytes(), expected.size_bytes()));
+            }
+            co_return;
+        });
+    }
+
+    BOOST_TEST_MESSAGE(fmt::format("wrote {}, replayed {}, corrupted {}", rp2buf.size(), found, mismatched));
+
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_EQUAL(write_error, sstring());
+    BOOST_REQUIRE_EQUAL(mismatched, 0u);
+    BOOST_REQUIRE_EQUAL(found, rp2buf.size());
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
+
+namespace {
+
+// Records the calls to its rename hooks.
+struct rename_hooks_recorder : public commitlog_file_extension {
+    std::vector<std::string> calls;
+
+    future<file> wrap_file(const sstring&, file f, open_flags) override {
+        co_return f;
+    }
+    future<> before_delete(const sstring&) override {
+        co_return;
+    }
+    future<> before_rename(const sstring& from, const sstring& to) override {
+        // The segment hasn't been renamed yet.
+        BOOST_REQUIRE(co_await file_exists(from));
+        BOOST_REQUIRE(!co_await file_exists(to));
+        calls.push_back(fmt::format("before_rename({}, {})", from, to));
+    }
+    future<> after_rename(const sstring& from, const sstring& to) override {
+        // The segment has already been renamed.
+        BOOST_REQUIRE(!co_await file_exists(from));
+        BOOST_REQUIRE(co_await file_exists(to));
+        calls.push_back(fmt::format("after_rename({}, {})", from, to));
+    }
+};
+
+future<> create_empty_file(std::string_view path) {
+    auto f = co_await open_file_dma(path, open_flags::wo | open_flags::create);
+    co_await f.close();
+}
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_rename_segment_calls_rename_hooks) {
+    tmpdir tmp;
+    const sstring from = (tmp.path() / "CommitLog-4-1.log").native();
+    const sstring to = (tmp.path() / "other" / "CommitLog-4-1.log").native();
+    co_await touch_directory((tmp.path() / "other").native());
+    co_await create_empty_file(from);
+
+    auto recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& calls = recorder->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder", std::move(recorder));
+
+    co_await commitlog::rename_segment(from, to, &exts);
+
+    BOOST_REQUIRE(!co_await file_exists(from));
+    BOOST_REQUIRE(co_await file_exists(to));
+    const std::vector<std::string> expected = {
+        fmt::format("before_rename({}, {})", from, to),
+        fmt::format("after_rename({}, {})", from, to),
+    };
+    BOOST_REQUIRE_MESSAGE(calls == expected,
+            fmt::format("Calls: {}, expected: {}", calls, expected));
+}
+
+SEASTAR_TEST_CASE(test_rename_segment_calls_all_rename_hooks) {
+    tmpdir tmp;
+    const sstring from = (tmp.path() / "CommitLog-4-1.log").native();
+    const sstring to = (tmp.path() / "other" / "CommitLog-4-1.log").native();
+    co_await touch_directory((tmp.path() / "other").native());
+    co_await create_empty_file(from);
+
+    auto recorder1 = std::make_unique<rename_hooks_recorder>();
+    auto recorder2 = std::make_unique<rename_hooks_recorder>();
+    const auto& calls1 = recorder1->calls;
+    const auto& calls2 = recorder2->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder1", std::move(recorder1));
+    exts.add_commitlog_file_extension("recorder2", std::move(recorder2));
+
+    co_await commitlog::rename_segment(from, to, &exts);
+
+    BOOST_REQUIRE(!co_await file_exists(from));
+    BOOST_REQUIRE(co_await file_exists(to));
+    const std::vector<std::string> expected = {
+        fmt::format("before_rename({}, {})", from, to),
+        fmt::format("after_rename({}, {})", from, to),
+    };
+    BOOST_REQUIRE_MESSAGE(calls1 == expected,
+            fmt::format("Calls 1: {}, expected: {}", calls1, expected));
+    BOOST_REQUIRE_MESSAGE(calls2 == expected,
+            fmt::format("Calls 2: {}, expected: {}", calls2, expected));
+}
+
+// The rename hooks of an extension are only called if the extension is among the given ones.
+SEASTAR_TEST_CASE(test_rename_segment_calls_rename_hooks_of_given_extensions_only) {
+    tmpdir tmp;
+    const auto path = [&tmp] (unsigned i) {
+        return sstring((tmp.path() / fmt::format("CommitLog-4-{}.log", i)).native());
+    };
+    co_await create_empty_file(path(0));
+
+    auto move_segment = [&] (const sstring& from, const sstring& to, const db::extensions* exts) -> future<> {
+        co_await commitlog::rename_segment(from, to, exts);
+        BOOST_REQUIRE(!co_await file_exists(from));
+        BOOST_REQUIRE(co_await file_exists(to));
+    };
+
+    auto recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& calls = recorder->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder", std::move(recorder));
+
+    // No extensions.
+    co_await move_segment(path(0), path(1), nullptr);
+
+    // No commitlog file extensions.
+    db::extensions no_exts;
+    co_await move_segment(path(1), path(2), &no_exts);
+
+    // Other commitlog file extensions.
+    auto other_recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& other_calls = other_recorder->calls;
+    db::extensions other_exts;
+    other_exts.add_commitlog_file_extension("other_recorder", std::move(other_recorder));
+    co_await move_segment(path(2), path(3), &other_exts);
+    BOOST_REQUIRE_MESSAGE(calls.empty(), fmt::format("Unexpected calls: {}", calls));
+    BOOST_REQUIRE_EQUAL(other_calls.size(), 2);
+
+    // Attach the previously created extensions.
+    co_await move_segment(path(3), path(4), &exts);
+    BOOST_REQUIRE_EQUAL(calls.size(), 2);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 32;
+
+    co_await cl_test(cfg, [](commitlog& log) -> future<> {
+        using force_sync = commitlog_mutation_entry_writer::force_sync;
+
+        constexpr auto n = 10;
+
+        utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+        utils::chunked_vector<frozen_mutation> mutations;
+        std::vector<replay_position> rps;
+
+        writers.reserve(n);
+        mutations.reserve(n);
+
+        // create multiple actual mutation writers
+        for (auto i = 0; i < n; ++i) {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            mutations.emplace_back(gen(1).front());
+            writers.emplace_back(gen.schema(), mutations.back(), force_sync(false));
+        }
+
+        db::replay_position first_rp, check_rp;
+        for (;;) {
+            auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 60s);
+            // we assume all entries goes into one single segment (no large entries)
+            auto i = std::ranges::adjacent_find(res, [](const db::replay_position& rp1, const db::replay_position& rp2) {
+                return rp1.base_id() != rp2.base_id();
+            });
+            if (i != res.end()) {
+                BOOST_ERROR("All entries should be in same segment");
+            }
+            db::replay_position new_rp;
+            for (auto& h : res) {
+                new_rp = h.release(); // keep data
+            }
+            if (first_rp == db::replay_position{}) {
+                first_rp = new_rp;
+            } else if (first_rp.base_id() != new_rp.base_id()) {
+                // we wrote into a new segment. This will almost
+                // certainly mean we first did a check into the previous one
+                BOOST_TEST_MESSAGE("Reached new segment");
+                check_rp = new_rp;
+                break;
+            }
+        }
+
+        co_await log.sync_all_segments();
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        bool found = false;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                commitlog_entry_reader r(buf_rp.buffer);
+                BOOST_REQUIRE(std::holds_alternative<mutation_entry>(r.entry().item));
+                const auto& mut_entry = std::get<mutation_entry>(r.entry().item);
+                auto& rp = buf_rp.position;
+                if (rp == check_rp) {
+                    // our (last) mutation entry in the new segment must have schema
+                    BOOST_REQUIRE(mut_entry.mapping().has_value());
+                    found = true;
+                }
+                co_return;
+            });
+        }
+        BOOST_REQUIRE(found);
+
+    });
+}
+
+>>>>>>> 7a5e832b81 (db/commitlog: Let file extensions follow renamed segments)
 BOOST_AUTO_TEST_SUITE_END()
