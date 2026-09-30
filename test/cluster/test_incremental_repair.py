@@ -233,10 +233,11 @@ async def verify_max_repaired_at(manager, scylla_path, servers, ks, max_repaired
             logger.info(f"Got {node_workdir=} {nr_sstables=} {sst=} {repaired_at=}")
             assert repaired_at <= max_repaired_at
 
-async def trigger_tablet_merge(manager, servers, logs):
+async def trigger_tablet_merge(manager, servers, logs, for_table_id=None):
     s1_log = logs[0]
     s1_mark = await s1_log.mark()
-    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+    params = {} if for_table_id is None else {'for_table_id': for_table_id}
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers, params=params)
     await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
 
@@ -610,7 +611,7 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     s1_mark = await logs[0].mark()
-    await trigger_tablet_merge(manager, servers, logs)
+    await trigger_tablet_merge(manager, servers, logs, table_id)
     # The merge process will set the unrepaired sstable with repaired_at=3 to repaired_at=0 during merge
     await logs[0].wait_for('Updating repaired_at for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
     await logs[0].wait_for('Completed updating repaired_at=.* for tablet merge', from_mark=s1_mark)
@@ -648,7 +649,7 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
     scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     # Trigger merge
-    await trigger_tablet_merge(manager, servers, logs)
+    await trigger_tablet_merge(manager, servers, logs, table_id)
 
     # Verify sstables_repaired_at should be 3 after merge
     for server, host in zip(servers, hosts):
@@ -789,7 +790,13 @@ async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(ma
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_incremental_repair_rejoin_do_tablet_operation(manager):
     cmdline = ['--logger-log-level', 'raft_topology=debug']
-    servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline)
+    # repair_finish_wait cannot be scoped to a single table, so it is also hit by
+    # the repair phase of the tablet rebuilds which auto-RF triggers for the
+    # system keyspaces. Nobody releases those, so they hold the repair slot until
+    # they abort on the injection's timeout and the repair of the test table is
+    # never initiated. Keep the system keyspaces on vnodes to avoid that.
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=config, cmdline=cmdline)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
