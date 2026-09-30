@@ -1015,12 +1015,30 @@ public:
             return b ? remove_file(cfg_file) : make_ready_future();
         });
     }
-    // FIXME: The options file doesn't follow a renamed segment.
-    future<> before_rename(const sstring&, const sstring&) override {
-        return make_ready_future();
+    // The options file is looked up next to the segment, so it must follow the segment.
+    // Without it, the segment is read as if it were unencrypted.
+    future<> before_rename(const sstring& from, const sstring& to) override {
+        const auto from_cfg_file = config_name(from);
+        const auto to_cfg_file = config_name(to);
+        bool changed = false;
+        // The destination must end up with the segment's options file, or none if the segment has none.
+        // Whatever is already there is a leftover, e.g. of an interrupted rename: remove it, or the segment
+        // could be decrypted with it.
+        if (co_await file_exists(to_cfg_file)) {
+            co_await remove_file(to_cfg_file);
+            changed = true;
+        }
+        if (co_await file_exists(from_cfg_file)) {
+            // Hard-link instead of copying: the new name either refers to the complete file or doesn't exist.
+            co_await link_file(from_cfg_file, to_cfg_file);
+            changed = true;
+        }
+        if (changed) {
+            co_await sync_directory(bfs::path(to_cfg_file).parent_path().string());
+        }
     }
-    future<> after_rename(const sstring&, const sstring&) override {
-        return make_ready_future();
+    future<> after_rename(const sstring& from, const sstring& to) override {
+        co_await before_delete(from);
     }
 };
 
