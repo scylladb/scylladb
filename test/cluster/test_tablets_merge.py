@@ -55,6 +55,8 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        # The system keyspaces' tables split and merge too; the waits below name this table.
+        table_id = await manager.get_table_or_view_id(ks, 'test')
 
         # Initial average table size of 400k (1 tablet), so triggers some splits.
         total_keys = 200
@@ -94,7 +96,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         await check()
         time.sleep(2) # Give load balancer some time to do work
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await check()
 
@@ -126,9 +128,9 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
             await manager.api.keyspace_compaction(server.ip_addr, ks)
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
+        await s1_log.wait_for(f"Emitting resize decision of type merge for table {table_id}", from_mark=s1_mark)
         # Waits for balancer to co-locate sibling tablets
-        await s1_log.wait_for("All sibling tablets are co-located")
+        await s1_log.wait_for(f"All sibling tablets are co-located for table {table_id}", from_mark=s1_mark)
         # Do some shuffling to make sure balancer works with co-located tablets
         await shuffle()
 
@@ -138,7 +140,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         await inject_error_on(manager, "replica_merge_completion_wait", servers)
         await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
 
-        await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet merge for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count < old_tablet_count
@@ -170,7 +172,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
             # forgive if balancer decided to migrate the target tablet post split.
             pass
 
-        await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+        await s1_log.wait_for(f'Merge completion fiber finished for table {ks}.test', from_mark=s1_mark)
 
         for server in servers:
             await manager.api.flush_keyspace(server.ip_addr, ks)
