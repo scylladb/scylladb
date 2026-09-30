@@ -471,6 +471,12 @@ public:
 
     static future<> read_log_file(sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
     static future<> read_log_file(const replay_state&, sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
+
+    /// \brief Rename a segment that's not in use by any commitlog instance, e.g. move it to another directory.
+    ///
+    /// The files that the commitlog file extensions keep for the segment follow it.
+    /// The segment is never left without them, even if we crash in the middle.
+    static future<> rename_segment(sstring from, sstring to, const db::extensions* = nullptr);
 private:
     commitlog(config);
 
