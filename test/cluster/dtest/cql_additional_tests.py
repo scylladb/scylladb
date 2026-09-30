@@ -39,7 +39,8 @@ from tools.assertions import (
     assert_one,
     assert_row_count,
 )
-from tools.cassandra_helpers import CassandraCluster, java_version_exist
+from tools.cassandra_docker import cassandra_docker_available
+from tools.cassandra_helpers import CassandraCluster
 from tools.cluster_topology import generate_cluster_topology, generate_rack_topology_based_rf
 from tools.data import (
     create_index,
@@ -56,6 +57,16 @@ from tools.tables_view_manager import index_is_built, wait_for_view
 logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.next_gating
+_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON = (
+    "Scylla can no longer write sstable filenames Apache Cassandra 3.11 will load. Its generation is always a "
+    "UUID now -- uuid_sstable_identifiers_enabled is value_status::Unused in db/config.cc, so it cannot be turned "
+    "off -- and Cassandra's Descriptor grammar only accepts an integer, so its nodetool refresh skips every file "
+    "and reports 'No new SSTables were found'. The Cassandra container harness itself works: it starts the "
+    "cluster, takes Scylla's schema over, copies the sstables in and runs the refresh; see "
+    "tools/cassandra_docker.py. Un-skip when Scylla can emit an integer generation again, or when the migration "
+    "renames the files on the way over."
+)
+
 
 
 @pytest.mark.dtest_full
@@ -84,7 +95,10 @@ class TestCQL(Tester):
         if not cluster.nodelist():
             rack_layout = generate_rack_topology_based_rf(nodes, rf)
             topology_layout = {"dc1": rack_layout}
-            cluster.populate(topology_layout).start(jvm_args=jvm_args)
+            # ccm's Cluster.start() waits by default; the in-tree shim only waits
+            # when asked, and the multi-node tests here query at QUORUM as soon as
+            # prepare() returns.
+            cluster.populate(topology_layout).start(jvm_args=jvm_args, wait_for_binary_proto=True, wait_other_notice=True)
         node1 = cluster.nodelist()[0]
         time.sleep(0.2)
 
@@ -6220,14 +6234,24 @@ class TestCQL(Tester):
     ):
         if columns is None:
             columns = ['"ID"', '"Ck1"', '"cK2"', '"Columnfamily_for_mc_sstables_column1"']
-        cc = CassandraCluster(cassandra_version="3.11.16", request=request, test_instance=self)
-        cassandra_node1 = cc.run_migration(scylla_cluster=self.cluster, scylla_test_path=self.test_path, keyspace_names_list=[keyspace_name])
+        cc = CassandraCluster(cassandra_version="3.11", request=request, test_instance=self)
+        cassandra_node1 = cc.run_migration(scylla_cluster=self.cluster, keyspace_names_list=[keyspace_name])
         cassandra_session = self.patient_cql_connection(cassandra_node1, keyspace=keyspace_name.replace('"', ""))
 
         self.mc_validate_data(session=cassandra_session, table_name=table_name, data_amount=data_amount, dataset=dataset, columns=columns, keys_columns_amount=keys_columns_amount)
 
-    @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
-    @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
+    @pytest.mark.skipif(condition=not cassandra_docker_available(), reason="test depends on cassandra 3.x, which runs here from its docker image")
+    @pytest.mark.skip_env(reason=_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON)
+    # Cassandra has to be able to read what Scylla wrote, and three of Scylla's
+    # defaults are its own: the mt sstable format is the trie index Cassandra
+    # has never heard of (me is the Cassandra-compatible one), UUID sstable
+    # identifiers are not in its filename grammar, and it has no
+    # LZ4WithDictsCompressor.
+    @pytest.mark.cluster_options(
+        sstable_format="me",
+        uuid_sstable_identifiers_enabled=False,
+        sstable_compression_user_table_options={"sstable_compression": "LZ4Compressor"},
+    )
     def test_mc_sstables_case_sensitive_insert(self, request, compaction_strategy_for_migration):
         """
         Test how the mc SSTAbles files format works when the column names are case sensitive
@@ -6246,8 +6270,18 @@ class TestCQL(Tester):
         # Create Cassandra cluster, migrate the Scylla data and validate the migrated data
         self.mc_migrate_scylla_to_cassandra(keyspace_name=keyspace_name, table_name=table_name, dataset=dataset, data_amount=data_amount, request=request)
 
-    @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
-    @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
+    @pytest.mark.skipif(condition=not cassandra_docker_available(), reason="test depends on cassandra 3.x, which runs here from its docker image")
+    @pytest.mark.skip_env(reason=_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON)
+    # Cassandra has to be able to read what Scylla wrote, and three of Scylla's
+    # defaults are its own: the mt sstable format is the trie index Cassandra
+    # has never heard of (me is the Cassandra-compatible one), UUID sstable
+    # identifiers are not in its filename grammar, and it has no
+    # LZ4WithDictsCompressor.
+    @pytest.mark.cluster_options(
+        sstable_format="me",
+        uuid_sstable_identifiers_enabled=False,
+        sstable_compression_user_table_options={"sstable_compression": "LZ4Compressor"},
+    )
     def test_mc_sstables_case_sensitive_update_value(self, request, compaction_strategy_for_migration):
         """
         Test how the mc SSTAbles files format works when the column names are case sensitive
@@ -6284,8 +6318,18 @@ class TestCQL(Tester):
         # Create Cassandra cluster, migrate the Scylla data and validate the migrated data
         self.mc_migrate_scylla_to_cassandra(keyspace_name=keyspace_name, table_name=table_name, dataset=dataset, data_amount=data_amount, request=request)
 
-    @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
-    @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
+    @pytest.mark.skipif(condition=not cassandra_docker_available(), reason="test depends on cassandra 3.x, which runs here from its docker image")
+    @pytest.mark.skip_env(reason=_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON)
+    # Cassandra has to be able to read what Scylla wrote, and three of Scylla's
+    # defaults are its own: the mt sstable format is the trie index Cassandra
+    # has never heard of (me is the Cassandra-compatible one), UUID sstable
+    # identifiers are not in its filename grammar, and it has no
+    # LZ4WithDictsCompressor.
+    @pytest.mark.cluster_options(
+        sstable_format="me",
+        uuid_sstable_identifiers_enabled=False,
+        sstable_compression_user_table_options={"sstable_compression": "LZ4Compressor"},
+    )
     def test_mc_sstables_case_sensitive_delete_value(self, request, compaction_strategy_for_migration):
         """
         Test how the mc SSTAbles files format works when the column names are case sensitive
@@ -6315,8 +6359,18 @@ class TestCQL(Tester):
         # Create Cassandra cluster, migrate the Scylla data and validate the migrated data
         self.mc_migrate_scylla_to_cassandra(keyspace_name=keyspace_name, table_name=table_name, dataset=dataset, data_amount=data_amount, request=request)
 
-    @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
-    @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
+    @pytest.mark.skipif(condition=not cassandra_docker_available(), reason="test depends on cassandra 3.x, which runs here from its docker image")
+    @pytest.mark.skip_env(reason=_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON)
+    # Cassandra has to be able to read what Scylla wrote, and three of Scylla's
+    # defaults are its own: the mt sstable format is the trie index Cassandra
+    # has never heard of (me is the Cassandra-compatible one), UUID sstable
+    # identifiers are not in its filename grammar, and it has no
+    # LZ4WithDictsCompressor.
+    @pytest.mark.cluster_options(
+        sstable_format="me",
+        uuid_sstable_identifiers_enabled=False,
+        sstable_compression_user_table_options={"sstable_compression": "LZ4Compressor"},
+    )
     def test_mc_sstables_case_sensitive_add_column(self, request, compaction_strategy_for_migration):
         """
         Test how the mc SSTAbles files format works when the column names are case sensitive
@@ -7058,7 +7112,7 @@ class TestsCQLAdditional(Tester):
         ]
         self.cluster.populate(3).start(jvm_args=jvm_args)
         nodes = self.cluster.nodelist()
-        schema_file = "test_data/c-s-profiles/create_100tables.cql"
+        schema_file = os.path.join(os.path.dirname(__file__), "test_data/c-s-profiles/create_100tables.cql")
         assert os.path.exists(schema_file), "schema file doesn't exist"
 
         logger.debug("Create 100+ tables by simple_test_100tables.cql")

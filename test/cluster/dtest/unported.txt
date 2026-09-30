@@ -14,7 +14,6 @@ compression_test.py
 consistency_test.py
 consistent_bootstrap_test.py
 counter_tests.py
-cql_additional_tests.py
 cql_cast_test.py
 cql_session_test.py
 cql_static_columns_tests.py
