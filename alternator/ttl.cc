@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -23,6 +24,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "utils/log.hh"
 #include "gc_clock.hh"
@@ -51,6 +53,7 @@
 #include "alternator/ttl_tag.hh"
 #include "dht/sharder.hh"
 #include "db/config.hh"
+#include "db/consistency_level.hh"
 #include "db/tags/utils.hh"
 #include "utils/labels.hh"
 
@@ -161,11 +164,15 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 //    where the numeric expiration time is encoded using DynamoDB JSON inside
 //    the bytes value.
 //
-// Scans and deletes are done with CL=LOCAL_QUORUM:
-// - Scans use LOCAL_QUORUM so expiration decisions are based on a consistent
+// Scans and deletes are normally done with a quorum CL (LOCAL_QUORUM, or
+// QUORUM - see expiration_consistency_level() below):
+// - Scans use a quorum CL so expiration decisions are based on a consistent
 //   value (for RF=3, this means the scanning thread reads the local replica
 //   plus asking one additional replica for a digest).
-// - Deletes use LOCAL_QUORUM so they are visible to LOCAL_QUORUM readers.
+// - Deletes use the same CL so they are visible to quorum readers.
+// When there are too few token owners for a quorum to ever be achieved, the
+// scan and the deletes fall back to CL=ONE or LOCAL_ONE and lose these
+// guarantees.
 //
 // TTL deletions are also written to CDC as system-originated expiration
 // deletions (not user-initiated deletes): In Alternator Streams, these events
@@ -251,13 +258,14 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 }
 
 // expire_item() expires an item - i.e., deletes it as appropriate for
-// expiration - with CL=LOCAL_QUORUM, and in a way Alternator Streams
+// expiration - with the given CL, and in a way Alternator Streams
 // understands is an expiration event - not a user-initiated deletion.
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
                             const std::vector<managed_bytes_opt>& row,
                             schema_ptr schema,
-                            api::timestamp_type ts) {
+                            api::timestamp_type ts,
+                            db::consistency_level cl) {
     // Prepare the row key to delete
     // NOTICE: the order of columns is guaranteed by the fact that selection::wildcard
     // is used, which indicates that columns appear in the order defined by
@@ -302,7 +310,7 @@ static future<> expire_item(service::storage_proxy& proxy,
     utils::chunked_vector<mutation> mutations;
     mutations.push_back(std::move(m));
     return proxy.mutate(std::move(mutations),
-        db::consistency_level::LOCAL_QUORUM,
+        cl,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
         db::allow_per_partition_rate_limit::no,
@@ -400,7 +408,7 @@ static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_se
 // Multi-DC design choice: We use get_primary_ranges() (global primary) rather
 // than get_primary_ranges_within_dc() (DC-local primary). This means each
 // token range is scanned by exactly one node in the entire cluster - not once
-// per DC. Deletions done with CL=LOCAL_QUORUM are replicated to all DCs by
+// per DC. Deletions done by the expiration scan are replicated to all DCs by
 // the normal replication mechanism. A known limitation is that if an entire DC
 // goes down, some token ranges may not be scanned promptly: if both the global
 // primary and global secondary for a range are in the same down DC, expiration
@@ -522,11 +530,79 @@ public:
     }
 };
 
+// How many replicas a range really has. A DC can only replicate a range to
+// its token owners, so this can be lower than the configured RF - and a
+// quorum is counted from the configured RF, so a quorum of a range may be
+// more replicas than the range has.
+static size_t replicas_of_a_range(const locator::effective_replication_map& erm) {
+    const locator::token_metadata& tm = erm.get_token_metadata();
+    const auto& rs = erm.get_replication_strategy();
+    if (rs.get_type() != locator::replication_strategy_type::network_topology) {
+        return std::min(erm.get_replication_factor(), tm.count_normal_token_owners());
+    }
+    const auto& nts = static_cast<const locator::network_topology_strategy&>(rs);
+    const auto dc_token_owners = tm.get_datacenter_token_owners();
+    size_t replicas = 0;
+    for (const sstring& dc : nts.get_datacenters()) {
+        const auto it = dc_token_owners.find(dc);
+        const size_t token_owners = it == dc_token_owners.end() ? 0 : it->second.size();
+        replicas += std::min(nts.get_replication_factor(dc), token_owners);
+    }
+    return replicas;
+}
+
+// The CL of the expiration scan and of its deletes:
+// - Tables with tablets: LOCAL_QUORUM. Tablets need NetworkTopologyStrategy
+//   and an RF of at most the DC's token owners, so the fallbacks below are
+//   never chosen.
+// - NetworkTopologyStrategy with vnodes: LOCAL_QUORUM, or QUORUM when the
+//   local DC has fewer token owners than a local quorum needs. QUORUM counts
+//   replicas in all the DCs, so it can still be achievable when a local
+//   quorum isn't, at the cost of a cross-DC round trip in this background
+//   scan. Note that when the local DC is short of token owners, a quorum is
+//   often all the replicas a range has, so a single node being down then
+//   stops the expiration until that node comes back - which we prefer over
+//   expiring rows based on a possibly stale replica.
+// - Any other strategy (always vnodes): QUORUM. These have no per-DC RF and
+//   spread their replicas over all the DCs, so a range often has too few
+//   replicas in the local DC to form a local quorum, and LOCAL_QUORUM would
+//   fail for such ranges.
+// - LOCAL_ONE (NetworkTopologyStrategy) or ONE when even a QUORUM asks for
+//   more replicas than a range has, and can therefore never be achieved -
+//   without this fallback the scan could never run. CL=ONE may read a stale
+//   replica which hasn't yet seen a write pushing the row's expiration time
+//   forward: we would then delete a row which is no longer expired, and the
+//   delete's fresh api::new_timestamp() (see below) makes its tombstone
+//   shadow that write. We accept that risk - the alternative is a table in
+//   which nothing ever expires.
+// That last risk isn't confined to the fallback: a local quorum of a DC whose
+// RF is 1 - say the dc2 node of a 'dc1': 3, 'dc2': 1 keyspace - is also a
+// single replica, which can be stale in exactly the same way. We keep
+// LOCAL_QUORUM there because it is what a user's LOCAL_QUORUM read of that
+// keyspace gets too.
+static db::consistency_level expiration_consistency_level(const locator::effective_replication_map& erm) {
+    const locator::token_metadata& tm = erm.get_token_metadata();
+    if (erm.get_replication_strategy().get_type() == locator::replication_strategy_type::network_topology) {
+        const auto& local_dc = tm.get_topology().get_datacenter();
+        const auto dc_token_owners = tm.get_datacenter_token_owners();
+        const auto it = dc_token_owners.find(local_dc);
+        const size_t local_token_owners = it == dc_token_owners.end() ? 0 : it->second.size();
+        if (local_token_owners >= db::local_quorum_for(erm, local_dc)) {
+            return db::consistency_level::LOCAL_QUORUM;
+        }
+        return replicas_of_a_range(erm) < db::quorum_for(erm)
+            ? db::consistency_level::LOCAL_ONE : db::consistency_level::QUORUM;
+    }
+    return replicas_of_a_range(erm) < db::quorum_for(erm)
+        ? db::consistency_level::ONE : db::consistency_level::QUORUM;
+}
+
 // Precomputed information needed to perform a scan on partition ranges
 struct scan_ranges_context {
     schema_ptr s;
     bytes column_name;
     std::optional<std::string> member;
+    db::consistency_level cl;
 
     service::client_state internal_client_state;
     ::shared_ptr<cql3::selection::selection> selection;
@@ -538,6 +614,7 @@ struct scan_ranges_context {
         : s(s)
         , column_name(column_name)
         , member(member)
+        , cl(expiration_consistency_level(*s->table().get_effective_replication_map()))
         , internal_client_state(service::client_state::internal_tag())
     {
         // FIXME: don't read the entire items - read only parts of it.
@@ -561,7 +638,6 @@ struct scan_ranges_context {
         tracing::trace_state_ptr trace_state;
         // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
         query_state_ptr = std::make_unique<service::query_state>(internal_client_state, trace_state, empty_service_permit());
-        db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
         query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
         query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     }
@@ -694,7 +770,7 @@ static future<> scan_table_ranges(
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 auto ts = api::new_timestamp();
-                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
+                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts, scan_ctx.cl);
             }
         }
         // FIXME: once in a while, persist p->state(), so on reboot
@@ -778,6 +854,13 @@ static future<bool> scan_table(
     expiration_stats.scan_table++;
     // FIXME: need to pace the scan, not do it all at once.
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
+    // The CL isn't always LOCAL_QUORUM - see expiration_consistency_level() -
+    // and how many replicas it really blocks for, and so how much the scan's
+    // guarantees are worth, depends on the keyspace's replication: ONE and
+    // LOCAL_ONE read a single replica, and so does LOCAL_QUORUM of a DC whose
+    // RF is 1. Name the chosen CL to let an operator correlate it with that
+    // replication.
+    tlogger.info("table {}.{} expiration scanning with consistency level {}", s->ks_name(), s->cf_name(), scan_ctx.cl);
 
     if (s->table().uses_tablets()) {
         std::optional<dht::token> last_token;
