@@ -266,6 +266,24 @@ async def test_view_build_status_cleanup_on_drop_view(manager: ScyllaClusterMana
         await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.vt1")
         await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", 0)
 
+# With vnodes, a view's build status is removed in the group0 command that
+# drops it, by the view builder of the node coordinating the DROP. Check that
+# this also happens when that node has view building disabled, so its view
+# builder never starts. The other node's status must be gone right after the
+# DROP returns, and not remain forever.
+async def test_view_build_status_removed_on_drop_via_node_without_view_building(manager: ScyllaClusterManager):
+    await manager.server_add()
+    s2 = await manager.server_add(config={"view_building": False})
+    cql = manager.get_cql()
+    cql2 = await manager.get_cql_exclusive(s2)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await create_table(cql, ks)
+        await create_mv(cql, ks, "vt1")
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", 1)
+        await cql2.run_async(f"DROP MATERIALIZED VIEW {ks}.vt1")
+        rows = await cql2.run_async(f"SELECT host_id, status FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'vt1'")
+        assert rows == []
+
 # Test that when removing the view, its build status is cleaned from the status table
 async def test_view_build_status_extended_on_added_node(manager: ScyllaClusterManager):
     node_count = 4

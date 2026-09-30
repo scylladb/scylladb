@@ -199,6 +199,21 @@ class view_builder final : public service::migration_listener::only_view_notific
     stats _stats;
     metrics::metric_groups _metrics;
 
+    // Adds the removal of a dropped view's build status to the group0 command
+    // that drops it. This is a separate listener because the view builder
+    // itself subscribes to schema changes only when it starts, and not at all
+    // with view_building=false, but a DROP coordinated by this node must remove
+    // the status anyway. So this listener is subscribed from construction until
+    // stop().
+    class drop_listener : public service::migration_listener::empty_listener {
+        view_builder& _vb;
+    public:
+        explicit drop_listener(view_builder& vb) : _vb(vb) {}
+        void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) override;
+        void on_before_drop_keyspace(const sstring& ks_name, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) override;
+    };
+    drop_listener _drop_listener{*this};
+
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
         std::vector<std::vector<view_build_init_status>> status_per_shard;
@@ -279,8 +294,8 @@ private:
     future<> handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name);
     future<view_builder_units> get_or_adopt_view_builder_lock(view_builder_units_opt units);
 
-    future<> mark_view_build_started(sstring ks_name, sstring view_name);
-    future<> mark_view_build_success(sstring ks_name, sstring view_name);
+    future<> mark_view_build_started(view_ptr view);
+    future<> mark_view_build_success(view_ptr view);
     future<> remove_view_build_status(sstring ks_name, sstring view_name);
     future<std::unordered_map<locator::host_id, sstring>> view_status(sstring ks_name, sstring view_name) const;
 
