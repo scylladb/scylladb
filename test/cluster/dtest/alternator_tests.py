@@ -66,6 +66,7 @@ class ConcurrencyLimitNotExceededError(Exception):
     pass
 
 
+@pytest.mark.dtest_full
 class TesterAlternator(BaseAlternator):
     def _num_of_nodes_for_test(self, rf):
         assert rf >= 3
@@ -1416,6 +1417,7 @@ class TtlNotExpiredError(Exception):
     pass
 
 
+@pytest.mark.dtest_full
 class TestAlternatorBackwardsCompatibility(BaseAlternator, UpgradeTester):
     """
     A class for testing Alternator backwards compatibility.

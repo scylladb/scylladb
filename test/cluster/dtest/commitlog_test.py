@@ -42,6 +42,8 @@ from tools.metrics import get_node_metrics
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.dtest_full
+@pytest.mark.next_gating
 @pytest.mark.single_node
 class TestCommitLog(Tester):
     """CommitLog Tests"""
@@ -870,6 +872,8 @@ class TestCommitLog(Tester):
         # CL replay should not have resurrected the data
         assert len(list(session.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0
 
+    @pytest.mark.dtest_debug
+    @pytest.mark.use_cassandra_stress
     def test_stop_failure_policy(self):
         """Test the stop commitlog failure policy (default one)"""
         # The failure only comes when the commitlog has to create a segment in
@@ -1152,6 +1156,7 @@ class TestCommitLog(Tester):
         assert rows[0][0] == 44, f"expecting 44, got rows[0][0]={rows[0][0]}"
         assert rows[1][0] == 10, f"expecting 10, got rows[1][0]={rows[1][0]}"
 
+    @pytest.mark.lwt
     def test_batch_commitlog(self):
         """
         Test batch mode of commitlog flushing
@@ -1178,12 +1183,14 @@ class TestCommitLog(Tester):
         assert_row_count(session=session, table_name="Test.cf", expected=100)
 
     @pytest.mark.skip_mode(mode="debug", reason="scylla-dtest does not run it in debug mode")
+    @pytest.mark.use_cassandra_stress
     def test_total_space_limit_of_commitlog_with_large_limit(self):
         """
         Test with 512M commitlog files, total space limit is 3096M
         """
         self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=512, commitlog_total_space_in_mb=3096)
 
+    @pytest.mark.use_cassandra_stress
     def test_total_space_limit_of_commitlog_with_medium_limit(self):
         """
         Test with 100M commitlog files, total space limit is 1024M
@@ -1306,6 +1313,7 @@ class TestCommitLog(Tester):
         self.ignore_log_patterns += ["Could not retrieve CDC streams with timestamp"]
         self.test_commitlog_enospc(cleanup_firstly_by_drain=False)
 
+    @pytest.mark.lwt
     def test_mixed_mode_commitlog_2_partitions_smp_1(self):
         """
         Test 'batch' and 'periodic' mode of commitlog flushing
@@ -1355,6 +1363,7 @@ class TestCommitLog(Tester):
         assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=2", num_rows_expected=150)
         assert_all(session=session, query="select * from Test.cf", expected=expected_result, ignore_order=True)
 
+    @pytest.mark.lwt
     def test_mixed_mode_commitlog_2_partitions_smp_2(self):
         """
         Test 'batch' and 'periodic' mode of commitlog flushing
@@ -1406,9 +1415,11 @@ class TestCommitLog(Tester):
         assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=101)
         assert_all(session=session, query="select * from Test.cf where pk1=1", expected=expected_result, ignore_order=True)
 
+    @pytest.mark.lwt
     def test_mixed_mode_commitlog_same_partition_smp_1(self):
         self._mixed_mode_commitlog_same_partition(smp="1")
 
+    @pytest.mark.lwt
     def test_mixed_mode_commitlog_same_partition_smp_2(self):
         self._mixed_mode_commitlog_same_partition(smp="2")
 
@@ -1463,6 +1474,7 @@ class TestCommitLog(Tester):
         assert_row_count_in_select(session=session, query="select * from Test.cf", num_rows_expected=251)
         assert_all(session=session, query="select * from Test.cf", expected=expected_result, ignore_order=True)
 
+    @pytest.mark.lwt
     def test_mixed_mode_with_delete_commitlog(self):
         """
         Test 'batch' and 'periodic' mode of commitlog flushing

@@ -59,6 +59,7 @@ TIMEOUT = 90
 # MAX_CELLS = 1000
 
 
+@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestLimits(Tester):
     def prepare(self):
@@ -483,6 +484,7 @@ class TestLimits(Tester):
         assert short_string == output.current_rows[0].test_string, "Expected to get the regular string inserted, but did not find it in the table!"
 
 
+@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestMaxCQLConnections(Tester):
     def test_max_cql_connections(self):

@@ -42,6 +42,7 @@ from tools.sslkeygen import create_ca, create_self_signed_x509_certificate
 logger = logging.getLogger(__file__)
 
 
+@pytest.mark.dtest_full
 class TestAuth(Tester):
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup: DTestSetup):
@@ -1156,6 +1157,7 @@ class TestAuth(Tester):
         logger.info("can't get session of node2 with normal user/password")
 
     # with consistent topology auth-v2 is enabled and it doesn't need nor allow changing RF
+    @pytest.mark.next_gating
     @pytest.mark.required_features("!consistent-topology-changes")
     def test_system_auth_ks_is_alterable(self):
         """

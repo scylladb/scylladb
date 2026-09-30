@@ -39,6 +39,7 @@ def fixture_set_cluster_settings(fixture_dtest_setup):
     fixture_dtest_setup.cluster.set_configuration_options({"enable_user_defined_functions": "true", "experimental_features": ["udf"]})
 
 
+@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.usefixtures("fixture_set_cluster_settings")
 class TestAuthRoles(Tester):
