@@ -4250,6 +4250,10 @@ async def test_truncate_in_one_batch_with_writes_survives_replay(manager: Scylla
     going back to raft and being applied again."""
     servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
+    # The keyspace below makes the three racks eligible for auto-RF; keep the balancer off so no
+    # migration of audit or system_traces runs while the writes are stalled: its barrier would
+    # wait on them and queue the TRUNCATE behind it.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
     host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:

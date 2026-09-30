@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from test.cluster.util import get_current_group0_config
+from test.cluster.util import get_current_group0_config, quiesce_and_disable_tablet_balancing
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
@@ -48,6 +48,9 @@ async def test_sole_voter_loads_table_from_uncommitted_log_tail(manager: ScyllaC
 
     cql, [host] = await manager.get_ready_cql([srv])
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=host)
+    # The balancer moves the system keyspaces' tablets onto the non-voter after it joins; the
+    # injection must hold the CREATE TABLE, not one of those commits.
+    await quiesce_and_disable_tablet_balancing(manager, srv.ip_addr)
 
     logger.info("Killing the voter with the CREATE TABLE entry in the log, past the persisted commit index")
     await manager.api.enable_injection(srv.ip_addr, INJECTION, one_shot=False)

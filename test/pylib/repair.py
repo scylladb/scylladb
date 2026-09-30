@@ -6,7 +6,7 @@
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, wait_for_auto_rf_settled
 from test.pylib.rest_client import read_barrier
 
 from cassandra.cluster import Session as CassandraSession
@@ -90,6 +90,9 @@ async def create_table_insert_data_for_repair(manager, rf=3, tablets=8, fast_sta
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f'Got hosts={hosts}');
+    # Auto-RF's rebuilds for the new racks repair tablets too; let them finish before the
+    # test arms repair injections or reads repair metrics.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     table_id = await manager.get_table_id(ks, "test")
     return (servers, cql, hosts, ks, table_id)
 
@@ -115,5 +118,8 @@ async def create_table_insert_data_for_repair_multiple_rows(manager, rf = 3 , ta
     create_table_cql = f"CREATE TABLE IF NOT EXISTS {ks}.test ( pk int, ck int, data int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode':'repair'}};"
     await cql.run_async(create_table_cql)
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    # Auto-RF's rebuilds for the new racks repair tablets too; let them finish before the
+    # test arms repair injections or reads repair metrics.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     table_id = await manager.get_table_id(ks, "test")
     return (servers, cql, hosts, ks, table_id)
