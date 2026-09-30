@@ -20,7 +20,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from ccmlib.scylla_node import NodetoolError, ScyllaNode
 from deepdiff import DeepDiff
 
-from alternator.utils import schemas
+from test.cluster.dtest.alternator.utils import schemas
 from alternator_utils import (
     ALTERNATOR_SECURE_PORT,
     ALTERNATOR_SNAPSHOT_FOLDER,

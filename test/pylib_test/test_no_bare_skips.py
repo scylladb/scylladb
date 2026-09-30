@@ -57,15 +57,17 @@ def test_no_bare_skip_markers_in_collection():
     # as a standalone main process.
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("PYTEST_XDIST")}
+    # Collect from the repository root so test.alternator does not shadow the
+    # installed alternator-client package's top-level alternator module.
     result = subprocess.run(
         [sys.executable, "-m", "pytest",
-         "--collect-only",
-         "--ignore=boost", "--ignore=raft",
-         "--ignore=ldap", "--ignore=vector_search",
-         "--ignore=unit",
+         "--collect-only", str(TEST_DIR),
+         "--ignore=test/boost", "--ignore=test/raft",
+         "--ignore=test/ldap", "--ignore=test/vector_search",
+         "--ignore=test/unit",
          "-p", "no:sugar"],
         capture_output=True, text=True,
-        cwd=str(TEST_DIR),
+        cwd=str(TEST_DIR.parent),
         env=env,
     )
     # If a bare skip exists, plugin raises UsageError → non-zero exit.
