@@ -720,7 +720,7 @@ public:
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _layout(layout)
-        , _prefix(loc ? std::move(*loc) : "sstables")
+        , _prefix(loc ? std::move(*loc) : sstring(object_storage_default_prefix))
         , _as(as)
     {
         sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "unified");
