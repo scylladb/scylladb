@@ -35,7 +35,7 @@ namespace db {
 static seastar::logger logger("raft_commitlog_replay");
 
 namespace {
-// Build a mapping from group_id to table_id for the raft groups whose tablet this shard
+// Build a mapping from group_id to the tablet of the raft groups whose tablet this shard
 // holds a replica of.
 //
 // The ownership test is what keeps replay from applying a group's entries into a tablet
@@ -44,13 +44,13 @@ namespace {
 // replaying it. has_replica() covers the old replica set and, through the transition's
 // next set, the pending replica, so a replica in the middle of joining still replays what
 // it received before the restart.
-std::unordered_map<raft::group_id, table_id> build_group_to_table_map(const locator::token_metadata& tm) {
+std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tablet_map(const locator::token_metadata& tm) {
     const auto this_replica = locator::tablet_replica {
         .host = tm.get_my_id(),
         .shard = this_shard_id()
     };
 
-    std::unordered_map<raft::group_id, table_id> result;
+    std::unordered_map<raft::group_id, locator::global_tablet_id> result;
     const auto& tablets = tm.tablets();
     for (const auto& [tid, _] : tablets.all_table_groups()) {
         const auto& tablet_map = tablets.get_tablet_map(tid);
@@ -62,7 +62,7 @@ std::unordered_map<raft::group_id, table_id> build_group_to_table_map(const loca
                 continue;
             }
             const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
-            result.emplace(gid, tid);
+            result.emplace(gid, locator::global_tablet_id{.table = tid, .tablet = tablet_id});
         }
     }
     return result;
@@ -155,7 +155,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         // means the boot sequence changed under us. Fail loudly instead.
         on_internal_error(logger, "processing the raft replay buffer before the local host id is known");
     }
-    const auto group_to_table = build_group_to_table_map(*token_metadata);
+    const auto group_to_tablet = build_group_to_tablet_map(*token_metadata);
 
     auto* new_commitlog_ptr = db.commitlog();
     SCYLLA_ASSERT(new_commitlog_ptr);
@@ -172,9 +172,9 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             continue;
         }
 
-        // Look up table_id for this group.
-        auto table_it = group_to_table.find(group_id);
-        if (table_it == group_to_table.end()) {
+        // Look up the tablet for this group.
+        auto tablet_it = group_to_tablet.find(group_id);
+        if (tablet_it == group_to_tablet.end()) {
             // Either the group is gone from tablet metadata - the table was dropped - or
             // the tablet has no replica on this shard anymore. Discard the entries: the
             // tablet's storage here is on its way out, and applying them would resurrect
@@ -182,7 +182,8 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             logger.info("group {} has no tablet replica on this shard, discarding {} entries", group_id, entries_list.size());
             continue;
         }
-        const auto table_id = table_it->second;
+        const auto tablet = tablet_it->second;
+        const auto table_id = tablet.table;
 
         // Query commit_idx from raft system tables. We treat commit_idx as
         // the effective snapshot index: all entries up to commit_idx are committed
@@ -200,7 +201,12 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
         }
         const auto commit_idx = *persisted_commit_idx;
 
-        logger.debug("group {}: {} entries, commit_idx={}", group_id, entries_list.size(), commit_idx);
+        // The last truncate the group applied and recorded. The record is written on the
+        // truncate entry's own commitlog reference and becomes durable only with a flush, so
+        // if it is here, the drop it is the receipt for happened.
+        auto truncate_record = co_await service::strong_consistency::raft_groups_storage::load_truncate_record(qp, group_id, this_shard_id());
+
+        logger.debug("group {}: {} entries, commit_idx={}, truncate_index={}", group_id, entries_list.size(), commit_idx, truncate_record.truncate_index);
 
         // First pass: filter entries (leader changes, out-of-order tails).
         // This must be done before any database writes to avoid applying entries that would
@@ -209,6 +215,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
         // Second pass: Apply committed entries to database and rewrite uncommitted entries to commitlog.
         uint64_t applied = 0;
+        uint64_t truncated = 0;
         uint64_t rewritten = 0;
         auto& group_data = _per_group_data[group_id];
 
@@ -221,19 +228,23 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // only be deleted after the memtables are flushed. Therefore, the data will either
             // be persisted to SSTables or, in case of a crash, still be available in the old commitlog.
             if (entry->idx <= commit_idx && std::holds_alternative<raft::command>(entry->data)) {
-                auto cmd = service::strong_consistency::detail::deserialize_raft_command(entry);
-                if (auto* write = std::get_if<service::strong_consistency::write_mutation>(&cmd.change)) {
-                    auto schema = co_await schemas.resolve_and_upgrade(write->mutation);
-                    co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
-                    ++applied;
+                if (entry->idx <= truncate_record.truncate_index) {
+                    // Dropped by the recorded truncate. Applying it would bring the data back.
+                    ++truncated;
                 } else {
-                    // TODO: Replaying a truncate_command is not implemented yet. The entry is skipped,
-                    // so the entries below it are applied again and the truncate they preceded
-                    // is not repeated.
-                    // To handle correctly truncate_command, we need to skip all entries
-                    // which log index is < latest applied truncate_command log idx.
-                    logger.warn("group {}: skipping the truncate_command at idx {}, replaying one is not implemented yet",
-                            group_id, entry->idx);
+                    auto cmd = service::strong_consistency::detail::deserialize_raft_command(entry);
+                    if (auto* write = std::get_if<service::strong_consistency::write_mutation>(&cmd.change)) {
+                        auto schema = co_await schemas.resolve_and_upgrade(write->mutation);
+                        co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                    } else {
+                        // The same code the state machine runs. It drops the entries applied above,
+                        // like the truncate did before the crash. With no commitlog reference to
+                        // hand over, the record it writes is made durable by the flush which
+                        // follows the replay, before the old segments are deleted.
+                        co_await service::strong_consistency::apply_truncate_command(db, tablet, group_id, entry->idx,
+                                std::get<service::strong_consistency::truncate_command>(cmd.change), truncate_record, db::rp_handle());
+                    }
+                    ++applied;
                 }
             }
 
@@ -280,8 +291,8 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             logger.debug("group {}: advanced snapshot to idx={}, term={}", group_id, commit_idx, *last_committed_term);
         }
 
-        logger.debug("group {}: discarded_leader_change={}, applied={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
-                rewritten, group_data.entries.size());
+        logger.debug("group {}: discarded_leader_change={}, applied={}, truncated={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
+                truncated, rewritten, group_data.entries.size());
     }
 
     // The old items are not needed anymore.
