@@ -1846,6 +1846,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_return std::move(guard);
         }
 
+        // An RF change is carried out by tablet migrations, and every migration
+        // goes through global_tablet_token_metadata_barrier(), which drains all
+        // normal nodes. With a dead node the barrier cannot pass, the coordinator
+        // fiber retries the migration once a second and does nothing else in the
+        // meantime: no resize decisions, no load balancing, no other requests.
+        // An operator ALTER KEYSPACE has the same effect, but that is the
+        // operator's call. Auto-RF acts on its own, so it must not start work it
+        // knows cannot complete. Defer until every normal node is alive again;
+        // the coordinator wakes up on gossip on_up() and re-evaluates then.
+        if (const auto dead_nodes = get_dead_nodes(); !dead_nodes.empty()) {
+            // Rate limited: the reconciler re-evaluates on every coordinator
+            // iteration, but an operator needs to see why auto-RF is idle.
+            static thread_local logger::rate_limit deferral_rate_limit{std::chrono::minutes(1)};
+            rtlogger.log(log_level::info, deferral_rate_limit,
+                    "auto-rf: deferring RF changes for {} keyspace(s) until dead node(s) {} are alive again",
+                    auto_rf_keyspaces.size(), dead_nodes);
+            if (_topo_sm._topology.needs_auto_rf_change) {
+                co_await clear_needs_auto_rf_change();
+                co_return std::nullopt;
+            }
+            co_return std::move(guard);
+        }
+
         std::unordered_map<sstring, std::set<sstring>> allowed_racks = get_racks_for_auto_rf_change();
         rtlogger.debug("Eligible rack by DC: {}", allowed_racks);
         struct rf_change_candidate {
@@ -3846,7 +3869,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             // should_preempt_balancing() checks needs_auto_rf_change, so a pending
             // auto-RF change stops tablet load balancing from being re-entered:
-            // auto-RF has the higher priority of the two.
+            // auto-RF has the higher priority of the two. The flag is therefore
+            // cleared on every path that leaves no change scheduled, including the
+            // backoff and dead-node deferral below, so that balancing is not
+            // starved while auto-RF is idle.
             if (auto guard_opt = co_await maybe_schedule_auto_rf_change(std::move(guard)); !guard_opt) {
                 // The guard is consumed, it means we scheduled an auto-RF change request.
                 co_return true;
