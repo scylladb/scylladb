@@ -601,6 +601,10 @@ async def create_cluster(topology, manager, logger, object_storage=None, extra_c
         host_ids[s.server_id] = host_id
         logger.info(f'Created node {s.ip_addr} in {s.datacenter}.{s.rack}')
 
+    # The system keyspaces' tablets are split and spread over the new nodes right
+    # after startup. Let the balancer finish that before the tests start.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+
     return servers,host_ids
 
 async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primary_replica_only, prefix, object_storage):
