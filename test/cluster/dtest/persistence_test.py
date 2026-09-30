@@ -15,9 +15,8 @@ from tools.data import print_table
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestPersistence(Tester):
     """
     Insert data into clusters, then restart them and verify if data persisted.
@@ -46,7 +45,6 @@ class TestPersistence(Tester):
         self.restart_cluster()
         node.stress(["read", "n=5", "no-warmup", "cl=ALL", "-pop", "seq=1...5", "-schema", "replication(factor=1)", "-col", "n=fixed(1)", "size=fixed(%s)" % size, "-rate", "threads=1"])
 
-    @pytest.mark.dtest_debug
     def test_persist_simple(self):
         """
         1) Create a 1 node cluster.

@@ -53,9 +53,8 @@ class SLATester(Tester):
         return entity
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestSLA(SLATester):
     @staticmethod
     def _validate_sla(service_level: ServiceLevel):
@@ -399,8 +398,7 @@ class TestSLA(SLATester):
         self.validate_attached_slas_list(session=session, entity=entity, expected_service_levels=[sl200])
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestSLANegativeTests(SLATester):
     def test_update_not_existing_sla(self):
         """
@@ -443,7 +441,8 @@ class TestSLANegativeTests(SLATester):
             ServiceLevel(session=session, name="sla1", shares=shares).create()
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestSLATimeouts(SLATester):
     KEY_NUM = 1000
@@ -555,7 +554,8 @@ class TestSLATimeouts(SLATester):
             logger.debug("Read result: %s", len(read_result.all()))
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestSLTimeoutsNegative(SLATester):
     @pytest.mark.parametrize(
@@ -582,7 +582,8 @@ class TestSLTimeoutsNegative(SLATester):
         assert exc.match(f".*{expected_exception_msg}.*")
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestSLAConfig(SLATester):
     @staticmethod
     def connection_in_scheduling_group(role_session, node, role_name, sg_name):

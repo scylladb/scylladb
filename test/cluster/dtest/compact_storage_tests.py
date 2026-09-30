@@ -13,8 +13,7 @@ from dtest_class import Tester
 from tools.files import get_node_cf_dir
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
 class TestCompactStorage(Tester):
@@ -45,11 +44,9 @@ class TestCompactStorage(Tester):
     def test_read_old_format_wide_row_data(self):
         self.load_and_read_from_sstables("scylla_compact_storage_wide_partition_old_format", self.row_size - 200)
 
-    @pytest.mark.dtest_debug
     def test_read_cassandra_wide_row_data(self):
         self.load_and_read_from_sstables("cassandra_compact_storage_wide_partition", self.row_size - 100)
 
-    @pytest.mark.dtest_debug
     def test_wide_row(self):
         cluster = self.cluster
         cluster.populate(1).start(wait_for_binary_proto=True)

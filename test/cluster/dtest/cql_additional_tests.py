@@ -47,7 +47,7 @@ from tools.data import (
     get_rows_set_from_res,
     rows_to_list,
 )
-from tools.marks import unmark, with_feature
+from tools.marks import with_feature
 from tools.metrics import get_node_metrics
 from tools.retrying import retrying
 from tools.stress import format_cs_output
@@ -55,10 +55,8 @@ from tools.tables_view_manager import index_is_built, wait_for_view
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
 
-
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestCQL(Tester):
     @pytest.fixture(scope="class")
     def compaction_strategy_for_migration(self):
@@ -2791,7 +2789,6 @@ class TestCQL(Tester):
             assert_invalid(session, "SELECT content FROM blogs WHERE time1 = 1 AND time2 = 1 AND author='foo'")
             assert_invalid(session, "SELECT content FROM blogs WHERE time1 = 1 AND time2 > 0 AND author='foo'")
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_limit_bugs(self):
         """Test for LIMIT bugs from 4579"""
@@ -3246,7 +3243,6 @@ class TestCQL(Tester):
         res = session.execute("SELECT * FROM test WHERE k = true")
         assert rows_to_list(res) == [[True, False]], list(res)
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_multiordering(self):
         session = self.prepare()
@@ -3385,7 +3381,6 @@ class TestCQL(Tester):
         res = session.execute("SELECT v1, v2 FROM test WHERE k IN (0, 1, 2)")
         assert rows_to_list(res) == [], list(res)
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_allow_filtering(self):
         """
@@ -3460,7 +3455,6 @@ class TestCQL(Tester):
             self._assert_invalid_filtering(session=session, query=q)
             self._assert_valid_query(session=session, query=q + " ALLOW FILTERING")
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_range_with_deletes(self):
         session = self.prepare()
@@ -6678,7 +6672,6 @@ class TestCQL(Tester):
         assert result.response_future.warnings and expected_message in result.response_future.warnings, "Starting with 4.6 a warning should be generated for query which can potentially contain infinite partitions"
 
 
-@pytest.mark.dtest_full
 class TestsCQLAdditional(Tester):
     def prepare(self, options=None):
         """
@@ -6694,6 +6687,7 @@ class TestsCQLAdditional(Tester):
         cluster.populate(1).start()
         return cluster
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_simple_null_value(self):
         cluster = self.prepare()
@@ -6722,6 +6716,7 @@ class TestsCQLAdditional(Tester):
         )
         assert len(res) == 3, res
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_create_secondary_indexes(self):
         cluster = self.prepare()
@@ -6746,7 +6741,7 @@ class TestsCQLAdditional(Tester):
             assert str(err) == "Indexes are not supported yet"
             assert getattr(err, "code") == 0000
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.lwt
     def test_lightweight_transaction(self):
@@ -6782,6 +6777,7 @@ class TestsCQLAdditional(Tester):
         assert len(res) == 1, res
         assert res[0] == row, res[0]
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_grant(self):
         cluster = self.prepare(options={"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"})
@@ -6797,6 +6793,7 @@ class TestsCQLAdditional(Tester):
             assert str(err) == "Not implemented: GRANT"
             assert getattr(err, "code") == 0000
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_revoke(self):
         cluster = self.prepare(options={"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"})
@@ -6817,6 +6814,7 @@ class TestsCQLAdditional(Tester):
             assert str(err) == "Not implemented: REVOKE"
             assert getattr(err, "code") == 0000
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_list(self):
         cluster = self.prepare(options={"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"})
@@ -6833,7 +6831,7 @@ class TestsCQLAdditional(Tester):
             assert str(err) == "Not implemented: LIST"
             assert getattr(err, "code") == 0000
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_limit_date_value_out_of_range(self):
         # positive case for scylladb/scylladb#1694
@@ -6889,6 +6887,7 @@ class TestsCQLAdditional(Tester):
         num_rows = int(re.search(regex, out).group(1))
         assert num_rows == 100
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2251",
                           reason="timestamps before year 1400 cannot be parsed from a string literal")
     @pytest.mark.single_node
@@ -6926,6 +6925,7 @@ class TestsCQLAdditional(Tester):
         num_rows = int(re.search(regex, out).group(1))
         assert num_rows == 10
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_limit_date_value_out_of_range_upper_limit(self):
         cluster = self.prepare()
@@ -6961,7 +6961,7 @@ class TestsCQLAdditional(Tester):
         num_rows = int(re.search(regex, out).group(1))
         assert num_rows == 10
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_select_all_data_and_filter_explicitly(self):
         # https://github.com/scylladb/scylla/issues/2272
@@ -7040,7 +7040,9 @@ class TestsCQLAdditional(Tester):
         # expect the same data
         assert r_explicitly == r_implicitly
 
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/14806
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/14806
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_create_100tables(self):
         """
@@ -7114,6 +7116,7 @@ class TestsCQLAdditional(Tester):
 
         logger.debug(f"Consumed {mem_after - mem_before} bytes")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_create_100_keyspaces_single_node(self):
         """
@@ -7121,6 +7124,7 @@ class TestsCQLAdditional(Tester):
         """
         self._create_100_keyspaces(nodes=1, rf=1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_create_100_keyspaces(self):
         """
         Create 100 keyspaces in a multi-dc cluster
@@ -7128,6 +7132,7 @@ class TestsCQLAdditional(Tester):
         self._create_100_keyspaces(nodes=[2, 2, 2], rf=1)
 
     # Regression test for scylladb/scylladb#8447
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_twcs_ck_filtering_with_cache(self):
         logger.debug("creating single-node cluster")
@@ -7165,6 +7170,7 @@ class TestsCQLAdditional(Tester):
         # this would return no row.
         assert_one(session, "select * from ks.t where pk = 1 and ck = 0", [1, 0])
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_indexed_statement_concurrency_limit(self):
         """
         Verify that in case of indexed paged query the first page returned would contain
@@ -7205,6 +7211,7 @@ class TestsCQLAdditional(Tester):
         logger.debug(f"Indexed select fetched {rows_received} rows out of {page_size}")
         assert rows_received < page_size, f"Expected to get less rows than requested, got {rows_received} with page size of {page_size}."
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.parametrize("restricted_future_state", [False, True])
     def test_restricted_future_timestamp(self, restricted_future_state):
@@ -7261,8 +7268,7 @@ class TestsCQLAdditional(Tester):
                 assert result[0].val1 is None
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestsMultiColumnRestrictionSimple(Tester):
     INSERT_COLUMNS = "key,clmn_int,clmn_text,clmn_timestamp,clmn_bool,clmn_ascii,clmn_uuid,clmn_blob"
@@ -7540,7 +7546,7 @@ class TestsMultiColumnRestrictionSimple(Tester):
         assert_all(session=session, query=select_stmt + "where key > 1 and clmn_int < 5 and clmn_text <= 'text2' and clmn_timestamp < 63873478378 ALLOW FILTERING", expected=[], ignore_order=True)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestsMultiColumnRestrictionCollection(Tester):
     TABLE_NAME = "cf"
@@ -7696,7 +7702,7 @@ class TestsMultiColumnRestrictionCollection(Tester):
         assert_all(session=session, query=select_stmt + "where id = 0 and map_uuid CONTAINS f54f6a76-b383-11e9-a2a3-2a2ae2dbcce4 and f_set_int CONTAINS 9 ALLOW FILTERING", expected=[], ignore_order=True)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.lwt
 class TestLWTWithCQL(Tester):
     """

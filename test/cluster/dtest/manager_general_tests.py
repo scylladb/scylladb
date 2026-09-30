@@ -25,6 +25,7 @@ from tools.cluster_topology import generate_cluster_topology
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestScyllaManagerClusterMgmt(Tester, ScyllaManagerMixin):
     def test_adding_cluster_while_its_down(self):

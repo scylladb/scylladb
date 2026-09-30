@@ -10,8 +10,7 @@ from cassandra.cluster import ResultSet, Session
 from tools.testers import ClusterSetupArgs, ConnectionArgs, CQLTester
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestStaticColumnQueries(CQLTester):
     CONNECTION_ARGS = ConnectionArgs()
     CLUSTER_SETUP_ARGS = ClusterSetupArgs()

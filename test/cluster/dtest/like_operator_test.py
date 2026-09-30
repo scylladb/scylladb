@@ -12,7 +12,7 @@ from tools.assertions import assert_all, assert_invalid, assert_none, assert_one
 from tools.data import create_index, create_local_index, rows_to_list
 from tools.paging import PageFetcher
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class BaseOperationsHelper:
@@ -284,7 +284,6 @@ class BaseOperationsHelper:
         return session
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestLikeOperatorForBaseTable(Tester, BaseOperationsHelper):
     def test_pk_filtering_of_text_type_with_percent_sign(self):
@@ -1535,7 +1534,6 @@ class TestLikeOperatorForBaseTable(Tester, BaseOperationsHelper):
             assert expected in actual_rows
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestLikeOperatorForMV(Tester, BaseOperationsHelper):
     def test_filtering_mv_new_primary(self):
@@ -1567,7 +1565,6 @@ class TestLikeOperatorForMV(Tester, BaseOperationsHelper):
         assert_none(session=session, query="SELECT * FROM building_by_city WHERE name LIKE 'q%T_' ALLOW FILTERING")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestIndexFilteringWithLike(Tester, BaseOperationsHelper):
     def test_filter_index(self):

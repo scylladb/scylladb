@@ -133,7 +133,8 @@ def get_row_by_pk_and_ck(dataset, pk, ck):
     return next(filter(lambda x: x.pk == pk and x.ck == ck, dataset))
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestCDCStaticRow(Tester, CDCInitializeHelper):
     """

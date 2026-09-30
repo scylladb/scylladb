@@ -27,8 +27,7 @@ from tools.marks import with_feature
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestBackupRestore(Tester):
     SNAPSHOT_NAME = "test-snapshot"
 
@@ -253,7 +252,6 @@ class TestBackupRestore(Tester):
         self.check_rows_on_node(node1, len(keys), found=keys, c1_values=c1_values, c2_values=c2_values)
 
     @pytest.mark.skip_if(with_feature("tablets"))
-    @pytest.mark.dtest_debug
     def test_restore_snapshot_using_old_token_ownership(self):
         """
         Check that we can restore snapshot files that use a non updated token ownership
@@ -308,7 +306,6 @@ class TestBackupRestore(Tester):
         logger.debug("Check that we may query ks.cf on node1...")
         session.execute(SimpleStatement("SELECT COUNT(*) FROM ks.cf"))
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_incremental_backup(self):
         """
@@ -356,7 +353,6 @@ class TestBackupRestore(Tester):
         # should not change after a compaction
         assert backups1_files == backups2_files, "backup contents changed after a compaction"
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_restore_snapshot_from_cassandra(self):
         """

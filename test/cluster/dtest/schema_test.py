@@ -16,9 +16,8 @@ from tools.schema import describe_rf, get_replication_options
 from tools.scylla_defines import CompactionStrategy
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestSchema(Tester):
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     def test_drop_column_compact(self):
@@ -29,7 +28,6 @@ class TestSchema(Tester):
 
         assert_invalid(session, "ALTER TABLE cf DROP c1", "Cannot drop columns from a")
 
-    @pytest.mark.dtest_debug
     def test_drop_column_compaction(self):
         session = self.prepare()
         session.execute("USE ks")
@@ -55,7 +53,6 @@ class TestSchema(Tester):
         session = self.patient_cql_connection(node)
         assert_all(session, "SELECT c1 FROM ks.cf", [[None], [None], [None], [4]], ignore_order=True)
 
-    @pytest.mark.dtest_debug
     def test_drop_column_queries(self):
         session = self.prepare()
 

@@ -20,13 +20,10 @@ from cassandra.cluster import NoHostAvailable
 from dtest_class import Tester, create_cf, create_ks
 from tools.assertions import assert_eventually_raises
 from tools.ldap_docker import LdapDocker
-from tools.marks import unmark
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 @pytest.mark.single_node
 class TestLdap(Tester):
     LDAP_USER = "scylla-qa"
@@ -246,12 +243,14 @@ class TestLdap(Tester):
         else:
             session.execute("SELECT * from ks.cf LIMIT 1")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_simple_ldap_connection(self):
         self.prepare()
         self.add_role_to_ldap()
         permission = {"user": self.LDAP_USER, "password": self.LDAP_PASSWORD, "role": "cassandra", "permissions": ["create", "modify", "select"], "resource": "all"}
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_user_login_only(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -260,6 +259,7 @@ class TestLdap(Tester):
         permission = {"user": "login_user", "password": "test", "role": "empty_role", "permissions": [], "resource": None}
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_wrong_user(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -272,6 +272,7 @@ class TestLdap(Tester):
         if not failed:
             raise Exception("User succeeded to create a session, instead of failing")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_partial_permissions(self):
         self.prepare()
         create_permission = {"user": "create_user", "password": "create_user", "role": "create_role", "permissions": ["create"], "resource": "all keyspaces"}
@@ -297,7 +298,8 @@ class TestLdap(Tester):
             self.check_user_permissions(permission_dict=permission_dict)
             logger.info(f"Finished with {k}")
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.no_boot_speedups
     def test_hard_restart_scylla(self):
         self.prepare()
@@ -308,6 +310,7 @@ class TestLdap(Tester):
         self.nodes[0].start(wait_other_notice=True, wait_for_binary_proto=True)
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_soft_restart_scylla(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -317,6 +320,7 @@ class TestLdap(Tester):
         self.nodes[0].start(wait_other_notice=True, wait_for_binary_proto=True)
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multiple_roles_superuser(self):
         self.prepare()
         list_of_roles = ["r1", "r2", "r3", "r4", "r5", "cassandra"]
@@ -328,6 +332,7 @@ class TestLdap(Tester):
             self.add_role_to_ldap(ldap_role=role)
             self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multiple_roles_single_permission(self):
         self.prepare(create_role=False)
         actions_list = ["create", "modify", "select"]
@@ -343,6 +348,7 @@ class TestLdap(Tester):
             self.add_role_to_ldap(ldap_role=role)
             self.check_user_permissions(permission_dict=permission_dict)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multiple_roles_permissions_combination(self):
         self.prepare(create_role=False)
         actions_list = ["create", "modify", "select"]
@@ -358,7 +364,8 @@ class TestLdap(Tester):
         permission["permissions"] = actions_list[:]
         self.check_user_permissions(permission_dict=permission)
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_add_ldap_after_regular_work(self):
         self.prepare(create_role=False, configure_ldap=False)
         cassandra_session = self.patient_cql_connection(node=self.nodes[0], user="cassandra", password="cassandra")
@@ -375,6 +382,7 @@ class TestLdap(Tester):
         permission = {"user": self.LDAP_USER, "password": self.LDAP_PASSWORD, "role": "cassandra", "permissions": ["create", "modify", "select"], "resource": "ALL KEYSPACES"}
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multiple_users_superuser_role(self):
         self.prepare()
         list_of_unique_members = [f"user_{i}" for i in range(10)]
@@ -385,6 +393,7 @@ class TestLdap(Tester):
             permission = {"user": user, "password": self.LDAP_PASSWORD, "role": "cassandra", "permissions": ["create", "modify", "select"], "resource": "ALL KEYSPACES"}
             self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multiple_users_with_modify_role(self):
         self.prepare()
         session = self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra")
@@ -397,6 +406,7 @@ class TestLdap(Tester):
             permission["user"] = user
             self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_grant_role_permissions(self):
         self.prepare()
         permission = {"user": self.LDAP_USER, "password": self.LDAP_PASSWORD, "role": "test_role", "permissions": ["create"], "resource": "all keyspaces"}
@@ -412,6 +422,7 @@ class TestLdap(Tester):
         permission["permissions"].append("select")
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_revoke_role_permissions(self):
         self.prepare()
         permission = {"user": self.LDAP_USER, "password": self.LDAP_PASSWORD, "role": "test_role", "permissions": ["create", "modify", "select"], "resource": "all keyspaces"}
@@ -426,6 +437,7 @@ class TestLdap(Tester):
         session.execute(f"REVOKE {revoke_permission} ON {permission['resource']} FROM '{permission['role']}'")
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_remove_user_from_ldap(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -438,6 +450,7 @@ class TestLdap(Tester):
         permission["permissions"] = []
         self.check_user_permissions(permission_dict=permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_modify_username_on_ldap(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -459,6 +472,7 @@ class TestLdap(Tester):
         self.create_role(session, new_user, permission["password"])
         self.check_user_permissions(permission_dict=new_permission)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_add_user_to_ldap(self):
         self.prepare()
         self.add_role_to_ldap()
@@ -477,11 +491,10 @@ class TestLdap(Tester):
         self.check_user_permissions(permission_dict=permission)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestLdapSaslAuth(TestLdap):
     use_saslauth = True
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_authentication(self):
         with pytest.raises(NoHostAvailable, match=r"Bad credentials"):  # User 'cassandra' absent from LDAP.
             self.prepare(add_cassandra_superuser_to_ldap=False)
@@ -490,6 +503,7 @@ class TestLdapSaslAuth(TestLdap):
         with pytest.raises(NoHostAvailable, match=r"Bad credentials"):
             self.patient_cql_connection(self.nodes[0], user="cassandra", password="wrong-password")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_switch_with_password_auth(self):
         """
         Create an user without password in Scylla, the password only exists in LDAP server.
@@ -536,6 +550,7 @@ class TestLdapSaslAuth(TestLdap):
         logger.debug("Try to login with old password in ldap")
         self.patient_cql_connection(node1, user=self.LDAP_USER, password=f"{self.LDAP_PASSWORD}")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_invalid_saslauthd_socket(self):
         """
         This test tries to set different invalid socket to scylla, and
@@ -571,6 +586,7 @@ class TestLdapSaslAuth(TestLdap):
         ret = self.test_ldap_docker.delete_ldap_object(f"uid={username},ou=Person,dc=scylladb,dc=com")
         assert ret["description"] == expected_descritpion
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_drop_cassandra_role(self):
         self.prepare()
         su_name, su_pasword = self._create_new_superuser()
@@ -581,6 +597,7 @@ class TestLdapSaslAuth(TestLdap):
                 session2 = self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra")
             session.execute(f"DROP ROLE 'cassandra'")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_drop_role_from_ldap_twice(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
@@ -590,6 +607,7 @@ class TestLdapSaslAuth(TestLdap):
             self._remove_user_from_ldap(test_user)
             self._remove_user_from_ldap(test_user, expected_descritpion="noSuchObject")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_recreate_role_after_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
@@ -603,6 +621,7 @@ class TestLdapSaslAuth(TestLdap):
             session.execute(f"CREATE ROLE 'no_ldap_user'")
             session.execute(f"DROP ROLE 'no_ldap_user'")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_block_current_role_drop(self):
         self.prepare()
         su_name, su_pasword = self._create_new_superuser()
@@ -610,12 +629,14 @@ class TestLdapSaslAuth(TestLdap):
             with pytest.raises(InvalidRequest, match=r"Cannot DROP primary role for current login"):
                 session.execute(f"DROP ROLE '{su_name}'")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_block_not_existing_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:
             with pytest.raises(InvalidRequest, match=r"Role not_existing_role doesn't exist."):
                 session.execute(f"DROP ROLE 'not_existing_role'")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_existing_session_after_drop(self):
         self.prepare()
         with self.patient_cql_connection(self.nodes[0], user="cassandra", password="cassandra") as session:

@@ -29,7 +29,7 @@ from tools.assertions import (
     assert_row_count_in_select_less,
 )
 from tools.data import rows_to_list
-from tools.marks import unmark, with_feature
+from tools.marks import with_feature
 from tools.misc import is_coverage
 
 from .cqlsh_tools import (
@@ -119,7 +119,6 @@ class ImmutableDictMixin:
         is_immutable(self)
 
 
-@pytest.mark.dtest_full
 class CqlshPrepare(Tester):
     def prepare(self, nodes=1, configuration_options=None):
         if not self.cluster.nodelist():
@@ -271,8 +270,6 @@ class CqlshPrepare(Tester):
     def tearDown(self): ...
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestCqlshCopy(CqlshPrepare):
     """
     Tests the COPY TO and COPY FROM features in cqlsh.
@@ -337,6 +334,7 @@ class TestCqlshCopy(CqlshPrepare):
         # into a bare function if cqlshlib is made easier to interact with.
         return [[self.format_for_csv(v) for v in row] for row in result]
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_list_data(self):
@@ -368,6 +366,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_tuple_data(self):
@@ -430,6 +429,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_colon_delimiter(self):
         """
@@ -437,6 +437,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.non_default_delimiter_template(":")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_letter_delimiter(self):
         """
@@ -444,6 +445,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.non_default_delimiter_template("a")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_number_delimiter(self):
         """
@@ -480,6 +482,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_undefined_as_null_indicator(self):
         """
@@ -487,6 +490,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.custom_null_indicator_template("undefined")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_null_as_null_indicator(self):
         """
@@ -494,6 +498,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.custom_null_indicator_template("null")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_writing_use_header(self):
         """
@@ -570,6 +575,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_all(session=self.session, query="SELECT * FROM testcounter", expected=data, ignore_order=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counter(self):
@@ -580,6 +586,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self._test_reading_counter_template()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counter_without_batching(self):
@@ -591,6 +598,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self._test_reading_counter_template(copy_options={"MAXBATCHSIZE": "1"})
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counters_with_skip_cols(self):
@@ -638,6 +646,7 @@ class TestCqlshCopy(CqlshPrepare):
         do_test("b", [[1, 1, 2, 2, 2], [2, 1, 2, 2, 2]])
         do_test("e", [[1, 2, 3, 3, 2], [2, 2, 3, 3, 2]])
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_reading_use_header(self):
         """
@@ -673,6 +682,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_all(session=self.session, query="SELECT * FROM testheader", expected=data, ignore_order=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_writing_with_timeformat(self):
         """
@@ -708,6 +718,7 @@ class TestCqlshCopy(CqlshPrepare):
         expected = [["1", "2015/01/01 07:00"], ["2", "2015/06/10 12:30"], ["3", "2015/12/31 23:59"]]
         assert sorted(csv_values, key=lambda x: x[0]) == expected, f"Actual value \"{csv_values}\" is not as expected '{expected}'"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_reading_with_ttl(self):
         """
@@ -748,6 +759,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_all(session=self.session, query="SELECT * FROM testttl", expected={}, ignore_order=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_explicit_column_order_writing(self):
         """
@@ -787,6 +799,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_csvs_items_equal(self.tempfile.name, reference_file.name)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_explicit_column_order_reading(self):
         """
@@ -862,6 +875,7 @@ class TestCqlshCopy(CqlshPrepare):
         results = rows_to_list(self.session.execute("SELECT * FROM ks.testquoted"))
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_quoted_column_names_reading_specify_names(self):
         """
@@ -871,6 +885,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.quoted_column_names_reading_template(specify_column_names=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_quoted_column_names_reading_dont_specify_names(self):
         """
@@ -917,10 +932,12 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_csvs_items_equal(self.tempfile.name, reference_file.name)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_quoted_column_names_writing_specify_names(self):
         self.quoted_column_names_writing_template(specify_column_names=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_quoted_column_names_writing_dont_specify_names(self):
         self.quoted_column_names_writing_template(specify_column_names=False)
@@ -968,6 +985,7 @@ class TestCqlshCopy(CqlshPrepare):
         else:
             self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_read_valid_data(self):
         """
@@ -978,6 +996,7 @@ class TestCqlshCopy(CqlshPrepare):
         # make sure the template works properly
         self.data_validation_on_read_template(2, expect_invalid=False)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_read_invalid_float(self):
         """
@@ -986,6 +1005,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.data_validation_on_read_template(2.14, expect_invalid=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_read_invalid_uuid(self):
         """
@@ -994,6 +1014,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.data_validation_on_read_template(uuid4(), expect_invalid=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_read_invalid_text(self):
         """
@@ -1002,6 +1023,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self.data_validation_on_read_template("test", expect_invalid=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_all_datatypes_write(self):
@@ -1031,6 +1053,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2393", reason="scylla has an old version of cqlshlib")
     @pytest.mark.single_node
     def test_all_datatypes_read(self):
@@ -1064,6 +1087,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         self.assert_csv_result_equal(self.tempfile.name, results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_all_datatypes_round_trip(self):
         """
@@ -1100,6 +1124,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_all(session=self.session, query="SELECT * FROM testdatatype", expected=exported_results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_wrong_number_of_columns(self):
         """
@@ -1180,9 +1205,11 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_all(session=self.session, query="SELECT * FROM testcopyto", expected=results)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_round_trip_murmur3(self):
         self._test_round_trip(nodes=3)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_source_copy_round_trip(self):
         """
@@ -1341,6 +1368,7 @@ class TestCqlshCopy(CqlshPrepare):
         assert f1_lines == f2_lines
         return ret
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_bulk_round_trip_default(self):
         """
@@ -1350,6 +1378,7 @@ class TestCqlshCopy(CqlshPrepare):
         """
         self._test_bulk_round_trip(nodes=3, partitioner="murmur3", num_operations=100000)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_bulk_round_trip_blogposts(self):
         """
@@ -1366,6 +1395,7 @@ class TestCqlshCopy(CqlshPrepare):
             stress_table="stresscql.blogposts",
         )
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/193",
@@ -1402,6 +1432,7 @@ class TestCqlshCopy(CqlshPrepare):
             lines_num = len(file.readlines())
         assert lines_num < num_records, f"Expected that lined in the file after copy is less then {num_records}, but got {lines_num}"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/193",
@@ -1437,10 +1468,12 @@ class TestCqlshCopy(CqlshPrepare):
             lines_num = len(file.readlines())
         assert lines_num < num_records, f"Expected that lined in the file after copy is less then {num_records}, but got {lines_num}"
 
+    # scylla-dtest took it out of gating: unmark cause of: https://github.com/scylladb/scylla-cqlsh/issues/37
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.single_node
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
-    @unmark.next_gating  # unmark cause of: https://github.com/scylladb/scylla-cqlsh/issues/37
     @pytest.mark.use_cassandra_stress
     def test_copy_to_with_child_process_crashing(self):
         """
@@ -1473,6 +1506,7 @@ class TestCqlshCopy(CqlshPrepare):
             lines_num = len(file.readlines())
         assert lines_num < num_records, f"Expected that lined in the file after copy is less then {num_records}, but got {lines_num}"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_copy_from_with_more_failures_than_max_attempts(self):
@@ -1510,6 +1544,7 @@ class TestCqlshCopy(CqlshPrepare):
         assert COPY_FROM_FAILURE_RE.search(copy_output), f"No COPY FROM failure reported by cqlsh: '{copy_output}'"
         assert_row_count_in_select_less(session=self.session, query=f"SELECT COUNT(*) FROM {stress_table}", max_rows_expected=num_records)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/191",
@@ -1550,6 +1585,7 @@ class TestCqlshCopy(CqlshPrepare):
 
         assert_row_count(session=self.session, table_name=stress_table, expected=num_records)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_copy_from_with_child_process_crashing(self):

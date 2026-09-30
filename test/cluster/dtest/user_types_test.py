@@ -54,8 +54,7 @@ def assert_udt_type(session, ks: str, udt: str, expected: bool):
     assert found_udt == expected
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestUserTypes(Tester):
     cluster_topology_1_node = generate_cluster_topology(dc_num=1, rack_num=1, nodes_per_rack=1)
     cluster_topology_3_nodes = generate_cluster_topology(dc_num=1, rack_num=3, nodes_per_rack=1)
@@ -230,7 +229,6 @@ class TestUserTypes(Tester):
         rows = list(session.execute(stmt))
         assert 0 == len(rows)
 
-    @pytest.mark.dtest_debug
     def test_nested_user_types(self):
         """Tests user types within user types"""
         cluster = self.cluster

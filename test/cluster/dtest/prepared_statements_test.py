@@ -10,10 +10,9 @@ from cassandra import InvalidRequest
 from dtest_class import Tester
 
 KEYSPACE = "foo"
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestPreparedStatements(Tester):
     """

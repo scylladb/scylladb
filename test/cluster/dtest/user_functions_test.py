@@ -17,8 +17,7 @@ from tools.assertions import assert_invalid, assert_one
 from tools.misc import ImmutableMapping
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestUserFunctions(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):

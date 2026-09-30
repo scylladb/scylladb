@@ -28,8 +28,7 @@ from tools.misc import retry_till_success
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestPutGet(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_set_cluster_settings(self, fixture_dtest_setup):

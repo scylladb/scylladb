@@ -23,10 +23,9 @@ from tools.metrics import get_node_metrics
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 class TestRepair(Tester):
     def check_repair_logs(self):
         return not isinstance(self.cluster, ScyllaCluster)
@@ -70,7 +69,6 @@ class TestRepair(Tester):
     def test_simple_sequential_repair(self):
         self._simple_repair(sequential=True)
 
-    @pytest.mark.next_gating
     # @pytest.mark.'dtest-debug' - https://github.com/scylladb/scylla/issues/4384
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_simple_parallel_repair(self):

@@ -22,9 +22,8 @@ KEYSPACE = "batch_ks"
 logger = logging.getLogger(__file__)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestBatch(Tester):
     """
     Tests for pushed native protocol notification from Cassandra.

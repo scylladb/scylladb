@@ -359,6 +359,7 @@ class ManagerBackupMixin:
         healthy_node.stress(["read", f"n={number_of_rows}", "-rate", f"threads={threads}"])
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestScyllaMgmtBackup(Tester, ManagerBackupMixin, ScyllaManagerMixin):
     @pytest.fixture(params=["native", "rclone"], scope="function", autouse=True)
@@ -1339,7 +1340,8 @@ def create_cron_list_from_timedelta(minutes=0, hours=0):
     return cron_list
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.scylla_manager
 class TestBackupWithEaR(EncryptionAtRestBase, ManagerBackupMixin, ScyllaManagerMixin):
     @pytest.fixture(params=["native", "rclone"], scope="function", autouse=True)

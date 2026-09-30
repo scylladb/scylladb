@@ -11,10 +11,9 @@ from dtest_class import Tester, create_ks
 from tools.cassandra_stess import CassandraStressDocker
 from tools.data import rows_to_list
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.use_cassandra_stress
 class TestStressSparsenessRatio(Tester):
@@ -59,7 +58,6 @@ class TestStressSparsenessRatio(Tester):
         assert pytest.approx(float(num_nones) / num_results, abs=delta) == expected_ratio
 
 
-@pytest.mark.dtest_full
 class TestCassandraStress(Tester):
     def test_cassandra_stress_sanity(self):
         self.cluster.populate(2).start(wait_for_binary_proto=True, wait_other_notice=True)

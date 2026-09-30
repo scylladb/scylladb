@@ -16,7 +16,6 @@ from dtest_class import Tester, create_cf, create_ks, wait_for
 from tools.assertions import assert_row_count
 from tools.cluster_topology import generate_cluster_topology_based_rf
 from tools.files import get_node_cf_dir, get_sstables_files
-from tools.marks import unmark
 from tools.scylla_defines import (
     FULL_TABLE_NAME,
     KB,
@@ -82,8 +81,6 @@ def create_table(  # noqa: PLR0913
     session.execute(query)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 @pytest.mark.use_cassandra_stress
 class TestIcsCompaction(Tester):
     #######################   Helper Functions Start  ###########################################################################
@@ -341,7 +338,8 @@ class TestIcsCompaction(Tester):
 
     #######################   Helper Functions End  ###########################################################################
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_check_default_compaction_strategy(self):
         session = self.create_cluster(num_of_nodes=1, rf=1)
         create_ks(session=session, name=KEYSPACE_NAME, rf=1)
@@ -349,6 +347,7 @@ class TestIcsCompaction(Tester):
         compaction = self._get_table_compaction_strategy()
         assert compaction == CompactionStrategy.INCREMENTAL, f"Default compaction is: {compaction}"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.parametrize(
         "first,second,third",
@@ -364,16 +363,19 @@ class TestIcsCompaction(Tester):
         node1.compact()
         node1.wait_for_compactions()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.parametrize("original_strategy", NON_ICS_STRATEGIES)
     def test_alter_table_to_ics(self, original_strategy):
         self._create_table_and_alter_compaction(original_compaction=original_strategy, new_compaction=CompactionStrategy.INCREMENTAL)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.parametrize("new_strategy", NON_ICS_STRATEGIES)
     def test_alter_table_from_ics(self, new_strategy):
         self._create_table_and_alter_compaction(original_compaction=CompactionStrategy.INCREMENTAL, new_compaction=new_strategy)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_ics_snapshot_and_restore(self):
         """
@@ -428,6 +430,7 @@ class TestIcsCompaction(Tester):
         logger.debug("removing snapshot_dir: " + snapshot_dir)
         shutil.rmtree(snapshot_dir)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.parametrize("strategy", NON_ICS_STRATEGIES)
     def test_strategy_to_ics_snapshot_refresh(self, strategy):
@@ -440,6 +443,7 @@ class TestIcsCompaction(Tester):
         restore_snapshot_with_refresh(snapshot_dir=snapshot_dir, node=node1, keyspace=KEYSPACE_NAME, table=TABLE_NAME)
         self._read_generated_sstables_data(increasing_write_size=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_ics_refresh_with_big_sstable_files(self):
         """
@@ -492,6 +496,7 @@ class TestIcsCompaction(Tester):
         logger.debug("removing snapshot_dir: " + snapshot_dir)
         shutil.rmtree(snapshot_dir)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_ics_sstables_refresh_with_collisions(self):
         """
@@ -519,6 +524,7 @@ class TestIcsCompaction(Tester):
         logger.debug("removing snapshot_dir: " + snapshot_dir)
         shutil.rmtree(snapshot_dir)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_ics_with_partitions_larger_than_sstable_size(self):
         """
         Check ics with variable size partitions, smaller and larger than sstable size on flush and on compaction.
@@ -551,6 +557,7 @@ class TestIcsCompaction(Tester):
         assert len(sstables_files1) > 1, "More than 1 sstable is expected"
         assert max_found_file_size <= max_expected_file_size, f"Maximum file size exceeds expected limit of {max_expected_file_size}: {max_found_file_size}"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_lcs_major_compaction_then_ics_major_compaction(self):
         """
@@ -564,6 +571,7 @@ class TestIcsCompaction(Tester):
         self.alter_table_compaction(compaction_strategy=CompactionStrategy.INCREMENTAL, assert_altered_compaction=True)
         node1.compact()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_sstable_files_validations_with_ics_compaction(self):
         """
         Check number and size of incremental compaction strategy sstables after generating load and running a major compaction via nodetool.
@@ -581,6 +589,7 @@ class TestIcsCompaction(Tester):
         assert len(sstables_files2) >= num_of_generated_sstables, f"Less than {num_of_generated_sstables} SSTable files found for {table} after ICS compaction!"
         self._check_sstable_file_size_limit(list_sstable_files=sstables_files2, sstable_size_in_mb=sstable_size_in_mb)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_ics_sstables_basic_large_partitions(self):
         """
         Add new keys on large-partitions-table for cluster nodes.
@@ -625,6 +634,7 @@ class TestIcsCompaction(Tester):
         self.cluster.flush()
         assert_row_count(session=session, table_name=FULL_TABLE_NAME, expected=total_rows)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_space_amplification_goal_trigger(self):
         """
@@ -656,6 +666,7 @@ class TestIcsCompaction(Tester):
         _sstables_files1, files_size = self._get_sstable_files_and_sizes()
         assert sorted(files_size) == [1, 10], "Cross-tier compaction was not triggered after space_amplification_goal is exceeded!"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_space_amplification_goal_3_buckets(self):
         """

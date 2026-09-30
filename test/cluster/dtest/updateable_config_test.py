@@ -31,7 +31,7 @@ from tools.misc import ImmutableMapping
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -45,7 +45,6 @@ def fixture_dtest_setup_overrides(dtest_config):
     return dtest_setup_overrides
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestUpdateableConfig(Tester):
     """
@@ -77,7 +76,6 @@ class TestUpdateableConfig(Tester):
         response = requests.get(f"http://{get_ip_from_node(node)}:{node.api_port}/v2/config/{param}")
         assert response.text == verify_response, f"response: {response.text}, expected: {verify_response}"
 
-    @pytest.mark.dtest_debug
     @pytest.mark.use_cassandra_stress
     def test_compaction_enforce_min_threshold(self):
         self.cluster.populate(1).start(wait_other_notice=True, wait_for_binary_proto=True)

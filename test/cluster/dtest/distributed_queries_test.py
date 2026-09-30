@@ -25,8 +25,7 @@ from tools.session import wait_reconnection
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.use_cassandra_stress
 class TestDistributedAggregations(Tester):
     CS_KEYSPACE = "ks"

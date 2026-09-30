@@ -140,8 +140,7 @@ class CQLSession:
         return int.from_bytes(hashlib.md5(str(self).encode("utf8")).digest(), "little")
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestSystemClients(Tester):
     _test_users = [
         {"user": "user1", "password": "password1"},

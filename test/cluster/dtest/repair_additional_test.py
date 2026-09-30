@@ -2566,10 +2566,8 @@ class RepairAdditionalBase(Tester):
         self.check_repair_tx_rx_rows(node3, expected_tx_row_nr=4 * nr_rows, expected_rx_row_nr=2 * nr_rows)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestRepairAdditional(RepairAdditionalBase):
-    @pytest.mark.dtest_debug
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_repair_triggering_off_strategy_compaction(self):
         """
@@ -2601,7 +2599,6 @@ class TestRepairAdditional(RepairAdditionalBase):
         # Test if compactions triggered properly
         self._run_repair_and_wait_for_compactions(node=node2, ks="ks", cf="cf1", aux_cf="cf2")
 
-    @pytest.mark.dtest_debug
     def test_repair_schema(self):
         return self._repair_schema_test()
 
@@ -2620,7 +2617,6 @@ class TestRepairAdditional(RepairAdditionalBase):
     def test_repair_partition_delete(self):
         return self._repair_partition_delete_test()
 
-    @pytest.mark.dtest_debug
     def test_repair_ttl_update(self):
         return self._repair_ttl_update_test()
 
@@ -2628,12 +2624,10 @@ class TestRepairAdditional(RepairAdditionalBase):
     def test_repair_option_pr(self):
         return self._repair_option_pr_test()
 
-    @pytest.mark.dtest_debug
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_repair_option_pr_dc_host(self):
         return self._repair_option_pr_dc_host_test()
 
-    @pytest.mark.dtest_debug
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_repair_option_pr_multi_dc(self):
         return self._repair_option_pr_multi_dc_test()
@@ -2724,36 +2718,28 @@ class TestRepairAdditional(RepairAdditionalBase):
     def test_repair_joint_row_3nodes_2(self):
         return self._repair_joint_row_3nodes_same_key_diff_value_test()
 
-    @pytest.mark.dtest_heavy
     def test_repair_one_missing_row_diff_shard_count(self):
         return self._repair_one_missing_row_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     def test_repair_one_deleted_row_diff_shard_count(self):
         return self._repair_one_deleted_row_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     def test_repair_disjoint_row_2nodes_diff_shard_count(self):
         return self._repair_disjoint_row_2nodes_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     def test_repair_disjoint_row_3nodes_diff_shard_count(self):
         return self._repair_disjoint_row_3nodes_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     def test_repair_joint_row_3nodes_1_diff_shard_count(self):
         return self._repair_joint_row_3nodes_same_key_same_value_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     def test_repair_joint_row_3nodes_2_diff_shard_count(self):
         return self._repair_joint_row_3nodes_same_key_diff_value_test(same_shard_count=False)
 
-    @pytest.mark.dtest_heavy
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_repair_same_row_diff_value_3nodes(self):
         return self._repair_same_row_diff_value_3nodes_test(same_shard_count=True)
 
-    @pytest.mark.dtest_heavy
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_repair_same_row_diff_value_3nodes_diff_shard_count(self):
         return self._repair_same_row_diff_value_3nodes_test(same_shard_count=False)

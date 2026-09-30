@@ -12,10 +12,9 @@ from dtest_class import Tester, create_ks
 from tools.assertions import assert_invalid
 from tools.cluster_topology import generate_cluster_topology
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 class TestUDTEncoding(Tester):
     @pytest.fixture(scope="function")
     def node1_session(self):

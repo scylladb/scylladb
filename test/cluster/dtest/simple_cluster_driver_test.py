@@ -20,8 +20,7 @@ from tools.schema import get_replication_options
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestSimpleCluster(Tester):
     __scylla_args__ = []
 

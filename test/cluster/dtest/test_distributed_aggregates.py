@@ -18,7 +18,8 @@ from tools.cluster_topology import generate_cluster_topology
 from tools.data import drop_table
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestDistributedAggregates(Tester):
     def prepare(self, rf, jvm_args=None, options=None):
         assert rf > 0

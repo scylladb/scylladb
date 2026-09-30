@@ -30,7 +30,7 @@ from dtest_setup_overrides import DTestSetupOverrides
 from tools import commitlog
 from tools.data import create_index, create_local_index
 from tools.files import replace_in_file, safe_mkdtemp
-from tools.marks import require, unmark
+from tools.marks import require
 from tools.misc import ImmutableMapping
 from tools.snapshots import (
     get_cf_snapshot_saved_dir,
@@ -42,7 +42,7 @@ from tools.stress import assert_cs_success, format_cs_output
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class SnapshotOperations:
@@ -160,35 +160,30 @@ class SnapshotTester(Tester):
         requests.delete(f"http://{ip}:10000/storage_service/snapshots?tag={tag}&kn={ks}&cf={cf}")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestSnapshot(SnapshotTester):
     """
     Test snapshot operations.
     """
 
-    @pytest.mark.dtest_debug
     def test_basic_snapshot_and_restore_with_refresh(self):
         """
         Test basic snapshot and restore without an sstable loader.
         """
         self.basic_snapshot_and_restore(tables_number=1, cf_param_name="")
 
-    @pytest.mark.dtest_debug
     def test_basic_mulitple_tables_snapshot_and_restore_with_refresh(self):
         """
         Test basic snapshot and restore without an sstable loader.
         """
         self.basic_snapshot_and_restore(tables_number=5, cf_param_name="-cf")
 
-    @pytest.mark.dtest_debug
     def test_basic_mulitple_tables_snapshot_using_column_family(self):
         """
         Test basic snapshot and restore without an sstable loader.
         """
         self.basic_snapshot_and_restore(tables_number=5, cf_param_name="--column-family")
 
-    @pytest.mark.dtest_debug
     def test_basic_mulitple_tables_snapshot_using_table(self):
         """
         Test basic snapshot and restore without an sstable loader.
@@ -427,7 +422,6 @@ class TestSnapshot(SnapshotTester):
         assert search_cf_in_snapshot(node, "cf1", "per_cf"), "cf {} is not found in snapshot but should be remain".format("cf1")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestParallelSnapshotOperations(Tester, SnapshotOperations):
     log = logging.getLogger()
@@ -648,7 +642,6 @@ class TestParallelSnapshotOperations(Tester, SnapshotOperations):
         self.verify_stderr_empty(results)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestSchemaFileInSnapshot(SnapshotTester):
     native_column_types_and_values = {
@@ -980,7 +973,6 @@ class TestSchemaFileInSnapshot(SnapshotTester):
         return node, session
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestSnapshotOptions(SnapshotTester):
     SNAP_OPS = SnapshotOperations

@@ -22,6 +22,7 @@ CLUSTER_NAME = "cluster1"
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestScyllaManagerSuspension(Tester, ScyllaManagerMixin):
     def test_create_task_while_suspended(self):

@@ -18,8 +18,7 @@ from tools.retrying import retrying
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestCqlSession(Tester):
     def prepare_cluster(self, nodes=1, options_dict=None, version=None):
         logger.debug(f"Start cluster with {nodes} nodes")

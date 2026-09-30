@@ -86,8 +86,7 @@ def template_file(src_file, /, **kwds):
         yield output_file.name
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestUpdateClusterLayout(Tester):
     @staticmethod
     def default_config_options(hinted_handoff_enabled=False, enable_sstable_key_validation=True):
@@ -3118,7 +3117,8 @@ class TestUpdateClusterLayout(Tester):
         verify_group0_and_token_ring_members(node1, expected_num_of_members=3)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestStopNodeEarly(Tester):
     @pytest.mark.parametrize("gently,wait_other_notice", [(False, False), (False, True), (True, False), (True, True)])
     def test_stop_node_while_restarting(self, gently, wait_other_notice):
@@ -3173,9 +3173,8 @@ class TestStopNodeEarly(Tester):
         assert len(result) == 1000
 
 
-@pytest.mark.dtest_full
-@pytest.mark.dtest_long
-@pytest.mark.dtest_heavy
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
 class TestLargeScaleCluster(Tester):
     @pytest.mark.timeout(4200)
     def test_add_many_nodes_under_load(self):  # noqa: PLR0915
@@ -3300,8 +3299,9 @@ class TestLargeScaleCluster(Tester):
 from tools.raft_topology import TopologyCoordinatorFinder
 
 
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.required_features("consistent-topology-changes")
-@pytest.mark.dtest_full
 @pytest.mark.parametrize(
     "num_of_racks",
     [pytest.param(3, id="3_racks"), pytest.param(5, id="5_racks")],

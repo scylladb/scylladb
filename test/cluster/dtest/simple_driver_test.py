@@ -12,9 +12,7 @@ from ccmlib.scylla_cluster import ScyllaCluster
 from dtest_class import Tester, create_ks
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_debug
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestSimpleDriver(Tester):
     @pytest.fixture(params=(["--smp", "1"], ["--smp", "2"]), ids=["SMP=1", "SMP=2"], autouse=True)

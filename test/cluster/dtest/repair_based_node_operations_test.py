@@ -26,7 +26,7 @@ from tools.raft_topology import TopologyCoordinatorFinder
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 @dataclass
@@ -469,8 +469,6 @@ class RepairBasedNodeOperationsScenarios:
                 self.tester.cluster.remove(node=tested_node, wait_other_notice=True, remove_node_dir=False)
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_full
 class TestRepairBasedNodeOperations(Tester):
     jvm_args = None
 

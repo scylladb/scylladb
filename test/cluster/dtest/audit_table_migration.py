@@ -33,7 +33,6 @@ NetworkTopologyStrategy, or other, the upgrade should not be performed.
 """
 
 
-@pytest.mark.next_gating
 class TestAuditTableMigration(UpgradeTester):
     __test__ = True
     upgrade_path = upgrade_matrix_from_last_enterprise_release_version

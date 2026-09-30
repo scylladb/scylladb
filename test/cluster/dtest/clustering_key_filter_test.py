@@ -20,9 +20,8 @@ logger = logging.getLogger(__name__)
 # start_cluster_and_get_node1() starts Scylla with --enable-cache set to 0.
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 @pytest.mark.parametrize("strategy", ["TimeWindowCompactionStrategy", "NullCompactionStrategy"])
 class TestClusteringKeyFilter(Tester):
     # Check that a row tombstone is not discarded when its sstable doesn't contain clustering range
@@ -32,7 +31,6 @@ class TestClusteringKeyFilter(Tester):
     def strategy_string(self, strategy: str):
         return "'class':'" + strategy + "', 'enabled' : 'false'"
 
-    @pytest.mark.dtest_debug
     def test_check_consistence_after_row_tombstone(self, strategy_string: str):
         node1 = self.start_cluster_and_get_node1()
 
@@ -58,7 +56,6 @@ class TestClusteringKeyFilter(Tester):
         result = self.select(node1, query)
         self.check_result(result, "key1", ["a"])
 
-    @pytest.mark.dtest_debug
     def test_check_non_composite(self, strategy_string: str):
         node1 = self.start_cluster_and_get_node1()
 
@@ -103,7 +100,6 @@ class TestClusteringKeyFilter(Tester):
         result = self.select(node1, query)
         self.check_result(result, "key1", ["a"])
 
-    @pytest.mark.dtest_debug
     def test_check_composite(self, strategy_string: str):  # noqa: PLR0915
         node1 = self.start_cluster_and_get_node1()
 

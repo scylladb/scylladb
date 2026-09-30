@@ -20,10 +20,9 @@ from tools.marks import issue_open, with_feature
 
 logger = logging.getLogger(__file__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 class TestRangeDeletion(Tester):
     compaction_strategy = None
 

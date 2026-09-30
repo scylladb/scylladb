@@ -504,7 +504,8 @@ class BaseTests(UpgradeTester):
         session.cluster.shutdown()
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestUpgradeFullPath(BaseTests):
     __test__ = True
 
@@ -520,7 +521,8 @@ class TestUpgradeFullPath(BaseTests):
         pass
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestUpgradeOneNode(BaseTests):
     __test__ = True
 
@@ -536,7 +538,8 @@ class TestUpgradeOneNode(BaseTests):
         pass
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestUpgradeClusterWithEnableDisableTWCSQueries(BaseTests):
     __test__ = True
 

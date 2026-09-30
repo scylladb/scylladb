@@ -29,8 +29,6 @@ logger = logging.getLogger(__name__)
 TESTED_STRATEGIES = ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy", "IncrementalCompactionStrategy"]
 MURMUR3 = 15
 
-pytestmark = pytest.mark.dtest_full
-
 
 class ReshardingBase(Tester):
     DEFAULT_MURMUR3_PARTITIONER = 12
@@ -197,7 +195,8 @@ class ReshardingBase(Tester):
         self._verify_number_of_data_files(data_files_num_before=data_files_num_before, reshard_to=reshard_to)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 @pytest.mark.parametrize("node_count,compaction_strategy,murmur3", [(1, strategy, MURMUR3) for strategy in TESTED_STRATEGIES])
 @pytest.mark.required_features("!tablets")  # scylladb/scylladb#16739
@@ -336,8 +335,8 @@ class TestReshardingTombstonesSingleNode(Tester):
         assert numfound == 0, "All tombstones were not removed during resharding"
 
 
-@pytest.mark.dtest_full
-@pytest.mark.dtest_heavy
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
 @pytest.mark.use_cassandra_stress
 @pytest.mark.parametrize(
     "node_count,compaction_strategy,murmur3",

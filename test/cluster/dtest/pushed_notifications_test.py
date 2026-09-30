@@ -99,8 +99,7 @@ class NotificationWaiter:
         self.connection.close()
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestPushedNotifications(Tester):
     """
     Tests for pushed native protocol notification from Cassandra.
@@ -268,8 +267,7 @@ class TestPushedNotifications(Tester):
         assert received_new_node_event, "NEW_NODE event isn't received"
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestVariousNotifications(Tester):
     """
     Tests for various notifications/messages from Cassandra.

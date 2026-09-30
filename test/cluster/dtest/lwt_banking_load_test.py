@@ -509,9 +509,8 @@ class Process(_mp_fork.Process):
         return self._exception
 
 
-@pytest.mark.dtest_full
-@pytest.mark.dtest_heavy
-@pytest.mark.dtest_debug
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
 @pytest.mark.skip_mode(mode="release", reason="heavy nemesis/consistency load test only meant to run with debug-mode assertions enabled")
 class TestLWTBankingLoad(Tester):
     """Emulate a series of money transfers and perform validation"""

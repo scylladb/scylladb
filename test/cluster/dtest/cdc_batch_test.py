@@ -210,9 +210,8 @@ def get_generator(data_type):
 checking_types = ["int", "bigint", "text", "varchar", "frozen<set<int>>", "frozen<set<text>>", "frozen<list<int>>", "list<int>", "set<int>", "map<int,int>", "map<text,blob>"]
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestCDCBatchesSimple(Tester, CDCInitializeHelper):
     keyspace = "ks"
     table = "cf"

@@ -19,11 +19,10 @@ from tools.marks import with_feature
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 @pytest.mark.skip_if(with_feature("tablets"))
-@pytest.mark.dtest_full
 class TestCounters(Tester):
     @pytest.mark.single_node
     def test_int_rollover(self):
@@ -141,7 +140,6 @@ class TestCounters(Tester):
             )
 
 
-@pytest.mark.dtest_full
 @pytest.mark.skip_if(with_feature("tablets"))
 class TestCountersStress(Tester):
     @pytest.fixture(scope="function", autouse=True)

@@ -194,7 +194,6 @@ class CDCInitializeHelper:
 
 
 @pytest.mark.scylla_cdc
-@pytest.mark.dtest_full
 class TestCdc(Tester, CDCInitializeHelper):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
@@ -261,10 +260,12 @@ class TestCdc(Tester, CDCInitializeHelper):
 
         logger.debug("Test finished")
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_simple_cdc(self, request, cluster_config):
         self.simple_cdc_template(request=request, topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=False)
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_simple_cdc_with_preimage(self, request, cluster_config):
         self.simple_cdc_template(request=request, topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=True)
 
@@ -321,13 +322,15 @@ class TestCdc(Tester, CDCInitializeHelper):
 
         logger.debug("Test finished")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.no_boot_speedups
-    @pytest.mark.next_gating
     # the test is not relevant for tablets - cluster expansion doesn't affect CDC streams of tablets-based keyspaces
     @pytest.mark.required_features("!tablets")
     def test_cluster_expansion_with_cdc(self, request, cluster_config):
         self.cluster_expansion_with_cdc_template(request, topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=False)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.no_boot_speedups
     # the test is not relevant for tablets - cluster expansion doesn't affect CDC streams of tablets-based keyspaces
     @pytest.mark.required_features("!tablets")
@@ -386,7 +389,7 @@ class TestCdc(Tester, CDCInitializeHelper):
 
         logger.debug("Test finished")
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     # the test is not relevant for tablets - cluster reduction doesn't affect CDC streams of tablets-based keyspaces
@@ -395,11 +398,15 @@ class TestCdc(Tester, CDCInitializeHelper):
         self.cluster_reduction_with_cdc_template(request=request, topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=False)
 
     # the test is not relevant for tablets - cluster reduction doesn't affect CDC streams of tablets-based keyspaces
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.required_features("!tablets")
     def test_cluster_reduction_with_cdc_and_preimage(self, request, cluster_config):
         self.cluster_reduction_with_cdc_template(request=request, topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=True)
 
     # checkAndRepairCdcStreams is not relevant for streams of tablets-based keyspaces
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.required_features("!tablets")
     def test_check_and_repair_after_cluster_reduction(self):
         # After a decommission, streams no longer match the new token ring structure.
@@ -497,28 +504,34 @@ class TestCdc(Tester, CDCInitializeHelper):
 
         logger.debug("Test finished")
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/14401",
                           reason="ALTERing a column type during a memtable flush can null out cells")
     def test_change_field_type_with_cdc(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ALTER b TYPE blob", topology=cluster_config.topology, replication=cluster_config.replication)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/14401",
                           reason="ALTERing a column type during a memtable flush can null out cells")
     def test_change_field_type_with_cdc_and_preimage(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ALTER b TYPE blob", topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=True)
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_add_field_with_cdc(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ADD c int", topology=cluster_config.topology, replication=cluster_config.replication)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_add_field_with_cdc_and_preimage(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ADD c int", topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=True)
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_remove_field_with_cdc(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf DROP c", topology=cluster_config.topology, replication=cluster_config.replication, additional_fields=["c int"])
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_remove_field_with_cdc_and_preimage(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf DROP c", topology=cluster_config.topology, replication=cluster_config.replication, additional_fields=["c int"], with_preimage=True)
 
@@ -526,6 +539,8 @@ class TestCdc(Tester, CDCInitializeHelper):
     # deselect test from running with consistent-topology-changes
     # the internal table system.cdc_local is not used with raft topology.
     # checkAndRepairCdcStreams is not relevant for streams of tablets-based keyspaces
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.required_features("!consistent-topology-changes", "!tablets")
     def test_check_and_repair_cdc_streams_liveness(self, fixture_dtest_setup: DTestSetup):
         # During the test, error "Could not find CDC generation" appears as part of the test logic.
@@ -860,8 +875,9 @@ def generate_test_id(param):
     return "-".join([f"{key}:{value}".lower() for key, value in param.items()]).replace("'", "")
 
 
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.scylla_cdc
-@pytest.mark.dtest_full
 class TestCdcWithCompactStorage(Tester, CDCInitializeHelper):
     expected_fields = ["cdc_stream_id", "cdc_time", "cdc_batch_seq_no", "cdc_end_of_batch", "cdc_operation", "cdc_ttl", "pk", "ck", "reg_column", "cdc_deleted_reg_column"]
     use_reg_column = False

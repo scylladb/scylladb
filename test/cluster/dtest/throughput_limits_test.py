@@ -24,7 +24,7 @@ from tools.rate_limit import rate_limit_expected_errors
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -44,7 +44,6 @@ class TestPerPartitionRateLimiter(Tester):
     Feature introduced in Scylla 5.1:
     https://github.com/scylladb/scylla/commit/dab56b82fae5e36f7aa2ca6700d8cfa5baa2b515"""
 
-    @pytest.mark.dtest_full
     def test_per_partition_rate_limit(self):
         # Create 2 node cluster to verify that it works also with non-shard aware driver
         # when half of requests go to coordinator node instead of replica node.

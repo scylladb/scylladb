@@ -27,7 +27,6 @@ from tools.snapshots import make_snapshot, restore_snapshot_with_refresh
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
 class TestCleanup(Tester):
     def prepare(self, nodes, num_keys, timeout=None, consistency=ConsistencyLevel.ALL, amount_of_tables=1, rf=None):  # noqa: PLR0913
         cluster = self.cluster
@@ -50,7 +49,7 @@ class TestCleanup(Tester):
                 for i in range(amount_of_tables):
                     insert_c1c2(session=session, keys=range(num_keys), consistency=consistency, cf=f"cf{i}")
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_cleanup(self):
         num_keys = 100000 if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode != "debug" else 10000
@@ -71,7 +70,7 @@ class TestCleanup(Tester):
 
         assert rows.one()[0] == num_keys
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cluster_cleanup(self):
         num_keys = 100000 if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode != "debug" else 10000
         timeout = self.cql_timeout(300)
@@ -93,6 +92,8 @@ class TestCleanup(Tester):
         rows = session.execute("select count(*) from ks.cf0;", timeout=timeout)
         assert rows.one()[0] == num_keys
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.required_features("!tablets")
     def test_cleanup_space_amplification(self):
         num_keys = 100000 if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode != "debug" else 10000
@@ -143,7 +144,7 @@ class TestCleanup(Tester):
         assert size_before > size_after, f"Cleanup is supposed to decrease disk utilisation, before=({sstables_before}, {size_before}) and after=({sstables_after}, {size_after})"
 
     # Reproducer for https://github.com/scylladb/scylladb/issues/1239
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cluster_cleanup_no_resurrection(self):
         """
         - Write data to 2-node cluster
@@ -196,6 +197,8 @@ class TestCleanup(Tester):
         rows = session.execute(query)
         assert rows.one()[0] == 0
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.required_features("!tablets")
     def test_cluster_restore_no_resurrection(self):  # noqa: PLR0915
         """
@@ -308,6 +311,8 @@ class TestCleanup(Tester):
         self.cluster.remove(owner_node, remove_node_dir=True)
         return len(partitions)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_no_resurrection_by_replaying_stale_commitlog(self):
         # Reproducer for https://github.com/scylladb/scylladb/issues/4734
         # 1. write data to two different tables ("cf0" and "cf1") in a 1-node
@@ -382,8 +387,8 @@ class TestCleanup(Tester):
 
         assert actual_num_keys == expected_num_keys
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
-    @pytest.mark.next_gating
     @pytest.mark.required_features("!tablets")  # cleanup skips tablets
     def test_drop_table_during_cleanup(self):
         """

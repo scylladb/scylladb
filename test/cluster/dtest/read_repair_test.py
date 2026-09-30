@@ -20,7 +20,7 @@ from tools.schema import change_schema_safely, describe_rf, get_replication_opti
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReadRepair(Tester):
     # The length of the argument `racks` corresponds to the number of racks in the cluster.
     # Each element of the list corresponds to the number of nodes in one of the racks.

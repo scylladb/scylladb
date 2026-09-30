@@ -18,7 +18,6 @@ from ccmlib import common
 from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, wait_for
 from tools.data import putget
 from tools.files import safe_mkdtemp
-from tools.marks import unmark
 from tools.misc import generate_ssl_stores, is_port_used, revoke_certificate
 from tools.sslkeygen import wait_for_cert_reload
 
@@ -98,15 +97,13 @@ class BaseSslTester(Tester):
         putget(cluster, session, cl=ConsistencyLevel.ONE)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestNativeTransportSSL(BaseSslTester):
     """
     Native transport integration tests, specifically for ssl and port configurations.
     """
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_connect_to_ssl(self):
         """
         Connecting to SSL enabled native transport port should only be possible using SSL enabled client
@@ -128,6 +125,7 @@ class TestNativeTransportSSL(BaseSslTester):
         with self._create_cluster_session(node1, use_ssl=True) as session:
             self._putget(cluster, session)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_connect_to_ssl_client_auth(self):
         """
         Connecting to SSL enabled native transport port should only be possible using SSL enabled client.
@@ -167,6 +165,7 @@ class TestNativeTransportSSL(BaseSslTester):
         except NoHostAvailable:
             pass
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_use_custom_port(self):
         """
         Connect to non-default native transport port
@@ -184,6 +183,7 @@ class TestNativeTransportSSL(BaseSslTester):
         with self._create_cluster_session(node1, port=9567, use_ssl=False) as session:
             self._putget(cluster, session)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_use_custom_ssl_port(self):
         """
         Connect to additional ssl enabled native transport port
@@ -202,7 +202,7 @@ class TestNativeTransportSSL(BaseSslTester):
         with self._create_cluster_session(node1, use_ssl=True, port=9666) as session:
             self._putget(cluster, session, ks="ks2")
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_reload_certificates(self, tmp_path):
         """
         Verify certificate reloading on modified file(s)
@@ -232,6 +232,7 @@ class TestNativeTransportSSL(BaseSslTester):
         with self._create_cluster_session(node1, use_ssl=True) as session:
             self._putget(cluster, session)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_disable_regular_port_while_encryption_enabled(self):
         """
         This test activates a cluster with encryption turned on, but instead of using the usual native_transport_port
@@ -312,11 +313,12 @@ class TestNativeTransportSSL(BaseSslTester):
             cluster.set_configuration_options(ports_conf)
             restart_and_verify_listen_ports(expected_ports=[v for k, v in ports_conf.items() if v not in [0, None]])
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_bug(
         link="https://github.com/scylladb/scylladb/issues/7500",
         reason="with client encryption on, Scylla still listens on the ports the test expects disabled",
     )
-    @unmark.next_gating
     def test_listen_ports_conf_by_zero(self):
         """
         Test native transport ports configuration, and verify the listening native transport ports after start.
@@ -324,17 +326,17 @@ class TestNativeTransportSSL(BaseSslTester):
         """
         self._listen_ports_conf_template(disable_value=0)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_bug(
         link="https://github.com/scylladb/scylladb/issues/7500",
         reason="with client encryption on, Scylla still listens on the ports the test expects disabled",
     )
-    @unmark.next_gating
     def test_listen_ports_conf(self):
         self._listen_ports_conf_template(disable_value=None)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestServerEncryption(BaseSslTester):
     def test_server_encryption_and_restart_node(self):
         """

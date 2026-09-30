@@ -348,7 +348,8 @@ class CdcTools(Tester, CDCInitializeHelper):
                 assert key in row.cdc_deleted_elements_value
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 @pytest.mark.scylla_cdc
 class TestCDCNativeType(CdcTools):
@@ -643,7 +644,8 @@ class TestCDCNativeType(CdcTools):
         )
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestCDCCollectionsType(CdcTools):
     columns_data = None
@@ -888,7 +890,6 @@ class TestCDCCollectionsType(CdcTools):
             self.check_cdc_log_row_collection(cdc_log_rows[postimage_index], operation=CdcLogOperations.POSTIMAGE, batch_seq=postimage_index, expected_data=postimage_expected_data)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.scylla_cdc
 class TestCdcUDT(CdcTools):
@@ -936,64 +937,102 @@ class TestCdcUDT(CdcTools):
         session.cluster.register_user_type(self.keyspace, self.udt_name, CustomUDT)
         session.execute(statement)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_insert_udt_delta(self):
         self.insert_udt_tpl()
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_insert_udt_preimage(self):
         self.insert_udt_tpl(preimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_insert_udt_preimage_full(self):
         self.insert_udt_tpl(preimage_enable="full")
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_insert_udt_postimage(self):
         self.insert_udt_tpl(postimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_insert_udt_preimage_postimage(self):
         self.insert_udt_tpl(preimage_enable=True, postimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_udt_delta(self):
         self.update_udt_tpl()
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_udt_preimage(self):
         self.update_udt_tpl(preimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_udt_preimage_full(self):
         self.update_udt_tpl(preimage_enable="full")
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_udt_postimage(self):
         self.update_udt_tpl(postimage_enable=True)
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_update_udt_preimage_postimage(self):
         self.update_udt_tpl(preimage_enable=True, postimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_field_non_frozen_udt(self):
         self.udt_update_field_on_non_frozen(remove_field_value=False)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_field_non_frozen_udt_preimage(self):
         self.udt_update_field_on_non_frozen(preimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_field_non_frozen_udt_preimage_full(self):
         self.udt_update_field_on_non_frozen(preimage_enable="full")
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_field_non_frozen_udt_postimage(self):
         self.udt_update_field_on_non_frozen(postimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_update_field_non_frozen_udt_preimage_postimage(self):
         self.udt_update_field_on_non_frozen(preimage_enable=True, postimage_enable=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_delete_field_value_in_non_frozen_udt(self):
         self.udt_update_field_on_non_frozen(remove_field_value=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_delete_field_value_in_non_frozen_udt_preimage(self):
         self.udt_update_field_on_non_frozen(preimage_enable=True, remove_field_value=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_delete_field_value_in_non_frozen_udt_preimage_full(self):
         self.udt_update_field_on_non_frozen(preimage_enable="full", remove_field_value=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_delete_field_value_in_non_frozen_udt_postimage(self):
         self.udt_update_field_on_non_frozen(postimage_enable=True, remove_field_value=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_delete_value_in_non_frozen_udt_field_preimage_postimage(self):
         self.udt_update_field_on_non_frozen(preimage_enable=True, postimage_enable=True, remove_field_value=True)
 

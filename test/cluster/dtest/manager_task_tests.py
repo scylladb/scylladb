@@ -26,6 +26,7 @@ from tools.cluster_topology import generate_cluster_topology
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestScyllaManagerTask(Tester, ScyllaManagerMixin):
     def _initiate_cluster(self):

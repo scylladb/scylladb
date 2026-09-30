@@ -9,9 +9,8 @@ import pytest
 from dtest_class import Tester, create_ks
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestSimpleBootShutdown(Tester):
     def prepare(self):
         """
@@ -117,7 +116,6 @@ class TestSimpleBootShutdown(Tester):
 
         assert len(res) == 0, f"expected length=0 got {res}"
 
-    @pytest.mark.dtest_debug
     def test_boot_create_keyspace_table_insert_shutdown_commitlog_replay_select(self):
         cluster = self.prepare()
         cluster.populate(1).start()

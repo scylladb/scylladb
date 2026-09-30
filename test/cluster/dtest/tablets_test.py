@@ -76,6 +76,7 @@ def get_non_replica_node(nodes, replicas):
     return no_replica_nodes[0]
 
 
+@pytest.mark.non_gating
 @pytest.mark.required_features("tablets")
 class TestTablets(Tester):
     def test_moving_tablets_different_dc(self):

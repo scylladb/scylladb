@@ -21,7 +21,6 @@ from ccmlib.scylla_node import ScyllaNode
 
 from dtest_class import Tester, create_cf, create_ks
 from tools.data import insert_c1c2
-from tools.marks import unmark
 from tools.metrics import get_node_metrics, wait_for_metric
 from tools.paging import PageFetcher
 from tools.retrying import retry_with_func_attempts
@@ -32,8 +31,7 @@ SCAN_READ = "scan"
 KBYTE = 1024
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReadAmplification(Tester):
     @staticmethod
     def get_metrics(metric_names, node_ips=None):
@@ -259,8 +257,7 @@ class TestReadAmplification(Tester):
         self.read_amplification(SCAN_READ, KBYTE * KBYTE * 20)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestMultiShardReader(Tester):
     """
     This class holds the test that covers the issue that cause to read amplification

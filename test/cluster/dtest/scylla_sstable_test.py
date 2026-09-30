@@ -56,11 +56,9 @@ class ScyllaSstable(Tester):
         assert len(symmetric_diff) == 0, f"Destination data set is not same as source. Found difference:\n{symmetric_diff} "
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestScyllaSstableDumpData(ScyllaSstable):
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     def test_scylla_sstable_basic(self):
         """
         Populate data, run sstabledump, extract data from json
@@ -94,8 +92,6 @@ class TestScyllaSstableDumpData(ScyllaSstable):
         json_values = self._fetch_data_from_json(data_json)
         self._compare_data(values_list, json_values)
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     # Counters are not yet supported with tablets
     @pytest.mark.required_features("!tablets")
     def test_sstabledump_counter_basic(self):
@@ -150,9 +146,8 @@ class TestScyllaSstableDumpData(ScyllaSstable):
         return res
 
 
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestScyllaSstableDumpataAllDatatypes(CqlshPrepare, ScyllaSstable):
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     def test_sstabledump_all_datatypes(self):
         cluster = self.cluster
         cluster.populate(1).start()

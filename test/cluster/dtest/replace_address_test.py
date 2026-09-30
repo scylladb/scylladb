@@ -47,8 +47,7 @@ class NodeUnavailableError(Exception):
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.parametrize("rbo_status", [True, False], ids=["rbo_enabled", "rbo_disabled"])
 class TestReplaceAddress(Tester):
     rbo_enabled: bool
@@ -342,7 +341,6 @@ class TestReplaceAddress(Tester):
 
         node4.start(wait_for_binary_proto=True, replace_node_host_id=node3.hostid())
 
-    @pytest.mark.dtest_debug
     def test_replace_active_node(self):
         logger.info("Starting cluster with 3 nodes.")
         self.init_cluster(num_nodes=3)
@@ -727,7 +725,6 @@ class TestReplaceAddress(Tester):
         fixture_dtest_setup.ignore_log_patterns.append(r".*seastar::rpc::closed_error[ :]+\(?connection is closed\)?.*")
 
     @pytest.mark.skip_if(with_feature("tablets"))
-    @pytest.mark.dtest_heavy
     def test_replace_node_diff_ip_take_write(self):  # noqa: PLR0915
         logger.info("Starting cluster with 5 nodes.")
         cluster = self.cluster
@@ -815,7 +812,6 @@ class TestReplaceAddress(Tester):
         write_thread.result()
 
     @pytest.mark.skip_if(with_feature("tablets"))
-    @pytest.mark.dtest_heavy
     def test_replace_node_same_ip_take_write(self):  # noqa: PLR0915
         logger.info("Starting cluster with 5 nodes.")
         cluster = self.cluster

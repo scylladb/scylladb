@@ -48,7 +48,7 @@ from tools.data import (
     rows_to_list,
     wait_for_schema_agreement,
 )
-from tools.marks import unmark, unmark_if, with_feature
+from tools.marks import with_feature
 from tools.misc import generate_random_text, remove_node
 from tools.retrying import retrying
 from tools.tables_view_manager import (
@@ -58,8 +58,6 @@ from tools.tables_view_manager import (
 )
 
 logger = logging.getLogger(__name__)
-
-pytestmark = pytest.mark.next_gating
 
 LONG_TEXT_LENGTH = 8193
 OVERSIZE_LENGTH = 66536
@@ -320,11 +318,12 @@ class SecondaryIndexesHelpers(Tester):
         read_all_index()
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestStaticSecondaryIndexes(SecondaryIndexesHelpers):
     INDEX_TYPE = "global"
 
-    @unmark.next_gating  # this is failing as xfailed
+    # scylla-dtest took it out of gating: this is failing as xfailed
     def test_query_data_with_index(self):
         """
         Create the index on the populated table and read the data that was inserted before index
@@ -402,9 +401,8 @@ class TestStaticSecondaryIndexes(SecondaryIndexesHelpers):
         session.shutdown()
 
 
-@unmark.next_gating
-@pytest.mark.dtest_heavy
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
 class TestSecondaryIndexes(SecondaryIndexesHelpers):
     INDEX_TYPE = "global"
 
@@ -1221,7 +1219,7 @@ class TestSecondaryIndexes(SecondaryIndexesHelpers):
         self.check_errors(self.cluster.nodelist()[0], exclude_errors)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestSecondaryIndexesOnCollections(SecondaryIndexesHelpers):
     INDEX_TYPE = "global"
@@ -1342,9 +1340,8 @@ class TestSecondaryIndexesOnCollections(SecondaryIndexesHelpers):
         assert str(err) == regexp_matches(r".*Cannot create index on (index_values|value) of frozen.*"), "Not expected error"
 
 
-@unmark.next_gating
-@pytest.mark.dtest_heavy
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
 class TestLocalIndexes(SecondaryIndexesHelpers):
     INDEX_TYPE = "local"
 
@@ -1814,7 +1811,7 @@ class TestLocalIndexes(SecondaryIndexesHelpers):
         self.check_errors(self.cluster.nodelist()[0], exclude_errors)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestMultipleSecondaryIndexes(SecondaryIndexesHelpers):
     def _prepare_for_multi_index_test(self):
         session = self.prepare(user_table=False, nodes=4, rf=3, keyspace_name="ks")

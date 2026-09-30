@@ -18,9 +18,8 @@ from dtest_class import Tester
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestScyllaHelpCommand(Tester):
     def test_scylla_help_does_not_contain_duplicate_args(self):
         scylla_help_text = self.get_scylla_help_text()

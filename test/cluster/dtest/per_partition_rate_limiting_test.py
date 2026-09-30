@@ -20,7 +20,6 @@ from cassandra.policies import RoundRobinPolicy, TokenAwarePolicy
 
 from dtest_class import Tester, create_ks
 from tools.cluster_topology import generate_cluster_topology
-from tools.marks import unmark
 from tools.rate_limit import rate_limit_expected_errors
 
 logger = logging.getLogger(__file__)
@@ -81,8 +80,6 @@ def is_per_partition_limit_reached_error(err):
     return isinstance(err, rate_limit_expected_errors)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestPerPartitionRateLimiting(Tester):
     warmup_seconds = 5.0
     measure_seconds = 15.0
@@ -195,6 +192,7 @@ class TestPerPartitionRateLimiting(Tester):
         self.validate_limited_writes(session, limit, cl, rf)
         self.validate_limited_reads(session, limit, cl, rf)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_writes(self):
         limit = 10
 
@@ -223,6 +221,7 @@ class TestPerPartitionRateLimiting(Tester):
         logger.info(stats)
         stats.validate_no_rejects()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_reads(self):
         limit = 10
 
@@ -250,6 +249,7 @@ class TestPerPartitionRateLimiting(Tester):
         logger.info(stats)
         stats.validate_no_rejects()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_read_write_independence(self):
         limit = 10
 
@@ -286,6 +286,7 @@ class TestPerPartitionRateLimiting(Tester):
             write_stats.validate_no_rejects()
             read_stats.validate_rate_limited(limit, rf_error=1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_table_independence(self):
         limit = 10
         table_name1 = "cf1"
@@ -327,8 +328,9 @@ class TestPerPartitionRateLimiting(Tester):
         session.execute("USE ks")
         fn(session)
 
-    @unmark.next_gating(reason="This test is quite heavy test and consistently passing")
-    @pytest.mark.dtest_heavy
+    # scylla-dtest took it out of gating: This test is quite heavy test and consistently passing
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
     def test_multinode_accuracy(self):
         nodes = generate_cluster_topology(rack_num=4)
         limit = 10
@@ -358,8 +360,9 @@ class TestPerPartitionRateLimiting(Tester):
 
         self.check_both_policies(check_rf1)
 
-    @unmark.next_gating(reason="This test is quite heavy test and consistently passing")
-    @pytest.mark.dtest_heavy
+    # scylla-dtest took it out of gating: This test is quite heavy test and consistently passing
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
     def test_multidc_accuracy(self):
         limit = 10
         nodes = {

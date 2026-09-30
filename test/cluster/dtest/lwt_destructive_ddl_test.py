@@ -20,8 +20,7 @@ from tools.log_utils import wait_for_any_log
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestLwtDestructiveDDL(Tester):
     """
     Destructive DDL in presence of LWT: execute destructive DDL

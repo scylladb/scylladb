@@ -16,15 +16,12 @@ from ccmlib.node import NodetoolError
 
 from dtest_class import Tester, wait_for
 from tools.data import rows_to_list
-from tools.marks import unmark
 from tools.rackdc import update_properties
 from tools.stress import assert_cs_success, format_cs_output
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_full
 class TestNodetool(Tester):
     @staticmethod
     def filter_asan_warning(output):
@@ -44,6 +41,7 @@ class TestNodetool(Tester):
             lines.append(line)
         return "\n".join(lines)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_decommission_after_drain_is_invalid(self):
         """
         @jira_ticket CASSANDRA-8741
@@ -63,6 +61,7 @@ class TestNodetool(Tester):
         expected_msg = "Node in DRAINED state"
         assert expected_msg in err.value.stdout or expected_msg in err.value.stderr
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_correct_dc_rack_in_nodetool_info(self):
         """
         @jira_ticket CASSANDRA-10382
@@ -146,9 +145,11 @@ class TestNodetool(Tester):
         cs_result = thread.result()
         assert_cs_success(cs_result)
 
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylla-dtest/issues/3372
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.parametrize("method", ["decommission", "kill"])
     @pytest.mark.use_cassandra_stress
-    @unmark.next_gating  # https://github.com/scylladb/scylla-dtest/issues/3372
     def test_seed(self, method):
         """
         Test if cassandra-stress works well when seed node is  "decommission" or "killed".

@@ -35,14 +35,13 @@ status_messages = (
 clients = ("Android", "iThing", "Chromium", "Mozilla", "Emacs")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.parametrize(
     "strategy",
     [
-        pytest.param("LeveledCompactionStrategy"),
-        pytest.param("SizeTieredCompactionStrategy"),
-        pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.next_gating),
-        pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.next_gating),
+        pytest.param("LeveledCompactionStrategy", marks=[pytest.mark.tier3, pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")]),
+        pytest.param("SizeTieredCompactionStrategy", marks=[pytest.mark.tier3, pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")]),
+        pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
+        pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
     ],
 )
 class TestWideRows(Tester):
@@ -558,7 +557,6 @@ class TestWideRows(Tester):
         self.cluster.compact()
         return row_number
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_wide_rows(self):
         self.write_wide_rows()

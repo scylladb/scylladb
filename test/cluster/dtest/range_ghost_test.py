@@ -11,9 +11,8 @@ import pytest
 from dtest_class import Tester, create_cf, create_ks
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestRangeGhosts(Tester):
     def test_ghosts(self):
         """Check range ghost are correctly removed by the system"""

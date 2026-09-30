@@ -40,7 +40,7 @@ from tools.data import (
     rows_to_list,
 )
 from tools.files import copy_files_to, get_node_cf_dir
-from tools.marks import unmark, with_feature
+from tools.marks import with_feature
 from tools.misc import ImmutableMapping, retry_till_success
 from tools.session import get_supported_features
 from tools.status import nodetool_gossipinfo, nodetool_status
@@ -54,8 +54,6 @@ def randbytes(n):
         yield random.getrandbits(8)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestNodetool(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
@@ -235,6 +233,7 @@ class TestNodetool(Tester):
                             res[k[0]][mt.group(1).strip()] = float(mt.group(2).strip())
         return res
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_decommission(self):
         """Ensure that nodetool decomission works
         starting two node cluster
@@ -300,6 +299,7 @@ class TestNodetool(Tester):
             for cf in res[ks]["tables"]:
                 self._verify_cfstats_cf(res[ks]["tables"][cf])
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     @pytest.mark.high_memory
@@ -374,6 +374,7 @@ class TestNodetool(Tester):
         self.assert_map_equal(table, "Maximum tombstones per slice (last five minutes)", 0)
         self.assert_map_less_equal(table, "Memtable data size", float(table["Memtable off heap memory used"]))
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_cfstats_syntax(self):
         """
@@ -440,6 +441,7 @@ class TestNodetool(Tester):
         else:
             assert not m, "unexpected snapshot " + snapshot + " found in keyspace " + ks
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_global_snapshot(self):
@@ -518,21 +520,25 @@ class TestNodetool(Tester):
         node1.nodetool("clearsnapshot -t" + tag)
         self.verify_snapshot(node1, "keyspace1", snapshot, exists=False)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_snapshot_tag(self):
         self.tst_snapshot("snaptag")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_snapshot_tag_keyspace(self):
         self.tst_snapshot("snaptag", keyspace="keyspace1")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_snapshot_tag_keyspace_cf(self):
         self.tst_snapshot("snaptag", keyspace="system_schema", column_family="tables")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_snapshot_tag_kc(self):
@@ -554,6 +560,7 @@ class TestNodetool(Tester):
         m = re.findall(r"^\s*([\d\.]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([\d\.]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s].*)\s*$", out, re.MULTILINE)
         return [self._list2ring(r) for r in m]
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_shutdown_during_sstable_upgrade(self):
         """Test that nodetool sstableupgrade command properly aborts
@@ -610,6 +617,7 @@ class TestNodetool(Tester):
         compressions = get_node_sstables_compression(node=node1)
         assert "SnappyCompressor" in compressions, f"Compression type unexpectedly not updated for {node1.name} sstables"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_global_create_after_clean(self):
@@ -678,6 +686,7 @@ class TestNodetool(Tester):
         table = output["keyspace1"]["tables"]["standard1"]
         self.assert_map_less(table, "SSTable count", sstable)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_general_compact(self):
@@ -690,6 +699,7 @@ class TestNodetool(Tester):
         """
         self._compact("")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_specific_compact(self):
@@ -736,6 +746,7 @@ class TestNodetool(Tester):
         res["tokens"] = [self._get_ring_entry(m) for m in tokens]
         return res
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_gossip_control(self):
         """
@@ -792,6 +803,7 @@ class TestNodetool(Tester):
             node.nodetool("disable" + cmd)
             assert not self.isrunning("status" + cmd, node), "Fail to disable " + cmd
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_binary(self):
         """
@@ -803,6 +815,7 @@ class TestNodetool(Tester):
         """
         self.tst_mgmt("binary")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_backup(self):
         """
@@ -857,6 +870,7 @@ class TestNodetool(Tester):
             cf = None
         return self.describering(node, ks, cf)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     # With tablets, replicas are not distributed evenly, but confined to racks.
     # The logic covered here is also tested in test.py and unit tests, so no point in maintaining this test with tablets.
@@ -988,15 +1002,18 @@ class TestNodetool(Tester):
             else:
                 assert "?" != val["Owns"], "missing own information"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_general_ring(self):
         self.check_ring()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/1057", reason="Call to service::get_local_storage_service().effective_ownership fails")
     @pytest.mark.use_cassandra_stress
     def test_keyspace_ring(self):
         self.check_ring("keyspace1")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_general_flush(self):
@@ -1010,6 +1027,7 @@ class TestNodetool(Tester):
         """
         self._flush("")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_keyspace_flush(self):
@@ -1023,6 +1041,7 @@ class TestNodetool(Tester):
         """
         self._flush(" keyspace1")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_keyspace_column_family_flush(self):
@@ -1059,6 +1078,7 @@ class TestNodetool(Tester):
                         res["vals"][val[0]][attribute] = val[index]
         return res
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_cfhistograms(self):
         """Test the nodetool cfhistograms
@@ -1122,6 +1142,7 @@ class TestNodetool(Tester):
                 return 0 if i == 0 else 1 + bucket_offsets[i - 1]
         return 0
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_sstables_in_tablehistograms(self):
         """
@@ -1178,6 +1199,7 @@ class TestNodetool(Tester):
         node = self.get_node(node)
         self.describecluster(node)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_describecluster(self):
         """Test the nodetool describecluster command"""
         cluster = self.cluster
@@ -1238,6 +1260,7 @@ class TestNodetool(Tester):
     def getendpoints(node, ks, cf, value):
         return node.nodetool("getendpoints " + ks + " " + cf + " " + value, True)[0]
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_getendpoints(self):
         """Test the nodetool getendpoints command
         start a cluster
@@ -1253,6 +1276,7 @@ class TestNodetool(Tester):
         endpoint = self.getendpoints(node, "ks1", "tbl1", "4")
         assert endpoint.startswith("127.0."), "Invalid endpoint returned '" + endpoint + "'"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_gossipinfo(self):
         cluster = self.cluster
         cluster.populate(2).start(wait_for_binary_proto=True)
@@ -1292,8 +1316,10 @@ class TestNodetool(Tester):
         response = requests.post(api_cmd)
         assert response.status_code == 200, response.text
 
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/14710
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.parametrize("strategy", ["TimeWindowCompactionStrategy", "SizeTieredCompactionStrategy"])
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/14710
     def test_resetlocalschema_api_issue_7811(self, strategy):
         cluster = self.cluster
         cluster.populate(nodes=generate_cluster_topology(rack_num=2)).start(wait_for_binary_proto=True)
@@ -1379,6 +1405,7 @@ class TestNodetool(Tester):
             assert node_status["host id"] == ValidUUID(), "Node host id has wrong uuid format"
             assert node_status["rack"] == PytestRegex(r"[\w-]+"), "Node rack has wrong format"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_status(self):
         """
@@ -1422,6 +1449,7 @@ class TestNodetool(Tester):
             node = self.cluster.nodelist()[0]
         self.netstats(node)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_info(self):
         """Test the `nodetool info` command
         Starts a cluster and call nodetool info
@@ -1509,6 +1537,7 @@ class TestNodetool(Tester):
             res["streams"].append(stream)
         return res
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_env(reason="bootstrap using streaming")
     @pytest.mark.use_cassandra_stress
     def test_netstats(self):
@@ -1534,6 +1563,7 @@ class TestNodetool(Tester):
         path = os.path.join(node.get_path(), folder)
         os.chmod(path, mod)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_nodetool_refresh_with_data_perms(self):
@@ -1588,6 +1618,7 @@ class TestNodetool(Tester):
         if expected_error:
             assert re.search(expected_error, str(error)), f"/{expected_error}/ not found in '{error}'"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_nodetool_refresh_with_wrong_upload_modes(self):
@@ -1635,6 +1666,7 @@ class TestNodetool(Tester):
         self._nodetool_refresh_expect_fail(node, expected_error=r"Must be either a regular file or a directory", debug_message="with symlink")
         os.remove(symlink_path)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_nodetool_refresh_with_load_and_stream(self):
         """
@@ -1652,6 +1684,7 @@ class TestNodetool(Tester):
         node.nodetool("refresh -- ks cf")
         node.watch_log_for(f"Loading new SSTables for keyspace=ks, table=cf, load_and_stream={load_and_stream}, primary_replica_only=false", timeout=10)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylla-tools-java/issues/282", reason="Nodetool refresh --load-and-stream doesn't support --primary-replica-only")
     @pytest.mark.single_node
     def test_nodetool_refresh_with_load_and_stream_with_primary_replica_only(self):
@@ -1682,6 +1715,7 @@ class TestNodetool(Tester):
                 assert latency_val >= cur, f"{latency_type} is not monotonic: {latency_val}({v} load), was {cur}"
                 cur = latency_val
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_proxyhistograms(self):
         """
@@ -1716,6 +1750,7 @@ class TestNodetool(Tester):
             node = self.cluster.nodelist()[0]
         return node.nodetool("version", True)[0]
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_version(self):
         self.run_cluster(nodes=1)
@@ -1790,6 +1825,7 @@ class TestNodetool(Tester):
             opt = []
         return self.stress(node, rf=rf, opr="mixed", times=times, duration=duration, col=col, pop=pop, opt=opt, expected_errors=expected_errors)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_get_sstable(self):
         """
@@ -1941,6 +1977,7 @@ class TestNodetool(Tester):
             except:
                 pass
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     # This test is testing a functionality which doesn't exist -- scrub
     # recovering arbitrary corruptions. Scrub was never designed to do that and
@@ -1954,6 +1991,7 @@ class TestNodetool(Tester):
         self._scrub_with_one_node_expect_data_loss(mode="SEGREGATE")
 
     # See test_scrub_with_one_node_expect_data_loss.
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/15693", reason="scrub can't recover arbitrary corruptions yet")
     def test_scrub_with_multi_nodes_expect_data_rebuild(self):
         cluster = self.run_cluster(nodes=3)
@@ -2045,6 +2083,7 @@ class TestNodetool(Tester):
         expected_pattern = "|".join(expected_errs)
         node.watch_log_for([expected_pattern, "Finished scrubbing"], timeout=timeout)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_scrub_sstable_with_invalid_fragment(self):
         """
@@ -2056,6 +2095,7 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="SKIP")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_scrub_ks_sstable_with_invalid_fragment(self):
         """
@@ -2063,6 +2103,7 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="SKIP", scrub_keyspace=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_scrub_segregate_sstable_with_invalid_fragment(self):
         """
@@ -2074,6 +2115,7 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="SEGREGATE")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_scrub_segregate_ks_sstable_with_invalid_fragment(self):
         """
@@ -2081,12 +2123,14 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="SEGREGATE", scrub_keyspace=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.single_node
-    @unmark.next_gating
     @pytest.mark.cluster_options(abort_on_malformed_sstable_error=False)
     def test_validate_with_one_node_expect_data_loss(self):
         self._scrub_with_one_node_expect_data_loss(mode="VALIDATE")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_validate_sstable_with_invalid_fragment(self):
         """
@@ -2095,6 +2139,7 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="VALIDATE")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_validate_ks_sstable_with_invalid_fragment(self):
         """
@@ -2102,6 +2147,7 @@ class TestNodetool(Tester):
         """
         self._scrub_sstable_with_invalid_fragment(mode="VALIDATE", scrub_keyspace=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_node_graceful_stop_during_stress_and_decommission(self, starting_size=4, node_count=10, rf=1):
         r"""
@@ -2193,6 +2239,7 @@ class TestNodetool(Tester):
         logger.info("Verifying node 3 process is not running")
         assert node3_process.is_running() is False, "Node 3 process didn't stop/exit correctly"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_sstable_info(self):
         """
@@ -2231,7 +2278,8 @@ class TestNodetool(Tester):
         assert tbl in out
 
     # remove test from next_gating due to https://github.com/scylladb/scylladb/issues/16219
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.use_cassandra_stress
     def test_disablebinary_and_disablegossip(self, tmp_path):
         def run_stress(node, num_keys, mode, consistency, limited_rows_per_second=None):
@@ -2302,8 +2350,7 @@ def set_node_probability(node, value: float):
     return set_result
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestGetTraceProbability(Tester):
     """
     Check gettraceprobablility command returned value after settraceprobablility operations:

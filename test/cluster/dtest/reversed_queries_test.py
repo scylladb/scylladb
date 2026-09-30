@@ -23,12 +23,9 @@ from paging_test import BasePagingTester, PageAssertionMixin, PageFetcher
 from tools.cluster import has_views_with_tablets_experimental_feature
 from tools.cluster_topology import generate_cluster_topology
 from tools.datahelp import create_rows
-from tools.marks import unmark
 from upgrade_test import UpgradeTester, upgrade_matrix_from_last_release_version
 
 logger = logging.getLogger(__name__)
-
-pytestmark = pytest.mark.next_gating
 
 
 class ConcurrentExecutor:
@@ -57,7 +54,7 @@ class ConcurrentExecutor:
             future.result()
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesPaging(BasePagingTester, PageAssertionMixin):
     def reversed_query_template(self, data, fetch_size, expected_page_count, expected_rows):
         session = self.prepare()
@@ -271,7 +268,7 @@ class BaseReversedQuerySelector:
         self.run_multi_partition_selects(session, bypass_cache, callback)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestSinglePartitionReversedQueriesSelectors(Tester, BaseReversedQuerySelector):
     def test_reverse_selectors(self):
@@ -294,7 +291,7 @@ class TestSinglePartitionReversedQueriesSelectors(Tester, BaseReversedQuerySelec
         self.run_single_partition_selects(session, bypass_cache=True)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestMultiPartitionReversedQueriesSelectors(Tester, BaseReversedQuerySelector):
     def test_reverse_selectors(self):
@@ -317,7 +314,7 @@ class TestMultiPartitionReversedQueriesSelectors(Tester, BaseReversedQuerySelect
         self.run_multi_partition_selects(session, bypass_cache=True)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestReversedQueriesMemoryUsage(Tester, ConcurrentExecutor):
     def prepare(self, nr_nodes):
@@ -380,7 +377,7 @@ class TestReversedQueriesMemoryUsage(Tester, ConcurrentExecutor):
         assert reverse_query_page_fetcher.pagecount() == normal_query_page_fetcher.pagecount()
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesReadRepair(Tester):
     def test_queries_with_read_repair(self):
         ROW_COUNT = 100
@@ -432,7 +429,7 @@ class TestReversedQueriesReadRepair(Tester):
         assert list(response) == expected_rows
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesMerging(Tester):
     def test_read_from_memtables_and_multiple_sstables(self):  # noqa: PLR0915
         # In order to test combining reader behavior, memtable/sstable rows
@@ -530,7 +527,7 @@ class TestReversedQueriesMerging(Tester):
         assert list(response) == expected_rows
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesOnTableWithReversedOrder(Tester):
     def test_reversed_query_on_table_with_reversed_order(self):
         ROW_COUNT = 100
@@ -556,10 +553,10 @@ class TestReversedQueriesOnTableWithReversedOrder(Tester):
         assert list(response) == expected_rows
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestReversedQueriesWithOverlappingRangeTombstones(Tester, ConcurrentExecutor):
-    @unmark.next_gating
     def test_reversed_query_with_overlapping_range_tombstones(self):
         TOMBSTONE_COUNT = 100 * 1000
 
@@ -605,7 +602,7 @@ class TestReversedQueriesWithOverlappingRangeTombstones(Tester, ConcurrentExecut
             raise
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesSelectorsDuringUpgrade(UpgradeTester, BaseReversedQuerySelector):
     __test__ = True
     upgrade_path = upgrade_matrix_from_last_release_version
@@ -667,7 +664,7 @@ class TestReversedQueriesSelectorsDuringUpgrade(UpgradeTester, BaseReversedQuery
             self.run_selects(session)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesReadRepairDuringUpgrade(UpgradeTester, BaseReversedQuerySelector):
     __test__ = True
     upgrade_path = upgrade_matrix_from_last_release_version
@@ -727,7 +724,7 @@ class TestReversedQueriesReadRepairDuringUpgrade(UpgradeTester, BaseReversedQuer
                 self.run_selects(session, bypass_cache=True, callback=clear_node_data)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
 class TestReversedQueriesWithTimeWindowCompactionStrategy(Tester):
     def test_reversed_queries_with_time_window_compaction_strategy(self):
@@ -768,7 +765,7 @@ class TestReversedQueriesWithTimeWindowCompactionStrategy(Tester):
         assert list(response) == expected_rows
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestReversedQueriesReadRepairBigMutationsSmallChanges(Tester):
     def test_queries_with_read_repair(self):
         ROW_COUNT = 10_000

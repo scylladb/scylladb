@@ -33,7 +33,7 @@ from tools.paging import PageFetcher
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class TestHelper(Tester):
@@ -213,7 +213,6 @@ class TestHelper(Tester):
         return res[0][0] if res else 0
 
 
-@pytest.mark.dtest_full
 class TestAvailability(TestHelper):
     """
     Test that we can read and write depending on the number of nodes that are alive and the consistency levels.
@@ -407,7 +406,6 @@ class TestAvailability(TestHelper):
         self._test_network_topology_strategy(combinations)
 
 
-@pytest.mark.dtest_full
 class TestAccuracy(TestHelper):
     """
     Test that we can consistently read back what we wrote depending on the write and read consitency levels.
@@ -698,7 +696,6 @@ class TestAccuracy(TestHelper):
         self._run_test_function_in_parallel(TestAccuracy.Validation.validate_users, self.nodes, self.rf_value.values(), combinations)
 
     @pytest.mark.skip_if(with_feature("tablets"))
-    @pytest.mark.dtest_debug
     def test_simple_strategy_counters(self):
         """
         Test for a single datacenter, counters table.
@@ -798,7 +795,6 @@ class TestAccuracy(TestHelper):
         self._run_test_function_in_parallel(TestAccuracy.Validation.validate_counters, self.nodes, self.rf_value.values(), combinations)
 
 
-@pytest.mark.dtest_full
 class TestConsistency(TestHelper):
     def test_short_read(self):
         """
@@ -925,7 +921,6 @@ class TestConsistency(TestHelper):
         node3.stop(wait_other_notice=True)
         assert_none(session, "SELECT * FROM t WHERE id = 0 LIMIT 1", cl=ConsistencyLevel.QUORUM)
 
-    @pytest.mark.dtest_debug
     def test_readrepair(self):
         cluster = self.cluster
         cluster_topology = generate_cluster_topology(rack_num=2)
@@ -1003,7 +998,7 @@ class TestConsistency(TestHelper):
             truncate_statement = SimpleStatement("TRUNCATE cf", consistency_level=ConsistencyLevel.QUORUM)
             session.execute(truncate_statement)
 
-    @pytest.mark.dtest_debug  # https://github.com/scylladb/scylla/issues/4384
+    # https://github.com/scylladb/scylla/issues/4384
     def test_quorum_available_during_failure(self):
         cl_value = ConsistencyLevel.QUORUM
         rf_value = 3

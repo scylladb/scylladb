@@ -221,8 +221,7 @@ class TracingReadAccessHelper:
         self._verify_tracing_info(output, node, table_name, "key")
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestTracingReadAccess(Tester, TracingReadAccessHelper):
     keyspace = "ks"
     table = "cf"

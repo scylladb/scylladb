@@ -15,9 +15,10 @@ from tools.cdc_utils import CDCInitializeHelper, CdcLogOperations, CDCTraceInfoM
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 @pytest.mark.scylla_cdc
-@pytest.mark.dtest_full
 class TestCDCTraceInfo(Tester, CDCInitializeHelper):
     keyspace = "ks"
     table = "cf"

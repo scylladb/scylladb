@@ -32,7 +32,7 @@ from tools.paging import PageAssertionMixin, PageFetcher, run_scenarios
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class BasePagingTester(Tester):
@@ -45,7 +45,6 @@ class BasePagingTester(Tester):
         return session
 
 
-@pytest.mark.dtest_full
 class TestPagingSize(BasePagingTester, PageAssertionMixin):
     """
     Basic tests relating to page size (relative to results set)
@@ -168,7 +167,6 @@ class TestPagingSize(BasePagingTester, PageAssertionMixin):
         self.assert_equal_ignore_order(pf.all_data(), expected_data)
 
 
-@pytest.mark.dtest_full
 class TestPagingWithModifiers(BasePagingTester, PageAssertionMixin):
     """
     Tests concerned with paging when CQL modifiers (such as order, limit, allow filtering) are used.
@@ -384,7 +382,6 @@ class TestPagingWithModifiers(BasePagingTester, PageAssertionMixin):
         )
 
 
-@pytest.mark.dtest_full
 class TestPagingData(BasePagingTester, PageAssertionMixin):
     def test_paging_a_single_wide_row(self):
         session = self.prepare()
@@ -1764,7 +1761,6 @@ class TestPagingData(BasePagingTester, PageAssertionMixin):
                 query_and_compare_results(**query_and_result)
 
 
-@pytest.mark.dtest_full
 class TestPagingDatasetChanges(BasePagingTester, PageAssertionMixin):
     """
     Tests concerned with paging when the queried dataset changes while pages are being retrieved.
@@ -1988,7 +1984,6 @@ class TestPagingDatasetChanges(BasePagingTester, PageAssertionMixin):
         # TODO: can we resume the node and expect to get more results from the result set or is it done?
 
 
-@pytest.mark.dtest_full
 class TestPagingQueryIsolation(BasePagingTester, PageAssertionMixin):
     """
     Tests concerned with isolation of paged queries (queries can't affect each other).
@@ -2076,7 +2071,6 @@ class TestPagingQueryIsolation(BasePagingTester, PageAssertionMixin):
         self.assert_equal_ignore_order(flatten_into_set(page_fetchers[10].all_data()), flatten_into_set(expected_data[:50000]))
 
 
-@pytest.mark.dtest_full
 class TestPagingWithDeletions(BasePagingTester, PageAssertionMixin):
     """
     Tests concerned with paging when deletions occur.
@@ -2384,7 +2378,6 @@ class TestPagingWithDeletions(BasePagingTester, PageAssertionMixin):
             assert [2, 2] == fetcher.num_results_all()
 
 
-@pytest.mark.dtest_full
 class TestPagingWithIndexingAndAggregation(BasePagingTester, PageAssertionMixin):
     """
     Tests concerned with paging when deletions occur.
@@ -2537,7 +2530,6 @@ class TestPagingWithIndexingAndAggregation(BasePagingTester, PageAssertionMixin)
         self.create_and_verify_id_results(session, ["someint", "somebigint"], id_val=2)
 
 
-@pytest.mark.dtest_full
 class TestUnpagedQueryLimit(Tester):
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):

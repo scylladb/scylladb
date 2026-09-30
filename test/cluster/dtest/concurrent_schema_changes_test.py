@@ -21,7 +21,6 @@ from dtest_class import Tester, create_ks
 from tools.assertions import assert_row_count_in_select
 from tools.cluster import new_node
 from tools.cluster_topology import generate_cluster_topology
-from tools.marks import unmark
 from tools.retrying import retrying
 from tools.tables_view_manager import index_is_built
 
@@ -35,8 +34,6 @@ def wait(delay=2):
     time.sleep(delay)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestConcurrentSchemaChanges(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_set_cluster_settings(self, fixture_dtest_setup):
@@ -155,6 +152,7 @@ class TestConcurrentSchemaChanges(Tester):
 
         __validate_schema()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_create_lots_of_tables_concurrently(self):
         """
         create tables across multiple threads concurrently
@@ -181,6 +179,7 @@ class TestConcurrentSchemaChanges(Tester):
         table_meta = session.cluster.metadata.keyspaces["lots_o_tables"].tables
         assert 250 == len(table_meta), f"expected 250, got len(table_meta)={len(table_meta)} "
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_create_lots_of_alters_concurrently(self):
         """
         create alters across multiple threads concurrently
@@ -217,6 +216,7 @@ class TestConcurrentSchemaChanges(Tester):
         self.validate_schema_consistent(node2, num_attempts=1)
         self.validate_schema_consistent(node3, num_attempts=1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.required_features("!tablets")  # Due to https://github.com/scylladb/scylladb/issues/17603
     def test_create_lots_of_indexes_concurrently(self, fixture_dtest_setup):
         """
@@ -272,7 +272,9 @@ class TestConcurrentSchemaChanges(Tester):
                 assert_row_count_in_select(session, f"select * from base_{n} where c1 = {ins}", 1)
                 assert_row_count_in_select(session, f"select * from base_{n} where c2 = {ins}", 1)
 
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/14934
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/14934
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_create_lots_of_mv_concurrently(self):
         """
         create materialized views across multiple threads concurrently
@@ -351,7 +353,8 @@ class TestConcurrentSchemaChanges(Tester):
         assert 0 == len(errors), "\n".join(errors)
 
     # Reason to exclude from next_gating: the test has failed runs in enterprise daily job
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_create_lots_of_schema_churn(self):
         """
         create tables, indexes, alters across multiple threads concurrently
@@ -367,7 +370,9 @@ class TestConcurrentSchemaChanges(Tester):
         self._verify_lots_of_schema_actions(session)
 
     # Reason to exclude from next_gating: the test has failed runs in enterprise daily jobs
-    @unmark.next_gating  # https://github.com/scylladb/scylla-enterprise/issues/3231
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylla-enterprise/issues/3231
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_create_lots_of_schema_churn_with_node_down(self, fixture_dtest_setup):
         """
         create tables, indexes, alters across multiple threads concurrently with a node down
@@ -392,6 +397,7 @@ class TestConcurrentSchemaChanges(Tester):
         node2.start(wait_other_notice=True)
         self._verify_lots_of_schema_actions(session)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_basic(self):
         """
         make several schema changes on the same node.
@@ -410,7 +416,7 @@ class TestConcurrentSchemaChanges(Tester):
 
         self.make_schema_changes(session, namespace="ns1")
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_changes_to_different_nodes(self):
         logger.debug("changes_to_different_nodes_test()")
         cluster = self.cluster
@@ -435,6 +441,7 @@ class TestConcurrentSchemaChanges(Tester):
         # check both, just because we can
         self.validate_schema_consistent(node2, num_attempts=1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_changes_while_node_down(self, fixture_dtest_setup):
         """
         makes schema changes while a node is down.
@@ -458,6 +465,7 @@ class TestConcurrentSchemaChanges(Tester):
 
         assert index_is_built(self.cluster, session, ks_name=f"ks_ns1", table_name=f"cf_ns1", index_name=f"index2_ns1")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_changes_while_node_toggle(self, fixture_dtest_setup):
         """
         makes schema changes while a node is down.
@@ -488,6 +496,7 @@ class TestConcurrentSchemaChanges(Tester):
         node3.start(wait_other_notice=True, wait_for_binary_proto=True)
         self.validate_schema_consistent(node1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_decommission_node(self):
         logger.debug("decommission_node_test()")
         cluster = self.cluster
@@ -523,7 +532,7 @@ class TestConcurrentSchemaChanges(Tester):
 
         self.validate_schema_consistent(node1)
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_snapshot(self):
         logger.debug("snapshot_test()")
         cluster = self.cluster
@@ -571,6 +580,7 @@ class TestConcurrentSchemaChanges(Tester):
         wait(2)
         self.validate_schema_consistent(node1)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_load(self):

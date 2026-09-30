@@ -9,21 +9,18 @@ import logging
 import pytest
 
 from cqlsh_tests.cqlsh_copy_tests import CqlshPrepare
-from tools.marks import unmark
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestCQLCast(CqlshPrepare):
     """Class provides interface for CAST scalar function"""
 
     COLUMN_NAME_TEMPLATE = "{}_clmn"
     KEYSPACE_NAME = "ks"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/3108",
                           reason="the error for an invalid cast names internal types (e.g. Int32Type) instead of the function signatures")
     def test_cast_negative(self):
@@ -31,93 +28,110 @@ class TestCQLCast(CqlshPrepare):
         test_from = ["text", "date"]
         self._test_run(test_from, TestData.NEGATIVE_VALUES, compare_error=True)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_udt(self):
         """Function performs positive tests CAST scalar function for user-defined type"""
         test_from = ["udt"]
         self._udt_test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_varint(self):
         """Function performs positive tests CAST scalar function for varint type"""
         test_from = ["varint"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_tinyint(self):
         """Function performs positive tests CAST scalar function for tinyint type"""
         test_from = ["tinyint"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_smallint(self):
         """Function performs positive tests CAST scalar function for smallint type"""
         test_from = ["smallint"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_int(self):
         """Function performs positive tests CAST scalar function for all int type"""
         test_from = ["int"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_bigint(self):
         """Function performs positive tests CAST scalar function for bigint type"""
         test_from = ["bigint"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_float(self):
         """Function performs positive tests CAST scalar function for float type"""
         test_from = ["float"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_double(self):
         """Function performs positive tests CAST scalar function for double type"""
         test_from = ["double"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_decimal(self):
         """Function performs positive tests CAST scalar function for decimal type"""
         test_from = ["decimal"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_date(self):
         """Function performs positive tests CAST scalar function for date type"""
         test_from = ["date"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_time(self):
         """Function performs positive tests CAST scalar function for time type"""
         test_from = ["time"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_cast_timestamp(self):
         """Function performs positive tests CAST scalar function for timestamp type"""
         test_from = ["timestamp"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_uuid(self):
         """Function performs positive tests CAST scalar function for uuid type"""
         test_from = ["uuid"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_boolean(self):
         """Function performs positive tests CAST scalar function for boolean"""
         test_from = ["boolean"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_ascii(self):
         """Function performs positive tests CAST scalar function for ascii type"""
         test_from = ["ascii"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_inet(self):
         """Function performs positive tests CAST scalar function for inet type"""
         test_from = ["inet"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_cast_timeuuid(self):
         """Function performs positive tests CAST scalar function for timeuuid type"""
         test_from = ["timeuuid"]
         self._test_run(test_from, TestData.POSITIVE_VALUES)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/13601",
                           reason="avg() of decimals differs from Cassandra's rounding (-2110054580.3 vs -2110054581)")
     def test_avg_cast_from_varint_to_decimal(self):

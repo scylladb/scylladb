@@ -33,8 +33,7 @@ from tools.files import get_node_cf_dir, get_sstables_files
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestBackupRestoreObjectStorage(Tester, ManagerBackupMixin, ScyllaManagerMixin):
     @pytest.fixture(params=["s3", "gcs"], scope="function", autouse=True)
     def setup_backend(self, request):

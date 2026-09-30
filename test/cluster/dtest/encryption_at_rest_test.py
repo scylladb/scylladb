@@ -27,7 +27,6 @@ from dtest_class import Tester, create_cf, wait_for
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import insert_c1c2, query_c1c2
 from tools.docker_utils import container_reload, container_remove, get_docker_client, get_ip_address_of_container, running_in_docker
-from tools.marks import unmark
 from tools.misc import generate_ssl_stores
 from tools.retrying import retrying
 
@@ -533,4 +532,4 @@ class EncryptionAtRestBase(Tester):
 
 
 def all_providers():
-    return [pytest.param(p, marks=[unmark.next_gating] if p == KeyProviderEnum.kmip else []) for p in KeyProviderEnum]
+    return [pytest.param(p) for p in KeyProviderEnum]

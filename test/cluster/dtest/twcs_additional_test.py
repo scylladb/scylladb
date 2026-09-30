@@ -21,9 +21,8 @@ from tools.misc import generate_random_text
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestTimeWindowCompactionStrategyAdditional(Tester):
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_full
     @pytest.mark.single_node
     def test_expired_sstables_are_compacted_separately(self):
         """

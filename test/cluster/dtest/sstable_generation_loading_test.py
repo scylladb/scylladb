@@ -17,14 +17,13 @@ import pytest
 
 from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
-from tools.marks import issue_open, requireif, unmark, with_feature
+from tools.marks import issue_open, requireif, with_feature
 from tools.misc import ImmutableMapping
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 class TestSSTableGenerationAndLoading(Tester):
     @pytest.fixture(scope="class", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):  # pylist:disable=unused-argument

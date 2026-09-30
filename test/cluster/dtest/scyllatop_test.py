@@ -23,8 +23,7 @@ from dtest_class import Tester
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestScyllaTop(Tester):
     def get_cli(self):
         node = self.cluster.nodelist()[0]
@@ -118,7 +117,6 @@ class TestScyllaTop(Tester):
         assert len(out) > 0, "Output should not be empty"
         os.remove(logfile)
 
-    @pytest.mark.dtest_debug
     @pytest.mark.use_cassandra_stress
     def test_default_start(self):
         """

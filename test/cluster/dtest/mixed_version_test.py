@@ -15,7 +15,6 @@ from ccmlib.utils.version import ComparableScyllaVersion
 
 from tools.assertions import assert_all, assert_invalid, assert_one, assert_row_count
 from tools.cluster_topology import generate_cluster_topology
-from tools.marks import unmark
 from upgrade_test import (
     UpgradeTester,
     upgrade_matrix_from_last_release_version,
@@ -24,8 +23,8 @@ from upgrade_test import (
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestSchemaChanges(UpgradeTester):
     __test__ = True
 
@@ -34,7 +33,7 @@ class TestSchemaChanges(UpgradeTester):
     ks = "test_upgrades"
     cf = "cf"
 
-    @unmark.next_gating  # https://github.com/scylladb/scylla-enterprise/issues/3237
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylla-enterprise/issues/3237
     def test_schema_and_data_on_mixed_versions_cluster(self, dtest_config):  # noqa: PLR0915
         """Check schema changes on a partly upgraded cluster.
 

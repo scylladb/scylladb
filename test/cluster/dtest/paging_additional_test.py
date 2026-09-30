@@ -20,8 +20,7 @@ from tools.metrics import get_node_metrics
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestAggregatePaging(BasePagingTester, PageAssertionMixin):
     """
     Basic aggregation tests using paging
@@ -85,7 +84,6 @@ class TestAggregatePaging(BasePagingTester, PageAssertionMixin):
         assert rows_count == [1], f"Expected 1 row, but got {rows_count}"
         assert all_data == [{"count": 1234}], f'Expected "{"count": 1234}", but got {all_data}'
 
-    @pytest.mark.dtest_debug
     def test_paged_count_with_clustering_key(self):
         self._test_paged_count_with_clustering_key("asc")
 
@@ -93,8 +91,6 @@ class TestAggregatePaging(BasePagingTester, PageAssertionMixin):
         self._test_paged_count_with_clustering_key("desc")
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestPagingSavedQueryStateBase(BasePagingTester):
     LOOKUPS = "querier_cache_lookups"
     MISSES = "querier_cache_misses"
@@ -148,8 +144,7 @@ class TestPagingSavedQueryStateBase(BasePagingTester):
         assert len(matched) == len(expected_metrics), f"Expected {len(expected_metrics)}, but got {len(matched)}"
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestLargePaging(TestPagingSavedQueryStateBase, PageAssertionMixin):
     """
     Tests for queries attempting to fetch large pages
@@ -193,7 +188,6 @@ class TestLargePaging(TestPagingSavedQueryStateBase, PageAssertionMixin):
         if validate_metrics:
             self.assert_nodes_metrics([{"lookups": pf.requested_pages - 1, "misses": -1, "resource_based_evictions": -1}] * len(self.cluster.nodelist()), verifier=verify_misses)
 
-    @pytest.mark.dtest_debug
     def test_large_page_range_queries(self):
         self.prepare_schema()
         self.session.execute("CREATE TABLE %s (pk text, ck text, v text, PRIMARY KEY(pk, ck))" % self.CF_NAME)
@@ -207,7 +201,6 @@ class TestLargePaging(TestPagingSavedQueryStateBase, PageAssertionMixin):
         self.fill_data(data=data, data_size=64 * 1024, keys=["pk", "ck"], vals=["v"])
         self.validate_data(query="select * from %s" % self.CF_NAME, fetch_size=1000, row_cnt=1000)
 
-    @pytest.mark.dtest_debug
     def test_large_page_range_queries_static_columns(self):
         self.prepare_schema()
         self.session.execute("CREATE TABLE %s (pk text, ck text, s text static, v text, PRIMARY KEY(pk, ck))" % self.CF_NAME)
@@ -248,8 +241,7 @@ class TestLargePaging(TestPagingSavedQueryStateBase, PageAssertionMixin):
         self.validate_data(query="select * from %s where pk = 0" % self.CF_NAME, fetch_size=15, row_cnt=1000, validate_metrics=True)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestPagingSavedQueryStateSingularRanges(TestPagingSavedQueryStateBase):
     """
     Tests concerned with querier-reuse during paging.
@@ -330,7 +322,6 @@ class TestPagingSavedQueryStateSingularRanges(TestPagingSavedQueryStateBase):
         assert requested_pages == 2, f"Expected 2 pages, got {requested_pages}"
         self.assert_nodes_metrics([{"lookups": requested_pages - 1}] * len(self.cluster.nodelist()))
 
-    @pytest.mark.dtest_debug
     def test_two_partitions(self):
         """
         Test that when the coordinator throws away parts of the results
@@ -407,8 +398,7 @@ class TestPagingSavedQueryStateSingularRanges(TestPagingSavedQueryStateBase):
         self.assert_nodes_metrics(({"lookups": pf.requested_pages - 1}, {}))
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestPagingQueryAlternativeConsistencyLevel(BasePagingTester):
     def test_consistency_level_quorum(self):
         test_ks_name = "keyspace_complex"

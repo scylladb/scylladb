@@ -13,7 +13,7 @@ from dtest_class import Tester
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestLargeColumn(Tester):
     """
     Check that inserting and reading large columns to the database doesn't cause off heap memory usage
@@ -35,8 +35,6 @@ class TestLargeColumn(Tester):
             assert field.strip().isdigit() or field == "NaN", "Expected numeric from fields from nodetool gcstats"
         return fields[6]
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
     def test_large_columns_mixed_workload_stress(self):

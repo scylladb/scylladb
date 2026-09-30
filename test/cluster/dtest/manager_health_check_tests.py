@@ -38,6 +38,7 @@ CLUSTER_NAME = "cluster1"
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestManagerHealthCheck(Tester, ScyllaManagerMixin):
     def get_manager_cluster(self):

@@ -17,16 +17,13 @@ from cdc_test import CDCInitializeHelper
 from dtest_class import Tester, create_ks
 from dtest_setup import DTestSetup
 from dtest_setup_overrides import DTestSetupOverrides
-from tools.marks import issue_open, unmark
+from tools.marks import issue_open
 from tools.misc import ImmutableMapping
 
 MB = 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
 
-
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.scylla_cdc
 class TestLargeColumnsWithCDC(Tester, CDCInitializeHelper):
@@ -55,6 +52,7 @@ class TestLargeColumnsWithCDC(Tester, CDCInitializeHelper):
         self.ignore_log_patterns.extend(self.expected_errors)
         return (node, session)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.parametrize("prepare_statements", [True, False], ids=["prepared_statements", "unprepared_statements"])
     def test_single_column_blob_max_size_with_cdc_preimage_full_postimage(self, prepare_statements: bool):
         """Test blob column with max size
@@ -93,8 +91,10 @@ class TestLargeColumnsWithCDC(Tester, CDCInitializeHelper):
             check_stalls=prepare_statements,
         )
 
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylla-dtest/issues/3354
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.parametrize("prepare_statements", [True, False], ids=["prepared_statements", "unprepared_statements"])
-    @unmark.next_gating  # https://github.com/scylladb/scylla-dtest/issues/3354
     def test_row_with_several_columns_of_blobs_with_cdc_preimage_full_postimage(self, prepare_statements: bool, fixture_dtest_setup: DTestSetup):
         """test row with several columns of blob type
 
@@ -151,6 +151,7 @@ class TestLargeColumnsWithCDC(Tester, CDCInitializeHelper):
             check_oversize_allocation=prepare_statements,
         )
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.parametrize("prepare_statements", [True, False], ids=["prepared_statements", "unprepared_statements"])
     def test_large_blob_in_map_delta_preimage_full(self, prepare_statements: bool):
         """test map type with large blob

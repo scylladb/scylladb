@@ -14,10 +14,9 @@ from dtest_setup_overrides import DTestSetupOverrides
 from tools.misc import ImmutableMapping
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.use_cassandra_stress
 @pytest.mark.parametrize("smp_options", [["--smp", "1"], ["--smp", "2"]], ids=["SMP=1", "SMP=2"])

@@ -175,9 +175,8 @@ class TestHelper(Tester):
         return self.get_sstables(table, indexes)
 
 
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.single_node
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestCompressionChunkSize(TestHelper):
     @pytest.mark.parametrize("compressor", ["DeflateCompressor", "LZ4Compressor", "SnappyCompressor"])
     def test_sstable_compression_chunk_size_positive(self, compressor):

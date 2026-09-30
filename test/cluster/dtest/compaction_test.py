@@ -28,7 +28,7 @@ from tools.cluster_topology import generate_cluster_topology
 from tools.context import disable_load_balancing
 from tools.data import chunks_list, create_c1c2_table, insert_c1c2, rows_to_list
 from tools.files import copy_files_to, get_node_cf_dir
-from tools.marks import unmark, with_feature
+from tools.marks import with_feature
 from tools.misc import ImmutableMapping, dump_sstables
 from tools.rest_clients import StorageServiceClient
 from tools.stress import fill_data_by_cs
@@ -36,15 +36,14 @@ from tools.stress import fill_data_by_cs
 logger = logging.getLogger(__file__)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.parametrize(
     "strategy",
     [
-        pytest.param("LeveledCompactionStrategy"),
-        pytest.param("SizeTieredCompactionStrategy", marks=pytest.mark.next_gating),
-        pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.next_gating),
-        pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.next_gating),
+        pytest.param("LeveledCompactionStrategy", marks=[pytest.mark.tier3, pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")]),
+        pytest.param("SizeTieredCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
+        pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
+        pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
     ],
 )
 @pytest.mark.cluster_options(repair_hints_batchlog_flush_cache_time_in_ms=0)
@@ -478,7 +477,6 @@ class TestCompaction(Tester):
         # Nevertheless, we pick 1.02
         assert final_value <= initial_value * 1.02
 
-    @pytest.mark.dtest_debug
     def test_sstable_deletion(self):
         """
         Test that sstables are deleted properly when able after compaction.
@@ -772,8 +770,8 @@ class TestCompaction(Tester):
 
             assert node.watch_log_for(exprs=log_expression, from_mark=mark)
 
-    @unmark.next_gating
-    @pytest.mark.dtest_heavy
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest runs it nightly in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_disable_autocompaction_doesnt_block_user_initiated_reshape_compaction(self):
         """

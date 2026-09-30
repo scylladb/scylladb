@@ -31,16 +31,15 @@ class TestDataDistribution(Tester):
         self.ks = "keyspace1"
         self.cf = "standard1"
 
-    @pytest.mark.dtest_full
     @pytest.mark.single_node
     @pytest.mark.parametrize("num_nodes", [3, 4, 6])
     @pytest.mark.parametrize(
         "strategy",
         [
-            pytest.param("LeveledCompactionStrategy"),
-            pytest.param("SizeTieredCompactionStrategy", marks=pytest.mark.next_gating),
-            pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.next_gating),
-            pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.next_gating),
+            pytest.param("LeveledCompactionStrategy", marks=[pytest.mark.tier3, pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")]),
+            pytest.param("SizeTieredCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
+            pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
+            pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")),
         ],
     )
     @pytest.mark.use_cassandra_stress

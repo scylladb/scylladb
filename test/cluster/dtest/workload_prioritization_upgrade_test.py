@@ -62,7 +62,7 @@ def query_runs_in_scheduling_group(client, sg):
     return semaphore_events > 0
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestWorkloadPrioritizationUpgrade(UpgradeTester):
     __test__ = True
     _multiprocess_can_split_ = False
@@ -141,7 +141,6 @@ class TestWorkloadPrioritizationUpgrade(UpgradeTester):
                     text=f"Waiting for a query of {role} to run under {sg} scheduling group",
                 )
 
-    @pytest.mark.next_gating
     def test_workload_prioritization_after_upgrade(self, dtest_config):
         self.clone_upgrade_path(dtest_config)
         config = {

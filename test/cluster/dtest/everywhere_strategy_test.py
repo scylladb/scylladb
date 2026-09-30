@@ -13,10 +13,9 @@ from dtest_class import Tester
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
-@pytest.mark.dtest_full
 # EverywhereStrategy is not supported with tablets
 @pytest.mark.required_features("!tablets")
 class TestEverywhereConsistency(Tester):

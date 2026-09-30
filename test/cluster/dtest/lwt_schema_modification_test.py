@@ -21,7 +21,7 @@ from tools.marks import issue_open, with_feature
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 KEYSPACE = "lwt_load_ks"
 
@@ -453,7 +453,6 @@ class MaterializedView:
             end_event.set()
 
 
-@pytest.mark.dtest_full
 @pytest.mark.lwt
 class TestLWTSchemaModification(Tester):
     """
@@ -599,7 +598,6 @@ class TestLWTSchemaModification(Tester):
         nodes = 8 if self.cluster.scylla_mode != "debug" else 4
         self._test_combine([LWTLoad(end=1), BatchInserts(node_idx=1)], smp=smp, nodes=nodes, loops=1, run_s=10)
 
-    @pytest.mark.next_gating
     def test_index_drop_add(self):
         loops = 4 if self.cluster.scylla_mode != "debug" else 2
         self._test_combine([LWTLoad(row_start=1001, row_end=9999), ReadRows(row_end=1000), IndexDropAdd(inter_delay=0.5)], nrows=10000, loops=loops, run_s=10)

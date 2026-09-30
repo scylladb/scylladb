@@ -20,9 +20,7 @@ from tools.sslkeygen import wait_for_cert_reload
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_debug
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestInternodeSSL(Tester):
     def test_putget_with_internode_ssl(self):
         """

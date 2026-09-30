@@ -41,11 +41,8 @@ from dsr.scylla_cluster.actions import (
 from dsr.scylla_cluster.cluster import ScyllaClusterTest
 from dtest_class import Tester
 from dtest_setup import DTestSetup
-from tools.marks import unmark
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestRandomPaxos(Tester):
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup: DTestSetup):
@@ -76,6 +73,7 @@ class TestRandomPaxos(Tester):
             report.nodeid = docstring
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_add_decommission_reboot(self, request: pytest.FixtureRequest):
         """
@@ -100,7 +98,8 @@ class TestRandomPaxos(Tester):
 
     # Reason for unmark: this test ran more than 40 minutes on several occasions
     # this test is very heavy and might fail in debug, running in dev and release mode gives us a good picture of this scenario
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_grow(self, request: pytest.FixtureRequest):
         """
@@ -152,6 +151,7 @@ class TestRandomPaxos(Tester):
         test_info.execute(tester=self)
 
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
     def test_topology_replace(self, request: pytest.FixtureRequest):
         """

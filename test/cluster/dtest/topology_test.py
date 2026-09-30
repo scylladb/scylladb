@@ -18,14 +18,11 @@ from dtest_class import Tester, create_cf, create_ks
 from tools.assertions import assert_almost_equal
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import insert_c1c2, query_c1c2
-from tools.marks import unmark
 from tools.status import wait_for_nodes_status
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 class TestTopology(Tester):
     REMOVENODE_REJECT_MSG = r"Rejected removenode operation.*the node being removed is alive, maybe you should use decommission instead"
     REMOVENODE_HOSTID_NOT_IN_CLUSTER = "Host ID not found in the cluster"
@@ -47,6 +44,7 @@ class TestTopology(Tester):
         for current_node in self.cluster.nodelist():
             current_node.flush()
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_decommissioned_node_cant_rejoin(self, fixture_dtest_setup):
         """
         @jira_ticket CASSANDRA-8801
@@ -81,7 +79,7 @@ class TestTopology(Tester):
             time.sleep(1)
         assert not node3.is_running()
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     # FIXME: https://github.com/scylladb/scylla-dtest/issues/5310
     @pytest.mark.cluster_options(enable_small_table_optimization_for_rbno=False)
     def test_crash_during_decommission(self):
@@ -147,7 +145,8 @@ class TestTopology(Tester):
         logger.debug(out)
         return out
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_remove_node_alive(self):
         cluster_topology = generate_cluster_topology(rack_num=3)
         self.prepare_cluster(cluster_topology, rf=3)
@@ -166,6 +165,7 @@ class TestTopology(Tester):
         if not found_messages:
             raise Exception("Removenode reject message was not found in logs")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_remove_node_alive_in_gossip(self):
         cluster_topology = generate_cluster_topology(rack_num=3)
         self.prepare_cluster(cluster_topology, rf=3)
@@ -188,6 +188,7 @@ class TestTopology(Tester):
         if not found_messages:
             raise Exception("Removenode reject message was not found in logs")
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_removenode_rejected_before_decommision_node(self):
         cluster_topology = generate_cluster_topology(rack_num=2, nodes_per_rack=2)
         # tablets enforces the RF constraints, so add one more node to the

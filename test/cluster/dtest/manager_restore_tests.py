@@ -91,6 +91,7 @@ class TestScyllaMgmtRestoreBase(Tester, ManagerBackupMixin, ScyllaManagerMixin):
         self.cluster.stress(["read", f"n={number_of_rows}", "-rate", f"threads={threads}"])
 
 
+@pytest.mark.non_gating
 @pytest.mark.scylla_manager
 class TestScyllaMgmtRestore(TestScyllaMgmtRestoreBase):
     def test_basic_restore(self):
@@ -519,7 +520,8 @@ class TestScyllaMgmtRestore(TestScyllaMgmtRestoreBase):
         assert self._template_post_restore_repair_only_restored_table_is_repaired(secondary_cluster, key_range={"ks": {"cf_2": (1, 21)}}), "Restoring the data of one table caused a different table in the same keyspace to be repaired"
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.scylla_manager
 class TestRestoreWithEaR(EncryptionAtRestBase, TestScyllaMgmtRestoreBase):
     def config_and_create_cluster(self, nodes, extra_config_options=None, cluster=None, kss=None, restart=False):

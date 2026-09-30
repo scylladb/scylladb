@@ -195,27 +195,33 @@ class BaseHelpers(Tester):
                     assert getattr(result[0], k) == row_content[k], error_string
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class MigrationTestBase(BaseHelpers):
     __test__ = False
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_without_compression(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c2) VALUES ('abc', 'cde');
         self._run_basic_migration_test("without_compression", {"key": "abc", "c1": None, "c2": "cde"})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_lz4_compression(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
         self._run_basic_migration_test("with_lz4_compression", {"key": "a", "c1": "abc", "c2": "cde"}, compression="LZ4")
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_compact_storage(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
         self._run_basic_migration_test("with_compact_storage", {"key": "a", "c1": "abc", "c2": "cde"}, compact_storage=True)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_compact_storage_and_composite_key(self):
         """
         Test that we can migrate a cassandra sstable with compact storage and clustering key
@@ -223,11 +229,15 @@ class MigrationTestBase(BaseHelpers):
         query = "CREATE COLUMNFAMILY  ks.cf (pk varchar, ck1 text, v1 text, PRIMARY KEY (pk, ck1)) WITH COMPACT STORAGE"
         self._run_basic_migration_test("with_compact_storage_and_composite_key", {"pk": "a", "ck1": "b", "v1": "abc"}, compact_storage=True, query=query)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_expired_ttl(self):
         # Data inserted in c* with the following query: INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde') USING TTL 1;
         # Expect no keys because the only one inserted is expired.
         self._run_basic_migration_test("with_expired_ttl", None, sleep=10)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_cell_tombstone(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
@@ -235,6 +245,8 @@ class MigrationTestBase(BaseHelpers):
         # DELETE c2 FROM ks.cf where key = 'a';
         self._run_basic_migration_test("with_cell_tombstone", {"key": "a", "c1": "abc", "c2": None})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_row_tombstone(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
@@ -242,6 +254,8 @@ class MigrationTestBase(BaseHelpers):
         # DELETE FROM ks.cf where key = 'a';
         self._run_basic_migration_test("with_row_tombstone", None)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_range_boundary_tombstone(self):
         if self.version in ("2_1_x", "2_2_x"):
             skip_env("Test not supported in version 2.1.x or 2.2.x")
@@ -271,6 +285,8 @@ class MigrationTestBase(BaseHelpers):
         assert result[0].pk == 1, "check partition key"
         assert result[0].ck == 1, "check clustering key"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_range_tombstone(self):
         # Content generated with:
         # INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
@@ -280,6 +296,8 @@ class MigrationTestBase(BaseHelpers):
         # DELETE FROM ks.cf WHERE key IN ('a', 'b');
         self._run_basic_migration_test("with_range_tombstone", {"key": "c", "c1": "abc", "c2": "cde"})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_clustering_key_range_tombstone(self):
         if self.version in ("2_1_x", "2_2_x"):
             skip_env("Test not supported in version 2.1.x or 2.2.x")
@@ -313,6 +331,8 @@ class MigrationTestBase(BaseHelpers):
         assert result[1].ck == 5, "check clustering key of row 2"
         assert result[1].v == 1, "check data of row 2"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_wide_row(self):
         node1 = self.start_cluster_and_get_node1()
 
@@ -336,21 +356,29 @@ class MigrationTestBase(BaseHelpers):
         assert result[2].c == "b", "check column c1"
         assert result[2].v == "b", "check column c1"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_collection_set(self):
         # CREATE COLUMNFAMILY ks.cf (key varchar PRIMARY KEY, messages set<text>);
         # INSERT INTO ks.cf (key, messages) VALUES ( 'a', {'hello world', 'scylla', 'scylladb', 'test'});
         self._run_migration_test_for_collection("with_collection_set", "set<text>", {"a": {"hello world", "scylla", "scylladb", "test"}})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_collection_list(self):
         # CREATE COLUMNFAMILY ks.cf (key varchar PRIMARY KEY, messages list<text>);
         # INSERT INTO ks.cf (key, messages) VALUES ( 'a', ['scylladb', 'scylla', 'hello world', 'test']);
         self._run_migration_test_for_collection("with_collection_list", "list<text>", {"a": ["scylladb", "scylla", "hello world", "test"]})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_collection_map(self):
         # CREATE COLUMNFAMILY ks.cf (key varchar PRIMARY KEY, messages map<varchar, text>)
         # INSERT INTO ks.cf (key, messages) VALUES ( 'a', { 'a':'value1', 'b':'value2' });
         self._run_migration_test_for_collection("with_collection_map", "map<varchar, text>", {"a": {"a": "value1", "b": "value2"}})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_frozen_collection_map(self):
         # CREATE COLUMNFAMILY ks.cf (key varchar PRIMARY KEY, messages frozen<map<varchar, text>>) ...
         # C* returns [Row(key=u'a', messages=OrderedMapSerializedKey([(u'a', u'value1'), (u'b', u'value2')])),
@@ -358,6 +386,8 @@ class MigrationTestBase(BaseHelpers):
         # querying the whole content of sstable with frozen collection map
         self._run_migration_test_for_collection("with_frozen_collection_map", "frozen<map<varchar, text>>", {"a": {"a": "value1", "b": "value2"}, "b": {"a": "value1", "b": "value2"}})
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_static_cell(self):
         node1 = self.start_cluster_and_get_node1()
 
@@ -379,6 +409,8 @@ class MigrationTestBase(BaseHelpers):
         assert result[1].i == 1, "check clustering key"
         assert result[1].s == "new", "check static cell"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_overlapping_tombstones(self):
         node1 = self.start_cluster_and_get_node1()
 
@@ -413,6 +445,8 @@ class MigrationTestBase(BaseHelpers):
         assert result[0].ck2 == "aaa", "check partition key"
         assert result[0].data == "fff", "check data"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_user_defined_types(self):
         node1 = self.start_cluster_and_get_node1()
 
@@ -435,6 +469,8 @@ class MigrationTestBase(BaseHelpers):
 
     # Test that scylla's issue 1212 is fixed, look: https://github.com/scylladb/scylla/issues/1212
     # Refresh procedure should ask row cache to evict some rows covered by new sstables.
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_to_check_consistency(self):
         node1 = self.start_cluster_and_get_node1()
 
@@ -672,7 +708,6 @@ class MigrationTestBase(BaseHelpers):
 #
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestMigration(MigrationTestBase):
     __test__ = True
@@ -707,11 +742,14 @@ class TestMigration(MigrationTestBase):
             if message:
                 assert message in str(error), error
 
-    @pytest.mark.dtest_debug
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_if(with_feature("tablets"))
     def test_migrate_sstable_with_counter(self):
         super().test_migrate_sstable_with_counter()
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_migrate_sstable_with_variant_data_types(self):
         super().test_migrate_sstable_with_variant_data_types()
 
@@ -719,7 +757,8 @@ class TestMigration(MigrationTestBase):
         return "uses org.apache.cassandra.dht.RandomPartitioner" + " partitioner which is different than" + " org.apache.cassandra.dht.Murmur3Partitioner" + " partitioner used by the database"
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 @pytest.mark.single_node
 class TestMigrationUpgradeSSTables(TestMigration):
     __test__ = True
@@ -766,7 +805,8 @@ class TestMigrationUpgradeSSTables(TestMigration):
 
 # @skip('not run every build')
 # @attr('long','compare-cassandra')
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestTTLWithMigrate(Tester):
     """Test Time To Live Feature with Migration"""
 
@@ -1023,7 +1063,8 @@ class TestTTLWithMigrate(Tester):
         return json.loads(res.stdout)["sstables"]["anonymous"]
 
 
-@pytest.mark.dtest_full
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
 class TestLoadAndStream(BaseHelpers):
     KEYSPACE_NAME = "keyspace1"
     TABLE_NAME = "standard1"

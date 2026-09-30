@@ -20,12 +20,9 @@ from dtest_setup import DTestSetup
 from tools.assertions import assert_none, assert_one, assert_row_count
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import prepare_statement
-from tools.marks import unmark
 from tools.metrics import get_node_metrics
 
 logger = logging.getLogger(__name__)
-
-pytestmark = pytest.mark.next_gating
 
 
 def shutdown_all_sessions(sessions: list):
@@ -49,7 +46,6 @@ def encode_int_pk_to_row_key_blob(key: int) -> bytes:
     return struct.pack(">i", key)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.lwt
 class TestLwt(Tester):
     @pytest.fixture(autouse=True)
@@ -68,6 +64,7 @@ class TestLwt(Tester):
         session.execute(table_cql)
         return node, session
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     @pytest.mark.required_features("!tablets")  # scylladb/scylla-dtest#3879
     def test_no_cross_shard_ops(self):
@@ -113,6 +110,7 @@ class TestLwt(Tester):
         cql = "DROP TABLE IF EXISTS t"
         session.execute(cql)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_metrics(self):
         # Because of
@@ -170,7 +168,8 @@ class TestLwt(Tester):
         # scylla_storage_proxy_coordinator_cas_read_unfinished_commit
         # scylla_storage_proxy_coordinator_cas_write_unfinished_commit
 
-    @unmark.next_gating
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_read_round_optimization(self):
         """
         3.5 Ensure read-round-optimization works: update the record using
@@ -247,6 +246,7 @@ class TestLwt(Tester):
         after = get_node_metrics(get_ip_from_node(node), metrics=[name])
         assert after.get(name, 0) - before.get(name, 0) == key_count
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_basic_distributed(self):  # noqa: PLR0915
         """Basic distributed tests (3.1 - 3.4 from the test plan)."""
 
@@ -345,6 +345,7 @@ class TestLwt(Tester):
         cql = "DROP TABLE IF EXISTS t"
         session3.execute(cql)
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_multi_dc(self):
         # 4.1 Check LOCAL_QUORUM works as expected if the other DC is not
         # available.
@@ -400,6 +401,7 @@ class TestLwt(Tester):
     def create_exclusive_sessions_for_every_node(self, cluster):
         return (self.exclusive_cql_connection(node) for node in cluster.nodelist())
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_not_deterministic_function_in_pk(self):
         table_name = "test"
         _node, session = self.case_prologue(table_cql=f"CREATE TABLE IF NOT EXISTS {table_name} (pk1 uuid, pk2 timestamp, ck date, PRIMARY KEY((pk1, pk2), ck))")
@@ -420,7 +422,7 @@ class TestLwt(Tester):
         assert_row_count(session=session, table_name=table_name, expected=rows)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.lwt
 class TestLWTPaxos(Tester):
     @pytest.fixture(autouse=True)
@@ -780,7 +782,7 @@ class TestLWTPaxos(Tester):
             create_cf(session=session1, name=table_name, key_type="int", columns={"v1": "int"}, paxos_grace_seconds=-1)
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.lwt
 class TestPaxosBug(Tester):
     def test_synced_most_recent_commit_in_cas_should_not_cause_timeouts(self):
@@ -853,10 +855,9 @@ error_injections = [
 ]
 
 
-@pytest.mark.dtest_full
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 @pytest.mark.lwt
 class TestLwtReadLinearizability(Tester):
-    @pytest.mark.dtest_debug
     @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
     def test_read_linearizability(self):
         """Consider 3 nodes A, B and C and a LWT failed write operation that managed to get V

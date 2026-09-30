@@ -40,7 +40,6 @@ bootstrap_start_log_pat = r"Starting to bootstrap|raft topology: start streaming
 bootstrap_done_log_pat = r"Bootstrap completed!|raft topology: streaming completed|raft_topology - streaming completed"
 
 
-@pytest.mark.dtest_full
 class TestBootstrap(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
@@ -69,9 +68,7 @@ class TestBootstrap(Tester):
             return initial_value
         return -1
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
-    @pytest.mark.dtest_smoke
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.single_node
     def test_start_stop(self):
         logger.info("populating cluster with one node")
@@ -83,9 +80,7 @@ class TestBootstrap(Tester):
         cluster.stop()
         logger.info("done")
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
-    @pytest.mark.dtest_smoke
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_start_stop_node(self):
         logger.info("populating cluster with three nodes")
         cluster = self.cluster
@@ -99,8 +94,7 @@ class TestBootstrap(Tester):
         cluster.stop()
         logger.info("done")
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_add_node(self):
         logger.info("populating cluster with three nodes")
         cluster = self.cluster
@@ -115,8 +109,7 @@ class TestBootstrap(Tester):
         cluster.stop()
         logger.info("done")
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_add_detached_node(self, request: pytest.FixtureRequest):
         logger.info("populating cluster with three nodes")
         cluster = self.cluster
@@ -138,7 +131,7 @@ class TestBootstrap(Tester):
         cluster.stop()
         logger.info("done")
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     # Tablets are migrated asynchronously post bootstrap,
     # without offstrastegy compaction.
     @pytest.mark.required_features("!tablets")
@@ -188,7 +181,7 @@ class TestBootstrap(Tester):
         session = self.patient_cql_connection(node2)
         assert_one(session, "SELECT count(*) from ks.cf", [keys], cl=ConsistencyLevel.ONE)
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_simple_bootstrap(self):
         cluster = self.cluster
         tokens = cluster.balanced_tokens(2)
@@ -245,6 +238,8 @@ class TestBootstrap(Tester):
         assert_almost_equal(data_total_size_node1, data_total_size_node1_after + data_total_size_node2_after, error=0.3)
         assert_almost_equal(data_total_size_node1_after, data_total_size_node2_after, error=0.3)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.use_cassandra_stress
     def test_read_from_bootstrapped_node(self):
         """Test bootstrapped node sees existing data, eg. CASSANDRA-6648"""
@@ -266,8 +261,7 @@ class TestBootstrap(Tester):
         new_rows = list(session.execute(f"SELECT * FROM {stress_table}"))
         assert original_rows == new_rows
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.use_cassandra_stress
     def test_manual_bootstrap(self):
         """Test adding a new node and bootstrapping it manually. No auto_bootstrap.
@@ -295,8 +289,8 @@ class TestBootstrap(Tester):
         current_rows = list(session.execute("SELECT * FROM %s" % stress_table))
         assert original_rows == current_rows
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.skip_mode(mode="debug", reason="test is too slow in debug mode")
-    @pytest.mark.next_gating
     @pytest.mark.use_cassandra_stress
     def test_local_quorum_bootstrap(self, tmp_path):
         """Test that CL local_quorum works while a node is bootstrapping. CASSANDRA-8058"""
@@ -362,6 +356,8 @@ class TestBootstrap(Tester):
 
         assert off_strategy_run, "off-strategy was not started during bootstrap"
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.use_cassandra_stress
     def test_decommissioned_wiped_node_can_join(self):
         """
@@ -417,6 +413,8 @@ class TestBootstrap(Tester):
         if "tablets" not in self.scylla_features:
             self._validate_off_strategy_started(node=node4, keyspace=keyspace_name, table=table_name, from_mark=mark)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.use_cassandra_stress
     def test_failed_bootstrap_wiped_node_can_join(self):
         """
@@ -530,15 +528,23 @@ class TestBootstrap(Tester):
         for key in range(10000):
             query_c1c2(session, key, ConsistencyLevel.QUORUM)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_full_cluster_recovery_after_forcibly_stop_3_nodes_rf_3(self):
         self._full_cluster_recovery_after_stop(gently=False, num_of_nodes=3, rf=3)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_full_cluster_recovery_after_gentle_stop_6_nodes_rf_2(self):
         self._full_cluster_recovery_after_stop(gently=True, num_of_nodes=6, rf=2)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_full_cluster_recovery_after_forcibly_stop_4_nodes_rf_1(self):
         self._full_cluster_recovery_after_stop(gently=False, num_of_nodes=4, rf=1)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.parametrize(
         "is_gracefully",
         [
@@ -631,6 +637,8 @@ class TestBootstrap(Tester):
         results = stress_thread.result()
         assert_cs_success(results)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.parametrize(
         "is_gracefully",
         [
@@ -717,6 +725,8 @@ class TestBootstrap(Tester):
         assert_cs_success(results)
         logger.debug(format_cs_output(results))
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_reject_node_bootstrap_no_gossip(self):
         """
         Node n4 will learn the ip and uuid of n3, but it does not know the gossip status of n3 since gossip status is
@@ -772,6 +782,8 @@ class TestBootstrap(Tester):
         for k in range(n_of_keys):
             query_c1c2(session, k, consistency=ConsistencyLevel.QUORUM)
 
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_reject_bootstrap_wiped_node_misspelled_seeds(self):
         """
         Regression test for https://github.com/scylladb/scylla-enterprise/issues/3523

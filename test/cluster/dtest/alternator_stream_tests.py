@@ -20,16 +20,15 @@ from alternator_utils import (
     StreamsTable,
 )
 from tools.cluster import new_node
-from tools.marks import unmark, with_feature
+from tools.marks import with_feature
 from tools.retrying import retrying
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
 @pytest.mark.skip_if(with_feature("tablets"))
 class TestAlternatorStreams(BaseAlternatorStream):
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_verify_all_nodes_have_same_stream(self):
         num_of_items = NUM_OF_ITEMS
         self.prepare_dynamodb_cluster(num_of_nodes=3)
@@ -43,6 +42,7 @@ class TestAlternatorStreams(BaseAlternatorStream):
             diff = self.compare_table_keys_only_data(expected_table_data=expected_items, table_data=records)
             assert not diff, f"The following keys are missing '{pformat(diff)}'"
 
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
     def test_verify_stream_records_after_topology_changed(self):  # noqa: PLR0915
         """
@@ -115,7 +115,7 @@ class TestAlternatorStreams(BaseAlternatorStream):
         self.cluster.remove(node4, wait_other_notice=True)
         _verify_items(_node=node5, _expected_table_data=expected_table_data, _num_of_requests=len(expected_table_data), event_names=frozenset(("INSERT",)))
 
-    @pytest.mark.next_gating
+    @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
     def test_list_streams_limit_parameter(self):
         """
         Test the list_streams command limit parameter.
@@ -148,7 +148,9 @@ class TestAlternatorStreams(BaseAlternatorStream):
         empty_streams_list = dynamodb_api.stream.list_streams(ExclusiveStartStreamArn=last_evaluated_stream_arn)["Streams"]
         assert len(empty_streams_list) == 0, f"Got unexpected list of Streams after the last evaluated Stream: {empty_streams_list}"
 
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/15260
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/15260
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_updated_shards_during_add_decommission_node(self):
         """
         Verify how open Streams shards react while the same node is repeatedly
@@ -230,7 +232,9 @@ class TestAlternatorStreams(BaseAlternatorStream):
             wait_for_open_shards_diff()
         decommission_thread.join()
 
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/15260
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/15260
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/DTEST-200",
                           reason="no joining node is found after the bootstrap error handling change")
     def test_sequence_numbers_during_add_decommission_node(self):
@@ -286,7 +290,9 @@ class TestAlternatorStreams(BaseAlternatorStream):
 
         decommission_thread.join()
 
-    @unmark.next_gating  # https://github.com/scylladb/scylladb/issues/15260
+    # scylla-dtest took it out of gating: https://github.com/scylladb/scylladb/issues/15260
+    @pytest.mark.tier3
+    @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     def test_added_node_gets_closed_shards(self):
         """
         test scenario:

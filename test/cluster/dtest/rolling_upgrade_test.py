@@ -24,7 +24,7 @@ from upgrade_test import UpgradeTester, tablets_supported, upgrade_matrix_from_l
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class RollingUpgradeBase(UpgradeTester):
@@ -288,7 +288,6 @@ class RollingUpgradeBase(UpgradeTester):
             yaml.safe_dump(data, fp)
 
 
-@pytest.mark.dtest_full
 class TestRollingUpgrade(RollingUpgradeBase):
     __test__ = True
     _multiprocess_can_split_ = False

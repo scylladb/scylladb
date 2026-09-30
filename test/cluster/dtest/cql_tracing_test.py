@@ -33,7 +33,7 @@ from tools.stress import assert_cs_success
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
+pytestmark = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 
 
 class PrepareClusterHelper(Tester):
@@ -58,9 +58,6 @@ class PrepareClusterHelper(Tester):
         return session
 
 
-@pytest.mark.next_gating
-@pytest.mark.dtest_debug
-@pytest.mark.dtest_full
 class TestCqlTracing(PrepareClusterHelper):
     """
     Test that the default implementation for tracing works.
@@ -280,7 +277,6 @@ class TestCqlTracing(PrepareClusterHelper):
         return 0
 
 
-@pytest.mark.dtest_full
 class TestSlowQueryTracing(PrepareClusterHelper):
     """
     This class represents tests for Slow Query Logging tracing type.

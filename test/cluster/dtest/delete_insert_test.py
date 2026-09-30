@@ -21,8 +21,7 @@ from tools.cluster_topology import generate_cluster_topology
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
-@pytest.mark.next_gating
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
 class TestDeleteInsert(Tester):
     """
     Examines scenarios around deleting data and adding data back with the same key
