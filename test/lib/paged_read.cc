@@ -27,6 +27,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "locator/token_range_splitter.hh"
+#include "query/query-result-writer.hh"
 #include "query/query_result_merger.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "readers/from_mutations.hh"
@@ -128,6 +129,58 @@ mutation_source make_source(lw_shared_ptr<const utils::chunked_vector<mutation>>
     });
 }
 
+// `m` without what lies at or after `pos` in the order of `query_schema`,
+// which is reversed for a reversed query. `m` uses the table's schema. The
+// partition tombstone precedes every position of the partition, and the static
+// row precedes every clustering position.
+mutation cut_before(const schema& query_schema, const mutation& m, position_in_partition_view pos) {
+    const auto& s = *m.schema();
+    const bool reversed = query_schema.version() != s.version();
+    switch (pos.region()) {
+    case partition_region::partition_start:
+        return mutation(m.schema(), m.decorated_key());
+    case partition_region::static_row: {
+        mutation header(m.schema(), m.decorated_key());
+        header.partition().apply(m.partition().partition_tombstone());
+        return header;
+    }
+    case partition_region::clustered: {
+        if (position_in_partition(pos).is_before_all_clustered_rows(query_schema)) {
+            return m.sliced({});
+        }
+        // The positions before `pos` in the query's order.
+        auto before = reversed
+                ? position_range(position_in_partition(pos.reversed()), position_in_partition::after_all_clustered_rows())
+                : position_range(position_in_partition::before_all_clustered_rows(), position_in_partition(pos));
+        auto range = position_range_to_clustering_range(before, s);
+        return m.sliced(range ? query::clustering_row_ranges{*range} : query::clustering_row_ranges{});
+    }
+    case partition_region::partition_end:
+        return m;
+    }
+    std::abort();
+}
+
+// `cmd` without the row, partition and tombstone limits. It keeps the
+// per-partition limit, and DISTINCT, which is a per-partition limit of one.
+query::read_command without_page_limits(const query::read_command& cmd) {
+    auto unlimited = cmd;
+    unlimited.set_row_limit(query::max_rows);
+    unlimited.partition_limit = query::max_partitions;
+    unlimited.tombstone_limit = static_cast<uint64_t>(query::tombstone_limit::max);
+    return unlimited;
+}
+
+// `cmd` without its row, partition, per-partition and tombstone limits. A
+// DISTINCT query has a per-partition limit of one, so the command loses the
+// distinct option too.
+query::read_command without_limits(const query::read_command& cmd) {
+    auto unlimited = without_page_limits(cmd);
+    unlimited.slice.set_partition_row_limit(query::partition_max_rows);
+    unlimited.slice.options.remove<query::partition_slice::option::distinct>();
+    return unlimited;
+}
+
 int32_t pk_of(const read_model::operation& op) {
     return std::visit([] (const auto& o) { return o.pk; }, op);
 }
@@ -195,6 +248,37 @@ std::string describe(const schema& s, const std::optional<full_position>& pos) {
         return "none";
     }
     return fmt::format("{}, {}", describe(s, pos->partition), describe(s, position_in_partition_view(pos->position)));
+}
+
+std::string describe(const schema& s, const std::optional<query::read_frontier>& frontier) {
+    if (!frontier) {
+        return "none";
+    }
+    return frontier->stop ? fmt::format("stop at {}", describe(s, frontier->stop)) : std::string("end of range");
+}
+
+// The skips of `r`, with the keys of their partitions. See
+// reconcilable_result::skips().
+std::vector<full_position> skips_of(const reconcilable_result& r) {
+    return r.skips() | std::views::transform([&] (const partition_skip& skip) {
+        return full_position(r.partitions()[skip.partition].mut().key(), skip.position);
+    }) | std::ranges::to<std::vector>();
+}
+
+std::string describe(const schema& s, const reconcilable_result& r) {
+    auto out = describe(s, r.frontier());
+    for (const auto& skip : skips_of(r)) {
+        out += fmt::format(", skip at {}", describe(s, std::optional<full_position>(skip)));
+    }
+    return out;
+}
+
+// The cursor of `r`, or its frontier if it holds one.
+std::string describe_position(const schema& s, const query::result& r) {
+    if (auto frontier = r.frontier()) {
+        return fmt::format("frontier {}", describe(s, frontier));
+    }
+    return fmt::format("cursor {}", describe(s, r.last_position()));
 }
 
 std::string describe(const schema& s, const dht::partition_range& range) {
@@ -366,6 +450,145 @@ class coordinator {
         }
     }
 
+    // The contents of `replica` which `frontier` and `skips` cover. See
+    // query::read_frontier and reconcilable_result::skips().
+    //
+    // With `enter_stop_partition`, the covered contents of the stop's
+    // partition get a partition tombstone older than every write. It makes a
+    // read enter the partition without changing its rows. See
+    // check_data_frontier().
+    mutation_source covered_contents(size_t replica, const schema& query_schema, const query::read_frontier& frontier,
+            const std::vector<full_position>& skips, bool enter_stop_partition = false) const {
+        auto covered = make_lw_shared<utils::chunked_vector<mutation>>();
+        for (const auto& m : *_contents[replica]) {
+            const auto after = [&] (const full_position& pos) {
+                return m.key().ring_order_tri_compare(*_schema, pos.partition);
+            };
+            if (frontier.stop && after(*frontier.stop) > 0) {
+                break;
+            }
+            const auto skip = std::ranges::find_if(skips, [&] (const full_position& pos) { return after(pos) == 0; });
+            if (frontier.stop && after(*frontier.stop) == 0) {
+                covered->push_back(cut_before(query_schema, m, frontier.stop->position));
+                if (enter_stop_partition) {
+                    covered->back().partition().apply(tombstone(api::min_timestamp, gc_clock::time_point()));
+                }
+            } else if (skip != skips.end()) {
+                covered->push_back(cut_before(query_schema, m, skip->position));
+            } else {
+                covered->push_back(m);
+            }
+        }
+        return make_source(std::move(covered));
+    }
+
+    // Checks the properties of the frontier of a reply of `replica` to a read
+    // of `range` with `cmd` which a new querier cannot check: the reply has a
+    // frontier if and only if the command asked for one, a short reply
+    // stopped, the skips are in order before the stop, and the stop is after
+    // the page's start. Returns whether the reply has a frontier.
+    bool check_frontier_shape(size_t replica, const schema& query_schema, const query::read_command& cmd, const dht::partition_range& range,
+            const std::optional<query::read_frontier>& frontier, const std::vector<full_position>& skips, query::short_read short_read) {
+        if (!cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+            if (frontier || !skips.empty()) {
+                violation("A reply has a frontier which its command did not ask for");
+            }
+            return false;
+        }
+        if (!frontier) {
+            violation("A reply has no frontier");
+            return false;
+        }
+        const auto ring_cmp = [&] (const full_position& a, const full_position& b) {
+            return a.partition.ring_order_tri_compare(query_schema, b.partition);
+        };
+        if (short_read && frontier->reached_end()) {
+            trace("  replica {} returns a short reply which reached the end of its range", replica);
+            violation("A short reply has a frontier at the end of its range");
+        }
+        for (size_t i = 0; i < skips.size(); ++i) {
+            const auto& skip = skips[i];
+            if ((i > 0 && ring_cmp(skips[i - 1], skip) >= 0) || (frontier->stop && ring_cmp(skip, *frontier->stop) >= 0)
+                    || skip.position.region() != partition_region::clustered) {
+                trace("  replica {} returns the frontier {} with a skip at {}", replica, describe(query_schema, frontier),
+                        describe(query_schema, std::optional<full_position>(skip)));
+                violation("A frontier has a skip out of order or outside the clustering rows");
+            }
+        }
+        // The page starts inside the first partition of the range if the
+        // range includes it. Its fragments before the start of its first
+        // clustering range are the partition's state, which an earlier page
+        // already read.
+        if (auto pk = query_result_builder::start_partition_of(range); pk && frontier->stop) {
+            const auto& ranges = cmd.slice.row_ranges(query_schema, *pk);
+            const full_position start(*pk, ranges.empty() ? position_in_partition::after_all_clustered_rows()
+                    : position_in_partition::for_range_start(ranges.front()));
+            if (full_position::cmp(query_schema, *frontier->stop, start) <= 0) {
+                trace("  replica {} returns the frontier {}, which does not move past the page's start {}", replica, describe(query_schema, frontier),
+                        describe(query_schema, std::optional<full_position>(start)));
+                violation("A frontier does not move past the start of its page");
+            }
+        }
+        return true;
+    }
+
+    // Checks the frontier of `reply`, which `replica` returned for a read of
+    // `range` with `cmd` and `opts`: a new querier which reads only what the
+    // frontier covers, without the row and partition limits, returns the same
+    // page and digest. A data reply does not say where the read left
+    // partitions at the per-partition limit, so that read keeps the
+    // per-partition limit.
+    void check_data_frontier(size_t replica, const schema_ptr& query_schema, const query::read_command& cmd, query::result_options opts,
+            const dht::partition_range& range, const query::result& reply) {
+        if (!check_frontier_shape(replica, *query_schema, cmd, range, reply.frontier(), {}, reply.is_short_read())) {
+            return;
+        }
+        auto read_covered = [&] (bool enter_stop_partition) {
+            auto permit = _semaphore.make_permit();
+            permit.set_max_result_size(query::max_result_size(query::result_memory_limiter::unlimited_result_size));
+            return tests::read_data_page(covered_contents(replica, *query_schema, *reply.frontier(), {}, enter_stop_partition), query_schema,
+                    std::move(permit), without_page_limits(cmd), opts, {range}, {},
+                    query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, tombstone_gc_state::no_gc(), {}, nullptr).get();
+        };
+        auto covered = read_covered(false);
+        // A page enters the partition which it stops in, because it stops
+        // after a fragment of the partition which reached its consumer. The
+        // digest covers the key of each partition which the page enters, also
+        // when the page has no row of it. The fragment can be a range
+        // tombstone change at the stop, which the covered contents lack. The
+        // read then enters the partition only with a tombstone which makes it
+        // enter.
+        if (reply.buf() == covered->buf() && reply.digest() != covered->digest() && reply.frontier()->stop) {
+            covered = read_covered(true);
+        }
+        if (!(reply.buf() == covered->buf()) || reply.digest() != covered->digest()) {
+            trace("  replica {} returns {}, with the frontier {}", replica, reply.pretty_printer(query_schema, cmd.slice),
+                    describe(*query_schema, reply.frontier()));
+            trace("  replica {} holds {} within the frontier", replica, covered->pretty_printer(query_schema, cmd.slice));
+            violation("A reply differs from a read of what its frontier covers");
+        }
+    }
+
+    // Like check_data_frontier(), for a mutation page. The covered contents
+    // end at the reply's skips, so the read has no limits.
+    void check_mutation_frontier(size_t replica, const schema_ptr& query_schema, const query::read_command& cmd, const dht::partition_range& range,
+            const reconcilable_result& reply) {
+        const auto skips = skips_of(reply);
+        if (!check_frontier_shape(replica, *query_schema, cmd, range, reply.frontier(), skips, reply.is_short_read())) {
+            return;
+        }
+        auto permit = _semaphore.make_permit();
+        permit.set_max_result_size(query::max_result_size(query::result_memory_limiter::unlimited_result_size));
+        auto covered = tests::read_mutation_page(covered_contents(replica, *query_schema, *reply.frontier(), skips), query_schema, std::move(permit),
+                without_limits(cmd), range, {}, query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size},
+                tombstone_gc_state::no_gc(), {}, nullptr).get();
+        if (!(reply == covered)) {
+            trace("  replica {} returns {}", replica, reply.pretty_printer(query_schema));
+            trace("  replica {} holds {} within the frontier", replica, covered.pretty_printer(query_schema));
+            violation("A reply differs from a read of what its frontier covers");
+        }
+    }
+
     // The digest algorithm which the replicas use, like storage_proxy's
     // digest_algorithm().
     query::digest_algorithm digest_algorithm() const {
@@ -466,18 +689,20 @@ class coordinator {
             permit.set_max_result_size(max_size);
             auto fresh = tests::read_data_page(_replicas[replica], query_schema, std::move(permit), cmd, opts, {range}, {}, std::move(fresh_accounter),
                     tombstone_gc_state::no_gc(), {}, nullptr).get();
-            const auto& pos = result->last_position();
-            const auto& fresh_pos = fresh->last_position();
-            const bool same_position = bool(pos) == bool(fresh_pos) && (!pos || full_position::cmp(*query_schema, *pos, *fresh_pos) == 0);
+            const auto& pos = result->wire_position();
+            const auto& fresh_pos = fresh->wire_position();
+            const bool same_position = bool(result->frontier()) == bool(fresh->frontier())
+                    && bool(pos) == bool(fresh_pos) && (!pos || full_position::cmp(*query_schema, *pos, *fresh_pos) == 0);
             if (!(result->buf() == fresh->buf()) || !same_position || result->is_short_read() != fresh->is_short_read()
                     || result->digest() != fresh->digest()) {
-                trace("  replica {} returns with its cached querier: {}, {}, cursor {}", replica, result->pretty_printer(query_schema, cmd.slice),
-                        describe(result->is_short_read()), describe(*query_schema, result->last_position()));
-                trace("  replica {} returns with a new querier: {}, {}, cursor {}", replica, fresh->pretty_printer(query_schema, cmd.slice),
-                        describe(fresh->is_short_read()), describe(*query_schema, fresh->last_position()));
+                trace("  replica {} returns with its cached querier: {}, {}, {}", replica, result->pretty_printer(query_schema, cmd.slice),
+                        describe(result->is_short_read()), describe_position(*query_schema, *result));
+                trace("  replica {} returns with a new querier: {}, {}, {}", replica, fresh->pretty_printer(query_schema, cmd.slice),
+                        describe(fresh->is_short_read()), describe_position(*query_schema, *fresh));
                 violation("A page read with a cached querier differs from the page read with a new querier");
             }
         }
+        check_data_frontier(replica, query_schema, cmd, opts, range, *result);
         return result;
     }
 
@@ -513,12 +738,22 @@ class coordinator {
             permit.set_max_result_size(max_size);
             auto fresh = tests::read_mutation_page(_replicas[replica], query_schema, std::move(permit), cmd, range, {},
                     _limiter.new_mutation_read(max_size, short_read_allowed).get(), tombstone_gc_state::no_gc(), {}, nullptr).get();
-            if (!(reply == fresh) || reply.row_count() != fresh.row_count() || reply.is_short_read() != fresh.is_short_read()) {
+            const auto frontier = reply.frontier();
+            const auto fresh_frontier = fresh.frontier();
+            const bool same_frontier = bool(frontier) == bool(fresh_frontier) && (!frontier || frontier->equal(*query_schema, *fresh_frontier));
+            const auto skips = skips_of(reply);
+            const auto fresh_skips = skips_of(fresh);
+            const bool same_skips = std::ranges::equal(skips, fresh_skips, [&] (const full_position& a, const full_position& b) {
+                return full_position::cmp(*query_schema, a, b) == 0;
+            });
+            if (!(reply == fresh) || reply.row_count() != fresh.row_count() || reply.is_short_read() != fresh.is_short_read()
+                    || !same_frontier || !same_skips) {
                 trace("  replica {} returns with its cached querier: {}", replica, reply.pretty_printer(query_schema));
                 trace("  replica {} returns with a new querier: {}", replica, fresh.pretty_printer(query_schema));
                 violation("A page read with a cached querier differs from the page read with a new querier");
             }
         }
+        check_mutation_frontier(replica, query_schema, cmd, range, reply);
         if (legacy_format(replica, coordinator_cmd)) {
             // Like handle_read(), the replica returns the mutations in the
             // legacy format, and the coordinator converts them back, like
@@ -571,8 +806,8 @@ class coordinator {
             std::vector<service::mutation_page_reply> replies;
             for (auto i : targets) {
                 auto reply = read_mutations(i, query_schema, *round_cmd, range);
-                trace("  round {}: replica {} mutations: {} partitions, {} rows, {}", round, i, reply.partitions().size(), reply.row_count(),
-                        describe(reply.is_short_read()));
+                trace("  round {}: replica {} mutations: {} partitions, {} rows, {}, frontier {}", round, i, reply.partitions().size(), reply.row_count(),
+                        describe(reply.is_short_read()), describe(s, reply));
                 replies.push_back({replica_id(i), make_foreign(make_lw_shared<reconcilable_result>(std::move(reply)))});
             }
             // The resolution gets the replies in the order of their arrival.
@@ -638,15 +873,15 @@ class coordinator {
         for (size_t i = 0; i < targets; ++i) {
             if (wants_data[i]) {
                 auto data = read_data(i, query_schema, *cmd, data_opts, range);
-                trace("  replica {} data: {} rows, {}, cursor {}", i, data->row_count().value_or(0), describe(data->is_short_read()),
-                        describe(s, data->last_position()));
+                trace("  replica {} data: {} rows, {}, {}", i, data->row_count().value_or(0), describe(data->is_short_read()),
+                        describe_position(s, *data));
                 first_round.push_back({i, true, std::move(data)});
             } else {
                 auto digest = read_data(i, query_schema, *cmd, query::result_options::only_digest(digest_algorithm()), range);
                 // Like storage_proxy::query_result_local_digest(), the reply
                 // omits the short-read flag. Only the trace shows it. A
                 // digest result does not count its rows.
-                trace("  replica {} digest: {}, cursor {}", i, describe(digest->is_short_read()), describe(s, digest->last_position()));
+                trace("  replica {} digest: {}, {}", i, describe(digest->is_short_read()), describe_position(s, *digest));
                 first_round.push_back({i, false, std::move(digest)});
             }
         }

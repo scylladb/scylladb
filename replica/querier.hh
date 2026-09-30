@@ -11,6 +11,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation/mutation_compactor.hh"
+#include "query/query-result.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
 #include "keys/full_position.hh"
@@ -249,6 +250,17 @@ public:
             return {};
         }
         return full_position_view(dk->key(), _compaction_state->current_position());
+    }
+
+    /// How far the read of the last page got. See query::read_frontier.
+    query::read_frontier frontier() const {
+        return _compaction_state->frontier();
+    }
+
+    /// Where the last page left partitions at the per-partition row limit.
+    /// See compact_mutation_state::skips().
+    const std::vector<full_position>& skips() const {
+        return _compaction_state->skips();
     }
 
     /// Whether the last page stopped inside the partition of

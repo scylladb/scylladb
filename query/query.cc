@@ -306,9 +306,23 @@ void result::ensure_counts() {
     }
 }
 
+bool read_frontier::equal(const schema& s, const read_frontier& other) const {
+    const auto same = [&s] (const full_position& a, const full_position& b) {
+        return full_position::cmp(s, a, b) == 0;
+    };
+    return bool(stop) == bool(other.stop) && (!stop || same(*stop, *other.stop));
+}
+
+const std::optional<full_position>& result::last_position() const {
+    if (_position_is_frontier) {
+        on_internal_error(qlogger, "result::last_position(): the result holds a frontier");
+    }
+    return _last_position;
+}
+
 full_position result::get_or_calculate_last_position() const {
-    if (_last_position) {
-        return *_last_position;
+    if (last_position()) {
+        return *last_position();
     }
     return result_view::do_with(*this, [] (const result_view& v) {
         return v.calculate_last_position();
@@ -356,11 +370,24 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     uint32_t partition_count = 0;
 
     std::optional<full_position> last_position;
+    // The frontier of the merged results, while every result so far has one
+    // and the merge took each of them whole. A merge of results with last
+    // positions has none.
+    std::optional<read_frontier> frontier;
+    if (!_partial.empty() && _partial.front()->frontier()) {
+        frontier = read_frontier::end();
+    }
 
+    size_t merged = 0;
     for (auto&& r : _partial) {
+        ++merged;
+        bool whole = false;
         result_view::do_with(*r, [&] (result_view rv) {
             last_position.reset();
-            for (auto&& pv : rv._v.partitions()) {
+            auto pvs = rv._v.partitions();
+            const size_t partitions_in_result = pvs.size();
+            size_t partitions_taken = 0;
+            for (auto&& pv : pvs) {
                 auto rows = pv.rows();
                 // If rows.empty(), then there's a static row, or there wouldn't be a partition
                 const uint64_t rows_in_partition = rows.size() ? : 1;
@@ -368,7 +395,9 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                 row_count += rows_to_include;
                 if (rows_to_include >= rows_in_partition) {
                     partitions.add(pv);
+                    ++partitions_taken;
                     if (++partition_count >= _max_partitions) {
+                        whole = partitions_taken == partitions_in_result;
                         return;
                     }
                 } else if (rows_to_include > 0) {
@@ -379,8 +408,16 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                     return;
                 }
             }
-            last_position = r->last_position();
+            whole = true;
+            if (!r->frontier()) {
+                last_position = r->last_position();
+            }
         });
+        if (auto r_frontier = r->frontier(); frontier && whole && frontier->reached_end() && r_frontier) {
+            *frontier = std::move(*r_frontier);
+        } else {
+            frontier.reset();
+        }
         if (r->is_short_read()) {
             is_short_read = short_read::yes;
             break;
@@ -389,9 +426,18 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
             break;
         }
     }
+    // A merge which leaves out the later results did not reach the end of
+    // their ranges.
+    if (frontier && frontier->reached_end() && merged < _partial.size()) {
+        frontier.reset();
+    }
 
     std::move(partitions).end_partitions().end_query_result();
-    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count, std::move(last_position)));
+    auto result = make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count, std::move(last_position));
+    if (frontier) {
+        result->set_frontier(std::move(frontier));
+    }
+    return make_foreign(std::move(result));
 }
 
 std::ostream& operator<<(std::ostream& out, const query::mapreduce_result::printer& p) {
@@ -461,4 +507,18 @@ std::optional<query::clustering_range> position_range_to_clustering_range(const 
     };
 
     return query::clustering_range{to_bound(r.start(), true), to_bound(r.end(), false)};
+}
+
+auto fmt::formatter<query::read_frontier::printer>::format(const query::read_frontier::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    const auto describe = [&p] (const full_position& pos) {
+        return fmt::format("{{{}, {}}}", pos.partition.with_schema(p.s), pos.position);
+    };
+    auto out = ctx.out();
+    if (p.frontier.stop) {
+        out = fmt::format_to(out, "stop at {}", describe(*p.frontier.stop));
+    } else {
+        out = fmt::format_to(out, "end of ranges");
+    }
+    return out;
 }

@@ -739,7 +739,9 @@ future<page_consume_result<ResultBuilder>> read_page(
     if (!f.failed()) {
         // no exceptions are thrown in this block
         auto result = std::move(f).get();
-        if (compaction_state->are_limits_reached() || result.is_short_read()) {
+        if (cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+            ResultBuilder::set_frontier(*s, result, *compaction_state);
+        } else if (compaction_state->are_limits_reached() || result.is_short_read()) {
             ResultBuilder::maybe_set_last_position(result, compaction_state->current_full_position());
         }
         const auto& cstats = compaction_state->stats();
@@ -889,12 +891,14 @@ private:
     reconcilable_result_builder _builder;
     schema_ptr _s;
     bool _tombstone_gc_enabled;
+    bool _send_read_frontier;
 
 public:
     mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter, bool tombstone_gc_enabled)
         : _builder(s, slice, std::move(accounter))
         , _s(s.shared_from_this())
         , _tombstone_gc_enabled(tombstone_gc_enabled)
+        , _send_read_frontier(slice.options.contains<query::partition_slice::option::send_read_frontier>())
      { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -918,7 +922,11 @@ public:
 
     foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
         if (results.empty()) {
-            return make_foreign(make_lw_shared<result_type>());
+            auto result = make_lw_shared<result_type>();
+            if (_send_read_frontier) {
+                result->set_frontier(*_s, query::read_frontier::end(), {});
+            }
+            return make_foreign(std::move(result));
         }
         auto& first = results.front();
         for (auto it = results.begin() + 1; it != results.end(); ++it) {
@@ -928,6 +936,9 @@ public:
     }
 
     static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) { }
+    static void set_frontier(const schema& s, result_type& r, const compact_for_query_state& state) {
+        r.set_frontier(s, state.frontier(), state.skips());
+    }
     static uint32_t get_partition_count(result_type& r) { return r.partitions().size(); }
     static uint64_t get_row_count(result_type& r) { return r.row_count(); }
 };
@@ -940,6 +951,7 @@ private:
     std::unique_ptr<query::result::builder> _res_builder;
     query_result_builder _builder;
     query::result_options _opts;
+    bool _send_read_frontier;
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
@@ -947,6 +959,7 @@ public:
         : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
         , _builder(s, *_res_builder, start_partition)
         , _opts(opts)
+        , _send_read_frontier(slice.options.contains<query::partition_slice::option::send_read_frontier>())
     { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -975,7 +988,11 @@ public:
 
     foreign_ptr<lw_shared_ptr<result_type>> merge(std::vector<foreign_ptr<lw_shared_ptr<result_type>>> results) {
         if (results.empty()) {
-            return make_foreign(make_lw_shared<result_type>());
+            auto result = make_lw_shared<result_type>();
+            if (_send_read_frontier) {
+                result->set_frontier(query::read_frontier::end());
+            }
+            return make_foreign(std::move(result));
         }
         query::result_merger merger(query::max_rows, query::max_partitions);
         merger.reserve(results.size());
@@ -987,6 +1004,9 @@ public:
 
     static void maybe_set_last_position(result_type& r, std::optional<full_position> full_position) {
         r.set_last_position(std::move(full_position));
+    }
+    static void set_frontier(const schema& s, result_type& r, const compact_for_query_state& state) {
+        r.set_frontier(state.frontier());
     }
     static uint32_t get_partition_count(result_type& r) {
         r.ensure_counts();

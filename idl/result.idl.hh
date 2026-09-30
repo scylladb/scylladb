@@ -20,7 +20,9 @@ class result {
     std::optional<uint32_t> row_count_low_bits() [[version 2.1]];
     std::optional<uint32_t> partition_count() [[version 2.1]];
     std::optional<uint32_t> row_count_high_bits() [[version 4.3]];
-    std::optional<full_position> last_position() [[version 5.1]];
+    // The last position, or the frontier's stop if the command asked for a
+    // frontier. See query::partition_slice::option::send_read_frontier.
+    std::optional<full_position> wire_position() [[version 5.1]];
 };
 
 }
