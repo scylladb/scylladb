@@ -6,7 +6,6 @@ on:
       - unlabeled
 
 env:
-  DEFAULT_BRANCH: 'master'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -17,14 +16,18 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.DEFAULT_BRANCH }}
-          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
-          fetch-depth: 1
       - name: Mark pull request as ready for review
-        run:  gh pr ready "${{ github.event.pull_request.number }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          # Keep using the backport token rather than GITHUB_TOKEN so that the
+          # resulting ready_for_review event still starts downstream workflows.
+          github-token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          script: |
+            await github.graphql(
+              `mutation($id: ID!) {
+                 markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+                   pullRequest { isDraft }
+                 }
+               }`,
+              { id: context.payload.pull_request.node_id }
+            );
