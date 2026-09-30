@@ -32,6 +32,7 @@
 #include <fmt/ranges.h>
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
+#include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 #include "service/load_meter.hh"
 #include "gms/feature_service.hh"
@@ -110,8 +111,12 @@ static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_n
 
 static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
     auto& db = ctx.db.local();
+    // The auto-RF system keyspaces are always on tablets, so counting them here
+    // would reject storage_service/ownership on every cluster. They carry no user
+    // data and do not affect the token ring, which is all get_ownership() reports,
+    // so the answer stays meaningful as long as everything else is on vnodes.
     auto uses_tablets = [&db](const auto& ks_name) {
-        return db.find_keyspace(ks_name).uses_tablets();
+        return !service::is_auto_rf_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
     };
 
     auto keyspaces = db.get_all_keyspaces();
