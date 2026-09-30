@@ -859,6 +859,13 @@ public:
     /// \throws std::logic_error If the given id does not belong to this instance.
     dht::token get_first_token(tablet_id id) const;
 
+    /// Returns the fraction of the ring owned by a given tablet, in (0, 1].
+    /// Tablet boundaries are arbitrary in the general case, so tablets of one table can own token
+    /// ranges of very different size and their count says little about how much of the table they
+    /// cover.
+    /// \throws std::logic_error If the given id does not belong to this instance.
+    double token_space_fraction(tablet_id id) const;
+
     /// Returns token_range which contains all tokens owned by a given tablet and only such tokens.
     /// \throws std::logic_error If the given id does not belong to this instance.
     dht::token_range get_token_range(tablet_id id) const;

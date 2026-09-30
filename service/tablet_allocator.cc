@@ -27,7 +27,9 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <iterator>
 #include <ranges>
 #include <utility>
@@ -959,6 +961,10 @@ class load_balancer {
     size_t max_write_streaming_load;
     size_t max_read_streaming_load;
 
+    // Upper bound on the fraction of a table's token space batching may keep in transition, to
+    // limit how many requests pay the double-quorum overhead.
+    double max_token_space_fraction;
+
     replica::database& _db;
     token_metadata_ptr _tm;
     service::topology* _topology;
@@ -966,6 +972,10 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    // Fraction of each table's token space in transition, in [0, 1]: from tablet metadata, and
+    // accumulated over the round by mark_as_scheduled(). Keyed by co-location group base table.
+    absl::flat_hash_map<table_id, double> _token_space_in_transition_per_table;
+    absl::flat_hash_map<table_id, double> _scheduled_token_space_per_table;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1113,6 +1123,9 @@ public:
         }
         max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
         max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
+        auto token_space_pct = db.get_config().tablet_streaming_max_token_space_percentage();
+        // Live-updatable, so clamp before comparing against accumulated token space.
+        max_token_space_fraction = std::isnan(token_space_pct) ? 0.0 : std::clamp(token_space_pct, 0.0, 100.0) / 100.0;
     }
 
     bool ongoing_rack_list_colocation() const {
@@ -1166,6 +1179,8 @@ public:
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
+
+        co_await count_token_space_in_transition();
 
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
@@ -1296,6 +1311,44 @@ public:
             for (auto& sload : load.shards) {
                 sload.dusage = disk_usage{ load.dusage->capacity / load.shard_count, 0 };
             }
+        }
+    }
+
+    // Whether batching `tablets` would keep the table within its token space budget: what is
+    // already in transition according to tablet metadata, plus what this round has scheduled, plus
+    // the candidate itself. Evaluated per migration rather than per shard, because the answer is a
+    // property of the candidate's table and does not change when the balancer tries another shard.
+    bool within_token_space_budget(const migration_tablet_set& tablets) const {
+        auto table = _tm->tablets().get_base_table(tablets.table());
+        const auto& tmap = _tm->tablets().get_tablet_map(tablets.table());
+        double used = 0;
+        if (auto i = _token_space_in_transition_per_table.find(table); i != _token_space_in_transition_per_table.end()) {
+            used += i->second;
+        }
+        if (auto i = _scheduled_token_space_per_table.find(table); i != _scheduled_token_space_per_table.end()) {
+            used += i->second;
+        }
+        for (auto gid : tablets.tablets()) {
+            used += tmap.token_space_fraction(gid.tablet);
+        }
+        return used <= max_token_space_fraction;
+    }
+
+    // Tablets scheduled during plan-making are counted separately, by mark_as_scheduled().
+    future<> count_token_space_in_transition() {
+        _token_space_in_transition_per_table.clear();
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            co_await coroutine::maybe_yield();
+            if (is_migrating_table(table)) {
+                continue;
+            }
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            double fraction = 0;
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                fraction += tmap.token_space_fraction(tid);
+            }
+            _token_space_in_transition_per_table[table] = fraction;
         }
     }
 
@@ -3485,7 +3538,11 @@ public:
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
-        _scheduled_tablets.insert(mig.tablet);
+        if (_scheduled_tablets.insert(mig.tablet).second) {
+            const auto& tmap = _tm->tablets().get_tablet_map(mig.tablet.table);
+            _scheduled_token_space_per_table[_tm->tablets().get_base_table(mig.tablet.table)]
+                    += tmap.token_space_fraction(mig.tablet.tablet);
+        }
     }
 
     void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
