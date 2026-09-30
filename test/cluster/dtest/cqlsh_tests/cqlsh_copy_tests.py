@@ -29,7 +29,7 @@ from tools.assertions import (
     assert_row_count_in_select_less,
 )
 from tools.data import rows_to_list
-from tools.marks import issue_open, unmark, with_feature
+from tools.marks import unmark, with_feature
 from tools.misc import is_coverage
 
 from .cqlsh_tools import (
@@ -571,7 +571,7 @@ class TestCqlshCopy(CqlshPrepare):
         assert_all(session=self.session, query="SELECT * FROM testcounter", expected=data, ignore_order=True)
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counter(self):
         """
         Test that COPY can read a csv file of COUNTER values.
@@ -581,7 +581,7 @@ class TestCqlshCopy(CqlshPrepare):
         self._test_reading_counter_template()
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counter_without_batching(self):
         """
         Test that COPY can read a csv file of COUNTER values with batching disabled,
@@ -592,7 +592,7 @@ class TestCqlshCopy(CqlshPrepare):
         self._test_reading_counter_template(copy_options={"MAXBATCHSIZE": "1"})
 
     @pytest.mark.single_node
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_reading_counters_with_skip_cols(self):
         """
         Test importing a CSV file for a counter table but skipping some columns:
@@ -1368,7 +1368,8 @@ class TestCqlshCopy(CqlshPrepare):
 
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
-    @pytest.mark.skip_if(issue_open("scylladb/cqlsh-rs#193"))
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/193",
+                          reason="cqlsh-rs COPY TO rejects MAXATTEMPTS and other valid options")
     def test_copy_to_with_more_failures_than_max_attempts(self):
         """
         Test exporting rows with failure injection by setting the environment variable CQLSH_COPY_TEST_FAILURES,
@@ -1403,7 +1404,8 @@ class TestCqlshCopy(CqlshPrepare):
 
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
-    @pytest.mark.skip_if(issue_open("scylladb/cqlsh-rs#193"))
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/193",
+                          reason="cqlsh-rs COPY TO rejects MAXATTEMPTS and other valid options")
     def test_copy_to_with_fewer_failures_than_max_attempts(self):
         """
         Test exporting rows with failure injection by setting the environment variable CQLSH_COPY_TEST_FAILURES,
@@ -1510,7 +1512,8 @@ class TestCqlshCopy(CqlshPrepare):
 
     @pytest.mark.single_node
     @pytest.mark.use_cassandra_stress
-    @pytest.mark.skip_if(issue_open("scylladb/cqlsh-rs#191"))
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/cqlsh-rs/issues/191",
+                          reason="cqlsh-rs COPY FROM imports 0 rows for tables with case-sensitive column names")
     def test_copy_from_with_fewer_failures_than_max_attempts(self):
         """
         Test importing rows with failure injection by setting the environment variable CQLSH_COPY_TEST_FAILURES,

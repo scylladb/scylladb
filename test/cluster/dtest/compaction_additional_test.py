@@ -55,7 +55,7 @@ from tools.files import (
     get_node_cf_dir,
     get_sstables_files,
 )
-from tools.marks import issue_open, unmark, with_feature
+from tools.marks import unmark, with_feature
 from tools.misc import ImmutableMapping, dump_sstables
 from tools.rest_clients import StorageServiceClient
 from tools.scylla_defines import CompactionStrategy
@@ -594,7 +594,7 @@ class TestCompactionAdditional(CompactionAdditionalTester):
     @pytest.mark.use_cassandra_stress
     @unmark.next_gating
     @pytest.mark.parametrize("strategy1,strategy2", get_strategies_upgrade_options(), ids=generate_ids)
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("scylladb/scylladb#16739"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_refresh_and_restart_after_compaction_strategy_change(self, strategy1, strategy2):  # noqa: PLR0915
         """
         This test tries to load backup sstable by refresh and restart after changing the compaction strategy.

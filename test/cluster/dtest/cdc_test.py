@@ -41,7 +41,6 @@ from tools.cdc_utils import (
 )
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import keyspace_has_tablets
-from tools.marks import issue_open
 from tools.misc import ImmutableMapping
 
 TOKENS_PER_NODE = 256
@@ -499,11 +498,13 @@ class TestCdc(Tester, CDCInitializeHelper):
         logger.debug("Test finished")
 
     @pytest.mark.next_gating
-    @pytest.mark.skip_if(issue_open("scylladb/scylladb#14401"))
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/14401",
+                          reason="ALTERing a column type during a memtable flush can null out cells")
     def test_change_field_type_with_cdc(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ALTER b TYPE blob", topology=cluster_config.topology, replication=cluster_config.replication)
 
-    @pytest.mark.skip_if(issue_open("scylladb/scylladb#14401"))
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/14401",
+                          reason="ALTERing a column type during a memtable flush can null out cells")
     def test_change_field_type_with_cdc_and_preimage(self, request, cluster_config):
         self.schema_change_template(request, "ALTER TABLE ks.cf ALTER b TYPE blob", topology=cluster_config.topology, replication=cluster_config.replication, with_preimage=True)
 

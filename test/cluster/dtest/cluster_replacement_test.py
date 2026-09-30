@@ -150,7 +150,6 @@ class TestClusterReplacement(Tester):
             cluster.add_seed(new_node)
         self._verify_data_integrity(n_of_keys)
 
-    @pytest.mark.require("scylladb/scylladb#16826")
     def test_rolling_cluster_replacement_sequentially_dead_nodes_multi_dc_rf_1(self):
         """
         This test uses the network topology strategy to replace a node in a multi dc cluster.

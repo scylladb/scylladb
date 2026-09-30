@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.dtest_full
 @pytest.mark.next_gating
-@pytest.mark.require("jira:SCYLLADB-2062")
 class TestSchemaChanges(UpgradeTester):
     __test__ = True
 

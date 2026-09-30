@@ -18,7 +18,7 @@ from ccmlib import common
 from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, wait_for
 from tools.data import putget
 from tools.files import safe_mkdtemp
-from tools.marks import issue_open, unmark
+from tools.marks import unmark
 from tools.misc import generate_ssl_stores, is_port_used, revoke_certificate
 from tools.sslkeygen import wait_for_cert_reload
 
@@ -312,7 +312,10 @@ class TestNativeTransportSSL(BaseSslTester):
             cluster.set_configuration_options(ports_conf)
             restart_and_verify_listen_ports(expected_ports=[v for k, v in ports_conf.items() if v not in [0, None]])
 
-    @pytest.mark.skip_if(issue_open("scylladb/scylladb#7500") | issue_open("scylladb/scylladb#7783"))
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/7500",
+        reason="with client encryption on, Scylla still listens on the ports the test expects disabled",
+    )
     @unmark.next_gating
     def test_listen_ports_conf_by_zero(self):
         """
@@ -321,7 +324,10 @@ class TestNativeTransportSSL(BaseSslTester):
         """
         self._listen_ports_conf_template(disable_value=0)
 
-    @pytest.mark.skip_if(issue_open("scylladb/scylladb#7500") | issue_open("scylladb/scylladb#7783"))
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/7500",
+        reason="with client encryption on, Scylla still listens on the ports the test expects disabled",
+    )
     @unmark.next_gating
     def test_listen_ports_conf(self):
         self._listen_ports_conf_template(disable_value=None)

@@ -21,7 +21,7 @@ from tools.cluster import get_group0_members
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import insert_c1c2, query_c1c2
 from tools.files import wipe_node_keyspace_directory
-from tools.marks import issue_open, unmark_if, with_feature
+from tools.marks import with_feature
 from tools.raft_topology import TopologyCoordinatorFinder
 
 logger = logging.getLogger(__name__)
@@ -715,7 +715,6 @@ class TestRepairBasedNodeOperations(Tester):
         rbnos = RepairBasedNodeOperationsScenarios(tester=self)
         rbnos.run_scenarios(rbno_enabled=enable_repair_based_node_ops, scenarios=[rbnos.replace_with_dead_nodes_scenario])
 
-    @pytest.mark.skip_if(issue_open("scylladb/scylladb#16826"))
     def test_ignore_dead_nodes_for_whole_dc_replace_option(self):
         """
         1. create multi-dc cluster.
@@ -824,7 +823,6 @@ class TestRepairBasedNodeOperations(Tester):
 
     @pytest.mark.skip_if(with_feature("tablets"), reason="Support rebuild with tablets: https://github.com/scylladb/scylladb/issues/17575#issuecomment-2172751170")
     @pytest.mark.parametrize("replication_factor", [1, 2, 3])
-    @pytest.mark.unmark_if("next_gating", condition=issue_open("#16826"))
     def test_safe_unsafe_rebuild(self, replication_factor):
         """
         Node rebuild from safe and unsafe source in multi-dc cluster

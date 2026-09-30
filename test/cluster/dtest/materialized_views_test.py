@@ -50,7 +50,7 @@ from tools.data import (
 )
 from tools.files import get_node_cf_dir, remove_files_in_folder
 from tools.group0_and_token_ring import wait_for_token_ring_and_group0_consistency
-from tools.marks import issue_closed, issue_open, unmark, with_feature
+from tools.marks import issue_closed, unmark, with_feature
 from tools.misc import flush_by_node, remove_node
 from tools.retrying import retrying
 from tools.session import get_supported_features
@@ -760,20 +760,18 @@ class TestMaterializedViews(CommonUtils):
         """Create 10 materialized views in parallel with base table deletes"""
         self._mv_populating_from_existing_data_during_changes_test("delete")
 
-    @pytest.mark.skip_if(
-        issue_open("scylladb/scylladb#17543")  # scylla asserts when truncating
-        | issue_open("scylladb/scylladb#17635")  # view table is not truncated when base table is
-    )
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/17635",
+                          reason="truncating a base table may leave data in the view but not in the base")
     def test_mv_populating_from_existing_data_during_truncate(self):
         """Create 10 materialized views in parallel with base table truncation"""
         self._mv_populating_from_existing_data_during_changes_test("truncate")
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18826"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_mv_populating_from_existing_data_during_extend(self):
         """Create 10 materialized views in parallel with adding a node"""
         self._mv_populating_from_existing_data_during_changes_test("add node")
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18826"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_mv_populating_from_existing_data_during_node_remove(self):
         """Create 10 materialized views in parallel with removing a node"""
         self._mv_populating_from_existing_data_during_changes_test("remove node")
@@ -784,7 +782,7 @@ class TestMaterializedViews(CommonUtils):
         """Create 10 materialized views in parallel with stopping a node"""
         self._mv_populating_from_existing_data_during_changes_test("stop node")
 
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("#18826"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_mv_populating_from_existing_data_during_node_decommission(self):
         """Create 10 materialized views in parallel with a node decommission"""
         self._mv_populating_from_existing_data_during_changes_test("decommission")
@@ -1388,7 +1386,8 @@ class TestMaterializedViews(CommonUtils):
             " to expire before being replayed.",
         )
 
-    @pytest.mark.require("2431")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2431",
+                          reason="crc_check_chance given in CREATE/ALTER MATERIALIZED VIEW is ignored (stays 1.0)")
     def test_crc_check_chance(self):
         """Test that crc_check_chance parameter is properly populated after mv creation and update"""
 
@@ -1517,7 +1516,11 @@ class TestMaterializedViews(CommonUtils):
 
         self.check_errors(node=self.cluster.nodelist()[0], exclude_errors="migration_task - Cant send migration request")
 
-    @pytest.mark.parametrize("rf", [pytest.param(1, marks=pytest.mark.skip_if(issue_open("scylladb/scylladb#26981") | issue_open("scylladb/scylladb#26984"))), pytest.param(3)])
+    @pytest.mark.parametrize("rf", [
+        pytest.param(1, marks=pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/26981",
+                                                   reason="view updates are lost during topology changes (also scylladb/scylladb#26984)")),
+        pytest.param(3),
+    ])
     def test_add_node_during_base_table_update(self, rf):
         """Test expand cluster - add one node during MV updates
         Test starts with a starting size: one DCs with 4 nodes, and add new node to the same DC during update existent records of base
@@ -2238,7 +2241,7 @@ class TestMaterializedViews(CommonUtils):
     @pytest.mark.parametrize(
         "colocated_view_replicas",
         [
-            pytest.param(True, marks=pytest.mark.skip_if(with_feature("tablets") & issue_open("scylladb/scylladb#24816")), id="colocated_view_replicas"),
+            pytest.param(True, marks=pytest.mark.skip_if(with_feature("tablets")), id="colocated_view_replicas"),
             pytest.param(False, id="non_colocated_view_replicas"),
         ],
     )
@@ -2497,7 +2500,7 @@ class TestMaterializedViews(CommonUtils):
     # they may be paired by two dead nodes and no view update will succeed.
     # https://github.com/scylladb/scylladb/issues/17043 can be done to
     # make this test work again.
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("scylladb/scylladb#17043"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_complex_repair(self):
         """
         Test that a materialized view are consistent after a more complex repair.
@@ -2585,7 +2588,7 @@ class TestMaterializedViews(CommonUtils):
     # they may be paired by two dead nodes and no view update will succeed.
     # https://github.com/scylladb/scylladb/issues/17043 can be done to
     # make this test work again.
-    @pytest.mark.skip_if(with_feature("tablets") & issue_open("scylladb/scylladb#17043"))
+    @pytest.mark.skip_if(with_feature("tablets"))
     def test_really_complex_repair(self):
         """
         Test that a materialized view are consistent after a more complex repair.
@@ -3321,7 +3324,8 @@ class TestMaterializedViewsConsistency(Tester):
         for row in data:
             self.rows[(row.a, row.b)] = row.c
 
-    @pytest.mark.require("2210")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2210",
+                          reason="the test runs `nodetool replaybatchlog`, which Scylla does not implement")
     def test_single_partition_consistent_reads_after_write(self):
         """
         Tests consistency of multiple writes to a single partition
@@ -3330,7 +3334,8 @@ class TestMaterializedViewsConsistency(Tester):
         self._consistent_reads_after_write_test(1)
 
     # nodetool: Found unexpected parameters: [replaybatchlog]
-    @pytest.mark.require("2210")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/2210",
+                          reason="the test runs `nodetool replaybatchlog`, which Scylla does not implement")
     def test_multi_partition_consistent_reads_after_write(self):
         """
         Taken from Cassandra

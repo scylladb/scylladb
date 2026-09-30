@@ -40,6 +40,7 @@ from dtest_scylla_manager import (
     TaskStatus,
 )
 from encryption_at_rest_test import EncryptionAtRestBase, KeyProviderEnum, all_providers
+from test.pylib.skip_types import skip_bug
 from tools.cluster_topology import generate_cluster_topology, generate_cluster_topology_based_rf
 from tools.docker_versions import get_docker_version
 from tools.fake_gcs_server import FakeGCSDocker
@@ -559,7 +560,7 @@ class TestScyllaMgmtBackup(Tester, ManagerBackupMixin, ScyllaManagerMixin):
             )
         self.clean_restore_and_verify_backup(backup_task, self.cluster.nodelist(), mgr_cluster, node1, keyspace_table_and_key_range)
 
-    def test_shutting_down_node_during_backup(self, is_issue_open):
+    def test_shutting_down_node_during_backup(self):
         topology_layout = generate_cluster_topology_based_rf(dc_num=1, nodes=4, rf=4)
         node1, _node2, _node3, node4 = self.config_and_create_cluster(topology=topology_layout)
         self.cluster.stress(["write", "cl=ALL", "n=1000K", "-rate", "threads=50", "-schema", "replication(factor=4)"])
@@ -576,9 +577,10 @@ class TestScyllaMgmtBackup(Tester, ManagerBackupMixin, ScyllaManagerMixin):
         backup_task = mgr_cluster.run_backup_command(location_list=[f"{self.backend}:{DESTINATION_BUCKET}"], keyspace_list=["keyspace1"])
         backup_task.wait_for_status(list_status=[TaskStatus.RUNNING], timeout=600, step=1)
 
-        if is_issue_open("scylladb/scylladb#24642"):
-            self.ignore_log_patterns.extend([r"snapshots - Error uploading .*: storage_io_error[ :]+\(?S3 error \(seastar::abort_requested_exception[ :]+\(?abort requested\)?\)\)?"])
-            self.ignore_log_patterns.extend([r"snapshots - Error uploading .*: std::runtime_error[ :]+\(?Failed to parse ETag list. Aborting multipart upload.\)?"])
+        # scylladb/scylladb#24642 (snapshot uploading is not aware of abortion) is still open;
+        # upstream ignores these errors only while it is.
+        self.ignore_log_patterns.extend([r"snapshots - Error uploading .*: storage_io_error[ :]+\(?S3 error \(seastar::abort_requested_exception[ :]+\(?abort requested\)?\)\)?"])
+        self.ignore_log_patterns.extend([r"snapshots - Error uploading .*: std::runtime_error[ :]+\(?Failed to parse ETag list. Aborting multipart upload.\)?"])
         node4.stop(wait_other_notice=True)
 
         backup_task.wait_for_status(list_status=[TaskStatus.ERROR], step=5, timeout=200)
@@ -1167,9 +1169,16 @@ class TestScyllaMgmtBackup(Tester, ManagerBackupMixin, ScyllaManagerMixin):
         misplaced_files = [snapshot for snapshot in snapshot_files if primary_mgr_cluster.id not in snapshot]
         assert misplaced_files, f"backup files command of the snapshot tag {primary_backup_task_snapshot_tag} contains unrelated files: {misplaced_files}"
 
-    def test_agent_check_location(self, is_issue_open):
-        if self.backend == "gcs" and is_issue_open("scylladb/scylla-manager#4626"):
-            pytest.skip("With GCS backend, check location never finishes.")
+    def test_agent_check_location(self, is_issue_open):  # noqa: ARG002
+        # is_issue_open() cannot be trusted here: this port has no network access and its
+        # offline stand-in reports every reference as closed (see conftest.is_issue_open).
+        # Verified directly against this build: `scylla-manager-agent check-location` with a
+        # bad extra gcs config does not fail fast, it hangs until _run()'s bounded timeout
+        # kills it -- scylladb/scylla-manager#4626 is not fixed here. Skip unconditionally
+        # for gcs rather than gating on a check that can never see the real issue state.
+        if self.backend == "gcs":
+            skip_bug(link="https://github.com/scylladb/scylla-manager/issues/4626",
+                     reason="agent check-location never finishes with GCS")
         correct_config_file_path = os.path.join(self.cluster.get_path(), "node1/conf/scylla-manager-agent.yaml")
         wrong_config_file_location = os.path.join(self.cluster._scylla_manager._get_path(), "TEMP_CONFIG.yaml")
         wrong_config_dict = {

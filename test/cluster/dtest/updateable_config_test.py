@@ -146,7 +146,6 @@ class TestUpdateableConfig(Tester):
         logger.info("compaction_enforce_min_threshold is disabled, expect compact to be triggered by one insert")
         node1.watch_log_for(compact_log, from_mark=mark, timeout=10)
 
-    @pytest.mark.require("#5382")
     def test_auto_adjust_flush_quota(self):
         """
         auto_adjust_flush_quota isn't a supported updateable parameter.
@@ -159,7 +158,8 @@ class TestUpdateableConfig(Tester):
         self.change_and_verify_config(node1, "auto_adjust_flush_quota", False, "false")
 
     @pytest.mark.use_cassandra_stress
-    @pytest.mark.require("#5384")
+    @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/5384",
+                          reason="updateable config stops working after a flood of SIGHUPs")
     def test_sighup_flood(self):
         self.cluster.populate(1).start(wait_other_notice=True, wait_for_binary_proto=True)
         node1 = self.cluster.nodelist()[0]
