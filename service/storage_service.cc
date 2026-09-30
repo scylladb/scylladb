@@ -2332,7 +2332,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const override {
             flat_hash_map<sstring, locator::replication_strategy_ptr> out;
             for (auto& [name, ks] : _db.local().get_keyspaces()) {
-                out.emplace(name, ks.get_replication_strategy_ptr());
+                out.emplace(name, ks->get_replication_strategy_ptr());
             }
             return out;
         };

@@ -1566,7 +1566,8 @@ public:
     explicit keyspace(config cfg, locator::effective_replication_map_factory& erm_factory);
     keyspace(const keyspace&) = delete;
     void operator=(const keyspace&) = delete;
-    keyspace(keyspace&&) = default;
+    // Tables link to their keyspace by address.
+    keyspace(keyspace&&) = delete;
 
     future<> shutdown() noexcept;
 
@@ -1796,7 +1797,8 @@ private:
     // groups reach for its compaction manager as they are destroyed, so it has to outlive them.
     std::unique_ptr<logstor::logstor> _logstor;
 
-    flat_hash_map<sstring, keyspace> _keyspaces;
+    // By pointer, so that rehashing does not move keyspaces: tables link to theirs by address.
+    flat_hash_map<sstring, std::unique_ptr<keyspace>> _keyspaces;
     tables_metadata _tables_metadata;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
@@ -2110,11 +2112,11 @@ public:
     future<std::optional<std::filesystem::path>> find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
+    const flat_hash_map<sstring, std::unique_ptr<keyspace>>& get_keyspaces() const {
         return _keyspaces;
     }
 
-    flat_hash_map<sstring, keyspace>& get_keyspaces() {
+    flat_hash_map<sstring, std::unique_ptr<keyspace>>& get_keyspaces() {
         return _keyspaces;
     }
 
