@@ -289,9 +289,13 @@ public:
     // factor configured for the data center by the replication strategy.
     // The tablets implementation returns the number of replicas in the read replica
     // set of the token's tablet which belong to the given data center, which accounts
-    // for ongoing migrations. All replicas are expected to be present in the topology
-    // associated with this instance (nodes which left the cluster are kept in
-    // topology while they appear in tablet replica sets).
+    // for ongoing migrations. Topology may briefly lag behind tablet metadata, leaving a
+    // replica whose data center cannot be resolved. Such a replica may belong to any data
+    // center, so it is added to each data center asked about, up to the replication factor
+    // the schema configures, and counts across data centers can add up to more than the
+    // tablet has.
+    // Replicas which could be placed are always counted, so a tablet lagging behind a
+    // replication factor change still reports its own replica set.
     virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const = 0;
 
     void invalidate() const noexcept {
@@ -315,7 +319,8 @@ public:
     /// scenario. Since we return IPs here, writes to the old replica would be incorrectly routed to the
     /// new replica.
     ///
-    /// The returned addresses are present in the topology object associated with this instance.
+    /// The returned addresses are present in the topology object associated with this
+    /// instance, except while topology lags behind tablet metadata (scylladb/scylladb#21856).
     virtual host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const = 0;
 
     /// Same as above but returns host ids instead of addresses
