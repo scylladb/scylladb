@@ -67,6 +67,12 @@ sstable_directory::sstables_registry_components_lister::sstables_registry_compon
 sstable_directory::restore_components_lister::restore_components_lister(const data_dictionary::storage_options::value_type& options,
                                                                         std::vector<sstring> toc_filenames)
         : _toc_filenames(std::move(toc_filenames))
+        , _unified_layout(std::visit(overloaded_functor {
+            [] (const data_dictionary::storage_options::local&) { return false; },
+            [] (const data_dictionary::storage_options::object_storage& os) {
+                return os.layout == data_dictionary::storage_options::object_storage_layout::unified;
+            },
+        }, options))
 {
 }
 
@@ -480,7 +486,10 @@ future<> sstable_directory::restore_components_lister::scan(sstable_directory& d
 }
 
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
-    co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
+    // In the unified layout, the object names contain the sstable_id and not the
+    // generation. So each entry is "{sstable_id}/{toc_name}": the sstable_id finds the
+    // objects, and the toc_name gives the generation, version and format.
+    co_await coroutine::parallel_for_each(_toc_filenames, [flags, unified_layout = _unified_layout, &directory] (sstring toc_filename) -> future<> {
         std::filesystem::path sst_path{toc_filename};
         auto result = sstables::parse_path(sst_path, "", "");
         if (!result) {
@@ -488,6 +497,18 @@ future<> sstable_directory::restore_components_lister::process(sstable_directory
         }
         entry_descriptor desc = std::move(*result);
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
+            co_return;
+        }
+        if (unified_layout) {
+            auto dir = sst_path.parent_path().filename().native();
+            try {
+                desc.sid = sstable_id(utils::UUID(std::string_view(dir)));
+            } catch (...) {
+                throw_malformed_sstable_exception(seastar::format("{}: '{}' is not an sstable identifier", toc_filename, dir));
+            }
+            dirlog.debug("Processing {} entry from {} under sstable_id={}", desc.generation, toc_filename, desc.sid);
+            co_await directory.process_descriptor(std::move(desc), flags,
+                    [&directory] { return *directory._storage_opts; });
             co_return;
         }
         dirlog.debug("Processing {} entry from {}", desc.generation, toc_filename);
