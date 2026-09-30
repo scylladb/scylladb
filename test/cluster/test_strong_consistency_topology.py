@@ -14,9 +14,9 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
-from test.pylib.rest_client import HTTPError
+from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info
-from test.pylib.util import gather_safely
+from test.pylib.util import gather_safely, start_writes
 from test.cluster.util import DEFAULT_CMDLINE, FeatureConfigurations, get_table_raft_group_id, new_test_keyspace, \
     new_test_table, wait_for_leader
 
@@ -158,3 +158,68 @@ async def test_tablet_migration_away_from_leader(manager: ScyllaClusterManager, 
             await read_back(cql, src_host, table, 10, ConsistencyLevel.QUORUM)
             await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (10, 10)", host=dst_host)
             await read_back(cql, src_host, table, 11, ConsistencyLevel.QUORUM)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.parametrize("leader_on_src", [
+    pytest.param(False, id="leader_away", marks=pytest.mark.skip_bug(
+        link="https://scylladb.atlassian.net/browse/SCYLLADB-4703",
+        reason="a write racing the migration can abort the leaving replica; "
+               "fixed by https://github.com/scylladb/scylladb/pull/31955")),
+    pytest.param(True, id="leader_on_src", marks=pytest.mark.skip_bug(
+        link="https://scylladb.atlassian.net/browse/SCYLLADB-4933",
+        reason="a write waiting on the leaving ex-leader fails when its raft group is torn down at use_new")),
+])
+async def test_tablet_migration_under_writes(manager: ScyllaClusterManager, leader_on_src: bool):
+    """
+    Moving a replica must not fail the clients' writes, whether it is a
+    follower (leader_away) or the leader (leader_on_src).
+    """
+    follower_only = {'rack1', 'rack2'} if leader_on_src else {'rack1', 'rack3'}
+    logger.info(f"Bootstrapping cluster, follower-only racks {sorted(follower_only)}")
+    servers = await boot_sc_cluster(manager, ['rack1', 'rack2', 'rack3', 'rack3'], follower_only)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    query = next(s for s in servers if s.rack == 'rack1')
+
+    async with new_test_keyspace(manager, KS_OPTS) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, query, ks, table_name)
+            assert len(tablets) == 1, f"Expected 1 tablet, got {tablets}"
+            token = tablets[0].last_token
+            original = {h for h, _ in tablets[0].replicas}
+            replica_of = {servers[host_ids.index(h)].rack: h for h in original}
+            assert replica_of.keys() == {'rack1', 'rack2', 'rack3'}, f"Expected one replica per rack, got {tablets[0].replicas}"
+
+            src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h == replica_of['rack3'])
+            src = servers[host_ids.index(src_host_id)]
+            dst = next(s for s in servers if s.rack == 'rack3' and s.server_id != src.server_id)
+            dst_host_id = host_ids[servers.index(dst)]
+            leader_before = src_host_id if leader_on_src else replica_of['rack2']
+            leader_after = dst_host_id if leader_on_src else replica_of['rack2']
+            await wait_for_leader(manager, servers[host_ids.index(leader_before)], group_id, expected_host_id=leader_before)
+            logger.info(f"group_id={group_id} src={src_host_id}:{src_shard} ({src}) dst={dst_host_id} ({dst}) "
+                        f"leader={leader_before} query={query}")
+
+            logger.info("Starting strict writes")
+            finish = await start_writes(cql, ks, table_name, concurrency=1)
+            try:
+                logger.info(f"Migrating {src_host_id}:{src_shard} to {dst_host_id}:0")
+                await manager.api.move_tablet(query.ip_addr, ks, table_name, src_host_id, src_shard, dst_host_id, 0, token)
+                logger.info("Migration finished")
+            finally:
+                # finish() re-raises the first failed write or read-back.
+                key_count = await asyncio.wait_for(finish(), 300)
+            logger.info(f"key_count={key_count}")
+
+            await manager.api.quiesce_topology(query.ip_addr)
+            tablets = await get_all_tablet_replicas(manager, query, ks, table_name)
+            assert {h for h, _ in tablets[0].replicas} == (original - {src_host_id}) | {dst_host_id}, \
+                f"Expected {src_host_id} replaced by {dst_host_id}, got {tablets[0].replicas}"
+            await wait_for_leader(manager, dst, group_id, expected_host_id=leader_after)
+            await read_barrier(manager.api, dst.ip_addr, group_id, timeout=60)
+            await read_back(cql, hosts[servers.index(query)], table, key_count, ConsistencyLevel.QUORUM)
+            await read_back(cql, hosts[servers.index(dst)], table, key_count, ConsistencyLevel.ONE)
