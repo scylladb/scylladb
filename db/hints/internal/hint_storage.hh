@@ -43,8 +43,10 @@ using hint_entry_reader = commitlog_mutation_entry_reader;
 ///                                 for which hints where ever created>
 ///
 /// \param hint_directory A hint directory to rebalance
+/// \param extensions The extensions whose commitlog file extensions must follow moved segments
+///                   (e.g. the files needed to decrypt encrypted segments)
 /// \return A future that resolves when the operation is complete.
-future<> rebalance_hints(std::filesystem::path hint_directory);
+future<> rebalance_hints(std::filesystem::path hint_directory, const db::extensions* extensions);
 
 /// \brief Remove a hint directory together with its contents, unless it still contains hint segments.
 ///

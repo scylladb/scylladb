@@ -125,9 +125,10 @@ future<hints_segments_map> get_current_hints_segments(const fs::path& hint_direc
 /// \param hint_directory a root hint directory
 /// \param ep_segments a map that was originally built by get_current_hints_segments() for this endpoint
 /// \param segments_to_move a list of segments we are allowed to move
+/// \param extensions the extensions whose commitlog file extensions must follow moved segments
 future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
         const fs::path& hint_directory, hints_ep_segments_map& ep_segments,
-        segment_list& segments_to_move)
+        segment_list& segments_to_move, const db::extensions* extensions)
 {
     manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}",
             ep, segments_per_shard, segments_to_move.size());
@@ -153,7 +154,11 @@ future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
             // Don't move the file to the same location. It's pointless.
             if (*seg_path_it != seg_new_path) {
                 manager_logger.trace("going to move: {} -> {}", *seg_path_it, seg_new_path);
-                co_await io_check(rename_file, seg_path_it->native(), seg_new_path.native(), rename_flags::none);
+                // Let commitlog do it, so that the files its extensions keep for the segment
+                // (e.g. the information needed to decrypt it) follow the segment.
+                co_await io_check([&] {
+                    return commitlog::rename_segment(seg_path_it->native(), seg_new_path.native(), extensions);
+                });
             } else {
                 manager_logger.trace("skipping: {}", *seg_path_it);
             }
@@ -173,7 +178,8 @@ future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
 ///
 /// \param hint_directory a root hint directory
 /// \param segments_map a map that was built by get_current_hints_segments()
-future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& segments_map) {
+/// \param extensions the extensions whose commitlog file extensions must follow moved segments
+future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& segments_map, const db::extensions* extensions) {
     // Count how many hint segments we have for each destination.
     std::unordered_map<sstring, size_t> per_ep_hints;
 
@@ -231,11 +237,11 @@ future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& 
         auto& current_segments_map = segments_map[ep];
 
         if (q) {
-            co_await rebalance_segments_for(ep, q, hint_directory, current_segments_map, current_segments_to_move);
+            co_await rebalance_segments_for(ep, q, hint_directory, current_segments_map, current_segments_to_move, extensions);
         }
 
         if (r) {
-            co_await rebalance_segments_for(ep, q + 1, hint_directory, current_segments_map, current_segments_to_move);
+            co_await rebalance_segments_for(ep, q + 1, hint_directory, current_segments_map, current_segments_to_move, extensions);
         }
     }
 }
@@ -336,12 +342,12 @@ future<bool> remove_hint_directory(fs::path dir) {
     co_return true;
 }
 
-future<> rebalance_hints(fs::path hint_directory) {
+future<> rebalance_hints(fs::path hint_directory, const db::extensions* extensions) {
     // Scan currently present hint segments.
     hints_segments_map current_hints_segments = co_await get_current_hints_segments(hint_directory);
 
     // Move segments to achieve an even distribution of files among all present shards.
-    co_await rebalance_segments(hint_directory, current_hints_segments);
+    co_await rebalance_segments(hint_directory, current_hints_segments, extensions);
 
     // Remove the directories of shards that are not present anymore.
     // They should not have any segments by now.
