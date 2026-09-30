@@ -90,6 +90,14 @@ class raft_server_with_timeouts {
     run_with_timeout(Op&& op, const char* op_name, seastar::abort_source* as, std::optional<raft_timeout> timeout);
 public:
     raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd);
+    // Resolves `timeout` into an absolute deadline, applying the group's configured default
+    // operation timeout when the caller asked for a timeout but did not pin a deadline of its
+    // own. Returns nullopt when the caller asked for no timeout at all.
+    std::optional<lowres_clock::time_point> resolve_deadline(const std::optional<raft_timeout>& timeout, const char* op_name) const;
+    // Builds the diagnostic an operation that timed out on this group should report, naming
+    // the group and the stage that timed out and, when that is the case, that the group
+    // currently has no quorum.
+    sstring timeout_message(const char* op_name) const;
     future<> add_entry(raft::command command, raft::wait_type type, seastar::abort_source& as, std::optional<raft_timeout> timeout);
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<bool> trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout);
