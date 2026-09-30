@@ -3650,7 +3650,12 @@ future<> database::flush_non_system_column_families() {
     dblog.info("Flushing non-system tables");
     return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
-        return cf->flush().then([this] {
+        // A write landing after the flush would be flushed again when the table
+        // closes, which on object storage needs the sstables registry that
+        // system_keyspace shutdown unplugs.
+        return cf->close_writes().then([cf] {
+            return cf->flush();
+        }).then([this] {
             _drain_progress.remaining_cfs--;
         });
     }).finally([] {

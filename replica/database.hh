@@ -1359,6 +1359,11 @@ public:
         return _pending_writes_phaser.advance_and_await();
     }
 
+    // database::drain() closes it before table::stop() does.
+    future<> close_writes() noexcept {
+        return _pending_writes_phaser.is_closed() ? make_ready_future() : _pending_writes_phaser.close();
+    }
+
     size_t writes_in_progress() const {
         return _pending_writes_phaser.operations_in_progress();
     }
