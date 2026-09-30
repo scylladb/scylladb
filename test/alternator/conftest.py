@@ -518,7 +518,7 @@ def cql(dynamodb):
     if is_aws(dynamodb):
         skip_env('Scylla-only CQL API not supported by AWS')
     url = dynamodb.meta.client._endpoint.host
-    host, = re.search(r'.*://([^:]*):', url).groups()
+    host = urlparse(url).hostname
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
