@@ -492,6 +492,9 @@ public:
     };
 private:
     schema_ptr _schema;
+    // Null for standalone tables built by tests, and once the table is removed from the
+    // database: its keyspace may be destroyed while the table drains pending operations.
+    const keyspace* _keyspace;
     config _config;
     locator::effective_replication_map_ptr _erm;
     lw_shared_ptr<const storage_options> _storage_opts;
@@ -1024,7 +1027,9 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm,
+            sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
+            locator::effective_replication_map_ptr erm, const keyspace* ks = nullptr);
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
@@ -1037,6 +1042,8 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
+    const keyspace* get_keyspace() const { return _keyspace; }
+    void detach_from_keyspace() noexcept { _keyspace = nullptr; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;

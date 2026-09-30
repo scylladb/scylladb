@@ -1235,7 +1235,8 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager,
+            sst_manager, *_cl_stats, _row_cache_tracker, erm, &ks);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
@@ -1306,6 +1307,7 @@ bool database::update_column_family(schema_ptr new_schema) {
 void database::remove(table& cf) noexcept {
     cf.deregister_metrics();
     _tables_metadata.remove_table(*this, cf);
+    cf.detach_from_keyspace();
 }
 
 global_table_ptr::global_table_ptr() {
