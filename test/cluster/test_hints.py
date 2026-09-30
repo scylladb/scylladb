@@ -22,7 +22,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
-from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import create_new_test_keyspace, get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -237,6 +237,45 @@ async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
 
         # For dropping the keyspace
         await manager.server_start(node2.server_id)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_counter_update_overloaded_by_in_flight_hints(manager: ScyllaClusterManager):
+    """
+    Reproduces SCYLLADB-4381. We keep hints in flight with slow_down_writing_hints until the
+    coordinator rejects counter updates with "Too many in flight hints". The coordinator is the
+    counter leader, and we verify that it didn't apply the rejected update.
+    """
+    coordinator, replica = await manager.servers_add(2, config={
+        "error_injections_at_startup": ["decrease_max_size_of_hints_in_progress"]
+    }, auto_rack_dc="dc1")
+
+    cql = await manager.get_cql_exclusive(coordinator)
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    table = f"{ks}.t"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c counter)")
+    update = SimpleStatement(f"UPDATE {table} SET c = c + 1 WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+
+    await manager.server_stop_gracefully(replica.server_id)
+    await manager.server_not_sees_other_server(coordinator.ip_addr, replica.ip_addr)
+
+    acknowledged = 0
+    async with inject_error(manager.api, coordinator.ip_addr, "slow_down_writing_hints"):
+        # We update until the in-flight hints exceed the 1000-byte limit, which takes 6 updates as of writing.
+        for _ in range(100):
+            try:
+                await cql.run_async(update)
+                acknowledged += 1
+            except NoHostAvailable as e:
+                for err in e.errors.values():
+                    assert err.summary == "Coordinator node overloaded" and re.match(r"Too many in flight hints: \d+", err.message)
+                break
+        else:
+            pytest.fail(f"The coordinator was not overloaded after {acknowledged} updates with hints in flight")
+
+        read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+        [row] = await cql.run_async(read)
+
+    assert row.c == acknowledged, f"counter is {row.c} after {acknowledged} acknowledged updates and a rejected one"
 
 async def test_sync_point(manager: ScyllaClusterManager):
     """
