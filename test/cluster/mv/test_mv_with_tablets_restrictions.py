@@ -216,7 +216,7 @@ async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, op: 
     Then attempts to remove the other node from the same rack, which would eliminate
     that rack entirely and make the keyspace RF-rack-invalid - should be rejected.
     """
-    cfg = {'rf_rack_valid_keyspaces': False, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+    cfg = {'rf_rack_valid_keyspaces': False, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}, 'auto_rf_keyspaces_use_vnodes']}
     cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
 
     async def remove_node(srv_to_remove, expected_error: str = None):
