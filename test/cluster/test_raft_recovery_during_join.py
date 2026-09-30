@@ -55,6 +55,11 @@ async def test_raft_recovery_during_join(manager: ScyllaClusterManager):
     cql, _ = await manager.get_ready_cql(servers)
     dead_hosts = await wait_for_cql_and_get_hosts(cql, dead_servers, time.time() + 60)
 
+    # Disable load balancer on the topology coordinator node so that an ongoing tablet migration doesn't fail one of the
+    # check_system_topology_and_cdc_generations_v3_consistency calls below. A tablet migration can suddenly make
+    # version or fence_version inconsistent among nodes.
+    await manager.disable_tablet_balancing()
+
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
 

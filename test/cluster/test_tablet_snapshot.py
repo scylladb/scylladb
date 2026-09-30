@@ -19,6 +19,7 @@ import pytest
 from test import TOP_SRC_DIR
 from test.cluster.util import get_topology_coordinator
 from test.cluster.util import new_test_keyspace
+from test.cluster.util import quiesce_and_disable_tablet_balancing
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import unique_name
 from test.pylib.util import wait_for_view
@@ -97,9 +98,15 @@ async def test_tablet_snapshot_matches_live_topology(manager: ScyllaClusterManag
         )
         await wait_for_view(cql, mv, len(servers))
 
-        # The snapshots are taken after the live topology is read, so a migration in that
-        # window would move replicas and make the comparison below fail intermittently.
-        await manager.disable_tablet_balancing()
+        # Creating the keyspace above makes its racks eligible for auto-RF, so the
+        # coordinator starts expanding the replication of audit and system_traces. Each
+        # of those changes bumps the topology version and rewrites their tablet maps, and
+        # one landing between the live read and the snapshots below makes them differ.
+        # quiesce_topology() waits those changes out as well as the balancer's own work
+        # (the auto-RF keyspaces have a per-shard tablet count goal, so the balancer
+        # splits their tablets shortly after the cluster starts). Quiesce before
+        # disabling the balancer, or a pending resize is never finalized.
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
         with get_live_topology(servers[0].ip_addr) as live_src:
             live_topo = live_src.get_topology()
@@ -142,7 +149,14 @@ async def test_tablet_snapshot_taken_after_replace_before_rebuild(manager: Scyll
     In that window the topology model must still list the replaced node as a replica, while
     system.topology already has it as left and the joining node as normal.
     """
-    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    # The test blocks the replace in await_tablets_rebuilt() and then throws the half
+    # joined cluster away without letting it finish. Keeping audit and system_traces on
+    # vnodes leaves the test's own keyspace as the only tablet table, which is all the
+    # assertions below need, and lets the orphaned server_start() operation complete.
+    # With those keyspaces on tablets it never does, and the manager's post-test drain
+    # waits the whole drain timeout for it and then marks the server broken.
+    servers = await manager.servers_add(3, auto_rack_dc="dc1",
+                                        config={'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']})
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3}"
