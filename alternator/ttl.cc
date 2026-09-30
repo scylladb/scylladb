@@ -53,6 +53,7 @@
 #include "db/config.hh"
 #include "db/tags/utils.hh"
 #include "utils/labels.hh"
+#include "utils/error_injection.hh"
 
 #include "ttl.hh"
 
@@ -678,6 +679,12 @@ static future<> scan_table_ranges(
                 expiration_stats.items_deleted++;
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
+                co_await utils::get_local_injector().inject("alternator_ttl_before_expire_item", [&s] (auto& handler) -> future<> {
+                    if (s->cf_name() != handler.get("cf_name")) {
+                        co_return;
+                    }
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                });
                 auto ts = api::new_timestamp();
                 co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
             }
