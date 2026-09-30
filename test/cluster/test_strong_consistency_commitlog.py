@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, quiesce_and_disable_tablet_balancing, reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
@@ -584,7 +584,7 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
     servers = await manager.servers_add(2, config=config, cmdline=cmdline)
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                                  "'replication_factor': 1} AND tablets = {'initial': 1} "
@@ -657,7 +657,7 @@ async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: S
     servers = await manager.servers_add(2, config=config, cmdline=cmdline)
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                                  "'replication_factor': 1} AND tablets = {'initial': 1} "
