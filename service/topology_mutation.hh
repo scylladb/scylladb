@@ -113,6 +113,7 @@ public:
     topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
+    topology_mutation_builder& set_needs_auto_rf_change(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id>& values);
     topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
@@ -126,6 +127,7 @@ public:
     topology_mutation_builder& add_new_committed_cdc_generation(const cdc::generation_id& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
+    topology_mutation_builder& del_needs_auto_rf_change();
     topology_mutation_builder& del_global_topology_request();
     topology_mutation_builder& del_global_topology_request_id();
     topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
