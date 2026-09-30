@@ -811,9 +811,6 @@ async def test_lwts_for_special_tables(manager: ScyllaClusterManager, storage_co
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_storage('s3', 'gs',
-                          reason='a node aborts during shutdown (exit code -6) on object storage, '
-                                 'intermittently on either backend; deeper investigation is needed')
 async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     """
     This is a regression test for #26355:
