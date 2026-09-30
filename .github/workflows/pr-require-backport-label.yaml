@@ -15,15 +15,25 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Wait for label to be added
-        run: sleep 1m
-      - uses: mheap/github-action-required-labels@0ac283b4e65c1fb28ce6079dea5546ceca98ccbe # v5.5.2
+      - name: Require a backport label
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
-          mode: minimum
-          count: 1
-          labels: "backport/none\nbackport/\\d{4}\\.\\d+\nbackport/\\d+\\.\\d+"
-          use_regex: true
-          add_comment: false
+          script: |
+            // The event payload is the snapshot from when the run was queued, so
+            // read the live label set via the API instead of sleeping and hoping
+            // the label has been applied by the time we look.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const required = /^(backport\/none|backport\/\d{4}\.\d+|backport\/\d+\.\d+)$/;
+            if (!(pr.labels || []).some(l => required.test(l.name))) {
+              core.setFailed(
+                "At least one backport label is required (backport/none or backport/<release>). " +
+                `Current labels: ${(pr.labels || []).map(l => l.name).join(', ') || '(none)'}`
+              );
+            }
       # A backport label alone is not enough: the backport itself needs a "Fixes:"
       # reference in the PR body. Checking it here, next to the label check, means
       # the author learns about it up front instead of after the merge, when the
@@ -33,8 +43,8 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
-            // The event payload is the snapshot from when the run was queued, and
-            // we slept a minute since; re-read the PR so labels and body are current.
+            // Re-read the PR so labels and body are current rather than the
+            // queued-event snapshot.
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
