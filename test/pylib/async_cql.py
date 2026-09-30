@@ -27,12 +27,14 @@ from cassandra.cluster import ResponseFuture     # type: ignore # pylint: disabl
 logger = logging.getLogger(__name__)
 
 
-def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False) -> asyncio.Future:
+def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False,
+                 return_warnings: bool = False) -> asyncio.Future:
     """Wrap a cassandra Future into an asyncio.Future object.
 
     Args:
         driver_response_future: future to wrap
         all_pages: fetch all pages
+        return_warnings: resolve to (result, the server's warnings or None)
 
     Returns:
         And asyncio.Future object which can be awaited.
@@ -41,18 +43,23 @@ def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False
     aio_future = loop.create_future()
     _result = []
 
+    def set_result(result):
+        if return_warnings:
+            result = (result, driver_response_future.warnings)
+        loop.call_soon_threadsafe(aio_future.set_result, result)
+
     def on_result(result):
         if aio_future.done():
             logger.debug("_wrap_future: on_result() on already done future: %s", result)
         else:
             if result is None:
-                loop.call_soon_threadsafe(aio_future.set_result, None)
+                set_result(None)
             else:
                 _result.extend(result)
                 if driver_response_future.has_more_pages and all_pages:
                     driver_response_future.start_fetching_next_page()
                 else:
-                    loop.call_soon_threadsafe(aio_future.set_result, _result)
+                    set_result(_result)
 
     def on_error(exception, *_):
         if not aio_future.done():
@@ -66,7 +73,7 @@ def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False
 
 
 # TODO: paged result query handling (iterable?)
-def run_async(self, *args, all_pages = True, **kwargs) -> asyncio.Future:
+def run_async(self, *args, all_pages = True, return_warnings = False, **kwargs) -> asyncio.Future:
     """Execute a CQL query asynchronously by wrapping the driver's future"""
     # The default timeouts should have been more than enough, but in some
     # extreme cases with a very slow debug build running on a slow or very busy
@@ -74,4 +81,4 @@ def run_async(self, *args, all_pages = True, **kwargs) -> asyncio.Future:
     # incremented to 200 seconds.
     # See issue #11289.
     kwargs.setdefault("timeout", 200.0)
-    return _wrap_future(self.execute_async(*args, **kwargs), all_pages = all_pages)
+    return _wrap_future(self.execute_async(*args, **kwargs), all_pages = all_pages, return_warnings = return_warnings)
