@@ -372,6 +372,15 @@ topology_mutation_builder& topology_mutation_builder::del_global_topology_reques
     return del("global_topology_request_id");
 }
 
+topology_mutation_builder& topology_mutation_builder::set_needs_auto_rf_change(bool value) {
+    _m.set_static_cell("needs_auto_rf_change", value, _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::del_needs_auto_rf_change() {
+    return del("needs_auto_rf_change");
+}
+
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {
     _node_builder.emplace(*this, n);
     return *_node_builder;
