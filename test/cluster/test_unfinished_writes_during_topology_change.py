@@ -41,7 +41,12 @@ async def test_unfinished_audit_write_during_topology_change(manager: ScyllaClus
      5. Check that the statement really was audited.
     """
     cmdline = ['--logger-log-level', 'debug_error_injection=debug']
-    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline)
+    # The audit write has to reach the other node, which the vnodes keyspace's RF 3 per DC
+    # guarantees. On tablets, audit starts with one replica, in the first node's rack, and
+    # without a user tablets keyspace auto-RF never extends it, so the write would stay on
+    # the coordinator. Keep the system keyspaces on vnodes.
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline, config=config)
 
     running = await manager.running_servers()
     cql, hosts = await manager.get_ready_cql(running)
