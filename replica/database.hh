@@ -2446,6 +2446,23 @@ mutation_reader make_multishard_streaming_reader(
         std::optional<size_t> multishard_reader_buffer_size,
         read_ahead read_ahead);
 
+// Creates a streaming reader for `ranges` (sorted, disjoint) of a tablet-based
+// table, reading from all shards, as one stream in token order.
+//
+// Reads each tablet on the shard that owns it, one tablet at a time. The
+// tablet's reader is an auto-paused evictable reader, so it holds no resources
+// on its shard between reads, and is recreated where it left off if evicted.
+// See make_streaming_reader() for `compaction_time`.
+// `buffer_size`, if set, is the buffer size of the tablet's reader on its
+// shard, i.e. how much is read there, and copied over, at a time.
+mutation_reader make_tablet_streaming_reader(
+        sharded<replica::database>& db,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range_vector& ranges,
+        gc_clock::time_point compaction_time,
+        std::optional<size_t> buffer_size = {});
+
 bool is_internal_keyspace(std::string_view name);
 
 class streaming_reader_lifecycle_policy
