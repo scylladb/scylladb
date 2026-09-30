@@ -15,7 +15,6 @@ from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.alternator.util import new_test_table, unique_table_name
-from test.alternator.test_vector import need_vector_search_in_botocore
 
 
 # Skip the entire module when running against AWS DynamoDB.
@@ -348,7 +347,7 @@ def test_audit_query_item_operations(dynamodb, cql, alternator_audit_enabled):
 # regardless of whether the search itself succeeds or fails (e.g., with
 # "Vector Store is disabled" if none is configured) - hence we don't check
 # the error(bool) field here, unlike the other audit tests above.
-def test_audit_search_vectors(dynamodb, cql, alternator_audit_enabled, need_vector_search_in_botocore):
+def test_audit_search_vectors(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb,
             KeySchema=[{"AttributeName": "p", "KeyType": "HASH"}],
             AttributeDefinitions=[{"AttributeName": "p", "AttributeType": "S"}],

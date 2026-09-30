@@ -25,7 +25,7 @@ from test.pylib.skip_types import skip_env
 from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT, need_vector_search_in_botocore
+from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
@@ -1170,7 +1170,7 @@ def authorized_vs(fn):
 # Test that a SearchVectors request requires SELECT permission on the table,
 # just like an ordinary Query does (but unlike a Query on a GSI or LSI, which
 # checks permissions on the separate index table).
-def test_rbac_searchvectors(need_vector_search_in_botocore, dynamodb, cql, table_vs):
+def test_rbac_searchvectors(dynamodb, cql, table_vs):
     with new_role(cql) as (role, key):
         with new_dynamodb(dynamodb, role, key) as d:
             # Sanity check: the original superuser (dynamodb) who created the
@@ -1200,7 +1200,7 @@ def test_rbac_searchvectors(need_vector_search_in_botocore, dynamodb, cql, table
 
 # Test that creating a table with a VectorIndexes parameter requires the
 # same CREATE permission as creating a regular table without VectorIndexes.
-def test_rbac_createtable_vectorindexes(need_vector_search_in_botocore, dynamodb, cql):
+def test_rbac_createtable_vectorindexes(dynamodb, cql):
     schema = {
         'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
         'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
@@ -1224,7 +1224,7 @@ def test_rbac_createtable_vectorindexes(need_vector_search_in_botocore, dynamodb
 # ALTER permission on the table, just as adding or deleting a GSI does.
 # The vector index is treated as a feature of the base table (like a GSI),
 # so modifying it requires ALTER rather than CREATE/DROP.
-def test_rbac_updatetable_vectorindex(need_vector_search_in_botocore, dynamodb, cql):
+def test_rbac_updatetable_vectorindex(dynamodb, cql):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
@@ -1274,7 +1274,7 @@ def test_rbac_updatetable_vectorindex(need_vector_search_in_botocore, dynamodb, 
 # another user who has permissions to SELECT the table.
 # This test is needs_vector_store, i.e., it will be skipped if the vector
 # store is not configured.
-def test_rbac_vectorstore_indexing(need_vector_search_in_botocore, dynamodb, needs_vector_store, cql):
+def test_rbac_vectorstore_indexing(dynamodb, needs_vector_store, cql):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:

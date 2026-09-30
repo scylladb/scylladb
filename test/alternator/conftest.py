@@ -24,16 +24,7 @@ from test.pylib.connect_options import add_host_option
 from urllib.parse import urlparse
 from functools import cache
 
-# Test that the Boto libraries are new enough. These tests want to test a
-# large variety of DynamoDB API features, and to do this we need a new-enough
-# version of the the Boto libraries (boto3 and botocore) so that they can
-# access all these API features.
-# In particular, the BillingMode feature was added in botocore 1.12.54.
 import botocore
-import sys
-from packaging.version import Version
-if (Version(botocore.__version__) < Version('1.12.54')):
-    pytest.exit("Your Boto library is too old. Please upgrade it,\ne.g. using:\n    sudo pip{} install --upgrade boto3".format(sys.version_info[0]))
 
 # We've been seeing Python crashing when shutting down after successfully
 # finishing Alternator tests, and couldn't figure out why (issue #17564).
