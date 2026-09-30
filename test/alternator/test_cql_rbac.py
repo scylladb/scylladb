@@ -29,6 +29,7 @@ from test.alternator.test_vector import needs_vector_store, wait_for_vector_inde
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
+    # alternator-client does not wrap the separate DynamoDB Streams service.
     if get_cert(dynamodb):
         skip_env("new_dynamodb_streams() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
     url = dynamodb.meta.client._endpoint.host

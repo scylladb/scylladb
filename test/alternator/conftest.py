@@ -9,22 +9,23 @@
 # require the same fixture, it can be set up only once - while still allowing
 # the user to run individual tests and automatically set up the fixtures they need.
 
-import pytest
-import boto3
-import requests
 import re
+from functools import cache
+from urllib.parse import urlparse
+
+import boto3
+import botocore
+import pytest
+import requests
+from alternator import Auth, close_resource
 from botocore import UNSIGNED
 
-from test.alternator.util import create_test_table, is_aws, scylla_log
+from test.alternator.util import create_alternator_resource, create_test_table, is_aws, scylla_log
 from test.conftest import dynamic_scope
 from test.cqlpy.conftest import host  # add required fixtures
+from test.pylib.connect_options import add_host_option
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-from test.pylib.connect_options import add_host_option
-from urllib.parse import urlparse
-from functools import cache
-
-import botocore
 
 # We've been seeing Python crashing when shutting down after successfully
 # finishing Alternator tests, and couldn't figure out why (issue #17564).
@@ -32,7 +33,7 @@ import botocore
 import faulthandler
 faulthandler.enable(all_threads=True)
 
-# By default, tests run against a local Scylla installation on localhost:8080/.
+# By default, tests run against a local Scylla installation on localhost:8000/.
 # The "--aws" option can be used to run against Amazon DynamoDB in the us-east-1
 # region.
 def pytest_addoption(parser):
@@ -119,11 +120,16 @@ def get_valid_alternator_role():
 
     return _get_valid_alternator_role
 
-# "dynamodb" fixture: set up client object for communicating with the DynamoDB
-# API. Currently this chooses either Amazon's DynamoDB in the default region
-# or a local Alternator installation on http://localhost:8080 - depending on the
-# existence of the "--aws" option. In the future we should provide options
-# for choosing other Amazon regions or local installations.
+def _local_alternator_url(address):
+    host = str(address)
+    if ':' in host and not host.startswith('['):
+        host = f'[{host}]'
+    return f'http://{host}:8000'
+
+
+# "dynamodb" fixture: set up a resource for communicating with the DynamoDB
+# API. This uses boto3 for Amazon DynamoDB or alternator-client for a local
+# Alternator installation, depending on the "--aws" option.
 @pytest.fixture(scope=dynamic_scope())
 def dynamodb(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
@@ -141,12 +147,12 @@ def dynamodb(request, get_valid_alternator_role):
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
             # derive the endpoint from the host fixture when running against a managed cluster
-            local_url = f"http://{address}:8000"
+            local_url = _local_alternator_url(address)
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
-        # Disable verifying in order to be able to use self-signed TLS certificates
+        # --https selects the self-signed local test server. An explicit HTTPS
+        # --url without --https retains normal certificate verification.
         verify = not request.config.getoption('https')
-        extra_config = botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)
         if request.config.getoption('mtls'):
             # The --mtls/--https CLI options are validated together in
             # pytest_configure(), but local_url's scheme can still end up
@@ -161,18 +167,15 @@ def dynamodb(request, get_valid_alternator_role):
             # certificate is used for authentication, not SigV4 credentials.
             cert_file = request.config.getoption('client_cert_file')
             key_file = request.config.getoption('client_key_file')
-            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-                region_name='us-east-1',
-                config=boto_config.merge(extra_config.merge(botocore.client.Config(
-                    signature_version=UNSIGNED,
-                    client_cert=(cert_file, key_file)))))
+            res = create_alternator_resource(local_url, Auth.disabled(), verify, cert_file, key_file)
         else:
             user, secret = get_valid_alternator_role(local_url)
-            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-                region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
-                config=boto_config.merge(extra_config))
+            res = create_alternator_resource(local_url, Auth.static_credentials(user, secret), verify)
     yield res
-    res.meta.client.close()
+    if request.config.getoption('aws'):
+        res.meta.client.close()
+    else:
+        close_resource(res)
 
 @pytest.fixture(scope=dynamic_scope())
 def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
@@ -209,6 +212,8 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
 
 @pytest.fixture(scope=dynamic_scope())
 def dynamodbstreams(request, get_valid_alternator_role):
+    # alternator-client wraps DynamoDB but not the separate DynamoDB Streams
+    # service, so Streams clients remain direct boto3 clients.
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
     # because boto3 checks them before we can get the server to check them.
@@ -224,7 +229,7 @@ def dynamodbstreams(request, get_valid_alternator_role):
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
             # derive the endpoint from the host fixture when running against a managed cluster
-            local_url = f"http://{address}:8000"
+            local_url = _local_alternator_url(address)
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
