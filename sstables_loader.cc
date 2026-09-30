@@ -892,6 +892,11 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
+    // For now, only the tablet-aware restore supports a table on object storage.
+    if (_db.local().find_column_family(ks_name, cf_name).get_storage_options().is_object_storage_type()) {
+        throw std::invalid_argument(format("Cannot restore {}.{} with /storage_service/restore: the table keeps its sstables on object storage, use /storage_service/tablets/restore",
+                ks_name, cf_name));
+    }
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
     auto progress = make_lw_shared<download_progress>();
