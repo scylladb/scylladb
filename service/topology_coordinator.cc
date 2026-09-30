@@ -164,6 +164,60 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
 
+    // Auto-RF backoff.
+    //
+    // A keyspace_rf_change which the request handler rejects leaves no trace in
+    // group0: the request is dropped and marked done with the error. The next
+    // coordinator iteration therefore re-detects the very same shortfall in
+    // get_keyspaces_that_require_auto_rf_change() and schedules the very same
+    // request again. For a persistent rejection that is an unbounded loop which
+    // starves every other topology operation.
+    //
+    // Remember the failed attempts here and back off exponentially, so that a
+    // rejection which cannot be satisfied yet costs a handful of attempts rather
+    // than one per coordinator iteration. Keeping this in memory is adequate: the
+    // reconciler is a single fiber on the coordinator, and on coordinator failover
+    // the map resets, which costs at most one extra attempt.
+    struct auto_rf_failure {
+        lowres_clock::time_point next_attempt;
+        unsigned consecutive_failures = 0;
+    };
+    static constexpr std::chrono::seconds auto_rf_backoff_base{1};
+    static constexpr std::chrono::seconds auto_rf_backoff_max{60};
+    std::unordered_map<sstring, auto_rf_failure> _auto_rf_failures;
+    // Wakes the coordinator fiber up when the earliest backoff expires. Without
+    // this the fiber, having no other work, sleeps on _topo_sm.event indefinitely
+    // and a backed-off keyspace would only be revisited on an unrelated event.
+    timer<lowres_clock> _auto_rf_retry_timer{[this] { _topo_sm.event.broadcast(); }};
+
+    static bool is_auto_rf_keyspace(const sstring& ks_name) {
+        return std::ranges::any_of(get_auto_rf_keyspaces(), [&] (const auto& e) { return e.first == ks_name; });
+    }
+
+    // Records that a keyspace_rf_change for `ks_name` was rejected and pushes the
+    // next auto-RF attempt for that keyspace into the future.
+    void note_auto_rf_change_failure(const sstring& ks_name) {
+        // Operator ALTERs of other keyspaces go through the same request
+        // handler; only the reconciler's own keyspaces are backed off.
+        if (!is_auto_rf_keyspace(ks_name)) {
+            return;
+        }
+        auto& f = _auto_rf_failures[ks_name];
+        // 1s, 2s, 4s, ... capped at auto_rf_backoff_max.
+        const auto delay = std::min(auto_rf_backoff_max,
+                std::chrono::seconds(auto_rf_backoff_base * (1u << std::min(f.consecutive_failures, 6u))));
+        ++f.consecutive_failures;
+        f.next_attempt = lowres_clock::now() + delay;
+        rtlogger.info("auto-rf: keyspace_rf_change for {} failed {} time(s) in a row, "
+                      "not retrying it for {}s", ks_name, f.consecutive_failures, delay.count());
+    }
+
+    // Called when a keyspace_rf_change for `ks_name` was processed successfully,
+    // so that the next shortfall is acted upon immediately.
+    void clear_auto_rf_change_failures(const sstring& ks_name) {
+        _auto_rf_failures.erase(ks_name);
+    }
+
     static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
 
     std::chrono::milliseconds _ring_delay;
@@ -1116,6 +1170,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             sstring error;
             if (_db.has_keyspace(ks_name)) {
                 try {
+                    // Simulates a keyspace_rf_change which is rejected for as long as
+                    // the injection is enabled. The tablet state which makes the real
+                    // rejection persistent (a tablet holding fewer replicas than the
+                    // keyspace's RF while every rack in the RF is still placeable) is
+                    // transient and could not be constructed synthetically.
+                    if (auto failing_ks = utils::get_local_injector().inject_parameter<std::string_view>("keyspace_rf_change_fail", "keyspace");
+                            failing_ks && *failing_ks == ks_name) {
+                        throw std::runtime_error(seastar::format("keyspace_rf_change_fail injection is enabled for keyspace {}", ks_name));
+                    }
                     auto& ks = _db.find_keyspace(ks_name);
                     auto tmptr = get_token_metadata_ptr();
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
@@ -1236,6 +1299,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
             co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", utils::wait_for_message(30s));
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
+
+            // A rejected request is dropped without a trace, so auto-RF would
+            // re-detect the same shortfall and re-issue it on the coordinator's
+            // very next iteration. Remember the outcome, see note_auto_rf_change_failure().
+            if (error.empty()) {
+                clear_auto_rf_change_failures(ks_name);
+            } else {
+                note_auto_rf_change_failure(ks_name);
+            }
         }
         break;
         case global_topology_request::truncate_table: {
@@ -1782,7 +1854,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             locator::replication_strategy_config_options new_options;
         };
         std::optional<rf_change_candidate> candidate;
+        // The earliest moment at which a keyspace skipped below leaves its backoff.
+        std::optional<lowres_clock::time_point> retry_at;
         for (const auto& [ks_name, goal] : auto_rf_keyspaces) {
+            // Note the backoff is keyed by keyspace only, not by the change which
+            // failed: a keyspace which was just rejected is left alone even if the
+            // topology meanwhile changed such that a different change would be
+            // attempted. That costs at most one backoff interval of delay on a
+            // system keyspace, and keeps the state trivially small.
+            if (auto it = _auto_rf_failures.find(ks_name); it != _auto_rf_failures.end() && lowres_clock::now() < it->second.next_attempt) {
+                rtlogger.debug("Keyspace {} had {} failed RF change(s) in a row, backing off", ks_name, it->second.consecutive_failures);
+                retry_at = std::min(retry_at.value_or(it->second.next_attempt), it->second.next_attempt);
+                continue;
+            }
             if (co_await service::ongoing_rf_change(_topo_sm._topology, _sys_ks, guard, ks_name)) {
                 rtlogger.debug("There is an ongoing RF change for keyspace {}, skipping", ks_name);
                 continue;
@@ -1867,7 +1951,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
 
+        if (retry_at) {
+            _auto_rf_retry_timer.rearm(*retry_at);
+        }
+
         if (!candidate) {
+            // Note the needs_auto_rf_change flag is cleared even when a keyspace is
+            // only backed off. The flag preempts tablet load balancing, and holding
+            // it for the whole backoff would trade one starvation for another; the
+            // request handler sets it again once the change is scheduled.
             if (_topo_sm._topology.needs_auto_rf_change) {
                 co_await clear_needs_auto_rf_change();
                 co_return std::nullopt;
@@ -2201,6 +2293,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         out.emplace_back(builder.build());
 
+        // A failed RF change leaves the shortfall in place, so the reconciler
+        // re-detects it and re-issues the same request on its next iteration.
+        // Record the outcome here too, not only where the handler rejects a
+        // request outright, or a persistently failing change re-enters the
+        // unbounded loop the backoff exists to stop.
+        if (error.empty()) {
+            clear_auto_rf_change_failures(completion.ks_name);
+        } else {
+            note_auto_rf_change_failure(completion.ks_name);
+        }
+
         out.emplace_back(topology_request_tracking_mutation_builder(completion.request_id)
                 .done(error)
                 .build());
@@ -2223,6 +2326,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         for (auto& m : schema_muts) {
             out.add_small(m);
         }
+
+        // Same reasoning as in generate_rf_change_completion_update().
+        note_auto_rf_change_failure(abort_info.ks_name);
 
         out.add(topology_request_tracking_mutation_builder(abort_info.request_id)
                 .abort(abort_info.error)
@@ -5624,6 +5730,7 @@ future<> topology_coordinator::run() {
 }
 
 future<> topology_coordinator::stop() {
+    _auto_rf_retry_timer.cancel();
     co_await _db.get_notifier().unregister_listener(this);
     utils::get_local_injector().unregister_on_disable("delay_cdc_stream_finalization");
     _topo_sm.on_tablet_split_ready = nullptr;
