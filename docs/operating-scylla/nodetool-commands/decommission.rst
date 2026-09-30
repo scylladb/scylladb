@@ -23,12 +23,14 @@ Before you run ``nodetool decommission``:
   on the remaining nodes. If there is not enough disk space on the remaining nodes,
   the removal of a node will fail. Add more storage to remaining nodes **before**
   starting the removal procedure.
-* Make sure that the number of nodes remaining in the DC after you decommission a node
-  will be the same or higher than the Replication Factor configured for the keyspace
-  in this DC. Please mind that e.g. audit feature, which is enabled by default, may require
-  adjusting ``audit`` keyspace. If the number of remaining nodes is lower than the RF, the decommission
-  request may fail.
-  In such a case, ALTER the keyspace to reduce the RF before running ``nodetool decommission``.
+* Make sure that the number of nodes remaining in the DC after you decommission
+  a node will be the same or higher than the Replication Factor configured for
+  the keyspace in this DC. If the number of remaining nodes is lower than the RF,
+  the decommission request may fail. In such a case, ALTER the keyspace to reduce
+  the RF before running ``nodetool decommission``.
+  If the ``audit`` keyspace (table auditing is enabled by default) uses vnodes,
+  it may need the same adjustment. If it uses tablets, ScyllaDB manages its
+  replication; see :ref:`Replication of the Audit Table <audit-table-replication>`.
 
 It's allowed to invoke ``nodetool decommission`` on multiple nodes in parallel. This will be faster than doing
 it sequentially if there is significant amount of data in tablet-based keyspaces, because

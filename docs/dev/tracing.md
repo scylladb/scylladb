@@ -69,7 +69,7 @@ $ nodetool settraceprobability 0.0001
 ```
 
 ### How traces are stored?
-Traces are stored in a `system_traces` keyspace for 24 hours, which consists of 2 tables with replication factor of 2:
+Traces are stored in the `system_traces` keyspace for 24 hours, in two of its tables (its replication is described in [system-keyspaces.md](system-keyspaces.md)):
 ```
 CREATE TABLE system_traces.events (
     session_id uuid,
