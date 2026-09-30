@@ -30,8 +30,10 @@ async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_c
                                         storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
+    # The injections this test blocks on are not scoped to the test table. Keep audit and
+    # system_traces on vnodes, or migrations and splits of their tablets enter them too.
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
+            'error_injections_at_startup': ['migration_streaming_wait', 'auto_rf_keyspaces_use_vnodes']
             }
     cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
     keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
@@ -245,8 +247,10 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
                                                        storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
+    # The injections this test blocks on are not scoped to the test table. Keep audit and
+    # system_traces on vnodes, or migrations and splits of their tablets enter them too.
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
+            'error_injections_at_startup': ['migration_streaming_wait', 'auto_rf_keyspaces_use_vnodes']
             }
     cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
     keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
@@ -341,8 +345,11 @@ async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: 
                                  storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
+    # The injections this test blocks on are not scoped to the test table. Keep audit and
+    # system_traces on vnodes, or migrations and splits of their tablets enter them too.
     cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(
-        {'tablets_mode_for_new_keyspaces': 'enabled', 'error_injections_at_startup': ['migration_streaming_wait']}))
+        {'tablets_mode_for_new_keyspaces': 'enabled',
+         'error_injections_at_startup': ['migration_streaming_wait', 'auto_rf_keyspaces_use_vnodes']}))
     keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
@@ -401,8 +408,11 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager, stor
     long as they contain no sstables older than the truncation time.
     """
     logger.info("Bootstrapping cluster")
+    # The injections this test blocks on are not scoped to the test table. Keep audit and
+    # system_traces on vnodes, or migrations and splits of their tablets enter them too.
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'tablet_load_stats_refresh_interval_in_seconds': 1,
+            'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes'],
           }
     cfg = storage_config.get_cluster_cfg(cfg)
     cmdline = [

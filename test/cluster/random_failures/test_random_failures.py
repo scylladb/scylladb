@@ -65,7 +65,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 async def four_nodes_cluster(manager: ScyllaClusterManager) -> None:
     LOGGER.info("Booting initial 4-node cluster.")
 
-    servers = await manager.servers_add(4, property_file=[
+    # The test kills nodes mid-join. A tablet migration in flight then blocks the new
+    # coordinator in global_tablet_token_metadata_barrier(), which needs every node up,
+    # and the join never proceeds. Keep the system keyspaces on vnodes.
+    config = {"error_injections_at_startup": ["auto_rf_keyspaces_use_vnodes"]}
+    servers = await manager.servers_add(4, config=config, property_file=[
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack3"},
