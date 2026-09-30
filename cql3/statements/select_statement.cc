@@ -492,12 +492,10 @@ select_statement::do_execute(query_processor& qp,
     std::optional<locator::tablet_routing_info> tablet_info = {};
 
     auto&& table = _schema->table();
-    if (_may_use_token_aware_routing && table.uses_tablets() && state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+    if (_may_use_token_aware_routing && state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         if (key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
             token = key_ranges[0].start()->value().as_decorated_key().token();
-
-            auto erm = table.get_effective_replication_map();
-            tablet_info = erm->check_locality(token, state.get_client_state().get_original_shard());
+            tablet_info = table.tablet_routing_info_for(token, state.get_client_state().get_original_shard());
         }
     }
 
