@@ -581,6 +581,7 @@ scylla_tests = set([
     'test/boost/gossiping_property_file_snitch_test',
     'test/boost/hash_test',
     'test/boost/hashers_test',
+    'test/boost/hint_storage_test',
     'test/boost/hint_test',
     'test/boost/idl_test',
     'test/boost/incremental_compaction_test',
