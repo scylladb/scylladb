@@ -20,6 +20,7 @@
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/file.hh>
 #include <seastar/util/closeable.hh>
 
@@ -1058,6 +1059,10 @@ future<> object_storage_base::destroy(const sstable& sst) {
     if (!sst.marked_for_deletion()) {
         co_return;
     }
+
+    // The last reference can be dropped in any scheduling group, and the S3
+    // requests would then use that group's connection pool.
+    co_await coroutine::switch_to(sst.manager().maintenance_sg());
 
     auto node_owner = sst.manager().get_local_host_id();
     auto sid = get_sstable_identifier(sst);
