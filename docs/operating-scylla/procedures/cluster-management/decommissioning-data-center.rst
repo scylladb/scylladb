@@ -130,16 +130,40 @@ Procedure
 
       cqlsh> ALTER KEYSPACE nba4 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']} AND tablets = { 'enabled': true };
 
-   .. note::
+   **The audit and system_traces keyspaces**
 
-      If table audit is enabled, the ``audit`` keyspace is automatically created with ``NetworkTopologyStrategy``.
-      You must also alter the ``audit`` keyspace to remove replicas from the decommissioned data-center. For example:
+   If table auditing is enabled, the ``audit`` keyspace is automatically created with ``NetworkTopologyStrategy``.
+   You must also remove the decommissioned data center from it. Otherwise, the decommission fails with an error
+   such as "zero replica after the removal". Use ``DESCRIBE KEYSPACE`` to check whether the ``audit`` and
+   ``system_traces`` keyspaces use tablets or vnodes.
 
-      .. code-block:: shell
+   * **Tablets** (``tablets = {'enabled': true}``): ScyllaDB manages the replication (see
+     :ref:`Replication of the Audit Table <audit-table-replication>`). Remove the data center from each keyspace
+     on tablets after all other keyspaces. While another tablets keyspace still replicates to the data center,
+     ScyllaDB adds it back. Keep the other data centers as ``DESCRIBE KEYSPACE`` shows them.
 
-         cqlsh> ALTER KEYSPACE audit WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
+     * With a rack list, set the data center to ``[]``.
+     * With a numeric replication factor, wait until the data center shows ``1``, then set it to ``0``. If no
+       other tablets keyspace is left anywhere in the cluster, ScyllaDB has nothing to follow and leaves the number as
+       it is: lower it yourself, one step at a time.
 
-      Failure to do so will result in decommission errors such as "zero replica after the removal".
+     For example, with rack lists:
+
+     .. code-block:: shell
+
+        cqlsh> ALTER KEYSPACE audit WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']};
+        cqlsh> ALTER KEYSPACE system_traces WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7']};
+
+     If ScyllaDB rejects the statement with ``Another RF change for this keyspace ... ongoing``, an automatic
+     change is in progress. Retry when it has finished.
+
+   * **Vnodes** (``tablets = {'enabled': false}``): set the data center to ``0`` in the ``audit`` keyspace, and in
+     ``system_traces`` where it uses ``NetworkTopologyStrategy`` (as after adding a data center; by default it uses
+     ``SimpleStrategy``, which names no data center). For example:
+
+     .. code-block:: shell
+
+        cqlsh> ALTER KEYSPACE audit WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
 
    .. warning::
 
