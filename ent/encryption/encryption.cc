@@ -1015,6 +1015,13 @@ public:
             return b ? remove_file(cfg_file) : make_ready_future();
         });
     }
+    // FIXME: The options file doesn't follow a renamed segment.
+    future<> before_rename(const sstring&, const sstring&) override {
+        return make_ready_future();
+    }
+    future<> after_rename(const sstring&, const sstring&) override {
+        return make_ready_future();
+    }
 };
 
 future<seastar::shared_ptr<encryption_context>> register_extensions(const db::config&, std::unique_ptr<encryption_config> cfg_in, db::extensions& exts, const ::service_set& services) {
