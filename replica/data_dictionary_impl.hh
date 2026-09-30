@@ -54,7 +54,7 @@ public:
         const auto& keyspaces = unwrap(db).get_keyspaces();
         ret.reserve(keyspaces.size());
         for (auto& ks : keyspaces) {
-            ret.push_back(wrap(ks.second));
+            ret.push_back(wrap(*ks.second));
         }
         return ret;
     }

@@ -583,7 +583,7 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
             auto& ks = db.local().get_keyspaces();
             auto i = ks.find(ksname);
             if (i != ks.end()) {
-                distributed_loader::populate_keyspace(db, sys_ks, i->second, sstring(ksname)).get();
+                distributed_loader::populate_keyspace(db, sys_ks, *i->second, sstring(ksname)).get();
             }
         }
     });
@@ -626,7 +626,7 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
                     continue;
                 }
 
-                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode));
+                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, *ks.second, ks_name, storage_mode));
             }
 
             when_all_succeed(futures.begin(), futures.end()).discard_result().get();
