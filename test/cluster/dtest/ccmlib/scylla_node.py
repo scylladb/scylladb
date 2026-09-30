@@ -905,6 +905,23 @@ class ScyllaNode:
     def get_endpoints(self, keyspace: str, table: str, key: str) -> list:
         return self.cluster.manager.api.natural_endpoints(node_ip=self.address(), keyspace=keyspace, table=table, key=key)
 
+    def is_scylla(self) -> bool:
+        return True
+
+    def scylla_exe(self) -> str:
+        """Return the path of the scylla binary this node runs."""
+
+        return str(self.cluster.manager.server_get_exe(server_id=self.server_id))
+
+    def get_sstablespath(self, keyspace: str, tables: list[str] | None = None, **kwargs) -> list[str]:
+        """Return the -Data.db paths of the given tables, as ccm's Node.get_sstablespath() does."""
+
+        del kwargs
+        files = []
+        for table in tables or [""]:
+            files += self.get_sstables(keyspace, table)
+        return files
+
     def get_sstables(self, keyspace, column_family, ignore_unsealed=True, cleanup_unsealed=False):
         keyspace_dir = os.path.join(self.get_path(), 'data', keyspace)
         cf_glob = '*'

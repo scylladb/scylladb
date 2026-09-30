@@ -1,0 +1,2 @@
+cassandra:
+  image: cassandra:3.11.19
