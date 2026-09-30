@@ -354,8 +354,9 @@ static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, t
 mutation_reader
 table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            const dht::partition_range_vector& ranges,
-                           gc_clock::time_point compaction_time) const {
-    auto& slice = s->full_slice();
+                           gc_clock::time_point compaction_time,
+                           const query::partition_slice* slice_opt) const {
+    auto& slice = slice_opt ? *slice_opt : s->full_slice();
 
     auto source = mutation_source([this, &ranges] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
