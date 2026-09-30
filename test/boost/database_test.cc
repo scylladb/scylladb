@@ -2436,18 +2436,28 @@ SEASTAR_TEST_CASE(test_table_links_to_its_keyspace) {
 }
 
 // A dropped table lives on until its pending operations drain, while its keyspace may be
-// destroyed as soon as the drop commits: the link must go.
+// destroyed as soon as the drop commits: the link must go, and no routing info be published.
 SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
+    cql_test_config cfg;
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.initial_tablets = 2;
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table ks.cf (k int primary key, v int);").get();
         auto table = e.local_db().find_column_family("ks", "cf").shared_from_this();
-        BOOST_REQUIRE(table->as_data_dictionary().keyspace());
+        BOOST_REQUIRE(table->uses_tablets());
+        BOOST_REQUIRE(table->as_data_dictionary().keyspace()->uses_tablets());
+
+        // Landed on a shard with no replica, so routing info is due if it may be published at all.
+        const auto token = dht::token::from_int64(0);
+        const auto foreign_shard = smp::count;
+        BOOST_REQUIRE(table->tablet_routing_info_for(token, foreign_shard));
 
         e.execute_cql("drop table ks.cf;").get();
 
         BOOST_REQUIRE(!table->get_keyspace());
         BOOST_REQUIRE(!table->as_data_dictionary().keyspace());
-    });
+        BOOST_REQUIRE(!table->tablet_routing_info_for(token, foreign_shard));
+    }, cfg);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

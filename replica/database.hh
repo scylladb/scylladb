@@ -1045,6 +1045,10 @@ public:
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
+    // Routing info to attach to the response of a single-partition request for `token`
+    // that landed on `original_shard`. Empty if the client routed correctly, and always
+    // empty while the keyspace's migration to tablets is not finalized.
+    std::optional<locator::tablet_routing_info> tablet_routing_info_for(dht::token token, unsigned original_shard) const;
 private:
     void update_tombstone_gc_rf_one();
 
