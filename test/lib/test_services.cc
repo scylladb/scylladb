@@ -63,6 +63,9 @@ public:
     unsigned min_compaction_threshold() const noexcept override {
         return schema()->min_compaction_threshold();
     }
+    std::optional<std::chrono::hours> scrub_period() const noexcept override {
+        return table().scrub_period();
+    }
     bool compaction_enforce_min_threshold() const noexcept override {
         return true;
     }
@@ -643,6 +646,18 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
         task->switch_state(compaction::compaction_task_executor::state::none);
     });
     co_await task->run_compaction();
+}
+
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
+future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {
+    return _cm.submit_automatic_scrub(t);
+}
+
+future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
+    return _cm.do_one_automatic_scrub_reevaluation();
 }
 
 }

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -55,6 +56,11 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// Defined below, with the other parsers and validators.
+// Declared here so that the automatic scrub period option may take their address.
+config_value parse_auto_scrub_period_hours(std::string_view value);
+std::optional<seastar::sstring> validate_auto_scrub_period_hours(std::string_view value);
+
 constexpr std::array registry_options = {
     option{
         .name = "auto_repair_enabled",
@@ -62,6 +68,16 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    option{
+        .name = "auto_scrub_period_hours",
+        .description = "If set to a positive value, every sstable which was written or validated more than this "
+                "many hours ago will be scheduled for automatic scrub. Set to 0 to disable automatic scrub",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .custom_parser = parse_auto_scrub_period_hours,
+        .custom_validator = validate_auto_scrub_period_hours,
     },
 };
 
@@ -149,6 +165,22 @@ std::optional<seastar::sstring> validate_boolean(std::string_view value) {
     return validate_with(parse_boolean, "'true' or 'false'", value);
 }
 
+// auto_scrub_period_hours is an integer option that only accepts values
+// in the unsigned 32 bit integer range.
+config_value parse_auto_scrub_period_hours(std::string_view value) {
+    constexpr int64_t max_auto_scrub_period_hours = std::numeric_limits<uint32_t>::max();
+
+    auto parsed = parse_integer(value);
+    if (parsed < 0 || parsed > max_auto_scrub_period_hours) {
+        throw marshal_exception("out of range");
+    }
+    return parsed;
+}
+
+std::optional<seastar::sstring> validate_auto_scrub_period_hours(std::string_view value) {
+    return validate_with(parse_auto_scrub_period_hours, "32-bit unsigned integer", value);
+}
+
 // Nothing above the registry bounds a text value (it is a map cell in a schema table), and it
 // is echoed by DESCRIBE, so cap it here.
 constexpr size_t max_text_value_length = 4096;
@@ -191,6 +223,16 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
         return std::get<T>(opt.default_value);
     }
     try {
+        if (opt.custom_parser) {
+            auto parsed = opt.custom_parser(*value);
+            auto* typed = std::get_if<T>(&parsed);
+            if (!typed) {
+                utils::on_internal_error(fmt::format(
+                        "cluster config '{}' has a custom parser returning a type other than the one it declares",
+                        opt.name));
+            }
+            return *typed;
+        }
         return parse(*value);
     } catch (const marshal_exception& e) {
         cluster_config_registry_logger.warn(
@@ -234,6 +276,12 @@ std::optional<version> current_version(const gms::feature_service& features) {
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
+    // An option that declares its own validation accepts something other than exactly what its
+    // registry type would, so its validator replaces the type's rather than adding to it.
+    if (opt.custom_validator) {
+        return opt.custom_validator(value);
+    }
+
     switch (opt.type()) {
     case value_type::text:
         return validate_text(value);
