@@ -63,6 +63,16 @@ struct partition {
     }
 };
 
+// A partition which a read left at the per-partition row limit before its
+// end, and then went past. `partition` is the index of the partition in
+// reconcilable_result::partitions(). `position` is the position right after
+// the last row which the read took from the partition. The read examined
+// nothing of the partition at or after it. See query::read_frontier.
+struct partition_skip {
+    uint32_t partition;
+    position_in_partition position;
+};
+
 // The partitions held by this object are ordered according to dht::decorated_key ordering and non-overlapping.
 // Each mutation must have different key.
 //
@@ -73,6 +83,11 @@ class reconcilable_result {
     query::result_memory_tracker _memory_tracker;
     utils::chunked_vector<partition> _partitions;
     uint32_t _row_count_high_bits;
+    // The frontier's stop, if _has_frontier. The wire carries only the stop,
+    // see wire_position().
+    std::optional<full_position> _stop;
+    bool _has_frontier = false;
+    std::vector<partition_skip> _skips;
 public:
     ~reconcilable_result();
     reconcilable_result();
@@ -82,6 +97,8 @@ public:
                         uint32_t row_count_high_bits, query::result_memory_tracker memory_tracker = { });
     reconcilable_result(uint64_t row_count, utils::chunked_vector<partition> partitions, query::short_read short_read,
                         query::result_memory_tracker memory_tracker = { });
+    reconcilable_result(uint32_t row_count_low_bits, utils::chunked_vector<partition> partitions, query::short_read short_read,
+                        uint32_t row_count_high_bits, std::optional<full_position> wire_position, std::vector<partition_skip> skips);
 
     const utils::chunked_vector<partition>& partitions() const;
     utils::chunked_vector<partition>& partitions();
@@ -102,6 +119,41 @@ public:
         return _short_read;
     }
 
+    // How far the replica read, if the command asked for it. See
+    // query::read_frontier, and skips() for the partitions which the read
+    // left at the per-partition row limit.
+    std::optional<query::read_frontier> frontier() const {
+        if (!_has_frontier) {
+            return std::nullopt;
+        }
+        return query::read_frontier{_stop};
+    }
+
+    // Sets the frontier. `skips` are the positions where the read left
+    // partitions at the per-partition row limit, in ring order. Each skip's
+    // partition must be in the result.
+    void set_frontier(const schema& s, query::read_frontier frontier, std::span<const full_position> skips);
+
+    // The partitions which the read left at the per-partition row limit, in
+    // ring order, if the command asked for a frontier. They are before the
+    // frontier's stop, and a partition which the read stopped in has none.
+    const std::vector<partition_skip>& skips() const {
+        return _skips;
+    }
+
+    // The wire does not tell a frontier which reached the end of the ranges
+    // from no frontier. A receiver of a reply to a command which asked for a
+    // frontier calls this, so that the result holds the frontier which the
+    // replica sent. See query::result::reinterpret_position_as_frontier().
+    void reinterpret_position_as_frontier() {
+        _has_frontier = true;
+    }
+
+    // The frontier's stop, if the result holds a frontier. For the IDL.
+    const std::optional<full_position>& wire_position() const {
+        return _stop;
+    }
+
     size_t memory_usage() const {
         return _memory_tracker.used_memory();
     }
@@ -110,6 +162,10 @@ public:
 
     // other must be disjoint with this
     // does not merge or update memory trackers
+    //
+    // `other` must follow this in the order of the ranges. The merged result
+    // has a frontier if both have one and this one reached the end of its
+    // ranges. It then has the skips of both.
     void merge_disjoint(schema_ptr schema, const reconcilable_result& other);
 
     struct printer {

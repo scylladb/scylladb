@@ -401,6 +401,9 @@ public:
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
+        if (cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+            result.reinterpret_position_as_frontier();
+        }
 
         co_return rpc::tuple{make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
     }
@@ -415,6 +418,9 @@ public:
             co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
+        if (cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+            result.reinterpret_position_as_frontier();
         }
 
         co_return rpc::tuple{make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())};
@@ -5708,7 +5714,7 @@ future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, 
 storage_proxy::query_result_local_digest(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da, db::per_partition_rate_limit::info rate_limit_info) {
     return query_result_local(std::move(erm), std::move(query_schema), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout, rate_limit_info).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
         auto&& [result, hit_rate] = result_and_hit_rate;
-        return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate, result->last_position()));
+        return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate, result->wire_position()));
     });
 }
 
@@ -6815,8 +6821,13 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
         ret = co_await coroutine::try_future(query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout));
     } else {
         auto res = co_await coroutine::try_future(query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout));
-        ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(co_await to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
-                local_cmd->get_row_limit(), local_cmd->partition_limit, opts))), std::get<1>(res));
+        auto data = co_await to_data_query_result(*std::get<0>(res), std::move(s), local_cmd->slice, local_cmd->get_row_limit(), local_cmd->partition_limit, opts);
+        // The reply's frontier tells how far the replica read, not how far the
+        // conversion read.
+        if (auto frontier = std::get<0>(res)->frontier()) {
+            data.set_frontier(std::move(frontier));
+        }
+        ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(std::move(data))), std::get<1>(res));
     }
     co_return ret;
 }

@@ -60,6 +60,10 @@ concept data_page_context = page_context<Context> && requires (Context& ctx) {
 /// the page's start count against the tombstone limit. See
 /// query_result_builder.
 ///
+/// If the command asks for a frontier, the result holds a frontier
+/// instead of the last emitted position. It tells how far the read of the
+/// page got, over all of `ranges`. See query::read_frontier.
+///
 /// `saved_querier` is an input and an output. On input, it holds the querier
 /// which the previous page saved, if any. That querier reads the first range.
 /// On output, it holds the querier to save for the next page, if any. Pass
@@ -88,6 +92,9 @@ future<lw_shared_ptr<query::result>> read_data_page(Context ctx,
         querier_opt = std::move(*saved_querier);
     }
 
+    // The frontier of the ranges read so far. The range which the page stops
+    // in, if any, gives the stop. A data page has no skips.
+    auto frontier = query::read_frontier::end();
     while (!qs.done()) {
         auto&& range = *qs.current_partition_range++;
 
@@ -99,6 +106,9 @@ future<lw_shared_ptr<query::result>> read_data_page(Context ctx,
 
         future<> fut = co_await coroutine::as_future(q.consume_page(query_result_builder(*query_schema, qs.builder, query_result_builder::start_partition_of(range)), qs.cmd.slice, qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state));
 
+        if (!fut.failed()) {
+            frontier = q.frontier();
+        }
         if (fut.failed() || !qs.done()) {
             co_await q.close();
             querier_opt = {};
@@ -122,14 +132,21 @@ future<lw_shared_ptr<query::result>> read_data_page(Context ctx,
         *saved_querier = std::move(querier_opt);
     }
 
-    co_return make_lw_shared<query::result>(qs.builder.build(std::move(last_pos)));
+    auto result = make_lw_shared<query::result>(qs.builder.build(std::move(last_pos)));
+    if (cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+        result->set_frontier(std::move(frontier));
+    }
+    co_return result;
 }
 
 /// Reads one page of a mutation query of `range` from `source`.
 ///
 /// A mutation page holds the replica's data with its tombstones, which the
 /// coordinator merges with other replicas' pages to reconcile them. Unlike a
-/// data page, it carries no last position.
+/// data page, it carries no last position. If the command asks for a
+/// frontier, the page holds one, which tells how far the read of the page
+/// got, and skips, which tell where the read left partitions at the
+/// per-partition row limit.
 ///
 /// See read_data_page() for `saved_querier` and the requirements. The saved
 /// querier reads `range`. The caller creates `accounter`.
@@ -161,6 +178,9 @@ future<reconcilable_result> read_mutation_page(Context ctx,
   try {
     auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.slice, cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
+    if (cmd.slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+        r.set_frontier(*query_schema, q.frontier(), q.skips());
+    }
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();
