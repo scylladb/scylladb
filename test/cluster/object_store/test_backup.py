@@ -2315,7 +2315,7 @@ async def test_cluster_backup_with_auto_snapshot(manager: ScyllaClusterManager, 
     """
     Tests a snapshot can be auto generated in backup request
     """
-    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'rapunzel'), object_storage, False)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'pumpernikkel'), object_storage, False)
 
 async def run_double_cluster_backup(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
@@ -2435,14 +2435,15 @@ async def run_cluster_backup_clear_and_restore(object_storage, topology, manager
     """
     Helper
     """
-    manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
+    prefix = unique_name('kokomo')
+    manifest = await run_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
     # get current row count
     cql = manager.get_cql()
 
     # drop everything
     await cql.run_async(f"TRUNCATE {ks}.{cf}")
 
-    manifests = [f'ninjax/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json']
+    manifests = [f'{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json']
     tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snapshot_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
     status = await manager.api.wait_task(servers[0].ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {servers[0].ip_addr} failed: {status}"
