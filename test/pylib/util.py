@@ -30,7 +30,7 @@ from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore #
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
-from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
+from cassandra import DriverException, ConsistencyLevel, Unavailable  # type: ignore # pylint: disable=no-name-in-module
 
 from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, use_traditional_build
 from test.pylib.internal_types import ServerInfo
@@ -533,7 +533,7 @@ def get_xdist_worker_id() -> str | None:
     return os.environ.get("PYTEST_XDIST_WORKER")
 
 
-def execute_with_tracing(cql : Session, statement : str | Statement, log : bool = False, *cql_execute_extra_args, **cql_execute_extra_kwargs):
+def execute_with_tracing(cql : Session, statement : str | Statement, log : bool = False, *cql_execute_extra_args, trace_timeout : float = 120, **cql_execute_extra_kwargs):
     """ Execute statement via cql session and log the tracing output. """
 
     cql_execute_extra_kwargs['trace'] = True
@@ -544,7 +544,20 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
     # Reading them back with the driver default (CL=LOCAL_ONE) may hit a replica
     # that has not yet received all events, causing intermittent failures.
     # Using CL=ALL ensures events from all replicas are merged.
-    tracing = query_result.response_future.get_all_query_traces(max_wait_per=900, query_cl=ConsistencyLevel.ALL)
+    #
+    # While auto-RF raises the RF of system_traces, the schema counts a new replica
+    # before it can serve reads, and a CL=ALL read in that window fails with
+    # Unavailable. Retry it for up to trace_timeout seconds.
+    deadline = time.time() + trace_timeout
+    while True:
+        try:
+            tracing = query_result.response_future.get_all_query_traces(max_wait_per=900, query_cl=ConsistencyLevel.ALL)
+            break
+        except Unavailable as exc:
+            if time.time() >= deadline:
+                raise
+            logger.info(f"Retrying the trace read at CL=ALL after: {exc}")
+            time.sleep(1)
 
     ret = []
     page_traces = []
