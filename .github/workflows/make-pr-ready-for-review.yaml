@@ -6,25 +6,21 @@ on:
       - unlabeled
 
 env:
-  DEFAULT_BRANCH: 'master'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   mark-ready:
-    if: github.event.label.name == 'conflicts'
+    if: >-
+      github.event.label.name == 'conflicts' &&
+      github.event.pull_request.draft &&
+      github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
+    permissions: {}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.DEFAULT_BRANCH }}
-          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
-          fetch-depth: 1
       - name: Mark pull request as ready for review
-        run:  gh pr ready "${{ github.event.pull_request.number }}"
+        # Backport token, not GITHUB_TOKEN, so ready_for_review still triggers workflows.
+        run: gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
         env:
-          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
