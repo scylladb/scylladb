@@ -6,6 +6,7 @@
 
 import logging
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import uuid
 from enum import Enum
-from functools import cached_property
+from functools import cached_property, lru_cache
 from pathlib import Path
 
 import boto3
@@ -22,6 +23,8 @@ from cassandra import ConsistencyLevel
 from docker.errors import DockerException
 from kmip.services import auth
 from kmip.services.server.server import KmipServer
+
+from test.pylib.skip_types import skip_env
 
 from dtest_class import Tester, create_cf, wait_for
 from tools.cluster_topology import generate_cluster_topology
@@ -65,6 +68,25 @@ supported_cipher_algorithms = {
 }
 
 
+@lru_cache
+def scylla_has_kmip(scylla_exe: str) -> bool:
+    """Whether this Scylla was built with KMIP support.
+
+    ent/encryption/kmip_host.cc compiles the "KMIP support not enabled" message
+    only when HAVE_KMIP is off, so finding it in the binary means the feature is
+    missing and a node configured with kmip_hosts refuses to start.
+    """
+
+    marker = b"KMIP support not enabled"
+    tail = b""
+    with open(scylla_exe, "rb") as binary:
+        while chunk := binary.read(8 << 20):
+            if marker in tail + chunk:
+                return False
+            tail = chunk[-len(marker):]
+    return True
+
+
 class BaseKeyProviderFactory:
     def __init__(self, key_provider, tester):
         self.key_provider = key_provider
@@ -104,15 +126,29 @@ class DefaultKeyProviderFactory(BaseKeyProviderFactory):
 
 class LocalFileSystemKeyProviderFactory(BaseKeyProviderFactory):
     def __init__(self, tester):
-        self.secret_file = os.path.join(tester.test_path, "test/node1/conf/data_encryption_keys")
         BaseKeyProviderFactory.__init__(self, KeyProviderEnum.local, tester)
 
+    @property
+    def _conf_dir(self):
+        """node1's configuration directory.
+
+        ccm put every node under <test_path>/test/nodeN; in-tree each node has
+        its own work dir, so ask node1 where its conf lives.  A property, not a
+        field, because the key provider is built before the cluster.
+        """
+
+        return self.tester.cluster.nodelist()[0].get_conf_dir()
+
+    @property
+    def secret_file(self):
+        return os.path.join(self._conf_dir, "data_encryption_keys")
+
     def additional_cf_options(self, ks=None):
-        return super().additional_cf_options() | {"secret_key_file": os.path.join(self.tester.test_path, "test/node1/conf/secret_key_file_" + ks) if ks else self.secret_file}
+        return super().additional_cf_options() | {"secret_key_file": os.path.join(self._conf_dir, "secret_key_file_" + ks) if ks else self.secret_file}
 
     def verify_secret_key(self, cipher_algorithm=None, secret_key_strength=None):
         logger.debug("Verify that local key is generated automatically")
-        keyfile = os.path.join(self.tester.test_path, "test/node1/conf/data_encryption_keys")
+        keyfile = self.secret_file
         assert os.path.exists(keyfile), "Default local key is not generated"
 
         if cipher_algorithm is None:
@@ -219,7 +255,7 @@ class KmipKeyProviderFactory(BaseKeyProviderFactory):
         s._logger.info("Stopping connection service.")
 
     def __enter__(self):
-        self.tempdir = tempfile.TemporaryDirectory(dir="tmp/")
+        self.tempdir = tempfile.TemporaryDirectory(prefix="dtest-kmip-")
 
         base_dir = self.tempdir.name
         generate_ssl_stores(base_dir)
@@ -406,7 +442,23 @@ class KMSRealKeyProviderFactory(BaseKeyProviderFactory):
 class EncryptionAtRestBase(Tester):
     multiple_num = 3
     default_node_num = 2
-    system_key_dir = "./resources/system_keys/"
+
+    # The key ccm kept in the dtest checkout's ./resources/system_keys.
+    SYSTEM_KEY_RESOURCE = Path(__file__).parent / "test_data" / "system_keys" / "system_key"
+
+    @pytest.fixture(scope="function", autouse=True)
+    def system_keys(self, tmp_path):
+        """Give the nodes a system key directory of their own.
+
+        It has to be absolute -- each node resolves a relative
+        system_key_directory against its own work dir -- and writable, because
+        prepare_system_key() copies further keys into it.
+        """
+
+        directory = tmp_path / "system_keys"
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy(EncryptionAtRestBase.SYSTEM_KEY_RESOURCE, directory / "system_key")
+        self.system_key_dir = str(directory)
 
     def get_session(self, node_idx=0, user=None, password=None):
         node = self.cluster.nodelist()[node_idx]
@@ -425,8 +477,8 @@ class EncryptionAtRestBase(Tester):
         if kss is None:
             kss = ["ks"]
         n = n if n else self.default_node_num
-        self.cluster.set_configuration_options({"system_key_directory": EncryptionAtRestBase.system_key_dir})
-        logger.debug("set system_key_directory to %s", EncryptionAtRestBase.system_key_dir)
+        self.cluster.set_configuration_options({"system_key_directory": self.system_key_dir})
+        logger.debug("set system_key_directory to %s", self.system_key_dir)
         if not self.cluster.nodelist():
             self.cluster.populate(generate_cluster_topology(rack_num=n)).start(wait_for_binary_proto=True, wait_other_notice=True, jvm_args=["--logger-log-level", "kms=trace"])
         elif restart:
@@ -452,10 +504,10 @@ class EncryptionAtRestBase(Tester):
         self.drop_keyspace(kss=kss)
 
     def prepare_system_key(self, keyfile="system_key", cipher_algorithm="AES/CBC/PKCS5Padding", secret_key_strength=128):
-        dest = os.path.join(EncryptionAtRestBase.system_key_dir, keyfile)
+        dest = os.path.join(self.system_key_dir, keyfile)
         # use saved key in dtest repo, generate it in future
         # the key can also be created by `dsetool createsystemkey $cipher_algorithm $strength`
-        src = os.path.join(EncryptionAtRestBase.system_key_dir, "system_key")  # AES/ECB/PKCS5Padding:128
+        src = os.path.join(self.system_key_dir, "system_key")  # AES/ECB/PKCS5Padding:128
         if not os.path.exists(dest) or not os.path.samefile(src, dest):
             shutil.copy(src, dest)
 
@@ -523,6 +575,8 @@ class EncryptionAtRestBase(Tester):
         elif key_provider == KeyProviderEnum.replicated:
             ret = ReplicatedKeyProviderFactory(self)
         elif key_provider == KeyProviderEnum.kmip:
+            if not scylla_has_kmip(self.cluster.manager.cluster.scylla_exe):
+                skip_env("this Scylla was built without KMIP support (HAVE_KMIP)")
             ret = KmipKeyProviderFactory(self)
         elif key_provider == KeyProviderEnum.kms:
             ret = KMSKeyProviderFactory(self)
@@ -535,5 +589,25 @@ class EncryptionAtRestBase(Tester):
         return ret
 
 
+def aws_credentials_available() -> bool:
+    """Whether the environment holds the AWS credentials Scylla's KMS provider takes when
+    kms_hosts names none (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).
+
+    test.py's S3 mock exports a made-up pair into every test's environment when it finds
+    none (test/pylib/s3mock_server.py), so only an access key shaped like AWS's own counts."""
+    key = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    return bool(re.fullmatch(r"(AKIA|ASIA)[A-Z0-9]{16}", key) and os.environ.get("AWS_SECRET_ACCESS_KEY"))
+
+
 def all_providers():
-    return [pytest.param(p, marks=[unmark.next_gating] if p == KeyProviderEnum.kmip else []) for p in KeyProviderEnum]
+    return [
+        pytest.param(
+            p,
+            marks=pytest.mark.skipif(
+                condition=not aws_credentials_available(),
+                reason="needs AWS credentials for the real KMS key alias/kms_encryption_test; "
+                       "the other providers run against local fakes",
+            ) if p is KeyProviderEnum.kms_real else [unmark.next_gating] if p is KeyProviderEnum.kmip else [],
+        )
+        for p in KeyProviderEnum
+    ]
