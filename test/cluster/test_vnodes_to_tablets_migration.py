@@ -1726,6 +1726,79 @@ async def test_replace_during_migration_tablet_followers(manager: ScyllaClusterM
         await verify_data_integrity(cql, ks, table_name, num_keys, cl=ConsistencyLevel.LOCAL_ONE, server=new_server)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replace_during_migration_tablet_followers_unflushed(manager: ScyllaClusterManager):
+    """Verify that repair-based replace streams unflushed data from tablet-only followers.
+
+    Same setup as test_replace_during_migration_tablet_followers, except that
+    the followers are forced to split their reads into the repair master's
+    shard ranges, i.e. to read many small ranges per tablet, and that part of
+    the data is flushed on the followers while the rest is left in their
+    memtables.
+
+    Without the injection, followers choose the split reads only when their
+    estimated partition count, which comes from sstable summaries, exceeds the
+    number of the master's shard ranges, so this test would depend on how
+    partitions are estimated.
+    """
+    num_flushed_keys = 1000
+    num_unflushed_keys = 1000
+    replaced_cmdline = ['--smp', '2']
+    follower_cmdline = ['--smp', '3']
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': 16,
+        'enable_repair_based_node_ops': True,
+    }
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+
+    replaced_server = await manager.server_add(cmdline=replaced_cmdline, config=cfg, property_file=property_files[0])
+    follower_servers = [
+        await manager.server_add(cmdline=follower_cmdline, config=cfg, property_file=property_files[1]),
+        await manager.server_add(cmdline=follower_cmdline, config=cfg, property_file=property_files[2]),
+    ]
+    servers = [replaced_server] + follower_servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        table_name = "test"
+        await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        await manager.api.create_vnode_tablet_migration(replaced_server.ip_addr, ks)
+        for s in follower_servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{table_name} (pk, c) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        logger.info(f"Writing {num_flushed_keys} rows and flushing them on the followers")
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_flushed_keys)))
+        for s in follower_servers:
+            await manager.api.keyspace_flush(s.ip_addr, ks, table_name)
+        logger.info(f"Writing {num_unflushed_keys} more rows, left in memtables")
+        num_keys = num_flushed_keys + num_unflushed_keys
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_flushed_keys, num_keys)))
+
+        for s in follower_servers:
+            await manager.api.enable_injection(s.ip_addr, "repair_reader_force_multishard_split", one_shot=False)
+
+        await manager.server_stop(replaced_server.server_id, convict=True)
+        replace_cfg = ReplaceConfig(replaced_id=replaced_server.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=replaced_cmdline,
+                                              property_file=replaced_server.property_file(),
+                                              config=cfg)
+
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(follower_servers + [new_server])
+        logger.info("Reading all rows from the replacement node at CL=LOCAL_ONE")
+        await verify_data_integrity(cql, ks, table_name, num_keys, cl=ConsistencyLevel.LOCAL_ONE, server=new_server)
+
+
 async def test_replace_during_migration_rejects_shard_count_mismatch(manager: ScyllaClusterManager):
     """Verify that node replacement during vnodes-to-tablets migration fails if shard counts do not match."""
     cfg = {'num_tokens': 1}
