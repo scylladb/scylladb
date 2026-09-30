@@ -14,6 +14,7 @@ from cassandra import WriteFailure
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -419,4 +420,72 @@ async def test_removenode_sc_replica_under_writes(manager: ScyllaClusterManager,
                 stmt = cql.prepare(f"INSERT INTO {table} (pk, c) VALUES (?, ?)")
                 for pk in range(key_count, key_count + 100):
                     await cql.run_async(stmt, [pk, pk])
+            await reconnect_driver(manager)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-4753",
+                      reason="a replica that needs a raft snapshot never catches up: transfer_snapshot() is not "
+                             "implemented (SCYLLADB-2565); lands after the basic replace test of "
+                             "https://github.com/scylladb/scylladb/pull/31887")
+async def test_replace_sc_replica_after_log_truncation(manager: ScyllaClusterManager):
+    """
+    Replacing a dead replica must work after the raft log was truncated, when
+    the new replica can only catch up through a snapshot.
+    """
+    racks = ['rack1', 'rack1', 'rack2', 'rack2', 'rack3', 'rack3']
+    servers = await boot_sc_cluster(manager, racks, {'rack1', 'rack3'})
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    query = next(s for s in servers if s.rack == 'rack1')
+
+    async with new_test_keyspace(manager, KS_OPTS) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            tablets = await get_all_tablet_replicas(manager, query, ks, table_name)
+            original = {h for h, _ in tablets[0].replicas}
+            replica_of = {servers[host_ids.index(h)].rack: h for h in original}
+            assert replica_of.keys() == {'rack1', 'rack2', 'rack3'}, f"Expected one replica per rack, got {tablets[0].replicas}"
+            await wait_for_leader(manager, servers[host_ids.index(replica_of['rack2'])], group_id,
+                                  expected_host_id=replica_of['rack2'])
+
+            logger.info("Truncating the raft logs: snapshot after every entry, keep 5")
+            thresholds = {'snapshot_threshold': '0', 'snapshot_threshold_log_size': '0',
+                          'snapshot_trailing': '5', 'snapshot_trailing_size': '0'}
+            await gather_safely(*[manager.api.enable_injection(s.ip_addr, "raft_server_set_snapshot_thresholds",
+                                                               one_shot=False, parameters=thresholds) for s in servers])
+            key_count = 50
+            for pk in range(key_count):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk})")
+            await gather_safely(*[manager.api.disable_injection(s.ip_addr, "raft_server_set_snapshot_thresholds")
+                                  for s in servers])
+
+            victim = servers[host_ids.index(replica_of['rack3'])]
+            logger.info(f"Killing the rack3 replica {replica_of['rack3']} ({victim}) and replacing it")
+            await manager.server_stop(victim.server_id, convict=True)
+            replacement = await manager.server_add(
+                replace_cfg=ReplaceConfig(replaced_id=victim.server_id, reuse_ip_addr=False, use_host_id=True),
+                config=SC_CONFIG.get_cluster_cfg({'error_injections_at_startup': ['avoid_being_raft_leader']}),
+                cmdline=CMDLINE, property_file={'dc': 'dc1', 'rack': 'rack3'},
+                # While the bug is open the replace never completes; the default timeout is 17 minutes.
+                timeout=300)
+            live_servers = [s for s in servers if s.server_id != victim.server_id] + [replacement]
+            live_host_ids = [h for h in host_ids if h != replica_of['rack3']] + [await manager.get_host_id(replacement.server_id)]
+
+            async def rebuilt_replica():
+                tablets = await get_all_tablet_replicas(manager, query, ks, table_name)
+                replicas = {h for h, _ in tablets[0].replicas}
+                if replica_of['rack3'] in replicas or len(replicas) != 3:
+                    return None
+                (new,) = replicas - original
+                return new
+            new_host_id = await wait_for(rebuilt_replica, time.time() + 120, label="the rack3 replica rebuilt")
+            new_replica = live_servers[live_host_ids.index(new_host_id)]
+            assert new_replica.rack == 'rack3', f"Replica rebuilt outside rack3: {new_replica}"
+
+            cql, hosts = await manager.get_ready_cql(live_servers)
+            await read_barrier(manager.api, new_replica.ip_addr, group_id, timeout=60)
+            await read_back(cql, hosts[live_servers.index(query)], table, key_count, ConsistencyLevel.QUORUM)
+            await read_back(cql, hosts[live_servers.index(new_replica)], table, key_count, ConsistencyLevel.ONE)
             await reconnect_driver(manager)
