@@ -988,8 +988,10 @@ public:
     // Requires ranges to be sorted and disjoint.
     // When compaction_time is engaged, the reader's output will be compacted, with the provided query time.
     // This compaction doesn't do tombstone garbage collection.
+    // Reads the full slice, unless `slice` is given, which must outlive the reader.
     mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit,
-            const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time) const;
+            const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time,
+            const query::partition_slice* slice = nullptr) const;
 
     // Single range overload.
     mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
