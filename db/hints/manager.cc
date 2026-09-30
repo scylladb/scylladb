@@ -68,13 +68,15 @@ private:
 private:
     utils::directories& _dirs;
     sstring _hints_directory;
+    const db::extensions* _extensions;
     state _state = state::uninitialized;
     seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
 
 public:
-    impl(utils::directories& dirs, sstring hints_directory)
+    impl(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions)
         : _dirs(dirs)
         , _hints_directory(std::move(hints_directory))
+        , _extensions(extensions)
     { }
 
 public:
@@ -106,7 +108,7 @@ public:
         const auto units = co_await seastar::get_units(_lock, 1);
 
         manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-        co_await rebalance_hints(fs::path{_hints_directory});
+        co_await rebalance_hints(fs::path{_hints_directory}, _extensions);
 
         _state = state::rebalanced;
     }
@@ -116,9 +118,9 @@ directory_initializer::directory_initializer(std::shared_ptr<directory_initializ
         : _impl(std::move(impl))
 { }
 
-future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
-    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
-        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
+future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions) {
+    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory), extensions] () mutable {
+        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory), extensions);
         return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
     });
 }
