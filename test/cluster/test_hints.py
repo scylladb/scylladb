@@ -30,7 +30,8 @@ from test.cluster.util import (check_token_ring_and_group0_consistency,
                                commitlog_sector_has_data, corrupt_commitlog_segment,
                                create_new_test_keyspace, get_commitlog_segment_id,
                                get_topology_coordinator, keyspace_has_tablets,
-                               new_test_keyspace, new_test_table)
+                               new_test_keyspace, new_test_table, parse_replication_options,
+                               quiesce_and_disable_tablet_balancing, wait_for_auto_rf_settled)
 
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,22 @@ async def assert_rows_present(cql, table: str, pk: str, keys, present: bool) -> 
     else:
         assert len(keys.intersection(results)) == 0, f"{keys} vs. {results}"
 
+
+async def wait_for_rack_given_up(manager, cql, rack, timeout: float = 120):
+    """
+    Wait until audit and system_traces no longer replicate to `rack`. Auto-RF gives a
+    rack up on its own once no other tablets keyspace uses it; where the system
+    keyspaces are on vnodes there is no rack list to check.
+    """
+    await wait_for_auto_rf_settled(manager, time.time() + timeout)
+    for ks in ('audit', 'system_traces'):
+        rows = await cql.run_async(f"SELECT replication, replication_v2 FROM system_schema.keyspaces WHERE keyspace_name='{ks}'")
+        if not rows:
+            continue
+        # replication_v2 is only set for a rack-list RF.
+        replicas = parse_replication_options(rows[0].replication_v2 or rows[0].replication).get("dc")
+        if isinstance(replicas, list):
+            assert rack not in replicas, f"{ks} still replicates to {rack}: {replicas}"
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterManager):
@@ -800,6 +817,11 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
     await nodetool.excludenode(cql, host_id2)
     await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
+
+    await wait_for_rack_given_up(manager, cql, s2.rack)
+    # system_traces, below its goal of two racks again, is extended to another rack
+    # right away. Let that rebuild finish, or the node operation below queues behind it.
+    await manager.api.quiesce_topology(s1.ip_addr)
 
     await manager.remove_node(s1.server_id, s2.server_id)
     await manager.server_stop_gracefully(s1.server_id)
@@ -1474,6 +1496,10 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
 
     cql = await manager.get_cql_exclusive(s2)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    # Auto-RF's commits for the new rack can fail the DDL below, issued on a group0
+    # follower (s2 may be one); let them finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s1.server_id)
@@ -1552,6 +1578,11 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = "
                         "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1, 'dc3': 1}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    # Let auto-RF extend the system keyspaces while all nodes are up, then keep the
+    # balancer still: a migration of a ks.t tablet during the hint replay makes the
+    # sender write the hint to every replica, dc2's included.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     await gather_safely(*[
         manager.server_stop_gracefully(s2.server_id),
