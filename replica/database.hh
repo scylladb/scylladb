@@ -1836,6 +1836,9 @@ private:
     noncopyable_function<future<>()> _unsubscribe_qos_configuration_change;
 
     utils::cross_shard_barrier _stop_barrier;
+    // Closed by drain() before the flush: a write reaching a table on object
+    // storage after its flush would need the sstables registry at close.
+    gate _object_storage_writes_gate;
 
     db::rate_limiter _rate_limiter;
 
@@ -1893,6 +1896,9 @@ private:
 
     future<db::large_data_violation_type> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
+    future<> do_apply_in_memory(column_family& cf, const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
+                                db::timeout_clock::time_point timeout,
+                                shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* large_data_violation_out);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
     future<mutation> read_and_transform_counter_mutation_to_shards(mutation m, column_family& cf, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);

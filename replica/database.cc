@@ -2241,7 +2241,17 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
                                      db::timeout_clock::time_point timeout,
                                      shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* violations_out) {
     auto& cf = find_column_family(m.column_family_id());
+    if (!cf.get_storage_options().is_local_type()) {
+        return try_with_gate(_object_storage_writes_gate, [&, h = std::move(h)] () mutable {
+            return do_apply_in_memory(cf, m, std::move(m_schema), std::move(h), timeout, std::move(guardrails), violations_out);
+        });
+    }
+    return do_apply_in_memory(cf, m, std::move(m_schema), std::move(h), timeout, std::move(guardrails), violations_out);
+}
 
+future<> database::do_apply_in_memory(column_family& cf, const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
+                                        db::timeout_clock::time_point timeout,
+                                        shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* violations_out) {
     data_listeners().on_write(m_schema, m);
 
     if (m.representation().size() > 128*1024) {
@@ -2263,6 +2273,11 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    if (!cf.get_storage_options().is_local_type()) {
+        return try_with_gate(_object_storage_writes_gate, [&, h = std::move(h)] () mutable {
+            return cf.apply(m, std::move(h), timeout);
+        });
+    }
     return cf.apply(m, std::move(h), timeout);
 }
 
@@ -3556,6 +3571,7 @@ future<> database::drain() {
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
     co_await _stop_barrier.arrive_and_wait();
+    co_await _object_storage_writes_gate.close();
     co_await flush_non_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await flush_system_column_families();
