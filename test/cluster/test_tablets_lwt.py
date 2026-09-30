@@ -13,7 +13,8 @@ from cassandra import Unauthorized
 
 from test import DEBUG_MODES
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
-from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver, FeatureConfig
+from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver, \
+    FeatureConfig, wait_for_auto_rf_settled, quiesce_and_disable_tablet_balancing
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
@@ -408,7 +409,8 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterMa
         logs = []
         for s in servers:
             logs.append(await manager.server_open_log(s.server_id))
-        assert sum([len(await log.grep('Initiating repair phase of tablet rebuild')) for log in logs]) == 1
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        assert sum([len(await log.grep(f'Initiating repair phase of tablet rebuild.*{table_id}')) for log in logs]) == 1
 
         # Step 5. Do the SERIAL (paxos) read of c from {n3, n4}.
         await set_injection([servers[1]], 'paxos_error_before_save_promise')
@@ -692,6 +694,11 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Scyll
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
+        # The SERIAL statements below are fenced by the topology version, so nothing may
+        # bump it once we start: let auto-RF and the balancer finish, then freeze.
+        await wait_for_auto_rf_settled(manager, time.time() + 120)
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
+
         # accept on the first node returns an error
         logger.info("Inject paxos_error_before_save_proposal")
         await inject_error_one_shot_on(manager, "paxos_error_before_save_proposal", [servers[0]])
@@ -752,6 +759,13 @@ async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager, storage_c
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # The SERIAL read below is fenced by the topology version: a replica answering
+        # behind a newer fence counts as a failed replica, and with the one failed on
+        # purpose the read would cross the failure threshold. Nothing may bump the
+        # version once we start: let auto-RF and the balancer finish, then freeze.
+        await wait_for_auto_rf_settled(manager, time.time() + 120)
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
         # accept on the first node returns an error
         logger.info("Inject paxos_error_before_save_proposal")
@@ -915,6 +929,12 @@ async def stop_during_held_paxos_write(manager: ScyllaClusterManager, storage_co
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+
+        # A topology change while the write is held would wait for it in its barrier, and
+        # the stop would wait for that barrier before reaching the drain injection: let
+        # auto-RF and the balancer finish, then freeze.
+        await wait_for_auto_rf_settled(manager, time.time() + 120)
+        await quiesce_and_disable_tablet_balancing(manager, s0.ip_addr)
 
         await manager.api.enable_injection(s0.ip_addr, injection, one_shot=False)
         await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 2) IF NOT EXISTS",
