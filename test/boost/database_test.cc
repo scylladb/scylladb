@@ -2490,4 +2490,34 @@ SEASTAR_THREAD_TEST_CASE(test_full_position_cmp_ring_order) {
     BOOST_REQUIRE(is_sorted_by_full_position);
 }
 
+// The link from a table to its keyspace reads the keyspace's current state, not a copy.
+SEASTAR_TEST_CASE(test_table_links_to_its_keyspace) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k int primary key, v int);").get();
+        auto& db = e.local_db();
+        auto& table = db.find_column_family("ks", "cf");
+
+        BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
+        BOOST_REQUIRE(table.get_keyspace()->metadata()->durable_writes());
+
+        e.execute_cql("alter keyspace ks with durable_writes = false;").get();
+        BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
+        BOOST_REQUIRE(!table.get_keyspace()->metadata()->durable_writes());
+    });
+}
+
+// A dropped table lives on until its pending operations drain, while its keyspace may be
+// destroyed as soon as the drop commits: the link must go.
+SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k int primary key, v int);").get();
+        auto table = e.local_db().find_column_family("ks", "cf").shared_from_this();
+        BOOST_REQUIRE(table->get_keyspace());
+
+        e.execute_cql("drop table ks.cf;").get();
+
+        BOOST_REQUIRE(!table->get_keyspace());
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
