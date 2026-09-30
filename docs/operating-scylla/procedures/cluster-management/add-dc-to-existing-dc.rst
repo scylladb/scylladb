@@ -162,6 +162,17 @@ Add New DC
    * System: ``system_distributed``, ``system_traces``, for example, replicate the data to three nodes in the new DC.
    * ``audit`` - if enabled - replicate the data to three nodes in the new DC.
 
+   .. note::
+         Check how ``system_traces`` and ``audit`` are stored with ``DESCRIBE KEYSPACE``. Where one of them uses
+         tablets (``tablets = {'enabled': true}``), its replication is managed automatically: do not ``ALTER`` it.
+         Once a tablets keyspace replicates to the new DC, ScyllaDB extends it to the DC and then raises its replication
+         there one step at a time, up to two (``system_traces``) or three (``audit``) replicas, as far as the tablets
+         keyspaces in the DC go: with rack lists among the racks they use, with a numeric replication factor where they
+         all use numeric ones. The ``ALTER`` statements below do not apply to it; use ``DESCRIBE KEYSPACE`` to follow
+         the progress. Where one of them uses vnodes (``tablets = {'enabled': false}``), as on a cluster where tablets
+         are not the default or one upgraded from a release that already had the keyspace, ``ALTER`` it as below.
+         See :ref:`Replication of the Audit Table <audit-table-replication>`.
+
    For example:
 
    Before
