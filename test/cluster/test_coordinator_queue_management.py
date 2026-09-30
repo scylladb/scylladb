@@ -11,7 +11,16 @@ import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+# The test kills nodes while topology requests are queued. If the cluster has
+# tablets, the tablet migrations of the auto-RF system keyspaces need a global
+# token metadata barrier which requires every node to be up (see the FIXME in
+# service::topology_coordinator::global_tablet_token_metadata_barrier()). The
+# coordinator then retries the barrier forever and never gets to process - and
+# cancel - the queued requests. Keep the system keyspaces on vnodes so that the
+# cluster has no tablets at all; this test is about the request queue, not about
+# tablets.
+CONFIG = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -22,8 +31,7 @@ async def test_coordinator_queue_management(manager: ScyllaClusterManager):
        Then it downs one node and creates a queue with two requests:
        bootstrap and decommission. Since none can proceed both should be canceled.
     """
-    await manager.server_add()
-    await manager.server_add()
+    await manager.servers_add(5, config=CONFIG)
     servers = await manager.running_servers()
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
     marks = [await log.mark() for log in logs]
@@ -37,7 +45,7 @@ async def test_coordinator_queue_management(manager: ScyllaClusterManager):
     [await manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers[:3]]
 
     s3_id = await manager.get_host_id(servers[3].server_id)
-    tasks = [asyncio.create_task(manager.server_add()),
+    tasks = [asyncio.create_task(manager.server_add(config=CONFIG)),
              asyncio.create_task(manager.remove_node(servers[0].server_id, servers[3].server_id))]
 
     # Ensure the removenode is queued before stopping servers[4].
@@ -64,7 +72,7 @@ async def test_coordinator_queue_management(manager: ScyllaClusterManager):
 
     [await manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers[:3]]
 
-    s = await manager.server_add(start=False)
+    s = await manager.server_add(start=False, config=CONFIG)
 
     tasks = [asyncio.create_task(manager.server_start(s.server_id, expected_error="request canceled because some required nodes are dead|received notification of being banned from the cluster from")),
              asyncio.create_task(manager.decommission_node(servers[1].server_id, expected_error="Decommission failed. See earlier errors"))]

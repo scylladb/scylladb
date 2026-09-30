@@ -1079,11 +1079,13 @@ def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
             return shard_id
     return -1
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_count_metric_per_shard(manager: ScyllaClusterManager):
     # Given two running servers
     shards_count = 4
     cmdline = ['--smp=4']
-    servers = await manager.servers_add(2, cmdline=cmdline)
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    servers = await manager.servers_add(2, cmdline=cmdline, config=config)
 
     # And given disabled load balancing
     await manager.disable_tablet_balancing()
@@ -1537,6 +1539,7 @@ def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[Ser
     assert total == initial_tablets * rf
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_basic(manager: ScyllaClusterManager):
     """
     Test decommissioning of all nodes in a rack
@@ -1551,7 +1554,7 @@ async def test_decommission_rack_basic(manager: ScyllaClusterManager):
     # We need to disable this option to be able to create a keyspace. This can be ditched
     # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
     # Then we can create `rf` nodes, create the keyspace, and add another node.
-    config = {"rf_rack_valid_keyspaces": False}
+    config = {"rf_rack_valid_keyspaces": False, 'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
 
     all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
@@ -1578,6 +1581,7 @@ async def test_decommission_rack_basic(manager: ScyllaClusterManager):
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, live_servers.values(), tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterManager):
     """
     Test decommissioning a rack, after a rack with new nodes is added
@@ -1590,7 +1594,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterMan
 
     # We can't add a new rack if we create a keyspace.
     # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
-    config = {"rf_rack_valid_keyspaces": False}
+    config = {"rf_rack_valid_keyspaces": False, 'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
 
     initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:

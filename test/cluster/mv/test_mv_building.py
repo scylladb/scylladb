@@ -242,7 +242,16 @@ async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_befor
     cmdline_before = ['--smp', str(smp_before), '--logger-log-level', 'view=debug']
     cmdline_after = ['--smp', str(smp_after), '--logger-log-level', 'view=debug']
 
-    server = await manager.server_add(cmdline=cmdline_before)
+    # The auto-RF system keyspaces (audit, system_traces) are on tablets, so every node
+    # has tablet-enabled tables and restarting one with fewer shards fails at startup:
+    #   Detected a tablet with invalid replica shard, reducing shard count with
+    #   tablet-enabled tables is not yet supported. Replace the node instead.
+    # The test's own keyspace already opts out of tablets; keep the system keyspaces on
+    # vnodes as well so that the smp_before > smp_after cases can restart. The injection
+    # is only read when those keyspaces are created, so it does not have to survive the
+    # error_injections_at_startup rewrites further down.
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    server = await manager.server_add(cmdline=cmdline_before, config=config)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
