@@ -939,7 +939,7 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
     sst->set_sstable_level(0);
     auto erm = table.get_effective_replication_map();
     sstables::sstable_open_config cfg {
@@ -1081,7 +1081,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         });
 
         auto downloaded_ssts = co_await container().map_reduce0(
-            [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
+            [tid, &sstables_on_shards, &snapshot_name](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
                 sstables_col sst_chunk;
                 for (auto& psst : sstables_on_shards[this_shard_id()]) {
                     for (auto&& sst : psst) {
@@ -1089,10 +1089,12 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     }
                 }
                 std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
+                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
                     auto& table = loader._db.local().find_column_family(tid.table);
                     auto stream_guard = table.stream_in_progress();
-                    auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
+                    auto min_info = table.get_storage_options().is_object_storage_type()
+                            ? co_await clone_backup_sstable(table, sst, snapshot_name, llog)
+                            : co_await download_sstable(loader._db.local(), table, sst, llog);
                     local_min_infos[min_info.shard].emplace_back(std::move(min_info));
                 });
                 co_return local_min_infos;
@@ -1110,12 +1112,15 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
             co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
                 sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+                // Use the sstable_id of the backup sstable, not of the clone. A retried
+                // restore looks for this sstable_id to skip the sstables which are
+                // already restored.
                 co_await sth.update_sstable_download_status(snap_name,
                                                             keyspace_name,
                                                             table_name,
                                                             datacenter,
                                                             rack,
-                                                            *attached_sst->sstable_identifier(),
+                                                            min_info.source_sid,
                                                             attached_sst->get_first_decorated_key().token(),
                                                             db::is_downloaded::yes);
             });
