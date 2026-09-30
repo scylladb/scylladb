@@ -2006,7 +2006,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
     }, cmdline=cmdline)]
     server = servers[0]
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, server.ip_addr)
 
     cql = manager.get_cql()
 
