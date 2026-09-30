@@ -639,6 +639,8 @@ def verify_ownership(resp, expected_ip, expected_ownership, delta):
     assert float(actual_ownership) == pytest.approx(expected_ownership, abs=delta)
 
 def test_get_ownership_tablets_disabled(cql, this_dc, rest_api):
+    # The system keyspaces' tablets do not count: ownership is token-ring ownership.
+    # A user tablets keyspace does make the call fail, see test_get_ownership_tablets_enabled.
     resp = rest_api.send("GET", f"storage_service/ownership")
     verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
 
