@@ -239,6 +239,23 @@ future<>
 sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         process_flags flags,
         noncopyable_function<data_dictionary::storage_options()>&& get_storage_options) {
+    auto generation = desc.generation;
+    try {
+        co_await do_process_descriptor(std::move(desc), flags, std::move(get_storage_options));
+    } catch (...) {
+        auto ex = std::current_exception();
+        if (!flags.skip_vanished_sstables || !components_are_missing(ex)) {
+            throw;
+        }
+        dirlog.warn("Leaving out SSTable {} of {}.{}, its components are gone: {}", generation,
+                _schema->ks_name(), _schema->cf_name(), ex);
+    }
+}
+
+future<>
+sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
+        process_flags flags,
+        noncopyable_function<data_dictionary::storage_options()>&& get_storage_options) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
