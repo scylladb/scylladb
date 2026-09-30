@@ -17,7 +17,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config, \
+    wait_for_auto_rf_settled, quiesce_and_disable_tablet_balancing
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -910,6 +911,8 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -983,6 +986,8 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -1057,6 +1062,8 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -1127,6 +1134,8 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -1252,7 +1261,10 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
         await cql.run_async(f"alter keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', {new_rf}}};")
 
     injection = "rebuild_repair_stage_fail"
-    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+    # The ALTERs below make racks eligible for auto-RF, whose rebuilds of the system
+    # keyspaces would fail on the injection too and be retried in the same way, so their
+    # retry could be the one the test waits for. Keep auto-RF out of it.
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection, "skip_auto_rf_change"]}
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--smp=2',
@@ -2239,7 +2251,9 @@ async def test_drop_keyspace_while_split(manager: ScyllaClusterManager):
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
-    await manager.disable_tablet_balancing()
+    # The split injections below are not scoped to the test table. Let the initial split
+    # of the system keyspaces' tablets finish first, so that only the test table splits.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     # create a table so that it has at least 2 tablets (and storage groups) per shard
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
