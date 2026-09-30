@@ -27,6 +27,7 @@
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
 #include "index/fulltext_index.hh"
+#include "index/pattern_index.hh"
 #include "locator/tablets.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/cql_protocol_extension.hh"
@@ -276,6 +277,9 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         }
         if (secondary_index::fulltext_index::has_index(*base_schema)) {
             additional_permissions.set<auth::permission::TEXT_SEARCH_INDEXING>();
+        }
+        if (secondary_index::pattern_index::has_index(*base_schema)) {
+            additional_permissions.set<auth::permission::PATTERN_SEARCH_INDEXING>();
         }
         co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT, auth::command_desc::type::OTHER, additional_permissions);
     } catch (const data_dictionary::no_such_column_family& e) {
