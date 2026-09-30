@@ -25,6 +25,7 @@
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/storage.hh"
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
@@ -1030,8 +1031,29 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
+    // A backup uses one of two layouts:
+    // - Flat layout, used by older backups. The component names contain the
+    //   generation, for example "me-3gqe_1lnj_4sbpc-big-Data.db".
+    // - Unified layout. A backup of a table on object storage copies nothing, so the
+    //   components stay where the table wrote them: "{prefix}/{sstable_id}/Data.db".
+    // Only a backup in the unified layout has the same endpoint, bucket and prefix as
+    // the restored table. For such a backup, name each entry "{sstable_id}/{toc_name}"
+    // and read it in the unified layout. The toc_name gives the generation, version
+    // and format, which are not in the object names.
+    const auto* dst_os = std::get_if<data_dictionary::storage_options::object_storage>(&_db.local().find_column_family(tid.table).get_storage_options().value);
+    const bool in_place = dst_os
+            && snapshot_info.endpoint == dst_os->endpoint
+            && snapshot_info.bucket == dst_os->bucket
+            && snapshot_info.prefix == sstables::object_storage_default_prefix;
+
     std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
     for (const auto& e : fully) {
+        if (in_place) {
+            // e.prefix is the directory of the manifest. In the unified layout, the
+            // objects are under the prefix of the table, not under e.prefix.
+            toc_names_by_prefix[snapshot_info.prefix].emplace_back(seastar::format("{}/{}", e.sstable_id, e.toc_name));
+            continue;
+        }
         // e.prefix is relative to the backup location's own prefix (snapshot_remote_locations.prefix).
         toc_names_by_prefix[join_path(snapshot_info.prefix, e.prefix)].emplace_back(e.toc_name);
     }
@@ -1052,7 +1074,8 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
                 std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
                     return &shard_aborts[this_shard_id()];
-                }).then_unpack([] (table_id, auto sstables) {
+                }, in_place ? data_dictionary::storage_options::object_storage_layout::unified
+                            : data_dictionary::storage_options::object_storage_layout::foreign).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
