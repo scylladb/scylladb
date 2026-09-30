@@ -22,7 +22,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
-from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table, parse_replication_options, \
+    quiesce_and_disable_tablet_balancing, wait_for_auto_rf_settled
 
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,22 @@ async def assert_rows_present(cql, table: str, pk: str, keys, present: bool) -> 
     else:
         assert len(keys.intersection(results)) == 0, f"{keys} vs. {results}"
 
+
+async def wait_for_rack_given_up(manager, cql, rack, timeout: float = 120):
+    """
+    Wait until audit and system_traces no longer replicate to `rack`. Auto-RF gives a
+    rack up on its own once no other tablets keyspace uses it; where the system
+    keyspaces are on vnodes there is no rack list to check.
+    """
+    await wait_for_auto_rf_settled(manager, time.time() + timeout)
+    for ks in ('audit', 'system_traces'):
+        rows = await cql.run_async(f"SELECT replication, replication_v2 FROM system_schema.keyspaces WHERE keyspace_name='{ks}'")
+        if not rows:
+            continue
+        # replication_v2 is only set for a keyspace on tablets.
+        replicas = parse_replication_options(rows[0].replication_v2 or rows[0].replication).get("dc")
+        if isinstance(replicas, list):
+            assert rack not in replicas, f"{ks} still replicates to {rack}: {replicas}"
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterManager):
@@ -444,6 +461,12 @@ async def test_draining_hints(manager: ScyllaClusterManager):
     await manager.server_start(s2.server_id)
 
     await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s2.rack, s3.rack]}}}")
+
+    await wait_for_rack_given_up(manager, cql, s1.rack)
+    # system_traces, below its goal of two racks again, is extended to another rack
+    # right away. Let that rebuild finish, or the node operation below queues behind it.
+    await manager.api.quiesce_topology(s1.ip_addr)
+
     async with asyncio.TaskGroup() as tg:
         _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
         _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
@@ -475,6 +498,11 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
     await nodetool.excludenode(cql, host_id2)
     await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
+
+    await wait_for_rack_given_up(manager, cql, s2.rack)
+    # system_traces, below its goal of two racks again, is extended to another rack
+    # right away. Let that rebuild finish, or the node operation below queues behind it.
+    await manager.api.quiesce_topology(s1.ip_addr)
 
     await manager.remove_node(s1.server_id, s2.server_id)
     await manager.server_stop_gracefully(s1.server_id)
@@ -1003,6 +1031,11 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
 
     cql = await manager.get_cql_exclusive(s2)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    # The keyspace makes rack2 eligible for auto-RF, and the coordinator's commits for
+    # extending audit and system_traces to it can make all the retries of a schema
+    # change issued on a group0 follower (s2 may be one) fail. Let them finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s1.server_id)
@@ -1081,6 +1114,13 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = "
                         "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1, 'dc3': 1}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    # The keyspace makes dc2 and dc3 eligible for auto-RF. Let it extend audit and
+    # system_traces while all nodes are up and then keep the balancer still: a
+    # migration of a ks.t tablet while s1 replays its hints, even one between
+    # shards of the same node, makes the hint sender write the hinted mutation to
+    # every replica, including the dc2 one which must not get the dc3-only keys.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     await gather_safely(*[
         manager.server_stop_gracefully(s2.server_id),
@@ -1198,6 +1238,13 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
 
     logger.info("Creating a table...")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    # audit and system_traces start on s1 alone, and the balancer then moves their
+    # tablets to s2 and splits them. A waited-on sync point keeps the token metadata
+    # version it started with, so such a migration would block in barrier_and_drain
+    # until the wait ends, and in subtest 2 the coordinator s1 could then not shut
+    # down. Keep the balancer still.
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
     stmt.consistency_level = ConsistencyLevel.ANY
