@@ -474,6 +474,9 @@ struct tablet_migration_streaming_info {
     // more work than just moving the tablet around. The stream_weight for all
     // other migrations are set to 1.
     int stream_weight = tablet_migration_stream_weight_default;
+    // On-disk size of the data streamed by this transition, or nullopt when it is not known.
+    // Filled in by the load balancer, which is the one holding tablet size statistics.
+    std::optional<uint64_t> size_in_bytes;
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
