@@ -1971,7 +1971,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 for (auto&& drain_fail : plan.drain_failures()) {
                     co_await coroutine::maybe_yield();
                     auto server_id = raft::server_id(drain_fail.node().uuid());
-                    _topo_sm.generate_cancel_request_update(out.frozen_mutations(), _feature_service, guard, server_id, drain_fail.reason());
+                    // The cancellation must go through the collector's counted add(): writing
+                    // straight into frozen_mutations() bypasses its change counter, and
+                    // generate_tablet_migration_state_updates() uses that counter to decide
+                    // whether anything has to be committed. A plan consisting of drain
+                    // failures alone was therefore dropped, and the leave request stayed
+                    // pending until some unrelated migration happened to flush the collector.
+                    utils::chunked_vector<canonical_mutation> cancel_muts;
+                    _topo_sm.generate_cancel_request_update(cancel_muts, _feature_service, guard, server_id, drain_fail.reason());
+                    if (!cancel_muts.empty()) {
+                        out.add(std::move(cancel_muts));
+                    }
                 }
             } else {
                 for (const tablet_migration_info& mig: plan.migrations()) {
