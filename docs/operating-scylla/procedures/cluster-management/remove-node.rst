@@ -37,6 +37,13 @@ Removing a Running Node
        If a keyspace uses tablets and contains a Materialized View or Secondary Index, or if the `rf_rack_valid_keyspaces` option is set,
        the invariant is enforced for the keyspace, and the node removal will be rejected if it would violate the invariant.
 
+       Where the ``audit`` and ``system_traces`` keyspaces use tablets (``DESCRIBE KEYSPACE`` shows
+       ``tablets = {'enabled': true}``), removing the last node of a rack also depends on them, as their replication
+       follows the other tablets keyspaces. Where those use rack lists,
+       drop the rack from your keyspaces first; see :ref:`Replication of the Audit Table <audit-table-replication>`,
+       including :ref:`its known limitation <audit-table-replication-limitation>` for data centers which mix numeric
+       replication factors and rack lists.
+
 #. Run the ``nodetool netstats`` command to monitor the progress of the token reallocation.
 #. Run the ``nodetool status`` command to verify that the node has been removed.
 
