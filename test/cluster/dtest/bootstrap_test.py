@@ -399,7 +399,7 @@ class TestBootstrap(Tester):
         node4.stop(wait_other_notice=False)
         node1.watch_log_for(f"({node4.address()}|{node4.hostid()}) is now (dead|DOWN)", from_mark=mark)
         data_dir = os.path.join(node4.get_path(), "data")
-        commitlog_dir = os.path.join(node4.get_path(), "commitlogs")
+        commitlog_dir = os.path.join(node4.get_path(), "commitlog")
         logger.debug(f"Deleting {data_dir}")
         node4.rmtree(data_dir)
         node4.rmtree(commitlog_dir)
@@ -590,7 +590,7 @@ class TestBootstrap(Tester):
         stress_thread = write_in_background(node1, duration_seconds=30)
 
         logger.info("Adding new node")
-        new_node = cluster.new_node(i=cluster_size + 1, debug=True, auto_bootstrap=True, is_seed=False, data_center="dc1", rack="r1")
+        new_node = cluster.new_node(i=cluster_size + 1, auto_bootstrap=True, is_seed=False, data_center="dc1", rack="r1")
         start_new_node_thread = executor.submit(lambda: new_node.start(wait_for_binary_proto=True, jvm_args=["--logger-log-level", "stream_session=debug"], no_wait=True))
         mark_log = new_node.mark_log()
 
@@ -679,7 +679,7 @@ class TestBootstrap(Tester):
         stress_thread = write_in_background(node1, duration_seconds=30)
 
         logger.info("Adding new node")
-        new_node = cluster.new_node(i=cluster_size + 1, debug=True, auto_bootstrap=True, is_seed=False, data_center="dc1", rack="r3")
+        new_node = cluster.new_node(i=cluster_size + 1, auto_bootstrap=True, is_seed=False, data_center="dc1", rack="r3")
         start_new_node_thread = executor.submit(lambda: new_node.start(wait_for_binary_proto=True, jvm_args=["--logger-log-level", "stream_session=debug"], no_wait=True))
         mark_log = new_node.mark_log()
 
@@ -758,7 +758,9 @@ class TestBootstrap(Tester):
 
         node4: ScyllaNode = cluster.new_node(4, data_center=1, rack=2)
         mark4 = node4.mark_log()
-        node4.start(wait_other_notice=False, wait_for_binary_proto=False)
+        # node4 is meant to be rejected: tell the harness so, or it treats the
+        # non-zero exit the test is asking for as a crash.
+        node4.start(wait_other_notice=False, wait_for_binary_proto=False, expected_error=expected_error)
         node4.watch_log_for(expected_error, from_mark=mark4)
         node4.stop(wait_other_notice=False)
 
