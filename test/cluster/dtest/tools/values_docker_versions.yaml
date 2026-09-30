@@ -1,2 +1,4 @@
+cassandra-stress:
+  image: scylladb/cassandra-stress:3.21.1
 cassandra:
   image: cassandra:3.11.19
