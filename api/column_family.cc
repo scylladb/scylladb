@@ -9,7 +9,6 @@
 #include <fmt/ranges.h>
 #include "column_family.hh"
 #include "api/api.hh"
-#include "api/validate.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/system.json.hh"
@@ -385,14 +384,14 @@ rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http:
             return make_ready_future<json::json_return_type>(results);
         }
 
-        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
-        api::req_param<unsigned> capacity(*req, "capacity", 256);
-        api::req_param<unsigned> list_size(*req, "list_size", 10);
+        auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
+        auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
-            !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.value, list_size.value, capacity.value);
+            !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration, list_size, capacity);
 
-        return seastar::do_with(db::toppartitions_query(db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
+        return seastar::do_with(db::toppartitions_query(db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity), [] (db::toppartitions_query& q) {
             return run_toppartitions_query(q);
         });
 }
@@ -1090,14 +1089,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         auto name = req->get_path_param("name");
         auto [ks, cf] = parse_fully_qualified_cf_name(name);
 
-        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
-        api::req_param<unsigned> capacity(*req, "capacity", 256);
-        api::req_param<unsigned> list_size(*req, "list_size", 10);
+        auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
+        auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
-            name, duration.value, list_size.value, capacity.value);
+            name, duration, list_size, capacity);
 
-        return seastar::do_with(db::toppartitions_query(db, {{ks, cf}}, {}, duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
+        return seastar::do_with(db::toppartitions_query(db, {{ks, cf}}, {}, duration, list_size, capacity), [] (db::toppartitions_query& q) {
             return run_toppartitions_query(q, true);
         });
     });
@@ -1111,8 +1110,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             fail(unimplemented::cause::API);
         }
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
+        auto flush = get_query_param<bool>(*req, "flush_memtables", true);
+        auto consider_only_existing_data = get_query_param<bool>(*req, "consider_only_existing_data");
         apilog.info("column_family/force_major_compaction: name={} flush={} consider_only_existing_data={}", req->get_path_param("name"), flush, consider_only_existing_data);
 
         auto keyspace = validate_keyspace(ctx, ks);
@@ -1204,8 +1203,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     ss::set_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
-        auto val_str = req->get_query_param("value");
-        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
+        bool value = get_query_param<bool>(*req, "value");
         return db.invoke_on_all([value] (replica::database& db) {
             db.set_enable_incremental_backups(value);
 

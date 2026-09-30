@@ -9,7 +9,6 @@
 #include "failure_detector.hh"
 #include "api/api.hh"
 #include "api/api-doc/failure_detector.json.hh"
-#include "api/validate.hh"
 #include "gms/application_state.hh"
 #include "gms/gossiper.hh"
 
@@ -69,7 +68,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::convict.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) -> future<json::json_return_type> {
-            auto host_id = validate_host_id(req->get_path_param("host"));
+            auto host_id = require_path_param<locator::host_id>(*req, "host");
             apilog.info("Convict {}", host_id);
             co_await g.convict(host_id);
             co_return seastar::json::json_void();
@@ -99,7 +98,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) {
-            auto state = g.get_endpoint_state_ptr(g.get_host_id(gms::inet_address(req->get_path_param("addr"))));
+            auto state = g.get_endpoint_state_ptr(g.get_host_id(require_path_param<gms::inet_address>(*req, "addr")));
             if (!state) {
                 return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->get_path_param("addr")));
             }

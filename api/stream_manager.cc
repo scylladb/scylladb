@@ -110,7 +110,7 @@ void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_
     });
 
     hs::get_total_incoming_bytes.set(r, [&sm](std::unique_ptr<request> req) {
-        gms::inet_address peer(req->get_path_param("peer"));
+        auto peer = require_path_param<gms::inet_address>(*req, "peer");
         return sm.map_reduce0([peer](streaming::stream_manager& sm) {
             return sm.get_progress_on_all_shards(peer).then([] (auto sbytes) {
                 return sbytes.bytes_received;
@@ -131,7 +131,7 @@ void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_
     });
 
     hs::get_total_outgoing_bytes.set(r, [&sm](std::unique_ptr<request> req) {
-        gms::inet_address peer(req->get_path_param("peer"));
+        auto peer = require_path_param<gms::inet_address>(*req, "peer");
         return sm.map_reduce0([peer] (streaming::stream_manager& sm) {
             return sm.get_progress_on_all_shards(peer).then([] (auto sbytes) {
                 return sbytes.bytes_sent;

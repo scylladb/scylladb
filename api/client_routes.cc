@@ -80,7 +80,7 @@ static std::vector<service::client_routes_service::client_route_entry> parse_set
 
         v.emplace_back(
             parse_string("connection_id", element),
-            utils::UUID{parse_string("host_id", element)},
+            parse_uuid_param("host_id", parse_string("host_id", element)),
             parse_string("address", element),
             port,
             tls_port,
@@ -115,7 +115,7 @@ static std::vector<service::client_routes_service::client_route_key> parse_delet
     for (const auto& element : root.GetArray()) {
         v.emplace_back(
             parse_string("connection_id", element),
-            utils::UUID{parse_string("host_id", element)}
+            parse_uuid_param("host_id", parse_string("host_id", element))
         );
     }
 

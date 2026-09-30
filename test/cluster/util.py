@@ -499,13 +499,20 @@ async def trigger_snapshot(manager, server: ServerInfo) -> None:
     host = cql.cluster.metadata.get_host(server.ip_addr)
     await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
 
-async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = None) -> None:
+async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = None,
+                           target_host_id: Optional[HostID] = None) -> None:
     """Make `server` step down as the leader of `group_id`, or of group0 if not given.
 
-    Fails if `server` is not the leader of that group.
+    Fails if `server` is not the leader of that group. If `target_host_id` is given,
+    leadership is handed to that node; it must be a voter of the group other than
+    `server`, otherwise the transfer cannot complete and the call fails after a timeout.
     """
-    params = {"group_id": group_id} if group_id is not None else None
-    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params)
+    params = {}
+    if group_id is not None:
+        params["group_id"] = group_id
+    if target_host_id is not None:
+        params["target_host_id"] = target_host_id
+    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params or None)
 
 
 
@@ -589,8 +596,9 @@ async def ensure_raft_group_leader_on(manager: ScyllaClusterManager, server: Ser
 
         logger.info(f"{group_name} leader is {coord}, want {desired_host_id}")
         coord_host = servers_by_host[coord]
-        logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr}")
-        await trigger_stepdown(manager, coord_host, group_id)
+        logger.info(
+            f"{group_name}, triggering stepdown of {coord}/{coord_host.ip_addr} in favor of {desired_host_id}")
+        await trigger_stepdown(manager, coord_host, group_id=group_id, target_host_id=desired_host_id)
 
 async def get_non_coordinator_host(manager: ScyllaClusterManager) -> ServerInfo | None:
     """Get first non-coordinator ServerInfo."""

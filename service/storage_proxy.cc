@@ -2364,8 +2364,6 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
     }
 }
 
-template<class T> struct dependent_false : std::false_type {};
-
 void paxos_response_handler::append_peer_error(sstring& target, locator::host_id peer, std::exception_ptr error) {
     if (!target.ends_with("...")) {
         auto new_target = format("{}host_id {} -> {};", target, peer, error);
@@ -2522,7 +2520,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         request_tracker.set_value(std::move(summary));
                     }
                 } else {
-                    static_assert(dependent_false<T>::value, "unexpected type!");
+                    static_assert(false, "unexpected type!");
                 }
             };
             std::visit(on_prepare_response, std::move(response));
