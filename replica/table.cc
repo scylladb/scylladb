@@ -3342,8 +3342,9 @@ void storage_group::clear_sstables() {
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
-        locator::effective_replication_map_ptr erm)
+        locator::effective_replication_map_ptr erm, const keyspace* ks)
     : _schema(std::move(schema))
+    , _keyspace(ks)
     , _config(std::move(config))
     , _erm(std::move(erm))
     , _storage_opts(std::move(sopts))
