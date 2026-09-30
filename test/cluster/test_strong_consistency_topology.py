@@ -10,6 +10,7 @@ import logging
 import time
 
 import pytest
+from cassandra import WriteFailure
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
@@ -17,7 +18,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info
-from test.pylib.util import gather_safely, start_writes
+from test.pylib.util import gather_safely, start_writes, wait_for
 from test.cluster.util import DEFAULT_CMDLINE, FeatureConfigurations, get_table_raft_group_id, new_test_keyspace, \
     new_test_table, reconnect_driver, wait_for_leader, wait_for_token_ring_and_group0_consistency
 
@@ -67,7 +68,7 @@ async def read_back(cql, host, table: str, key_count: int, cl: ConsistencyLevel)
 
 async def check_replica_left(manager: ScyllaClusterManager, query: ServerInfo, live_servers: list[ServerInfo],
                              ks: str, table_name: str, group_id: str, original: set[str], victim_host_id: str,
-                             partner: ServerInfo, partner_host_id: str, expected_leader_host_id: str, key_count: int):
+                             partner: ServerInfo, partner_host_id: str, expected_leaders: set[str], key_count: int):
     """Checks shared by the replica-removal tests, once the victim is gone."""
     await manager.api.quiesce_topology(query.ip_addr)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
@@ -80,8 +81,11 @@ async def check_replica_left(manager: ScyllaClusterManager, query: ServerInfo, l
     assert {h for h, _ in tablets[0].replicas} == (original - {victim_host_id}) | {partner_host_id}, \
         f"Expected {victim_host_id} replaced by {partner_host_id}, got {tablets[0].replicas}"
 
-    leader = await wait_for_leader(manager, partner, group_id, expected_host_id=expected_leader_host_id)
-    assert leader == expected_leader_host_id, f"Expected {expected_leader_host_id} to lead, got {leader}"
+    async def allowed_leader():
+        leader = await manager.api.get_raft_leader(partner.ip_addr, group_id)
+        return leader if leader in expected_leaders else None
+    # A follower may name a stale leader until the new term reaches it, so poll.
+    leader = await wait_for(allowed_leader, time.time() + 60, label=f"a leader in {sorted(expected_leaders)}")
     logger.info(f"{leader} leads group {group_id} after the removal")
 
     # After the barrier the CL=ONE read-back proves the partner holds every acked write.
@@ -310,5 +314,109 @@ async def test_decommission_sc_replica_under_writes(manager: ScyllaClusterManage
             # In leader_on_victim the partner is the only eligible voter left once C_new commits.
             after_leader = partner_host_id if leader_on_victim else rack2_host_id
             await check_replica_left(manager, query, live_servers, ks, table_name, group_id, original,
-                                     victim_host_id, partner, partner_host_id, after_leader, key_count)
+                                     victim_host_id, partner, partner_host_id, {after_leader}, key_count)
+            await reconnect_driver(manager)
+
+
+async def write_through_failover(cql, table: str, stop: asyncio.Event) -> int:
+    """Write c = pk for pk = 0, 1, ... until `stop`; returns the number of keys written.
+
+    A key whose write was forwarded to a dead leader and failed fast is retried, so the
+    written keys stay range(n). Any other error fails the test.
+    """
+    stmt = cql.prepare(f"INSERT INTO {table} (pk, c) VALUES (?, ?)")
+    pk = 0
+    while not stop.is_set():
+        try:
+            await cql.run_async(stmt, [pk, pk])
+            pk += 1
+        except WriteFailure as e:
+            assert "failed while forwarding" in str(e), e
+            logger.info(f"pk={pk} failed fast, retrying: {e}")
+            await asyncio.sleep(0.1)
+    return pk
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.parametrize("leader_on_victim", [
+    pytest.param(False, id="leader_away"),
+    pytest.param(True, id="leader_on_victim")])
+async def test_removenode_sc_replica_under_writes(manager: ScyllaClusterManager, leader_on_victim: bool):
+    """
+    Removing a dead replica must not fail the clients' writes; its rack partner
+    takes the replica over.
+
+    In leader_on_victim only rack1 is follower-only: after a hard kill nobody
+    steps down and only a live leader can add the partner, so an eligible
+    replica has to survive. The victim is the leader the product elected.
+    Until a new leader is elected, writes forwarded to the dead one fail fast,
+    which is by design (SCYLLADB-4758): they are retried, and writes must
+    succeed again once the replica is removed.
+    """
+    follower_only = {'rack1', 'rack3'} if not leader_on_victim else {'rack1'}
+    logger.info(f"Bootstrapping cluster, follower-only racks {sorted(follower_only)}")
+    servers = await boot_sc_cluster(manager, ['rack1', 'rack1', 'rack2', 'rack2', 'rack3', 'rack3'], follower_only)
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    query = next(s for s in servers if s.rack == 'rack1')
+
+    async with new_test_keyspace(manager, KS_OPTS) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, query, ks, table_name)
+            assert len(tablets) == 1, f"Expected 1 tablet, got {tablets}"
+            original = {h for h, _ in tablets[0].replicas}
+            replica_of = {servers[host_ids.index(h)].rack: h for h in original}
+            assert replica_of.keys() == {'rack1', 'rack2', 'rack3'}, f"Expected one replica per rack, got {tablets[0].replicas}"
+
+            if leader_on_victim:
+                # Ask the rack1 replica: the other rack1 node does not host the group.
+                victim_host_id = await wait_for_leader(manager, servers[host_ids.index(replica_of['rack1'])], group_id)
+                assert victim_host_id != replica_of['rack1'], f"The follower-only rack1 replica {victim_host_id} leads"
+                victim = servers[host_ids.index(victim_host_id)]
+                survivor = next(h for r, h in replica_of.items() if r not in ('rack1', victim.rack))
+            else:
+                victim_host_id = replica_of['rack3']
+                victim = servers[host_ids.index(victim_host_id)]
+                await wait_for_leader(manager, servers[host_ids.index(replica_of['rack2'])], group_id,
+                                      expected_host_id=replica_of['rack2'])
+            partner = next(s for s in servers if s.rack == victim.rack and s.server_id != victim.server_id)
+            partner_host_id = host_ids[servers.index(partner)]
+            # Once it is a voter, the partner is eligible too.
+            after_leaders = {survivor, partner_host_id} if leader_on_victim else {replica_of['rack2']}
+            logger.info(f"group_id={group_id} replicas={tablets[0].replicas} victim={victim_host_id} ({victim}, {victim.rack}) "
+                        f"partner={partner_host_id} ({partner}) leader after one of {sorted(after_leaders)} query={query}")
+
+            if leader_on_victim:
+                logger.info("Starting writes that retry fast failures")
+                stop = asyncio.Event()
+                writer = asyncio.ensure_future(write_through_failover(cql, table, stop))
+
+                async def finish():
+                    stop.set()
+                    return await writer
+            else:
+                logger.info("Starting strict writes")
+                finish = await start_writes(cql, ks, table_name, concurrency=1)
+            try:
+                logger.info(f"Killing {victim_host_id} ({victim}) and removing it through {query}")
+                await manager.server_stop(victim.server_id, convict=True)
+                await manager.remove_node(query.server_id, victim.server_id)
+                logger.info("Removenode finished")
+            finally:
+                # finish() re-raises the first failed write or read-back.
+                key_count = await asyncio.wait_for(finish(), 300)
+            logger.info(f"key_count={key_count}")
+
+            live_servers = [s for s in servers if s.server_id != victim.server_id]
+            await check_replica_left(manager, query, live_servers, ks, table_name, group_id, original,
+                                     victim_host_id, partner, partner_host_id, after_leaders, key_count)
+            if leader_on_victim:
+                logger.info("Checking that strict writes succeed after the failover")
+                cql, _ = await manager.get_ready_cql(live_servers)
+                stmt = cql.prepare(f"INSERT INTO {table} (pk, c) VALUES (?, ?)")
+                for pk in range(key_count, key_count + 100):
+                    await cql.run_async(stmt, [pk, pk])
             await reconnect_driver(manager)
