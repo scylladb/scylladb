@@ -1,6 +1,7 @@
 # Copyright (C) 2025-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+import re
 import asyncio
 import pytest
 import logging
@@ -152,7 +153,12 @@ async def test_client_routes_lost_quorum(request, manager: ScyllaClusterManager)
     async def fail_req(f):
         with pytest.raises(HTTPError) as exc:
             await f("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)], timeout=timeout + 60)
-        assert "raft operation [read_barrier] timed out, there is no raft quorum" in exc.value.message
+        # Which stage of the group0 operation trips the timeout depends on what else the
+        # node has in flight: the read barrier when the operation runs alone, the group0
+        # operation mutex when it has to queue behind one that cannot commit without a
+        # quorum. These two requests race, so either stage is possible for either of them.
+        assert re.search(r"raft operation \[[^\]]*\] timed out, there is no raft quorum",
+                         exc.value.message), exc.value.message
 
     await asyncio.gather(fail_req(manager.api.client.post), fail_req(manager.api.client.delete))
     await wait_for_expected_client_routes_size(cql, 1)
