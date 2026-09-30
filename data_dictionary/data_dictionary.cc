@@ -32,6 +32,11 @@ table::schema() const {
     return _ops->get_table_schema(*this);
 }
 
+std::optional<keyspace>
+table::keyspace() const {
+    return _ops->get_table_keyspace(*this);
+}
+
 const std::vector<view_ptr>&
 table::views() const {
     return _ops->get_table_views(*this);
