@@ -61,6 +61,10 @@ public:
 
 using object_storage_reference_names = utils::small_vector<sstring, 3>;
 
+// Prefix shared by all native object-storage tables of a bucket. Foreign
+// locations carry their own prefix.
+inline constexpr std::string_view object_storage_default_prefix = "sstables";
+
 class opened_directory final {
     std::filesystem::path _pathname;
     file _file;

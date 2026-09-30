@@ -244,15 +244,16 @@ distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db,
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring type, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
+distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring type, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src,
+        data_dictionary::storage_options::object_storage_layout layout) {
     // Do not mutate the source sstable's level.
     // The sstable level would be mutated to 0, if needed, later on by download_sstable.
     bool need_mutate_level = false;
-    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, type, prefix, sstables=std::move(sstables), get_abort_src] (auto& global_table, auto& directory) {
+    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, type, prefix, layout, sstables=std::move(sstables), get_abort_src] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
-            sharded_parameter([bucket, endpoint, type, prefix, get_abort_src] {
+            sharded_parameter([bucket, endpoint, type, prefix, layout, get_abort_src] {
                 seastar::abort_source* as = get_abort_src ? get_abort_src() : nullptr;
-                auto opts = data_dictionary::make_object_storage_options(endpoint, type, bucket, prefix, as);
+                auto opts = data_dictionary::make_object_storage_options(endpoint, type, bucket, prefix, as, layout);
                 return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
             }),
             sstables,
