@@ -468,6 +468,11 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: S
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
 
+        # The keyspace makes rack2 eligible for auto-RF. Let it and the migrations of the
+        # system tablets which follow finish, so that the one-shot injection below is taken
+        # by a cleanup of the drain rather than by one of those migrations.
+        await manager.api.quiesce_topology(coord_serv.ip_addr)
+
         mark = await coord_log.mark()
         await manager.api.enable_injection(coord_serv.ip_addr, "wait_after_tablet_cleanup", one_shot=True)
 

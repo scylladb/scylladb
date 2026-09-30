@@ -12,7 +12,8 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version, get_topology_coordinator
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version, get_topology_coordinator, \
+    quiesce_and_disable_tablet_balancing
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -689,7 +690,7 @@ async def test_tablet_split(manager: ScyllaClusterManager, injection_error: str)
         await check()
         time.sleep(5) # Give load balancer some time to do work
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await check()
 
@@ -1464,7 +1465,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ScyllaClust
         await compaction_task
 
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count > 1
@@ -2053,7 +2054,10 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
         assert len(rows) == 0
 
-        await manager.disable_tablet_balancing()
+        # The one-shot injection below is not scoped to the test table. Let a pending
+        # resize of the system keyspaces' tablets finish first, so that it is not the one
+        # which takes it.
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
 
@@ -2072,7 +2076,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         await s1_log.wait_for(f"Loading new SSTables for keyspace", from_mark=s1_mark)
 
         await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await manager.api.wait_for_injection_enter(servers[0].ip_addr, "stream_mutation_fragments")
         await manager.api.message_injection(server.ip_addr, "stream_mutation_fragments")
@@ -2212,7 +2216,10 @@ async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: Sc
 
     cql = manager.get_cql()
 
-    await manager.disable_tablet_balancing()
+    # The one-shot resize injections below are not scoped to the test table. Let the
+    # initial split of the system keyspaces' tablets finish first, so that only the test
+    # table's split is left to take them.
+    await quiesce_and_disable_tablet_balancing(manager, server.ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
@@ -2403,7 +2410,9 @@ async def test_split_and_incremental_repair_synchronization(manager: ScyllaClust
 
     cql = manager.get_cql()
 
-    await manager.disable_tablet_balancing()
+    # The resize injection and the log wait below are not scoped to the test table. Let
+    # the initial split of the system keyspaces' tablets finish first.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     initial_tablets = 2
 
