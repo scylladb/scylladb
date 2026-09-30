@@ -14,6 +14,7 @@
 #include "mutation_tombstone_stats.hh"
 #include "tombstone_gc.hh"
 #include "keys/full_position.hh"
+#include "query/query-result.hh"
 #include <type_traits>
 #include "utils/log.hh"
 
@@ -223,7 +224,27 @@ class compact_mutation_state {
 
     // Remember if we requested to stop mid-partition.
     stop_iteration _stop = stop_iteration::no;
+    // Where the current page stopped, if it did, and the partitions which it
+    // left at the per-partition row limit. See frontier().
+    std::optional<full_position> _page_stop;
+    std::vector<full_position> _skips;
 private:
+    // The position right after the last fragment which the compactor
+    // consumed. See query::read_frontier::stop.
+    position_in_partition position_after_last_fragment() const {
+        switch (_last_pos.region()) {
+        case partition_region::partition_start:
+            return position_in_partition::for_static_row();
+        case partition_region::static_row:
+            return position_in_partition::before_all_clustered_rows();
+        case partition_region::clustered:
+            return position_in_partition::after_key(_schema, _last_pos);
+        case partition_region::partition_end:
+            return _last_pos;
+        }
+        std::abort();
+    }
+
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration do_consume(range_tombstone_change&& rtc, Consumer& consumer, GCConsumer& gc_consumer) {
@@ -609,6 +630,13 @@ public:
             if (!sstable_compaction()) {
                 stop = _row_limit && _partition_limit && stop != stop_iteration::yes
                        ? stop_iteration::no : stop_iteration::yes;
+                if (stop) {
+                    _page_stop.emplace(_dk->key(), _stop ? position_after_last_fragment() : position_in_partition::for_partition_end());
+                } else if (_stop) {
+                    // Only the per-partition row limit stops a partition
+                    // without stopping the page.
+                    _skips.emplace_back(_dk->key(), position_after_last_fragment());
+                }
                 // If we decided to stop earlier but decide to continue now, we
                 // are in effect skipping the partition. Do not leave `_stop` at
                 // `stop_iteration::yes` in this case, reset it back to
@@ -681,7 +709,26 @@ public:
         _query_time = query_time;
         _stats = {};
         _stop = stop_iteration::no;
+        _page_stop.reset();
+        _skips.clear();
         return state;
+    }
+
+    /// How far the read of the current page got, once its consumption ended.
+    /// The read stopped where the compactor asked the reader to stop, or else
+    /// it read its input to the end. Only updated when SSTableCompaction ==
+    /// compact_for_sstables::no. See query::read_frontier.
+    query::read_frontier frontier() const {
+        return query::read_frontier{_page_stop};
+    }
+
+    /// The partitions which the current page left at the per-partition row
+    /// limit before their end, and then went past, in ring order. Each skip
+    /// is the position right after the last row which the page took from its
+    /// partition. The skips are before the frontier's stop, and a partition
+    /// which the page stopped in has no skip. See reconcilable_result::skips().
+    const std::vector<full_position>& skips() const {
+        return _skips;
     }
 
     /// Whether the last page stopped inside the current partition, so that

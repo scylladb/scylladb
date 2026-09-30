@@ -272,6 +272,47 @@ public:
     bool operator==(const result_digest& rh) const = default;
 };
 
+// How far a replica read when it served a page. A replica reports it
+// instead of the last position when the command asks for it, see
+// partition_slice::option::send_read_frontier, so that the coordinator does
+// not have to deduce it from the reply's content, limits and flags.
+//
+// The command selects a set of positions: the partitions in its partition
+// ranges, and in each partition, the clustering ranges which the slice gives
+// for that partition. The reply holds all of the replica's data at the
+// selected positions before `stop`. The exception is a partition which the
+// read left early, at the per-partition row limit, and then went past. A
+// mutation reply lists such partitions, see reconcilable_result::skips(). The
+// reply says nothing about the positions at or after `stop`.
+//
+// Positions are in the order of the query schema, so they are reversed for a
+// reversed query. See full_position::cmp().
+struct read_frontier {
+    // Where the read stopped, or nullopt if it read its ranges to the end.
+    // A read stops right after a fragment, and the stop is:
+    // - (pk, after_key(ck)) after the clustering row ck;
+    // - (pk, pos) after a range tombstone change at pos;
+    // - (pk, before_all_clustered_rows()) after the static row;
+    // - (pk, for_partition_end()) after the end of partition pk.
+    std::optional<full_position> stop;
+
+    // Where a read which reached the end of its ranges stands.
+    static read_frontier end() {
+        return {};
+    }
+
+    bool reached_end() const {
+        return !stop;
+    }
+
+    bool equal(const schema& s, const read_frontier& other) const;
+
+    struct printer {
+        const schema& s;
+        const read_frontier& frontier;
+    };
+};
+
 //
 // The query results are stored in a serialized form. This is in order to
 // address the following problems, which a structured format has:
@@ -317,7 +358,10 @@ class result {
     query::result_memory_tracker _memory_tracker;
     std::optional<uint32_t> _partition_count;
     std::optional<uint32_t> _row_count_high_bits;
+    // The last position, or the frontier's stop if _position_is_frontier.
+    // The wire carries only the position, see wire_position().
     std::optional<full_position> _last_position;
+    bool _position_is_frontier = false;
 public:
     class builder;
     class partition_writer;
@@ -427,17 +471,48 @@ public:
 
     void ensure_counts();
 
-    const std::optional<full_position>& last_position() const {
-        return _last_position;
-    }
+    // The position of the last fragment which the replica consumed, if the
+    // result holds one. A result holds a frontier instead if the command asked
+    // for one; calling this then is an internal error.
+    const std::optional<full_position>& last_position() const;
 
     void set_last_position(std::optional<full_position> last_position) {
         _last_position = std::move(last_position);
+        _position_is_frontier = false;
     }
 
     // Return _last_position if replica filled it, otherwise calculate it based
     // on the content (by looking up the last row in the last partition).
     full_position get_or_calculate_last_position() const;
+
+    // How far the replica read, if the result holds a frontier. See
+    // read_frontier, and result_merger::get() for merged results.
+    std::optional<read_frontier> frontier() const {
+        if (!_position_is_frontier) {
+            return std::nullopt;
+        }
+        return read_frontier{_last_position};
+    }
+
+    // Replaces the position with `frontier`. With nullopt, the result holds
+    // no position.
+    void set_frontier(std::optional<read_frontier> frontier) {
+        _position_is_frontier = bool(frontier);
+        _last_position = frontier ? std::move(frontier->stop) : std::nullopt;
+    }
+
+    // The wire does not tell a frontier from a last position. A receiver of
+    // a reply to a command which asked for a frontier calls this, so that
+    // the result holds the frontier which the replica sent.
+    void reinterpret_position_as_frontier() {
+        _position_is_frontier = true;
+    }
+
+    // The position which the wire carries: the last position, or the
+    // frontier's stop. For the IDL.
+    const std::optional<full_position>& wire_position() const {
+        return _last_position;
+    }
 
     struct printer {
         schema_ptr s;
@@ -453,3 +528,7 @@ std::ostream& operator<<(std::ostream& os, const query::result::printer&);
 }
 
 template <> struct fmt::formatter<query::result::printer> : fmt::ostream_formatter {};
+
+template <> struct fmt::formatter<query::read_frontier::printer> : fmt::formatter<string_view> {
+    auto format(const query::read_frontier::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

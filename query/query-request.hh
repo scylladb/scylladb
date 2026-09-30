@@ -209,6 +209,13 @@ public:
         // timestamps and expiries to support WRITETIME(col[key])/TTL(col[key])
         // and WRITETIME(col.field)/TTL(col.field) selectors.
         send_collection_timestamps,
+        // When set, a reply tells how far the replica read: a data or digest
+        // reply holds a query::read_frontier instead of the last position, and
+        // a mutation reply holds one too. The wire carries the frontier's stop
+        // in the place of the last position, so the receiver must know that
+        // it asked, see query::result::reinterpret_position_as_frontier().
+        // Only a coordinator with the READ_FRONTIERS cluster feature sets it.
+        send_read_frontier,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -225,7 +232,8 @@ public:
         option::always_return_static_content,
         option::range_scan_data_variant,
         option::allow_mutation_read_page_without_live_row,
-        option::send_collection_timestamps>>;
+        option::send_collection_timestamps,
+        option::send_read_frontier>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
