@@ -11,6 +11,7 @@
 #include <boost/process.hpp>
 
 #include <stdint.h>
+#include <fstream>
 #include <random>
 #include <regex>
 
@@ -22,6 +23,13 @@
 #include <seastar/net/dns.hh>
 
 #include <seastar/testing/test_case.hh>
+<<<<<<< HEAD
+||||||| parent of e7aee7eb0e (encryption: Move the options file together with a renamed commitlog segment)
+#include <seastar/testing/test_fixture.hh>
+=======
+#include <seastar/testing/test_fixture.hh>
+#include <seastar/testing/thread_test_case.hh>
+>>>>>>> e7aee7eb0e (encryption: Move the options file together with a renamed commitlog segment)
 
 #include <fmt/ranges.h>
 
@@ -41,6 +49,7 @@
 #include "init.hh"
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
@@ -175,6 +184,583 @@ SEASTAR_TEST_CASE(test_local_file_provider) {
     co_await test_provider(fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string()), tmp);
 }
 
+<<<<<<< HEAD
+||||||| parent of e7aee7eb0e (encryption: Move the options file together with a renamed commitlog segment)
+static std::string local_key_options(const fs::path& keyfile) {
+    return fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string());
+}
+
+// Reproduces a bug where rewriting a single sstable component (as done when
+// updating repaired_at, which rewrites Statistics) re-encodes the component
+// according to the *current* encryption settings, which might be incompatible
+// with the encryption settings used by all other components. When that happens,
+// Statistics.db becomes effectively corrupted.
+//
+// The sstable is first written under `initial_options`, then the table is
+// ALTERed to `altered_options`, then the Statistics component is rewritten and
+// the sstable is reloaded from disk (forcing a fresh parse of Statistics).
+// Before the fix, that would crash or throw an exception.
+static future<> test_statistics_rewrite_encryption_mismatch(const tmpdir& tmp,
+        const std::string& initial_options, const std::string& altered_options) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({tmp.path().string()});
+    // Use vnodes, not tablets: below we locate the sstable's shard with
+    // dht::static_shard_of(), which is only meaningful for the static (vnode)
+    // sharder. With tablets, a partition's shard comes from the tablet map.
+    cfg->enable_tablets(false);
+    cfg->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::disabled);
+    {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*cfg, init);
+    }
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        auto with_clause = initial_options.empty()
+            ? std::string()
+            : fmt::format(" WITH scylla_encryption_options={{{}}}", initial_options);
+        env.execute_cql(fmt::format("create table ks.t (pk text primary key, v text){}", with_clause)).get();
+        env.execute_cql("insert into ks.t (pk, v) values ('pk0', 'v0')").get();
+
+        // Produce an sstable, written under the initial encryption settings.
+        env.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "t").flush();
+        }).get();
+
+        // Diverge the schema's encryption from what the sstable was written with.
+        // The on-disk sstables keep their original encryption, as recorded in
+        // their scylla_metadata.
+        env.execute_cql(fmt::format("alter table ks.t WITH scylla_encryption_options={{{}}}", altered_options)).get();
+
+        // The single partition lives on exactly one shard, so only that shard has
+        // an sstable to rewrite. Find it rather than sweeping all shards.
+        auto s = env.local_db().find_column_family("ks", "t").schema();
+        auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring("pk0")));
+        auto owning_shard = dht::static_shard_of(*s, dht::get_token(*s, pk));
+
+        env.db().invoke_on(owning_shard, [] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "t");
+            co_await cf.disable_auto_compaction();
+            auto sstables = cf.get_sstables();
+            BOOST_REQUIRE(!sstables->empty());
+            for (auto sst : *sstables) {
+                // update_repaired_at() calls rewrite_statistics(), which must run
+                // in a seastar thread -- do_with_cql_env_thread gives us one, but
+                // invoke_on's continuation is not one, so hop into async().
+                auto expected_repaired_at = sst->get_stats_metadata().repaired_at + 1;
+                co_await seastar::async([sst, expected_repaired_at] {
+                    sst->update_repaired_at(expected_repaired_at);
+                });
+
+                // Reload the sstable from disk. This re-parses Statistics.db,
+                // which must be decodable using the encryption parameters
+                // recorded in the on-disk scylla_metadata.
+                // Note: no get_format() accessor on this branch; sstable_format_types::big
+                // is the only format and is make_sstable()'s default.
+                auto reloaded = cf.get_sstables_manager().make_sstable(
+                        cf.schema(), cf.get_storage_options(), sst->generation(),
+                        sst->state(), sst->get_version());
+                co_await reloaded->load(cf.schema()->get_sharder());
+                BOOST_REQUIRE_EQUAL(reloaded->get_stats_metadata().repaired_at, expected_repaired_at);
+            }
+        }).get();
+
+        // Sanity check.
+        require_rows(env, "select * from ks.t",
+                {{utf8_type->decompose(sstring("pk0")), utf8_type->decompose(sstring("v0"))}});
+    }, cfg, {}, cql_test_init_configurables{ *ext });
+}
+
+// sstable written in the clear, encryption enabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_enabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, {}, local_key_options(keyfile));
+}
+
+// sstable written encrypted, encryption disabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_disabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile), "'key_provider': 'none'");
+}
+
+// sstable written encrypted, encryption key changed afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_changing_encryption_key) {
+    tmpdir tmp;
+    auto keyfile1 = tmp.path() / "secret_key1";
+    auto keyfile2 = tmp.path() / "secret_key2";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile1), local_key_options(keyfile2));
+}
+
+// As above, but the encryption settings change while the node is *down*, so that
+// the sstable object is constructed fresh on restart, with the new schema.
+//
+// This is the case the tests above cannot reach: there, sstable::_schema is the
+// schema captured at flush time, so wrap_writeonly() never sees the new settings.
+// After a reload the sstable object is built with the current (altered) schema,
+// while its files on disk -- and its scylla_metadata -- are from the original
+// write. rewrite_statistics() then writes Statistics.db under the *new* settings
+// and never updates Scylla.db, so the on-disk metadata still describes the old
+// encoding. The component and the metadata that describes it disagree.
+static future<> test_statistics_rewrite_after_reload(const tmpdir& tmp,
+        const std::string& initial_options, const std::string& altered_options) {
+    auto make_config = [&] {
+        auto ext = std::make_shared<db::extensions>();
+        auto cfg = seastar::make_shared<db::config>(ext);
+        cfg->data_file_directories({tmp.path().string()});
+        // Use vnodes; see test_statistics_rewrite_encryption_mismatch.
+        cfg->enable_tablets(false);
+        cfg->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::disabled);
+        {
+            boost::program_options::options_description desc;
+            boost::program_options::options_description_easy_init init(&desc);
+            configurable::append_all(*cfg, init);
+        }
+        return std::make_tuple(cfg, ext);
+    };
+
+    // First session: create the table under the initial settings, write an
+    // sstable, then ALTER. The ALTER only lands in the schema; the sstables on
+    // disk keep their original encoding.
+    {
+        auto [cfg, ext] = make_config();
+        cql_test_config tcfg(cfg);
+        auto with_clause = initial_options.empty()
+            ? std::string()
+            : fmt::format(" WITH scylla_encryption_options={{{}}}", initial_options);
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            env.execute_cql(fmt::format("create table ks.t (pk text primary key, v text){}", with_clause)).get();
+            env.execute_cql("insert into ks.t (pk, v) values ('pk0', 'v0')").get();
+            env.db().invoke_on_all([] (replica::database& db) {
+                return db.find_column_family("ks", "t").flush();
+            }).get();
+            env.execute_cql(fmt::format("alter table ks.t WITH scylla_encryption_options={{{}}}", altered_options)).get();
+        }, tcfg, {}, cql_test_init_configurables{ *ext });
+    }
+
+    // Second session: the sstable is loaded from disk and gets an sstable object
+    // built with the current, altered schema.
+    {
+        auto [cfg, ext] = make_config();
+        cql_test_config tcfg(cfg);
+        // Keep the data written by the first session.
+        tcfg.clean_data_dir_before_test = false;
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            auto s = env.local_db().find_column_family("ks", "t").schema();
+            auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring("pk0")));
+            auto owning_shard = dht::static_shard_of(*s, dht::get_token(*s, pk));
+
+            env.db().invoke_on(owning_shard, [] (replica::database& db) -> future<> {
+                auto& cf = db.find_column_family("ks", "t");
+                co_await cf.disable_auto_compaction();
+                auto sstables = cf.get_sstables();
+                BOOST_REQUIRE(!sstables->empty());
+                for (auto sst : *sstables) {
+                    auto expected_repaired_at = sst->get_stats_metadata().repaired_at + 1;
+                    co_await seastar::async([sst, expected_repaired_at] {
+                        sst->update_repaired_at(expected_repaired_at);
+                    });
+
+                    auto reloaded = cf.get_sstables_manager().make_sstable(
+                            cf.schema(), cf.get_storage_options(), sst->generation(),
+                            sst->state(), sst->get_version());
+                    co_await reloaded->load(cf.schema()->get_sharder());
+                    BOOST_REQUIRE_EQUAL(reloaded->get_stats_metadata().repaired_at, expected_repaired_at);
+                }
+            }).get();
+
+            require_rows(env, "select * from ks.t",
+                    {{utf8_type->decompose(sstring("pk0")), utf8_type->decompose(sstring("v0"))}});
+        }, tcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+// sstable written in the clear, encryption enabled while the node is down.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_enabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_after_reload(tmp, {}, local_key_options(keyfile));
+}
+
+// sstable written encrypted, encryption disabled while the node is down.
+// Here the rewritten Statistics.db would be written in the clear while the
+// carried-over scylla_metadata still says the component is encrypted, so the
+// read path would try to decrypt plaintext.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_disabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_after_reload(tmp, local_key_options(keyfile), "'key_provider': 'none'");
+}
+
+// sstable written encrypted, key changed while the node is down.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_changing_encryption_key) {
+    tmpdir tmp;
+    auto keyfile1 = tmp.path() / "secret_key1";
+    auto keyfile2 = tmp.path() / "secret_key2";
+    co_await test_statistics_rewrite_after_reload(tmp, local_key_options(keyfile1), local_key_options(keyfile2));
+}
+
+=======
+// The encryption options of a commitlog segment are stored in a hidden file next to it.
+static fs::path encryption_options_file(const fs::path& segment) {
+    return segment.parent_path() / ("." + segment.filename().native());
+}
+
+static std::string read_whole_file(const fs::path& path) {
+    std::ifstream f(path);
+    return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+// Writes a commitlog segment with a single entry to `dir` and returns its path.
+static fs::path write_commitlog_segment(const fs::path& dir, const db::extensions& exts) {
+    fs::create_directories(dir);
+
+    db::commitlog::config cfg;
+    cfg.commit_log_location = dir.native();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.max_reserve_segments = 0;
+    cfg.extensions = &exts;
+    cfg.warn_about_segments_left_on_disk_after_shutdown = false;
+    auto cl = db::commitlog::create_commitlog(std::move(cfg)).get();
+
+    const sstring data = "data";
+    // Release the handle without marking the data as flushed, so that the segment is kept on disk after shutdown.
+    cl.add_mutation(table_id(utils::UUID_gen::get_time_UUID()), data.size(), db::commitlog::force_sync::yes, [&data] (db::commitlog::output& out) {
+        out.write(data.data(), data.size());
+    }).get().release();
+    cl.shutdown().get();
+    cl.release().get();
+
+    std::vector<fs::path> segments;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.path().filename().native().starts_with(db::commitlog::descriptor::FILENAME_PREFIX)) {
+            segments.push_back(entry.path());
+        }
+    }
+    BOOST_REQUIRE_EQUAL(segments.size(), 1);
+    return segments.front();
+}
+
+static size_t count_commitlog_entries(const fs::path& segment, const db::extensions* exts) {
+    size_t count = 0;
+    db::commitlog::read_log_file(segment.native(), db::commitlog::descriptor::FILENAME_PREFIX,
+            [&count] (db::commitlog::buffer_and_replay_position) {
+        ++count;
+        return make_ready_future<>();
+    }, 0, exts).get();
+    return count;
+}
+
+static void check_rename_encrypted_commitlog_segment(const tmpdir& tmp, const db::extensions& exts,
+        bool stale_options_file_in_destination) {
+    BOOST_REQUIRE(!exts.commitlog_file_extensions().empty());
+
+    const fs::path segment = write_commitlog_segment(tmp.path() / "src", exts);
+    const std::string options = read_whole_file(encryption_options_file(segment));
+    BOOST_REQUIRE(!options.empty());
+    // Sanity check: the segment can't be read without its encryption options.
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(segment, nullptr), size_t(0));
+
+    const fs::path destination = tmp.path() / "dst" / segment.filename();
+    fs::create_directories(destination.parent_path());
+    if (stale_options_file_in_destination) {
+        std::ofstream(encryption_options_file(destination)) << "stale";
+    }
+
+    db::commitlog::rename_segment(segment.native(), destination.native(), &exts).get();
+
+    BOOST_REQUIRE(!fs::exists(segment));
+    BOOST_REQUIRE(!fs::exists(encryption_options_file(segment)));
+    BOOST_REQUIRE(fs::exists(destination));
+    BOOST_REQUIRE(fs::exists(encryption_options_file(destination)));
+    BOOST_REQUIRE_EQUAL(read_whole_file(encryption_options_file(destination)), options);
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(destination, &exts), size_t(1));
+}
+
+static void check_rename_unencrypted_commitlog_segment(const tmpdir& tmp, const db::extensions& exts) {
+    BOOST_REQUIRE(!exts.commitlog_file_extensions().empty());
+
+    const db::extensions no_exts;
+    const fs::path segment = write_commitlog_segment(tmp.path() / "src", no_exts);
+    BOOST_REQUIRE(!fs::exists(encryption_options_file(segment)));
+    // Sanity check: a segment without encryption options is read as unencrypted.
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(segment, &exts), size_t(1));
+
+    // A valid options file of another segment, so that the segment would be decrypted with it if it were kept.
+    const fs::path other_segment = write_commitlog_segment(tmp.path() / "other", exts);
+    const fs::path destination = tmp.path() / "dst" / segment.filename();
+    fs::create_directories(destination.parent_path());
+    fs::copy_file(encryption_options_file(other_segment), encryption_options_file(destination));
+
+    db::commitlog::rename_segment(segment.native(), destination.native(), &exts).get();
+
+    BOOST_REQUIRE(!fs::exists(segment));
+    BOOST_REQUIRE(fs::exists(destination));
+    BOOST_REQUIRE(!fs::exists(encryption_options_file(destination)));
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(destination, &exts), size_t(1));
+}
+
+static void do_test_rename_commitlog_segment(std::function<void(const tmpdir&, const db::extensions&)> check) {
+    tmpdir tmp;
+    test_provider_args args{ .tmp = tmp };
+    auto [cfg, ext] = make_commitlog_config(args, {
+        { "key_provider", "LocalFileSystemKeyProviderFactory" },
+        { "secret_key_file", (tmp.path() / "secret_key").string() },
+    });
+    auto notify_set = configurable::init_all(*cfg, *ext).get();
+
+    std::exception_ptr ex;
+    try {
+        check(tmp, *ext);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    notify_set.notify_all(configurable::system_state::stopped).get();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+}
+
+// An encrypted commitlog segment moved with commitlog::rename_segment() must stay readable,
+// i.e. its encryption options file must follow it.
+SEASTAR_THREAD_TEST_CASE(test_rename_encrypted_commitlog_segment) {
+    do_test_rename_commitlog_segment([] (const tmpdir& tmp, const db::extensions& exts) {
+        check_rename_encrypted_commitlog_segment(tmp, exts, false);
+    });
+}
+
+// A stale options file in the destination (e.g. left by an interrupted rename) must be replaced.
+SEASTAR_THREAD_TEST_CASE(test_rename_encrypted_commitlog_segment_replaces_stale_options_file) {
+    do_test_rename_commitlog_segment([] (const tmpdir& tmp, const db::extensions& exts) {
+        check_rename_encrypted_commitlog_segment(tmp, exts, true);
+    });
+}
+
+// A segment without an options file is read as unencrypted, so it must stay without one after the rename.
+// A stale options file in the destination must be removed, or the segment would be decrypted with it.
+SEASTAR_THREAD_TEST_CASE(test_rename_unencrypted_commitlog_segment_removes_stale_options_file) {
+    do_test_rename_commitlog_segment(check_rename_unencrypted_commitlog_segment);
+}
+
+static std::string local_key_options(const fs::path& keyfile) {
+    return fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string());
+}
+
+// Reproduces a bug where rewriting a single sstable component (as done when
+// updating repaired_at, which rewrites Statistics) re-encodes the component
+// according to the *current* encryption settings, which might be incompatible
+// with the encryption settings used by all other components. When that happens,
+// Statistics.db becomes effectively corrupted.
+//
+// The sstable is first written under `initial_options`, then the table is
+// ALTERed to `altered_options`, then the Statistics component is rewritten and
+// the sstable is reloaded from disk (forcing a fresh parse of Statistics).
+// Before the fix, that would crash or throw an exception.
+static future<> test_statistics_rewrite_encryption_mismatch(const tmpdir& tmp,
+        const std::string& initial_options, const std::string& altered_options) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({tmp.path().string()});
+    // Use vnodes, not tablets: below we locate the sstable's shard with
+    // dht::static_shard_of(), which is only meaningful for the static (vnode)
+    // sharder. With tablets, a partition's shard comes from the tablet map.
+    cfg->enable_tablets(false);
+    cfg->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::disabled);
+    {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*cfg, init);
+    }
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        auto with_clause = initial_options.empty()
+            ? std::string()
+            : fmt::format(" WITH scylla_encryption_options={{{}}}", initial_options);
+        env.execute_cql(fmt::format("create table ks.t (pk text primary key, v text){}", with_clause)).get();
+        env.execute_cql("insert into ks.t (pk, v) values ('pk0', 'v0')").get();
+
+        // Produce an sstable, written under the initial encryption settings.
+        env.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "t").flush();
+        }).get();
+
+        // Diverge the schema's encryption from what the sstable was written with.
+        // The on-disk sstables keep their original encryption, as recorded in
+        // their scylla_metadata.
+        env.execute_cql(fmt::format("alter table ks.t WITH scylla_encryption_options={{{}}}", altered_options)).get();
+
+        // The single partition lives on exactly one shard, so only that shard has
+        // an sstable to rewrite. Find it rather than sweeping all shards.
+        auto s = env.local_db().find_column_family("ks", "t").schema();
+        auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring("pk0")));
+        auto owning_shard = dht::static_shard_of(*s, dht::get_token(*s, pk));
+
+        env.db().invoke_on(owning_shard, [] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "t");
+            co_await cf.disable_auto_compaction();
+            auto sstables = cf.get_sstables();
+            BOOST_REQUIRE(!sstables->empty());
+            for (auto sst : *sstables) {
+                // update_repaired_at() calls rewrite_statistics(), which must run
+                // in a seastar thread -- do_with_cql_env_thread gives us one, but
+                // invoke_on's continuation is not one, so hop into async().
+                auto expected_repaired_at = sst->get_stats_metadata().repaired_at + 1;
+                co_await seastar::async([sst, expected_repaired_at] {
+                    sst->update_repaired_at(expected_repaired_at);
+                });
+
+                // Reload the sstable from disk. This re-parses Statistics.db,
+                // which must be decodable using the encryption parameters
+                // recorded in the on-disk scylla_metadata.
+                // Note: no get_format() accessor on this branch; sstable_format_types::big
+                // is the only format and is make_sstable()'s default.
+                auto reloaded = cf.get_sstables_manager().make_sstable(
+                        cf.schema(), cf.get_storage_options(), sst->generation(),
+                        sst->state(), sst->get_version());
+                co_await reloaded->load(cf.schema()->get_sharder());
+                BOOST_REQUIRE_EQUAL(reloaded->get_stats_metadata().repaired_at, expected_repaired_at);
+            }
+        }).get();
+
+        // Sanity check.
+        require_rows(env, "select * from ks.t",
+                {{utf8_type->decompose(sstring("pk0")), utf8_type->decompose(sstring("v0"))}});
+    }, cfg, {}, cql_test_init_configurables{ *ext });
+}
+
+// sstable written in the clear, encryption enabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_enabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, {}, local_key_options(keyfile));
+}
+
+// sstable written encrypted, encryption disabled afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_disabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile), "'key_provider': 'none'");
+}
+
+// sstable written encrypted, encryption key changed afterwards.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_changing_encryption_key) {
+    tmpdir tmp;
+    auto keyfile1 = tmp.path() / "secret_key1";
+    auto keyfile2 = tmp.path() / "secret_key2";
+    co_await test_statistics_rewrite_encryption_mismatch(tmp, local_key_options(keyfile1), local_key_options(keyfile2));
+}
+
+// As above, but the encryption settings change while the node is *down*, so that
+// the sstable object is constructed fresh on restart, with the new schema.
+//
+// This is the case the tests above cannot reach: there, sstable::_schema is the
+// schema captured at flush time, so wrap_writeonly() never sees the new settings.
+// After a reload the sstable object is built with the current (altered) schema,
+// while its files on disk -- and its scylla_metadata -- are from the original
+// write. rewrite_statistics() then writes Statistics.db under the *new* settings
+// and never updates Scylla.db, so the on-disk metadata still describes the old
+// encoding. The component and the metadata that describes it disagree.
+static future<> test_statistics_rewrite_after_reload(const tmpdir& tmp,
+        const std::string& initial_options, const std::string& altered_options) {
+    auto make_config = [&] {
+        auto ext = std::make_shared<db::extensions>();
+        auto cfg = seastar::make_shared<db::config>(ext);
+        cfg->data_file_directories({tmp.path().string()});
+        // Use vnodes; see test_statistics_rewrite_encryption_mismatch.
+        cfg->enable_tablets(false);
+        cfg->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::disabled);
+        {
+            boost::program_options::options_description desc;
+            boost::program_options::options_description_easy_init init(&desc);
+            configurable::append_all(*cfg, init);
+        }
+        return std::make_tuple(cfg, ext);
+    };
+
+    // First session: create the table under the initial settings, write an
+    // sstable, then ALTER. The ALTER only lands in the schema; the sstables on
+    // disk keep their original encoding.
+    {
+        auto [cfg, ext] = make_config();
+        cql_test_config tcfg(cfg);
+        auto with_clause = initial_options.empty()
+            ? std::string()
+            : fmt::format(" WITH scylla_encryption_options={{{}}}", initial_options);
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            env.execute_cql(fmt::format("create table ks.t (pk text primary key, v text){}", with_clause)).get();
+            env.execute_cql("insert into ks.t (pk, v) values ('pk0', 'v0')").get();
+            env.db().invoke_on_all([] (replica::database& db) {
+                return db.find_column_family("ks", "t").flush();
+            }).get();
+            env.execute_cql(fmt::format("alter table ks.t WITH scylla_encryption_options={{{}}}", altered_options)).get();
+        }, tcfg, {}, cql_test_init_configurables{ *ext });
+    }
+
+    // Second session: the sstable is loaded from disk and gets an sstable object
+    // built with the current, altered schema.
+    {
+        auto [cfg, ext] = make_config();
+        cql_test_config tcfg(cfg);
+        // Keep the data written by the first session.
+        tcfg.clean_data_dir_before_test = false;
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            auto s = env.local_db().find_column_family("ks", "t").schema();
+            auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring("pk0")));
+            auto owning_shard = dht::static_shard_of(*s, dht::get_token(*s, pk));
+
+            env.db().invoke_on(owning_shard, [] (replica::database& db) -> future<> {
+                auto& cf = db.find_column_family("ks", "t");
+                co_await cf.disable_auto_compaction();
+                auto sstables = cf.get_sstables();
+                BOOST_REQUIRE(!sstables->empty());
+                for (auto sst : *sstables) {
+                    auto expected_repaired_at = sst->get_stats_metadata().repaired_at + 1;
+                    co_await seastar::async([sst, expected_repaired_at] {
+                        sst->update_repaired_at(expected_repaired_at);
+                    });
+
+                    auto reloaded = cf.get_sstables_manager().make_sstable(
+                            cf.schema(), cf.get_storage_options(), sst->generation(),
+                            sst->state(), sst->get_version());
+                    co_await reloaded->load(cf.schema()->get_sharder());
+                    BOOST_REQUIRE_EQUAL(reloaded->get_stats_metadata().repaired_at, expected_repaired_at);
+                }
+            }).get();
+
+            require_rows(env, "select * from ks.t",
+                    {{utf8_type->decompose(sstring("pk0")), utf8_type->decompose(sstring("v0"))}});
+        }, tcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+// sstable written in the clear, encryption enabled while the node is down.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_enabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_after_reload(tmp, {}, local_key_options(keyfile));
+}
+
+// sstable written encrypted, encryption disabled while the node is down.
+// Here the rewritten Statistics.db would be written in the clear while the
+// carried-over scylla_metadata still says the component is encrypted, so the
+// read path would try to decrypt plaintext.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_disabling_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+    co_await test_statistics_rewrite_after_reload(tmp, local_key_options(keyfile), "'key_provider': 'none'");
+}
+
+// sstable written encrypted, key changed while the node is down.
+SEASTAR_TEST_CASE(test_statistics_rewrite_after_reload_changing_encryption_key) {
+    tmpdir tmp;
+    auto keyfile1 = tmp.path() / "secret_key1";
+    auto keyfile2 = tmp.path() / "secret_key2";
+    co_await test_statistics_rewrite_after_reload(tmp, local_key_options(keyfile1), local_key_options(keyfile2));
+}
+
+>>>>>>> e7aee7eb0e (encryption: Move the options file together with a renamed commitlog segment)
 static future<> create_key_file(const fs::path& path, const std::vector<key_info>& key_types) {
     std::ostringstream ss;
 
