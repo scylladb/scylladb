@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <optional>
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_any.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -23,6 +24,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "replica/database.hh"
 #include "utils/assert.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
 #include "mutation/timestamp.hh"
@@ -258,6 +260,45 @@ future<utils::UUID> raft_group0_client::get_last_group0_state_id() {
     return _sys_ks.get_last_group0_state_id();
 }
 
+// Both group0 mutexes are semaphore(1)s that a group0_guard holds for the whole operation,
+// commit included, and `_read_apply_mutex` is taken by group0_state_machine::apply() as
+// well. A single slow operation therefore stalls every other one waiting on them, so the
+// caller's timeout has to cover these waits as much as it covers the read barrier between
+// them - otherwise they are unbounded in practice and the caller hangs instead of getting
+// the error its timeout promised.
+future<semaphore_units<>> raft_group0_client::hold_mutex(semaphore& sem, const char* op_name,
+        seastar::abort_source& as, std::optional<raft_timeout> timeout) {
+    if (!timeout) {
+        // Nothing to bound the wait by, and the raft group need not even exist yet: this is
+        // also the path bootstrap takes, before group0 has been created.
+        co_return co_await get_units(sem, 1, as);
+    }
+
+    auto group0 = _raft_gr.group0_with_timeouts();
+    const auto deadline = group0.resolve_deadline(timeout, op_name);
+    if (!deadline) {
+        co_return co_await get_units(sem, 1, as);
+    }
+
+    abort_on_expiry<> operation_as{*deadline};
+    [[maybe_unused]] const auto timeout_sub = utils::chain_abort_source(operation_as.abort_source(), as);
+    try {
+        co_return co_await get_units(sem, 1, operation_as.abort_source());
+    } catch (...) {
+        if (!operation_as.abort_source().abort_requested() || as.abort_requested()) {
+            throw;
+        }
+        const auto message = group0.timeout_message(op_name);
+        // Under quorum loss every queued waiter times out, so rate limit this like
+        // run_with_timeout() does, and name the caller the way it does too.
+        static thread_local logging::logger::rate_limit rate_limit{std::chrono::seconds(1)};
+        const auto& loc = timeout->loc;
+        logger.log(log_level::warn, rate_limit, "{}; timeout requested at [{}({}:{}) `{}`] while waiting for another group0 operation on this node to finish",
+                message, loc.file_name(), loc.line(), loc.column(), loc.function_name());
+        throw raft_operation_timeout_error(message.c_str());
+    }
+}
+
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "start_group0_operation: must run on shard 0");
@@ -267,12 +308,19 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
         throw exceptions::configuration_exception{"cannot start group0 operation in the maintenance mode"};
     }
 
-    auto operation_holder = co_await get_units(_operation_mutex, 1, as);
+    // The operation mutex, the read barrier and the read-apply mutex below each
+    // apply the timeout; resolve it to one deadline here so that a relative
+    // timeout bounds the whole of start_operation() rather than each stage.
+    if (timeout && !timeout->value) {
+        timeout->value = _raft_gr.group0_with_timeouts().resolve_deadline(timeout, "group0 operation");
+    }
+
+    auto operation_holder = co_await hold_mutex(_operation_mutex, "group0 operation mutex", as, timeout);
     co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
 
     // Take `_group0_read_apply_mutex` *after* read barrier.
     // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-    auto read_apply_holder = co_await hold_read_apply_mutex(as);
+    auto read_apply_holder = co_await hold_read_apply_mutex(as, timeout);
 
     auto observed_group0_state_id = co_await get_last_group0_state_id();
     auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
@@ -348,12 +396,12 @@ bool raft_group0_client::maintenance_mode() const {
     return _maintenance_mode == maintenance_mode_enabled::yes;
 }
 
-future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source& as) {
+future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source& as, std::optional<raft_timeout> timeout) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "hold_read_apply_mutex: must run on shard 0");
     }
 
-    return get_units(_read_apply_mutex, 1, as);
+    return hold_mutex(_read_apply_mutex, "group0 read apply mutex", as, timeout);
 }
 
 template void raft_group0_client::validate_change(const topology_change& change);
