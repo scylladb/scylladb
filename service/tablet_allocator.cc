@@ -963,6 +963,16 @@ class load_balancer {
     size_t max_write_streaming_load;
     size_t max_read_streaming_load;
 
+    // Amount of tablet data a shard may stream regardless of the limits above: a migration which
+    // fits in it together with what the shard already streams is not subject to them. With small
+    // tablets the fixed coordination cost dominates moving the data, and the topology coordinator
+    // amortizes it across concurrent transitions. Zero disables batching.
+    uint64_t min_streaming_batch_size;
+
+    // Upper bound on the streaming load of a shard, counted like the limits above. Unlike them, it
+    // holds for batched migrations too, so that many tables or tablets cannot overload a shard.
+    size_t max_streaming_load;
+
     // Upper bound on the fraction of a table's token space in transition, to limit how many requests
     // pay the double-quorum overhead.
     double max_token_space_fraction;
@@ -1175,6 +1185,10 @@ public:
         max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
         max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
         namespace opt = db::cluster_config_registry::option_name;
+        min_streaming_batch_size = std::max<int64_t>(0, _cluster_config_manager.resolve_integer_config(
+                cluster_config_option(opt::tablet_streaming_min_batch_size_in_bytes), {}));
+        max_streaming_load = std::max<int64_t>(0, _cluster_config_manager.resolve_integer_config(
+                cluster_config_option(opt::tablet_streaming_max_transitions_per_shard), {}));
         auto token_space_pct = _cluster_config_manager.resolve_floating_point_config(
                 cluster_config_option(opt::tablet_streaming_max_token_space_percentage), {});
         // Set at runtime, so clamp before comparing against accumulated token space.
@@ -1593,6 +1607,7 @@ public:
             auto tmsi = get_migration_streaming_info(topo, repaired_tmap, plan.gid.table, plan.gid.tablet, trinfo);
             if (can_accept_load(nodes, tmsi)) {
                 apply_load(nodes, tmsi);
+                mark_as_scheduled(plan.gid);
                 ret.add(plan.gid);
             }
         }
@@ -3223,25 +3238,52 @@ public:
         }
     }
 
+    // Whether a migration of `size` may ignore the count limits on a shard already streaming
+    // streamed_bytes. Both must be measured, and together they must fit in the batch: a tablet which
+    // does not fit migrates under the count limits as before, so nothing is lost by not batching it.
+    bool can_batch(uint64_t streamed_bytes, bool shard_measured, std::optional<uint64_t> size) const {
+        return min_streaming_batch_size && shard_measured && size && streamed_bytes + *size <= min_streaming_batch_size;
+    }
+
     bool can_accept_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
         for (auto r : info.read_from) {
             if (!nodes.contains(r.host)) {
                 continue;
             }
-            auto load = nodes[r.host].shards[r.shard].streaming_read_load;
-            if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
-                lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
+            auto& shard = nodes[r.host].shards[r.shard];
+            auto load = shard.streaming_read_load;
+            if (load > 0 && load + info.stream_weight > max_streaming_load) {
+                lblogger.debug("Migration skipped because of streaming load cap on {} ({})", r, load);
                 return false;
+            }
+            if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
+                if (!can_batch(shard.streaming_read_bytes, shard.streaming_read_measured, info.size_in_bytes)) {
+                    lblogger.debug("Migration skipped because of read load limit on {} ({}, {} bytes)",
+                                   r, load, shard.streaming_read_bytes);
+                    return false;
+                }
+                lblogger.debug("Migration batched over read load limit on {} ({}, {} bytes)",
+                               r, load, shard.streaming_read_bytes);
             }
         }
         for (auto r : info.written_to) {
             if (!nodes.contains(r.host)) {
                 continue;
             }
-            auto load = nodes[r.host].shards[r.shard].streaming_write_load;
-            if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
-                lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
+            auto& shard = nodes[r.host].shards[r.shard];
+            auto load = shard.streaming_write_load;
+            if (load > 0 && load + info.stream_weight > max_streaming_load) {
+                lblogger.debug("Migration skipped because of streaming load cap on {} ({})", r, load);
                 return false;
+            }
+            if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
+                if (!can_batch(shard.streaming_write_bytes, shard.streaming_write_measured, info.size_in_bytes)) {
+                    lblogger.debug("Migration skipped because of write load limit on {} ({}, {} bytes)",
+                                   r, load, shard.streaming_write_bytes);
+                    return false;
+                }
+                lblogger.debug("Migration batched over write load limit on {} ({}, {} bytes)",
+                               r, load, shard.streaming_write_bytes);
             }
         }
         return true;
@@ -3251,11 +3293,17 @@ public:
     //  FIXME: remove precondition but it's not easy without copying noad_load_map.
     bool can_accept_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
         // Since all migration info have the same source and destination, the load check can be done
-        // once with the combined stream weight.
+        // once with the combined stream weight and size.
         auto info = infos[0];
         info.stream_weight = 0;
+        info.size_in_bytes = uint64_t(0);
         for (auto& i : infos) {
             info.stream_weight += i.stream_weight;
+            if (i.size_in_bytes && info.size_in_bytes) {
+                *info.size_in_bytes += *i.size_in_bytes;
+            } else {
+                info.size_in_bytes = std::nullopt;
+            }
         }
         return can_accept_load(nodes, info);
     }
@@ -3617,6 +3665,12 @@ public:
 
     static void pick(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
         sketch.pick(host, shard, tablet_set.tablets().size(), tablet_set.tablet_set_disk_size);
+    }
+
+    // Puts the tablet in transition for the rest of the round, so that other planners skip it.
+    // For repairs, which use up no token space.
+    void mark_as_scheduled(global_tablet_id tablet) {
+        _scheduled_tablets.insert(tablet);
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
