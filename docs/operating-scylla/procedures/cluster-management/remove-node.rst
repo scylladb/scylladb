@@ -37,6 +37,14 @@ Removing a Running Node
        If a keyspace uses tablets and contains a Materialized View or Secondary Index, or if the `rf_rack_valid_keyspaces` option is set,
        the invariant is enforced for the keyspace, and the node removal will be rejected if it would violate the invariant.
 
+       Where the ``audit`` and ``system_traces`` keyspaces use tablets (``DESCRIBE KEYSPACE`` shows
+       ``tablets = {'enabled': true}``), they follow your tablets keyspaces: to remove the last node of a rack, drop the
+       rack from your keyspaces first, and the two give it up on their own. If you have no tablets keyspaces,
+       remove the rack from the two keyspaces with ``ALTER KEYSPACE`` yourself. They keep one rack in every data
+       center, so to remove the last node of a data center, follow
+       :doc:`Remove a Data Center </operating-scylla/procedures/cluster-management/decommissioning-data-center>`.
+       See :ref:`Replication of the Audit Table <audit-table-replication>`.
+
 #. Run the ``nodetool netstats`` command to monitor the progress of the token reallocation.
 #. Run the ``nodetool status`` command to verify that the node has been removed.
 
@@ -87,6 +95,9 @@ the ``nodetool removenode`` operation will fail. To ensure successful operation 
 * In the case of node failures during the ``removenode`` operation, re-run repair before running
   ``nodetool removenode`` (not required when :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for ``removenode`` 
   is enabled).
+* If the node is the last one of its rack and the ``audit`` or ``system_traces`` keyspace uses tablets, exclude the node
+  first (``nodetool excludenode``), then drop the rack from your keyspaces, then remove the node: the two keyspaces give
+  the rack up only once the down node is excluded.
 
 Additional Information
 ----------------------
