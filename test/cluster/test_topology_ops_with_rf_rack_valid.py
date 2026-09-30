@@ -73,7 +73,7 @@ async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, enfo
     When enforce=True: Second node removal should be rejected with an error
     When enforce=False: Second node removal should succeed but with a warning log
     """
-    cfg = {'rf_rack_valid_keyspaces': enforce, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+    cfg = {'rf_rack_valid_keyspaces': enforce, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}, 'auto_rf_keyspaces_use_vnodes']}
     cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
 
     async def remove_node(server_id: str, expected_error: str = None):
@@ -339,6 +339,7 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ScyllaClust
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.parametrize("scenario", ["last_in_dc", "last_in_rack"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_remove_last_node_in_dc_violating_rf_rack(manager: ScyllaClusterManager, op: str, scenario: str):
     """
     Test that removing the last node in a DC or rack is rejected when a
@@ -359,7 +360,7 @@ async def test_remove_last_node_in_dc_violating_rf_rack(manager: ScyllaClusterMa
       rejected, then ALTER KEYSPACE to drop r2 from the rack list allows the
       removal to succeed.
     """
-    cfg = {'rf_rack_valid_keyspaces': True}
+    cfg = {'rf_rack_valid_keyspaces': True, 'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
     cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
 
     if scenario == "last_in_dc":
