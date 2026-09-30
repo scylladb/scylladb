@@ -265,13 +265,14 @@ class ManagerBackupMixin:
         output_string, err = functioning_node.nodetool("status", capture_output=True)
         assert not err, "nodetool status execution failed"
         print(output_string)
-        if node_address not in output_string:
+        # Whole fields, not substrings: 127.0.0.1 is a substring of 127.0.0.10.
+        if node_address not in output_string.split():
             if tolerate_missing:
                 logger.debug("node %s was not found in nodetool status, retrying", node_address)
                 return "Nonexistent"
             assert False, f"Could not find requested node ({node_address}) in nodetool status"
         output_lines = output_string.split("\n")
-        relevant_line = next(line for line in output_lines if node_address in line)
+        relevant_line = next(line for line in output_lines if node_address in line.split())
         return relevant_line[:2]
 
     def _is_node_at_status(self, node_address, functioning_node, desirable_status, tolerate_missing):
