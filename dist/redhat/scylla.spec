@@ -35,6 +35,15 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 
 %undefine _missing_build_ids_terminate_build
 
+# The relocatable package bundles unmodified distro libraries and commands,
+# which keep their original build-ids. The default "compat" mode puts a
+# /usr/lib/.build-id link for each of them in scylla-server, clashing with the
+# same links owned by the distro packages when the RPM is installed on the
+# Fedora release it was built on (#21057, SCYLLADB-4841).
+# "alldebug" moves all build-id links into scylla-debuginfo, so gdb/perf/
+# debuginfod still find scylla's debug info by build-id.
+%global _build_id_links alldebug
+
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
