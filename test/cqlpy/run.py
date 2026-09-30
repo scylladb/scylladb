@@ -421,7 +421,7 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--experimental-features=logstor')
         cmd.remove('--logstor-disk-size-in-mb=8')
         cmd.remove('--logstor-file-size-in-mb=4')
-        cmd.remove('--logstor-separator-max-memory-in-mb=8')
+    if major < [2026,4]:
         cmd.remove('--logstor-sparse-files=true')
     return (cmd, env)
 
