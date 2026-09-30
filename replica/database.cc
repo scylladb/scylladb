@@ -3558,6 +3558,7 @@ future<> database::drain() {
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
     co_await _stop_barrier.arrive_and_wait();
+    get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<table> t) { t->mark_drained(); });
     co_await flush_non_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await flush_system_column_families();
