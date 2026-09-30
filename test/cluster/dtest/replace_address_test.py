@@ -93,7 +93,8 @@ class TestReplaceAddress(Tester):
             nodetool_ring_params = []
         if address is None:
             address = node.address()
-        ring_lines = [line for line in node.nodetool(" ".join(["ring ", *nodetool_ring_params]))[0].splitlines() if address in line]
+        # Whole fields, not substrings: 127.0.0.1 is a substring of 127.0.0.10.
+        ring_lines = [line for line in node.nodetool(" ".join(["ring ", *nodetool_ring_params]))[0].splitlines() if address in line.split()]
         tokens_list = [token.split()[-1] for token in ring_lines]
         return sorted(tokens_list)
 
