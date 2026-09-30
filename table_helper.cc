@@ -8,6 +8,7 @@
  */
 
 #include "cql3/statements/property_definitions.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include <seastar/core/coroutine.hh>
@@ -19,6 +20,8 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
+#include "db/config.hh"
 
 static logging::logger tlogger("table_helper");
 
@@ -216,13 +219,20 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
         if (!db.has_keyspace(keyspace_name)) {
             locator::replication_strategy_config_options opts;
-            if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
-                for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
-                    opts[dc] = replication_factor;
-            }
-            else {
-                opts["replication_factor"] = replication_factor;
-            }
+            opts[cql3::statements::ks_prop_defs::REPLICATION_FACTOR_KEY] = replication_factor;
+            bool uses_tablets = initial_tablets.has_value();
+            const auto& feat = qp.proxy().features();
+            const auto& cfg = db.get_config();
+            opts = cql3::statements::prepare_options(
+                    replication_strategy_name,
+                    *qp.proxy().get_token_metadata_ptr(),
+                    cfg.rf_rack_valid_keyspaces(),
+                    cfg.enforce_rack_list(),
+                    std::move(opts),
+                    /*old_options=*/{},
+                    feat.rack_list_rf,
+                    uses_tablets);
+
             auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), initial_tablets, std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
