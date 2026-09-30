@@ -352,13 +352,9 @@ bool vector_index::is_local(const sstring& target_string) {
 }
 
 bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
-    auto class_it = im.options().find(db::index::secondary_index::custom_class_option_name);
     auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
-    if (class_it != im.options().end() && target_it != im.options().end()) {
-        auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
-        return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && get_target_column(target_it->second) == target_name;
-    }
-    return false;
+    return target_it != im.options().end() && secondary_index_manager::is_custom_index<vector_index>(im)
+            && get_target_column(target_it->second) == target_name;
 }
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {

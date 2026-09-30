@@ -45,15 +45,7 @@ protected:
 
     template <typename T>
     static bool has_index_impl(const schema& s) {
-        auto i = s.indices();
-        return std::any_of(i.begin(), i.end(), [](const auto& index) {
-            auto it = index.options().find(db::index::secondary_index::custom_class_option_name);
-            if (it != index.options().end()) {
-                auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
-                return (custom_class && dynamic_cast<T*>((*custom_class)().get()));
-            }
-            return false;
-        });
+        return std::ranges::any_of(s.indices(), secondary_index_manager::is_custom_index<T>);
     }
 };
 
