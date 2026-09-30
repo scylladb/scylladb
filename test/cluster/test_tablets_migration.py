@@ -1071,7 +1071,11 @@ async def test_disable_balancing_cancels_migration_blocked_on_the_source(manager
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cancelling_covers_many_tablets_of_many_tables(manager: ScyllaClusterManager, scale_timeout):
     """Cancelling covers several tablets of several tables; the mutations are built per table."""
-    cfg = cancel_test_config()
+    # With audit and system_traces on tablets, the 4th node makes their tablets split
+    # (min_per_shard_tablet_count), and the pending split finalization keeps the balancer
+    # from scheduling migrations while the parked ones are in flight, so only the first
+    # plan's migrations (possibly all of one table) would ever start.
+    cfg = cancel_test_config(extra={'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']})
     servers = [await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": r})
                for r in ["r1", "r2", "r3"]]
     await manager.disable_tablet_balancing()

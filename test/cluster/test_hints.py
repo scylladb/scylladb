@@ -757,7 +757,10 @@ async def test_failed_hint_draining_does_not_block_decommission(manager: ScyllaC
     """
     This test verifies that a decommission finishes even if draining hints fails.
     """
-    s1, _, _ = await manager.servers_add(3, auto_rack_dc="dc")
+    # Keep audit and system_traces on vnodes: on tablets they replicate to s1's rack alone,
+    # which s1 is the last node of, so its decommission would be rejected.
+    config = {"error_injections_at_startup": ["auto_rf_keyspaces_use_vnodes"]}
+    s1, _, _ = await manager.servers_add(3, config=config, auto_rack_dc="dc")
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_drain_fail", one_shot=False)
 
@@ -1059,15 +1062,18 @@ async def test_hints_encrypted_segments_after_rebalancing(manager: ScyllaCluster
     # The shard that disappears after decreasing the shard count.
     highest_shard = shard_count - 1
     cmdline = ["--smp", str(shard_count)]
+    # Keep audit and system_traces on vnodes too: their tablets would block the shard decrease.
+    vnodes_system_keyspaces = "auto_rf_keyspaces_use_vnodes"
     config = {
-        "error_injections_at_startup": ["decrease_hints_flush_period"],
+        "error_injections_at_startup": ["decrease_hints_flush_period", vnodes_system_keyspaces],
         "system_info_encryption": {
             "enabled": True,
             "key_provider": "LocalFileSystemKeyProviderFactory",
         }
     } | LocalFileSystemKeyProviderFactory(tmpdir).configuration_parameters()
     s1 = await manager.server_add(cmdline=cmdline, config=config, property_file={"dc": "dc1", "rack": "r1"})
-    s2 = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
+    s2 = await manager.server_add(config={"error_injections_at_startup": [vnodes_system_keyspaces]},
+                                  property_file={"dc": "dc1", "rack": "r2"})
 
     s1_hints_dir = await get_hints_dir(manager, s1)
     s2_host_id = await manager.get_host_id(s2.server_id)
