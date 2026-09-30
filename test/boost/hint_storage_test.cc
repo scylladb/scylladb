@@ -45,6 +45,39 @@ fs::path get_host_hint_dir(const fs::path& hints_dir, unsigned shard) {
     return hints_dir / fmt::to_string(shard) / test_ep;
 }
 
+// The extensions of a node with encryption of system info, which includes the commitlog, enabled.
+class encryption_extensions {
+    std::shared_ptr<db::extensions> _exts = std::make_shared<db::extensions>();
+    seastar::shared_ptr<db::config> _cfg = seastar::make_shared<db::config>(_exts);
+    configurable::notify_set _notify_set;
+
+public:
+    explicit encryption_extensions(const fs::path& key_directory) {
+        boost::program_options::options_description desc;
+        boost::program_options::options_description_easy_init init(&desc);
+        configurable::append_all(*_cfg, init);
+
+        _cfg->read_from_yaml(fmt::format(
+                "system_key_directory: {}\n"
+                "system_info_encryption:\n"
+                "    enabled: true\n"
+                "    key_provider: LocalFileSystemKeyProviderFactory\n",
+                key_directory.native()));
+        _notify_set = configurable::init_all(*_cfg, *_exts).get();
+
+        BOOST_REQUIRE_MESSAGE(!_exts->commitlog_file_extensions().empty(),
+                "Commitlog encryption isn't enabled");
+    }
+
+    ~encryption_extensions() {
+        _notify_set.notify_all(configurable::system_state::stopped).get();
+    }
+
+    const db::extensions* get() const {
+        return _exts.get();
+    }
+};
+
 std::set<std::string> list_segments(const fs::path& dir) {
     std::set<std::string> segments;
     for (const auto& entry : fs::directory_iterator(dir)) {
@@ -133,6 +166,52 @@ void add_leftover(const fs::path& dir, std::string_view file_name) {
 }
 
 } // anonymous namespace
+
+// Hints are rebalanced away from a shard that doesn't exist anymore. The moved
+// segments must stay readable, including the encrypted ones, which requires
+// their encryption info to follow them.
+// See also: SCYLLADB-4295.
+SEASTAR_THREAD_TEST_CASE(test_rebalance_hints_keeps_segments_readable) {
+    tmpdir tmp;
+    const fs::path key_dir = tmp.path() / "keys";
+    const fs::path hints_dir = tmp.path() / "hints";
+    const fs::path stale_dir = get_host_hint_dir(hints_dir, this_smp_shard_count());
+    const encryption_extensions exts(key_dir);
+
+    const auto encrypted = write_segments(stale_dir, 2 * this_smp_shard_count(), exts.get());
+    for (const auto& segment : encrypted) {
+        BOOST_REQUIRE_MESSAGE(count_hints(stale_dir / segment, nullptr) == 0,
+                fmt::format("Segment {} isn't encrypted", segment));
+    }
+    auto segments = encrypted;
+    // Segments written before encryption was enabled are unencrypted.
+    // They must stay readable too.
+    segments.merge(write_segments(stale_dir, 1, nullptr));
+    check_segments(hints_dir, segments, exts.get());
+
+    db::hints::internal::rebalance_hints(hints_dir, exts.get()).get();
+
+    BOOST_REQUIRE(!fs::exists(stale_dir.parent_path()));
+    check_segments(hints_dir, segments, exts.get());
+}
+
+// Files that got separated from their segments, e.g. because an older version of
+// Scylla moved the segments without them, must not prevent removing the directory
+// of a shard that doesn't exist anymore.
+// See also: SCYLLADB-4295.
+SEASTAR_THREAD_TEST_CASE(test_rebalance_hints_removes_stale_shard_directory_with_leftovers) {
+    tmpdir tmp;
+    const fs::path hints_dir = tmp.path() / "hints";
+    const fs::path stale_dir = get_host_hint_dir(hints_dir, this_smp_shard_count());
+
+    const auto segments = write_segments(stale_dir, 1, nullptr);
+    add_leftover(stale_dir, orphaned_sidecar);
+
+    db::hints::internal::rebalance_hints(hints_dir, nullptr).get();
+
+    BOOST_REQUIRE(!fs::exists(stale_dir.parent_path()));
+    check_segments(hints_dir, segments, nullptr);
+}
 
 // Files that aren't hint segments don't prevent removing a hint directory.
 SEASTAR_THREAD_TEST_CASE(test_remove_hint_directory_removes_leftovers) {
