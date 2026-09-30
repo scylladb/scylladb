@@ -112,6 +112,10 @@ using read_ahead = bool_class<struct read_ahead_tag>;
 /// that own a subrange in the range. Shard reader are created on-demand, when
 /// the shard is visited for the first time.
 ///
+/// Supports vnode-based tables only: its algorithms assume that shards own the
+/// ring round-robin. For tablet-based tables, see
+/// replica::make_tablet_streaming_reader().
+///
 /// The read starts with a concurrency of one, that is the reader reads from a
 /// single shard at a time. The concurrency is exponentially increased (to a
 /// maximum of the number of shards) when a reader's buffer is empty after

@@ -25,6 +25,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include "test/lib/eventually.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -2127,6 +2128,27 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_next_partition) {
             read(i);
         }
         BOOST_REQUIRE(!read_mutation_from_mutation_reader(reader).get());
+        return make_ready_future<>();
+    }).get();
+}
+
+// The multishard reader assumes the vnode data layout, so it must refuse
+// tablet-based tables rather than read them wrong.
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_rejects_tablets) {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+        env.execute_cql("CREATE KEYSPACE ks_msr_tablets WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'initial': 8}").get();
+        env.execute_cql("CREATE TABLE ks_msr_tablets.t (pk int PRIMARY KEY, v int)").get();
+        auto& table = env.local_db().find_column_family("ks_msr_tablets", "t");
+        auto s = table.schema();
+        auto factory = [] (schema_ptr s, reader_permit permit, const dht::partition_range&, const query::partition_slice&,
+                tracing::trace_state_ptr, mutation_reader::forwarding) {
+            return make_empty_mutation_reader(std::move(s), std::move(permit));
+        };
+        seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+        BOOST_REQUIRE_THROW(make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                s, table.get_effective_replication_map(), make_reader_permit(env), query::full_partition_range, s->full_slice()),
+                std::runtime_error);
         return make_ready_future<>();
     }).get();
 }
