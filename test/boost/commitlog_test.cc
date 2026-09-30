@@ -1635,6 +1635,12 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
         seastar::future<> before_delete(const seastar::sstring&) override {
             co_return;
         }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
     };
 
     auto ep = std::make_unique<myext>(do_file_delete);
@@ -1764,6 +1770,12 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
             deleted.emplace_back(filename);
             co_return;
         }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
     };
 
     auto ep = std::make_unique<myext>();
@@ -1848,6 +1860,12 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
                 BOOST_REQUIRE(!f.available());
                 waiters.emplace_back(std::move(f));
             }
+            co_return;
+        }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            co_return;
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
             co_return;
         }
     };
@@ -2280,6 +2298,12 @@ SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
             co_return make_shared<my_file_impl>(std::move(f), _promise, _signal);
         }
         seastar::future<> before_delete(const seastar::sstring& filename) override {
+            return make_ready_future<>();
+        }
+        seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+            return make_ready_future<>();
+        }
+        seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
             return make_ready_future<>();
         }
     };
@@ -3235,7 +3259,133 @@ SEASTAR_TEST_CASE(test_oversized_entry_forced_sync_retry) {
     BOOST_REQUIRE_EQUAL(found, rp2buf.size());
 }
 
-#endif
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
+
+namespace {
+
+// Records the calls to its rename hooks.
+struct rename_hooks_recorder : public commitlog_file_extension {
+    std::vector<std::string> calls;
+
+    future<file> wrap_file(const sstring&, file f, open_flags) override {
+        co_return f;
+    }
+    future<> before_delete(const sstring&) override {
+        co_return;
+    }
+    future<> before_rename(const sstring& from, const sstring& to) override {
+        // The segment hasn't been renamed yet.
+        BOOST_REQUIRE(co_await file_exists(from));
+        BOOST_REQUIRE(!co_await file_exists(to));
+        calls.push_back(fmt::format("before_rename({}, {})", from, to));
+    }
+    future<> after_rename(const sstring& from, const sstring& to) override {
+        // The segment has already been renamed.
+        BOOST_REQUIRE(!co_await file_exists(from));
+        BOOST_REQUIRE(co_await file_exists(to));
+        calls.push_back(fmt::format("after_rename({}, {})", from, to));
+    }
+};
+
+future<> create_empty_file(std::string_view path) {
+    auto f = co_await open_file_dma(path, open_flags::wo | open_flags::create);
+    co_await f.close();
+}
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_rename_segment_calls_rename_hooks) {
+    tmpdir tmp;
+    const sstring from = (tmp.path() / "CommitLog-4-1.log").native();
+    const sstring to = (tmp.path() / "other" / "CommitLog-4-1.log").native();
+    co_await touch_directory((tmp.path() / "other").native());
+    co_await create_empty_file(from);
+
+    auto recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& calls = recorder->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder", std::move(recorder));
+
+    co_await commitlog::rename_segment(from, to, &exts);
+
+    BOOST_REQUIRE(!co_await file_exists(from));
+    BOOST_REQUIRE(co_await file_exists(to));
+    const std::vector<std::string> expected = {
+        fmt::format("before_rename({}, {})", from, to),
+        fmt::format("after_rename({}, {})", from, to),
+    };
+    BOOST_REQUIRE_MESSAGE(calls == expected,
+            fmt::format("Calls: {}, expected: {}", calls, expected));
+}
+
+SEASTAR_TEST_CASE(test_rename_segment_calls_all_rename_hooks) {
+    tmpdir tmp;
+    const sstring from = (tmp.path() / "CommitLog-4-1.log").native();
+    const sstring to = (tmp.path() / "other" / "CommitLog-4-1.log").native();
+    co_await touch_directory((tmp.path() / "other").native());
+    co_await create_empty_file(from);
+
+    auto recorder1 = std::make_unique<rename_hooks_recorder>();
+    auto recorder2 = std::make_unique<rename_hooks_recorder>();
+    const auto& calls1 = recorder1->calls;
+    const auto& calls2 = recorder2->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder1", std::move(recorder1));
+    exts.add_commitlog_file_extension("recorder2", std::move(recorder2));
+
+    co_await commitlog::rename_segment(from, to, &exts);
+
+    BOOST_REQUIRE(!co_await file_exists(from));
+    BOOST_REQUIRE(co_await file_exists(to));
+    const std::vector<std::string> expected = {
+        fmt::format("before_rename({}, {})", from, to),
+        fmt::format("after_rename({}, {})", from, to),
+    };
+    BOOST_REQUIRE_MESSAGE(calls1 == expected,
+            fmt::format("Calls 1: {}, expected: {}", calls1, expected));
+    BOOST_REQUIRE_MESSAGE(calls2 == expected,
+            fmt::format("Calls 2: {}, expected: {}", calls2, expected));
+}
+
+// The rename hooks of an extension are only called if the extension is among the given ones.
+SEASTAR_TEST_CASE(test_rename_segment_calls_rename_hooks_of_given_extensions_only) {
+    tmpdir tmp;
+    const auto path = [&tmp] (unsigned i) {
+        return sstring((tmp.path() / fmt::format("CommitLog-4-{}.log", i)).native());
+    };
+    co_await create_empty_file(path(0));
+
+    auto move_segment = [&] (const sstring& from, const sstring& to, const db::extensions* exts) -> future<> {
+        co_await commitlog::rename_segment(from, to, exts);
+        BOOST_REQUIRE(!co_await file_exists(from));
+        BOOST_REQUIRE(co_await file_exists(to));
+    };
+
+    auto recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& calls = recorder->calls;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("recorder", std::move(recorder));
+
+    // No extensions.
+    co_await move_segment(path(0), path(1), nullptr);
+
+    // No commitlog file extensions.
+    db::extensions no_exts;
+    co_await move_segment(path(1), path(2), &no_exts);
+
+    // Other commitlog file extensions.
+    auto other_recorder = std::make_unique<rename_hooks_recorder>();
+    const auto& other_calls = other_recorder->calls;
+    db::extensions other_exts;
+    other_exts.add_commitlog_file_extension("other_recorder", std::move(other_recorder));
+    co_await move_segment(path(2), path(3), &other_exts);
+    BOOST_REQUIRE_MESSAGE(calls.empty(), fmt::format("Unexpected calls: {}", calls));
+    BOOST_REQUIRE_EQUAL(other_calls.size(), 2);
+
+    // Attach the previously created extensions.
+    co_await move_segment(path(3), path(4), &exts);
+    BOOST_REQUIRE_EQUAL(calls.size(), 2);
+}
 
 SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
     commitlog::config cfg;
