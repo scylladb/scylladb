@@ -15,8 +15,10 @@
 
 import pytest
 import time
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
-from .util import new_test_table, new_materialized_view, new_secondary_index, ScyllaMetrics
+from .util import new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index, ScyllaMetrics
 
 # All tests in this file check the Scylla-only per-row TTL feature, so
 # let's mark them all scylla_only with an autouse fixture:
@@ -325,6 +327,7 @@ def test_rename_ttl_column(cql, test_keyspace):
 def ttl_period(cql):
     result = list(cql.execute("SELECT value FROM system.config WHERE name='alternator_ttl_period_in_seconds'"))
     assert len(result) == 1
+    assert float(result[0].value) <= 30
     return float(result[0].value)
 
 # Utility function to convert Python's notion of time (floating-point
@@ -599,3 +602,25 @@ def test_row_ttl_metrics(cql, test_keyspace, ttl_period):
         # the exactly 2 items deleted (we assume that no other TTL activity
         # is running on the same Scylla instance in parallel...)
         assert end.get('scylla_expiration_items_deleted') == (start.get('scylla_expiration_items_deleted') or 0) + 2
+
+# Test that per-row TTL works even when the keyspace's RF is higher than the
+# number of nodes - e.g., RF=3 on the single node that test/cqlpy uses. The
+# expiration scanner used LOCAL_QUORUM, which can never be reached in this
+# case, so every scan failed and nothing ever expired.
+@pytest.mark.parametrize('strategy', ['SimpleStrategy', 'NetworkTopologyStrategy'])
+def test_row_ttl_expiration_rf_above_node_count(cql, ttl_period, strategy):
+    if strategy == 'SimpleStrategy':
+        replication = "{'class': 'SimpleStrategy', 'replication_factor': 3}"
+    else:
+        dc = cql.execute('SELECT data_center FROM system.local').one().data_center
+        replication = "{'class': 'NetworkTopologyStrategy', '" + dc + "': 3}"
+    one = ConsistencyLevel.ONE
+    with new_test_keyspace(cql, f"WITH replication = {replication} AND tablets = {{'enabled': false}}") as ks:
+        with new_test_table(cql, ks, 'p int primary key, e timestamp ttl') as table:
+            cql.execute(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES (1, {to_ttl("timestamp", time.time()-60)})', consistency_level=one))
+            deadline = time.time() + 3*ttl_period + 3
+            while time.time() < deadline:
+                if not list(cql.execute(SimpleStatement(f'SELECT p FROM {table}', consistency_level=one))):
+                    return
+                time.sleep(0.1)
+            pytest.fail('row was not expired')
