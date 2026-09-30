@@ -969,6 +969,10 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    // Fraction of each table's token space in transition, in [0, 1]: from tablet metadata, and
+    // accumulated over the round by mark_as_scheduled(). Keyed by co-location group base table.
+    absl::flat_hash_map<table_id, double> _token_space_in_transition_per_table;
+    absl::flat_hash_map<table_id, double> _scheduled_token_space_per_table;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1051,6 +1055,23 @@ private:
                 return false;
         }
         on_internal_error(lblogger, format("Invalid transition stage: {}", static_cast<int>(trinfo->stage)));
+    }
+
+    // Whether a transition of `kind` uses up its table's token space budget. Transitions which move
+    // replicas make requests pay the double-quorum overhead. Repairs and restores keep the replicas,
+    // so they do not affect requests.
+    static bool uses_token_space(tablet_transition_kind kind) {
+        switch (kind) {
+            case tablet_transition_kind::migration:
+            case tablet_transition_kind::intranode_migration:
+            case tablet_transition_kind::rebuild:
+            case tablet_transition_kind::rebuild_v2:
+                return true;
+            case tablet_transition_kind::repair:
+            case tablet_transition_kind::restore:
+                return false;
+        }
+        on_internal_error(lblogger, format("Invalid tablet transition kind: {}", static_cast<int>(kind)));
     }
 
     using migration_vector = migration_plan::migrations_vector;
@@ -1200,6 +1221,8 @@ public:
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
+
+        co_await count_token_space_in_transition();
 
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
@@ -1353,6 +1376,26 @@ public:
             for (auto& sload : load.shards) {
                 sload.dusage = disk_usage{ load.dusage->capacity / load.shard_count, 0 };
             }
+        }
+    }
+
+    // Tablets scheduled during plan-making are counted separately, by mark_as_scheduled().
+    future<> count_token_space_in_transition() {
+        _token_space_in_transition_per_table.clear();
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            co_await coroutine::maybe_yield();
+            if (is_migrating_table(table)) {
+                continue;
+            }
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            double fraction = 0;
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                if (uses_token_space(trinfo.transition)) {
+                    fraction += tmap.token_space_fraction(tid);
+                }
+            }
+            _token_space_in_transition_per_table[table] = fraction;
         }
     }
 
@@ -3535,7 +3578,11 @@ public:
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
-        _scheduled_tablets.insert(mig.tablet);
+        if (_scheduled_tablets.insert(mig.tablet).second && uses_token_space(mig.kind)) {
+            const auto& tmap = _tm->tablets().get_tablet_map(mig.tablet.table);
+            _scheduled_token_space_per_table[_tm->tablets().get_base_table(mig.tablet.table)]
+                    += tmap.token_space_fraction(mig.tablet.tablet);
+        }
     }
 
     void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
