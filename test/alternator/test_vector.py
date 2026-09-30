@@ -7787,6 +7787,13 @@ def dynamodb_with_alternator_extensions(new_dynamodb_session, dynamodb):
     with add_alternator_extensions_to_client(resource.meta.client):
         yield resource
 
+def test_custom_service_models_are_isolated(dynamodb, dynamodb_with_float32vector,
+        dynamodb_with_alternator_extensions, new_dynamodb_session):
+    clean_resource = new_dynamodb_session()
+    resources = (dynamodb, dynamodb_with_float32vector, dynamodb_with_alternator_extensions, clean_resource)
+    shape_maps = [resource.meta.client.meta.service_model._shape_resolver._shape_map for resource in resources]
+    assert len({id(shape_map) for shape_map in shape_maps}) == len(shape_maps)
+
 # Test that a vector search without an explicit ProjectionExpression aims to
 # return as much of the items as it can:
 #  - For BaseRead=false, only the projected attributes (including also the

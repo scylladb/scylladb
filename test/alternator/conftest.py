@@ -11,16 +11,17 @@
 
 import re
 from functools import cache
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 import boto3
 import botocore
 import pytest
 import requests
-from alternator import Auth, close_resource
+from alternator import Auth, Helper, close_resource
 from botocore import UNSIGNED
 
-from test.alternator.util import create_alternator_resource, create_test_table, is_aws, scylla_log
+from test.alternator.util import alternator_config, configure_alternator_resource, create_alternator_resource, create_test_table, is_aws, scylla_log
 from test.conftest import dynamic_scope
 from test.cqlpy.conftest import host  # add required fixtures
 from test.pylib.connect_options import add_host_option
@@ -179,14 +180,17 @@ def dynamodb(request, get_valid_alternator_role):
 
 @pytest.fixture(scope=dynamic_scope())
 def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
+    aws_resources = []
+    helpers = {}
+
     def _new_dynamodb_session(user='cassandra', password='secret_pass'):
-        ses = boto3.Session()
-        host = urlparse(dynamodb.meta.client._endpoint.host)
-        conf = botocore.client.Config(parameter_validation=False)
         if request.config.getoption('aws'):
-            return boto3.resource('dynamodb', config=conf)
-        conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
-        region_name = dynamodb.meta.client.meta.region_name
+            conf = botocore.client.Config(parameter_validation=False)
+            resource = boto3.Session().resource('dynamodb', config=conf)
+            aws_resources.append(resource)
+            return resource
+        url = dynamodb.meta.client._endpoint.host
+        verify = not request.config.getoption('https')
         if request.config.getoption('mtls'):
             # Under mTLS, the identity is determined by the client
             # certificate, not by the "user" parameter - there is no way to
@@ -199,16 +203,29 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
             # certificate is used for authentication, not SigV4 credentials.
             cert_file = request.config.getoption('client_cert_file')
             key_file = request.config.getoption('client_key_file')
-            return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'https',
-                region_name=region_name,
-                config=conf.merge(botocore.client.Config(
-                    signature_version=UNSIGNED,
-                    client_cert=(cert_file, key_file))))
-        user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
-        return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'https',
-            region_name=region_name, aws_access_key_id=user, aws_secret_access_key=secret,
-            config=conf)
-    return _new_dynamodb_session
+            auth = Auth.disabled()
+        else:
+            cert_file = None
+            key_file = None
+            user, secret = get_valid_alternator_role(url, role=user)
+            auth = Auth.static_credentials(user, secret)
+        helper_key = (auth, cert_file, key_file)
+        if helper_key not in helpers:
+            config = alternator_config(url, verify, cert_file, key_file)
+            helpers[helper_key] = Helper(config, auth=auth, verify=verify).start()
+        # alternator-client 2.0.0 creates resources through boto3's
+        # process-global default session. Use a fresh session here so tests
+        # which modify botocore service models cannot affect other resources.
+        session = boto3.Session()
+        with patch('alternator.client.boto3', session):
+            resource = helpers[helper_key].resource()
+        return configure_alternator_resource(resource)
+
+    yield _new_dynamodb_session
+    for resource in aws_resources:
+        resource.meta.client.close()
+    for helper in helpers.values():
+        helper.stop()
 
 @pytest.fixture(scope=dynamic_scope())
 def dynamodbstreams(request, get_valid_alternator_role):

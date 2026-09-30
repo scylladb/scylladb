@@ -15,11 +15,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-import boto3
 import botocore
 import pytest
 import requests
-from alternator import Auth, Config as AlternatorConfig, RetryConfig, TLS, TimeoutConfig, create_resource
+from alternator import Auth, Config as AlternatorConfig, RetryConfig, TLS, TimeoutConfig, close_resource, create_resource
 from botocore import UNSIGNED
 from botocore.hooks import HierarchicalEmitter
 from botocore.validate import ParamValidationDecorator
@@ -683,8 +682,7 @@ def create_alternator_resource(url, auth, verify=True, client_cert_file=None, cl
 
 # Create a new DynamoDB API resource (connection object) similar to the
 # existing "dynamodb" resource - but authenticating with the given role
-# and key.
-# This is a ScyllaDB-only feature.
+# and key. This is a ScyllaDB-only feature.
 @contextmanager
 def new_dynamodb(dynamodb, role, key):
     # Under mTLS, identity is determined solely by the client certificate
@@ -695,13 +693,9 @@ def new_dynamodb(dynamodb, role, key):
     if get_cert(dynamodb):
         skip_env("new_dynamodb() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
     url = dynamodb.meta.client._endpoint.host
-    config = dynamodb.meta.client._client_config
-    region_name = dynamodb.meta.client.meta.region_name
-    verify = not url.startswith('https')
-    ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
-        aws_access_key_id=role, aws_secret_access_key=key,
-        region_name=region_name, config=config)
+    verify = dynamodb.meta.client._endpoint.http_session._verify
+    ret = create_alternator_resource(url, Auth.static_credentials(role, key), verify)
     try:
         yield ret
     finally:
-        ret.meta.client.close()
+        close_resource(ret)
