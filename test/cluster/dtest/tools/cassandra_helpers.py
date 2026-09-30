@@ -6,17 +6,12 @@
 
 import logging
 import os
-import pathlib
 import re
 import shutil
-from functools import lru_cache
+import tempfile
 
 import pytest
-from ccmlib.common import get_java_home_path
 
-from dtest_config import DTestConfig
-from dtest_setup import DTestSetup, copy_logs
-from dtest_setup_overrides import DTestSetupOverrides
 from tools.files import copy_files_to, get_cf_dir
 
 logger = logging.getLogger(__name__)
@@ -28,12 +23,11 @@ class CassandraCluster:
     def __init__(self, cassandra_version, request, test_instance):
         self.cassandra_version = cassandra_version
         self.request: pytest.FixtureRequest = request
-        self.dtest_config = DTestConfig()
-        self.dtest_config.setup(self.request)
-        self.dtest_config.cassandra_version = cassandra_version
-        self.dtest_setup = DTestSetup(dtest_config=self.dtest_config, setup_overrides=DTestSetupOverrides(), cluster_name="test")
         self.test_instance = test_instance
-        self.test_path = None
+        self.test_path = tempfile.mkdtemp(prefix="dtest-cassandra-")
+        # The sstables are bind-mounted into the containers, so the work
+        # directory has to be reachable by the container's uid as well.
+        os.chmod(self.test_path, 0o755)
         self.cluster = None
         self.scylla_data_tmp_folder = None
         self.scylla_schema_ddl = None
@@ -50,17 +44,25 @@ class CassandraCluster:
         # Stop Scylla cluster before create new Cassandra cluster because of it's impossible to run two clusters simultaneously
         if self.scylla_cluster:
             self.scylla_cluster.stop(wait_other_notice=True)
+        # Imported here, not at module scope: this module is imported by every
+        # migration test, and only the handful that need a real Cassandra
+        # should have to have the docker stack installed.
+        from tools.cassandra_docker import CassandraDockerCluster
+
         # Set up Cassandra cluster
-        self.dtest_setup.initialize_cluster(DTestSetup.create_ccm_cluster)
+        self.cluster = CassandraDockerCluster(
+            version=self.cassandra_version,
+            workdir=self.test_path,
+            datacenter=self.scylla_cluster.nodelist()[0].data_center if self.scylla_cluster else None,
+        )
         self.request.addfinalizer(self.tear_down)
-        self.cluster = self.dtest_setup.cluster
+        config_options = dict(config_options or {})
         # remove experimental_features parameter that cassandra doesn't support
-        self.cluster._config_options.pop("experimental_features", None)
+        config_options.pop("experimental_features", None)
         self.cluster.set_configuration_options(values=config_options)
         logger.debug(f"Starting a Cassandra cluster of {nodes} node(s) with options {config_options}...")
         self.cluster.populate(nodes)
         self.cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
-        self.test_path = self.dtest_setup.test_path
         return self.cluster.nodelist()[0]
 
     def get_scylla_test_schema_ddl(self, keyspace_names_list=None, table_names_list=None, get_system_keyspaces=None):
@@ -99,10 +101,18 @@ class CassandraCluster:
             for table_name in table_names_list:
                 self.folders_tree[keyspace_name].append(table_name)
 
-    def get_table_folder(self, base_path, node, keyspace_name, table_name, create=False):
+    @staticmethod
+    def get_table_folder(base_path, node, keyspace_name, table_name, create=False):
+        """Return a node's directory for one table.
+
+        `base_path` is the root to build it under; when it is None the node's
+        own work directory is used, which is where both a Scylla node (through
+        the cluster manager) and a Cassandra container keep their data.
+        """
         keyspace_name = keyspace_name.replace('"', "")
         table_name = table_name.replace('"', "")
-        ks_dir = os.path.join(base_path, "test", node.name, "data", keyspace_name)
+        node_dir = node.get_path() if base_path is None else os.path.join(base_path, node.name)
+        ks_dir = os.path.join(node_dir, "data", keyspace_name)
         if create:
             the_folder = os.path.join(ks_dir, f"{table_name}-tmp")
             os.makedirs(the_folder)
@@ -110,13 +120,12 @@ class CassandraCluster:
             the_folder = get_cf_dir(ks_dir, table_name)
         return the_folder
 
-    def copy_scylla_test_data_to_tmp(self, scylla_test_path, keyspace_names_list=None, table_names_list=None, nodes=None):
+    def copy_scylla_test_data_to_tmp(self, keyspace_names_list=None, table_names_list=None, nodes=None):
         self.scylla_cluster.flush()
         self.create_data_folders_tree(keyspace_names_list, table_names_list)
-        self.scylla_data_tmp_folder = os.path.join("/tmp", scylla_test_path.split("/")[-1])
-        os.makedirs(self.scylla_data_tmp_folder)
+        self.scylla_data_tmp_folder = tempfile.mkdtemp(prefix="dtest-scylla-data-")
         logger.debug(f"Create {self.scylla_data_tmp_folder} test folder")
-        self.copy_table_data_all_nodes(from_base_path=scylla_test_path, to_base_path=self.scylla_data_tmp_folder, create_to_folder=True, nodes=nodes)
+        self.copy_table_data_all_nodes(from_base_path=None, to_base_path=self.scylla_data_tmp_folder, create_to_folder=True, nodes=nodes)
 
     def copy_table_data_all_nodes(self, from_base_path, to_base_path, nodes=None, create_to_folder=False):
         logger.debug("Copy Scylla test data files")
@@ -125,11 +134,17 @@ class CassandraCluster:
                 for table in tables:
                     copy_from = self.get_table_folder(base_path=from_base_path, node=node, keyspace_name=ks, table_name=table)
                     copy_to = self.get_table_folder(base_path=to_base_path, node=node, keyspace_name=ks, table_name=table, create=create_to_folder)
-                    logger.debug(f"Copy data files for {ks}.{table} table: from {copy_from} to {copy_to}")
+                    # get_cf_dir() returns None when the table has no directory
+                    # yet, which used to turn the whole migration into a silent
+                    # no-op and only showed up as an empty table at the far end.
+                    assert copy_from, f"No directory for {ks}.{table} on {node.name} under {from_base_path or node.get_path()}"
+                    assert copy_to, f"No directory for {ks}.{table} on {node.name} under {to_base_path or node.get_path()}"
+                    files = sorted(os.listdir(copy_from))
+                    logger.info(f"Copy {len(files)} data files for {ks}.{table} on {node.name}: from {copy_from} to {copy_to}: {files}")
                     copy_files_to(from_dir=copy_from, to_dir=copy_to, files_only=True)
 
     def copy_scylla_data_to_cassandra(self, nodes=None):
-        self.copy_table_data_all_nodes(from_base_path=self.scylla_data_tmp_folder, to_base_path=self.test_path, nodes=nodes)
+        self.copy_table_data_all_nodes(from_base_path=self.scylla_data_tmp_folder, to_base_path=None, nodes=nodes)
 
     def create_test_schema(self, node):
         for ks, cmds in self.scylla_schema_ddl.items():
@@ -154,7 +169,7 @@ class CassandraCluster:
         for node in nodes:
             node.flush()
 
-    def run_migration(self, scylla_cluster, scylla_test_path, keyspace_names_list=None, table_names=None, nodes="ALL"):
+    def run_migration(self, scylla_cluster, keyspace_names_list=None, table_names=None, nodes="ALL"):
         self.scylla_cluster = scylla_cluster
         if not self.scylla_cluster:
             logger.debug("Missed Scylla cluster. Migration cant be run")
@@ -162,11 +177,11 @@ class CassandraCluster:
         self.get_scylla_test_schema_ddl(keyspace_names_list=keyspace_names_list, table_names_list=table_names)
 
         # Node(s) for Scylla cluster
-        nodes_list = self.scylla_cluster.nodes.values() if nodes == "ALL" else [self.scylla_cluster.nodes.values()[0]]
+        nodes_list = list(self.scylla_cluster.nodes.values()) if nodes == "ALL" else [self.scylla_cluster.nodelist()[0]]
 
-        self.copy_scylla_test_data_to_tmp(scylla_test_path=scylla_test_path, keyspace_names_list=keyspace_names_list, table_names_list=table_names, nodes=nodes_list)
+        self.copy_scylla_test_data_to_tmp(keyspace_names_list=keyspace_names_list, table_names_list=table_names, nodes=nodes_list)
 
-        node1 = self.create_and_start_cluster(nodes=len(self.scylla_cluster.nodes.values()), config_options={"hinted_handoff_enabled": False})
+        node1 = self.create_and_start_cluster(nodes=len(nodes_list), config_options={"hinted_handoff_enabled": False})
 
         # Node(s) for Cassandra cluster
         nodes_list = self.cluster.nodelist() if nodes == "ALL" else [node1]
@@ -177,34 +192,38 @@ class CassandraCluster:
         return node1
 
     def tear_down(self):
+        """Stop the Cassandra cluster and clean up after it.
+
+        The containers and their bind-mounted work directory always go, even
+        when the test failed; the node logs are kept with the test's own logs
+        first, so a failure can still be read afterwards.
+        """
         logger.debug("Remove temporary folder with Scylla data")
         if self.scylla_data_tmp_folder and os.path.exists(self.scylla_data_tmp_folder):
-            shutil.rmtree(self.scylla_data_tmp_folder)
+            shutil.rmtree(self.scylla_data_tmp_folder, ignore_errors=True)
 
-        dtest_setup = self.dtest_setup
-        for con in dtest_setup.connections:
-            con.cluster.shutdown()
-        dtest_setup.connections = []
-
-        rep_setup = getattr(self.request.node, "rep_setup", None)
-        rep_call = getattr(self.request.node, "rep_call", None)
-        failed = getattr(rep_setup, "failed", False) or getattr(rep_call, "failed", False)
+        if self.cluster is None:
+            return
         try:
-            if not dtest_setup.allow_log_errors:
-                try:
-                    dtest_setup.check_errors_all_nodes()
-                except AssertionError:
-                    failed = True
-                    raise
+            self.save_logs()
         finally:
-            try:
-                # save the logs for inspection
-                if (failed and self.dtest_config.delete_logs == "passed") or self.dtest_config.delete_logs == "none":
-                    copy_logs(self.request, dtest_setup)
-            except Exception as e:  # noqa: BLE001
-                logger.error("Error saving log: %s", str(e))
-            finally:
-                dtest_setup.cleanup_cluster()
+            self.cluster.remove()
+            self.cluster = None
+
+    def save_logs(self):
+        """Copy each Cassandra node's system.log next to the test's own logs."""
+
+        log_dir = os.environ.get("LOG_SAVED_DIR", "logs")
+        test_name = re.sub(r"[^\w.-]", "_", self.request.node.name)
+        dest = os.path.join(log_dir, f"cassandra-{test_name}")
+        try:
+            os.makedirs(dest, exist_ok=True)
+            for node in self.cluster.nodelist():
+                log = os.path.join(node.get_path(), "logs", "system.log")
+                if os.path.exists(log):
+                    shutil.copyfile(log, os.path.join(dest, f"{node.name}.log"))
+        except OSError as e:
+            logger.error("Error saving Cassandra logs: %s", e)
 
 
 class SchemaDDL:
@@ -298,23 +317,3 @@ class SchemaDDL:
             if l.isupper():
                 return f'"{string}"'
         return string
-
-
-@lru_cache(maxsize=2)
-def java_version_exist(java_version: str | int) -> bool:
-    """
-    Checks if the specified Java version exists in the known JVM names and is available in the system.
-
-    :param java_version: The Java version to check for existence. Supported versions are '8' and '11'.
-    :type java_version: str
-    :raises AssertionError: If the specified Java version is not supported.
-    :return: True if the specified Java version is found in the system, False otherwise.
-    :rtype: bool
-    """
-    java_version = str(java_version)
-    known_jvm_names = {"8": ["1.8", "8"], "11": ["11"]}
-    jvm_root_path = "/usr/lib/jvm/"
-    assert java_version in known_jvm_names, f"java_version={java_version} not supported in:\n{known_jvm_names}"
-
-    java_home_path = get_java_home_path(pathlib.Path(jvm_root_path), known_jvm_names[java_version])
-    return java_home_path is not None
