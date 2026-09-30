@@ -2735,7 +2735,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         co_await coroutine::parallel_for_each(replicas, [this, gid] (locator::tablet_replica r) -> future<> {
                             auto dst = raft::server_id(r.host.uuid());
                             if (!is_excluded(dst)) {
-                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, dst, gid);
+                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, _as, dst, gid);
                                 rtlogger.debug("Tablet {} restored on {}", gid, r.host);
                             }
                         });
