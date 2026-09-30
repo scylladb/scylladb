@@ -18,6 +18,10 @@ on:
       - 'docs/_ext/scylladb_metrics.py'
       - '.github/workflows/docs-validate-metrics.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-metrics:
     runs-on: ubuntu-latest

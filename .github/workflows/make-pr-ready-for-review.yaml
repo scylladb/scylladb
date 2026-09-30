@@ -9,6 +9,10 @@ env:
   DEFAULT_BRANCH: 'master'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   mark-ready:
     if: github.event.label.name == 'conflicts'
