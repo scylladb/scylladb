@@ -11,7 +11,7 @@ import logging
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id
+from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, quiesce_and_disable_tablet_balancing
 
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,17 @@ async def test_raft_snapshot_request(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'raft=trace',
         ]
+    # The assertions below require the group 0 log to stand still: the tablets of
+    # the auto-RF system keyspaces are otherwise migrated in the background, and
+    # every migration commits group 0 entries, so a snapshot is immediately
+    # followed by new log entries.
     servers = await manager.servers_add(3, cmdline=cmdline)
     cql = manager.get_cql()
 
     s1 = servers[0]
     h1 = (await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60))[0]
+
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     # Verify that snapshotting updates the snapshot ID and truncates the log.
     log_size = await get_raft_log_size(cql, h1)
