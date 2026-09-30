@@ -1182,7 +1182,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 updates.add_large(std::move(m));
                             }
 
-                            updates.add(tbuilder_with_request_drop().build());
+                            auto builder = tbuilder_with_request_drop();
+                            if (_feature_service.auto_replication_factor && !get_keyspaces_that_require_auto_rf_change(guard).empty()) {
+                                builder.set_needs_auto_rf_change(true);
+                            }
+                            updates.add(builder.build());
                             updates.add(topology_request_tracking_mutation_builder(req_id)
                                                         .done()
                                                         .build());
@@ -1707,9 +1711,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_return std::move(guard);
         }
 
+        auto clear_needs_auto_rf_change = [&] -> future<> {
+            const auto ts = guard.write_timestamp();
+            topology_mutation_builder builder(ts);
+            builder.del_needs_auto_rf_change();
+            co_await update_topology_state(std::move(guard), {builder.build()}, "auto-rf: clear needs_auto_rf_change flag");
+        };
+
         auto auto_rf_keyspaces = get_keyspaces_that_require_auto_rf_change(guard);
         if (auto_rf_keyspaces.empty()) {
             rtlogger.debug("No keyspaces require auto RF change");
+            if (_topo_sm._topology.needs_auto_rf_change) {
+                co_await clear_needs_auto_rf_change();
+                co_return std::nullopt;
+            }
             co_return std::move(guard);
         }
 
@@ -1807,6 +1822,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
 
         if (!candidate) {
+            if (_topo_sm._topology.needs_auto_rf_change) {
+                co_await clear_needs_auto_rf_change();
+                co_return std::nullopt;
+            }
             co_return std::move(guard);
         }
 
@@ -1826,7 +1845,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                  .set("request_type", global_topology_request::keyspace_rf_change)
                  .set_new_keyspace_rf_change_data(candidate->ks_name, flattened);
 
-        builder.queue_global_topology_request_id(global_request_id);
+        builder.queue_global_topology_request_id(global_request_id)
+               .set_needs_auto_rf_change(true);
 
         utils::chunked_vector<canonical_mutation> muts;
         muts.emplace_back(builder.build());
@@ -2128,9 +2148,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
 
-        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
-                .finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id)
-                .build());
+        topology_mutation_builder builder{guard.write_timestamp()};
+        builder.finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id);
+        if (_feature_service.auto_replication_factor && !get_keyspaces_that_require_auto_rf_change(guard).empty()) {
+            builder.set_needs_auto_rf_change(true);
+        }
+        out.emplace_back(builder.build());
 
         out.emplace_back(topology_request_tracking_mutation_builder(completion.request_id)
                 .done(error)
@@ -3532,6 +3555,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return std::make_pair(true, std::move(guard));
         }
 
+        if (_topo_sm._topology.needs_auto_rf_change) {
+            return std::make_pair(true, std::move(guard));
+        }
+
         return std::make_pair(false, std::move(guard));
     }
 
@@ -3665,12 +3692,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 guard = std::move(*guard_opt);
             }
 
-            // Note: This source of work is not included in should_preempt_balancing().
-            // That's because auto-RF changes are not independent sources of work;
-            // they are triggered by other topology changes which already preempt
-            // load balancing. Additionally, auto-RF changes have higher
-            // priority than tablet load balancing, so we cannot re-enter load
-            // balancing while auto RF has work to do.
+            // should_preempt_balancing() checks needs_auto_rf_change, so a pending
+            // auto-RF change stops tablet load balancing from being re-entered:
+            // auto-RF has the higher priority of the two.
             if (auto guard_opt = co_await maybe_schedule_auto_rf_change(std::move(guard)); !guard_opt) {
                 // The guard is consumed, it means we scheduled an auto-RF change request.
                 co_return true;

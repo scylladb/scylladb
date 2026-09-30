@@ -249,6 +249,11 @@ struct topology {
     // hence the need for this field.
     std::unordered_set<raft::server_id> excluded_tablet_nodes;
 
+    // needs_auto_rf_change is set to true, when user keyspace RF is altered
+    // and there are auto-RF-keyspaces that did not reach its target RF.
+    // When true, tablet migrations preempt in order to schedule auto RF change.
+    bool needs_auto_rf_change = false;
+
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one

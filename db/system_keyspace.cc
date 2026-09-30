@@ -303,6 +303,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("paused_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .with_column("ongoing_rf_changes", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .with_column("ongoing_restore_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("needs_auto_rf_change", boolean_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -3400,6 +3401,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         ret.excluded_tablet_nodes = ret.ignored_nodes;
         for (const auto& [id, _]: ret.left_nodes_rs) {
             ret.excluded_tablet_nodes.insert(id);
+        }
+
+        if (some_row.has("needs_auto_rf_change")) {
+            ret.needs_auto_rf_change = some_row.get_as<bool>("needs_auto_rf_change");
+        } else {
+            ret.needs_auto_rf_change = false;
         }
     }
 
