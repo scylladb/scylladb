@@ -318,6 +318,8 @@ public:
 
     const abort_source& get_abort_source() const noexcept { return _abort; }
 
+    scheduling_group maintenance_sg() const noexcept { return _maintenance_sg; }
+
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
 
