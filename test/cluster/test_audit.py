@@ -389,6 +389,28 @@ class AuditBackendTable(AuditBackend):
             new_audit_settings[key] = modifiers[key]
         return new_audit_settings
 
+    @classmethod
+    def _execute_audit_log_query(cls, session, consistency_level, timeout: float = 120):
+        """Read audit.audit_log, tolerating the transient unavailability caused by auto-RF.
+
+        The audit keyspace is an auto-RF keyspace: the topology coordinator
+        raises its replication factor one rack at a time while the cluster is
+        being formed. A read at QUORUM issued while such an RF change is in
+        flight can be rejected with Unavailable, because the consistency level
+        already accounts for the new replica while that replica cannot serve
+        reads yet. The window is short, so just retry.
+        """
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return session.execute(SimpleStatement(cls.AUDIT_LOG_QUERY,
+                                                       consistency_level=consistency_level))
+            except Unavailable as exc:
+                if time.time() >= deadline:
+                    raise
+                logger.info(f"Retrying the audit log query after: {exc}")
+                time.sleep(0.5)
+
     @override
     def get_audit_log_dict(self, session, consistency_level):
         """_summary_
@@ -398,7 +420,7 @@ class AuditBackendTable(AuditBackend):
         # We would like to have named tuples as results so we can verify the
         # order in which the fields are returned as the tests make assumptions about this.
         assert session.row_factory == named_tuple_factory
-        res = session.execute(SimpleStatement(self.AUDIT_LOG_QUERY, consistency_level=consistency_level))
+        res = self._execute_audit_log_query(session, consistency_level)
         res_list = list(res)
         res_list.sort(key=lambda row: (row.event_time.time, row.node))
         return { self.audit_mode(): res_list }
