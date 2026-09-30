@@ -33,6 +33,7 @@
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -93,6 +94,7 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -105,7 +107,7 @@ public:
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
@@ -469,6 +471,12 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
     co_return desc;
 }
 
+future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, bool, std::string_view) const {
+    // A backup sstable is never on the filesystem of the restored table, so there is
+    // nothing to clone. For a table on filesystem, restore downloads the components.
+    on_internal_error(sstlog, fmt::format("Cannot clone {} into filesystem storage {}", src.get_filename(), _dir.path().native()));
+}
+
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     co_await touch_directory(new_dir);
     sstring old_dir = _dir.native();
@@ -641,7 +649,7 @@ bool filesystem_storage::operator==(const storage& other) const noexcept {
     return other_fs && sstable_directory::compare_sstable_storage_prefix(_base_dir.native(), other_fs->_base_dir.native());
 }
 
-future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
@@ -688,6 +696,9 @@ protected:
     object_name make_ref_object_name(sstable_id sid, generation_type gen, locator::host_id host_id) const {
         return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
     }
+    object_name make_snapshot_ref_object_name(sstable_id sid, generation_type gen, std::string_view tag) const {
+        return object_name(_bucket, prefix(), sid, fmt::format("refs/snapshot-{}/{}", tag, gen));
+    }
 
     bool uses_foreign_layout() const noexcept {
         return _layout == data_dictionary::storage_options::object_storage_layout::foreign;
@@ -709,15 +720,16 @@ public:
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _layout(layout)
-        , _prefix(loc ? std::move(*loc) : "sstables")
+        , _prefix(loc ? std::move(*loc) : sstring(object_storage_default_prefix))
         , _as(as)
     {
-        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "live");
+        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "unified");
     }
 
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -731,7 +743,7 @@ public:
     future<> destroy(const sstable& sst) override;
     std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     bool operator==(const storage&) const noexcept override;
-    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
+    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
@@ -1142,7 +1154,7 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _prefix == other_object->_prefix;
 }
 
-future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
     if (!desc.sid) {
         on_internal_error(sstlog, fmt::format("Cannot remove SSTable on object storage with generation={} from registry: has no sstable_id", desc.generation));
     }
@@ -1237,6 +1249,85 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     }
 
     sstlog.debug("clone sst: {} generation={}: done", sst.get_filename(), gen);
+    co_return desc;
+}
+
+future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const {
+    auto* src_storage = dynamic_cast<const object_storage_base*>(&src.get_storage());
+    if (!src_storage) {
+        on_internal_error(sstlog, fmt::format("Cannot clone {} into {} storage: the source is not on object storage", src.get_filename(), _type));
+    }
+    // An object storage can copy an object only inside one endpoint. Each endpoint
+    // has its own client, so another client means another endpoint.
+    if (src_storage->_client.get() != _client.get()) {
+        co_await coroutine::return_exception(std::invalid_argument(fmt::format("Cannot clone {} into {} storage: the source uses another endpoint", src.get_filename(), _type)));
+    }
+    // A copy can take a long time, so the copy must be abortable. The storage options
+    // of a table have no abort source. So use the abort source which `src` was opened
+    // with, which is the abort source of the restore.
+    auto* as = src_storage->abort_source();
+
+    auto src_sid = src_storage->get_sstable_identifier(src);
+    // Share the components only if the TOC of `src` already has the object name which
+    // this storage uses for `src_sid`, in the same bucket. This is true only for a
+    // backup in the unified layout, in the location of this table.
+    const auto& toc = sstable_version_constants::TOC_SUFFIX;
+    auto share_components = may_use_reference_sharing
+            && src_storage->_bucket == _bucket
+            && src_storage->make_object_name(src, toc, src.generation()).str()
+                    == object_name(_bucket, prefix(), src_sid, toc).str();
+    // A shared clone keeps `src_sid`, so the clone uses the objects which are already
+    // in place. A copied clone needs a new sstable_id, because the sstable_id is the
+    // prefix of the object names. If the copy kept `src_sid`, two replicas which
+    // restore the same backup sstable would write the same objects. The copy would
+    // also overwrite the objects of the table which the backup was taken from, if
+    // that table keeps its sstables in the same location.
+    auto sid = share_components ? src_sid : sstable_id(gen.as_uuid());
+    sstlog.debug("Cloning {} sstable_id={} generation={} into {}/{}: new_generation={} new_sstable_id={} share_components={}",
+            src.get_filename(), src_sid, src.generation(), _bucket, prefix(), gen, sid, share_components);
+
+    entry_descriptor desc(gen, sid, src.get_version(), src.get_format(), component_type::TOC);
+    // `src` is opened in the upload state. The clone belongs to the restored table,
+    // so the clone must be in the normal state, or the next boot does not find it.
+    desc.state = sstable_state::normal;
+    // `src` and this storage use the same sstables manager, because the node which
+    // runs the restore opens both.
+    auto node_owner = src.manager().get_local_host_id();
+    co_await src.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, *desc.state, desc);
+    co_await create_reference(sid, gen, node_owner);
+
+    if (share_components) {
+        // The snapshot can be dropped before this node reference is created. Then the
+        // drop can delete the components, and the clone would point to missing objects.
+        // So check that the snapshot still has its reference. If not, undo the clone:
+        // remove the node reference with remove_by_registry_entry(), which deletes the
+        // components when no reference is left, remove the registry entry, and fail.
+        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), snapshot_tag), as)) {
+            co_await remove_by_registry_entry(desc, node_owner);
+            co_await src.manager().sstables_registry().delete_entry(owner(), node_owner, gen);
+            co_await coroutine::return_exception(std::runtime_error(fmt::format("Cannot restore {}: snapshot {} does not hold the components of sstable_id={}",
+                    src.get_filename(), snapshot_tag, sid)));
+        }
+    } else {
+        utils::get_local_injector().inject("fail_clone_from_before_copy", [] { throw std::runtime_error("Failing sstable clone"); });
+        co_await coroutine::parallel_for_each(src.all_components(), [this, &src, src_storage, sid, as] (const std::pair<component_type, sstring>& p) -> future<> {
+            auto dst = object_name(_bucket, prefix(), sid, p.second);
+            if (p.first == component_type::Scylla) {
+                // Scylla.db stores the sstable_id. A copy of Scylla.db would keep `src_sid`, and
+                // loading the clone would fail, because `sid` is different. So write Scylla.db
+                // again with `sid`.
+                auto scylla_metadata = co_await src.copy_scylla_metadata();
+                scylla_metadata->set_sstable_identifier(sid);
+                auto scylla_metadata_bufs = co_await src.serialize_scylla_metadata(std::move(*scylla_metadata));
+                co_await _client->put_object(std::move(dst), std::move(*scylla_metadata_bufs), make_sstable_object_attributes(p.first, src), as);
+                co_return;
+            }
+            co_await _client->copy_object(src_storage->make_object_name(src, p.second, src.generation()),
+                    std::move(dst), make_sstable_object_attributes(p.first, src), as);
+        });
+    }
+
+    sstlog.debug("clone_from sst: {} new_generation={}: done", src.get_filename(), gen);
     co_return desc;
 }
 
