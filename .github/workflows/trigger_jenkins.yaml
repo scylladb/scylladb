@@ -140,6 +140,12 @@ jobs:
             STATE=$(jq -r '.state' <<< "$PR_JSON")
             [[ "$STATE" == "open" ]] || continue
 
+            if jq -e '.labels | any(.name == "status/merge_candidate")' <<< "$PR_JSON" >/dev/null; then
+              if ! gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/status%2Fmerge_candidate" >/dev/null; then
+                echo "WARNING: failed to remove status/merge_candidate from PR #$PR_NUMBER" >&2
+              fi
+            fi
+
             COMMENTS=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq ".[] | select(.user.login == \"$BOT_LOGIN\") | .body")
 
             if grep -qF "$MARKER" <<< "$COMMENTS"; then
