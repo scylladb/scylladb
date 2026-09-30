@@ -782,7 +782,16 @@ async def test_lwts_for_special_tables(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+<<<<<<< HEAD
 async def test_lwt_shutdown(manager: ManagerClient):
+||||||| parent of a16bfb4072 (test: tablets_lwt: run test_lwt_shutdown on object storage)
+@pytest.mark.skip_storage('s3', 'gs',
+                          reason='a node aborts during shutdown (exit code -6) on object storage, '
+                                 'intermittently on either backend; deeper investigation is needed')
+async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+=======
+async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+>>>>>>> a16bfb4072 (test: tablets_lwt: run test_lwt_shutdown on object storage)
     """
     This is a regression test for #26355:
     * Start a cluster with two nodes (s0, s1) and a tablet-based table.
