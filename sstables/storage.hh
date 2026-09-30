@@ -122,6 +122,17 @@ public:
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
+    // Clones the backup sstable `src` into this storage. clone_from() creates the
+    // registry entry and the node reference, and puts the components under the object
+    // names of this storage. clone() works inside one storage. clone_from() takes the
+    // object names of `src` from the storage of `src`, so `src` can be in another
+    // bucket and use another layout.
+    // `may_use_reference_sharing` tells only if the cluster allows reference sharing.
+    // The implementation decides if the components of `src` can be shared.
+    // `snapshot_tag` is the tag of the snapshot which holds `src`.
+    // The clone is not sealed, so the next boot removes the clone of an interrupted
+    // restore. The caller seals the clone.
+    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
