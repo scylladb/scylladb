@@ -25,6 +25,7 @@ import pytest
 from cassandra.cluster import ConsistencyLevel              # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest
 
+from test.cluster.util import wait_for_auto_rf_settled
 from test.pylib.rest_client import inject_error, read_barrier
 from test.pylib.util import wait_for
 
@@ -96,6 +97,9 @@ async def setup(manager, racks=BOTH_RACKS):
     await cql.run_async("CREATE KEYSPACE ks WITH replication = "
                         f"{{'class': 'NetworkTopologyStrategy', 'dc1': {racks}}} "
                         "AND tablets = {'initial': 8}")
+    # ks makes its racks eligible, so auto-RF extends audit and system_traces. Those ALTERs
+    # are schema changes too, and the pause would catch one of them instead of the test's.
+    await wait_for_auto_rf_settled(manager, time.time() + 120, server=coordinator)
     return cql, coordinator, paused
 
 

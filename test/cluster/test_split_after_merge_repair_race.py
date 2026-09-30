@@ -74,9 +74,9 @@ logger = logging.getLogger(__name__)
 ABORT_MARKER = "was already unlinked before being added to table"
 
 
-async def _enable(manager, servers, name, one_shot=False):
+async def _enable(manager, servers, name, one_shot=False, parameters={}):
     await asyncio.gather(*[
-        manager.api.enable_injection(s.ip_addr, name, one_shot=one_shot)
+        manager.api.enable_injection(s.ip_addr, name, one_shot=one_shot, parameters=parameters)
         for s in servers
     ])
 
@@ -189,10 +189,14 @@ async def test_split_bypass_race_with_repair_after_merge(manager: ScyllaClusterM
             # it to finalize so the post-merge load-balancer emits the
             # split decision naturally.
             logger.info("Triggering tablet merge (force decrease)")
-            await _enable(manager, servers, "tablet_force_tablet_count_decrease")
+            # Merge only the test table and wait for its own merge: unscoped, the
+            # system keyspaces' tables merge too, and theirs could satisfy the wait.
+            table_id = await manager.get_table_id(ks, 'test')
+            await _enable(manager, servers, "tablet_force_tablet_count_decrease",
+                          parameters={'for_table_id': str(table_id)})
             try:
                 await _wait_for_pattern_any(
-                    logs, marks, "Detected tablet merge for table", timeout=120)
+                    logs, marks, f"Detected tablet merge for table {ks}.test", timeout=120)
                 logger.info("Merge detected")
             except asyncio.TimeoutError:
                 skip_env("Could not trigger merge in this run")
