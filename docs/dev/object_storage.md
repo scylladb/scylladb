@@ -390,6 +390,25 @@ Object-storage SSTable lifecycle:
 
 The `status` and `state` fields in `system.sstables` describe the local SSTable entry lifecycle. They do not describe a global lifecycle state for the object-storage component set identified by `sstable_id`.
 
+### Restore into object-storage tables
+
+Only the tablet-aware restore, `/storage_service/tablets/restore`, can restore into a table on object storage. The legacy restore, `/storage_service/restore`, rejects such a table.
+
+The restore does not download the components to the node. The components stay in the object storage. For each backup SSTable, the restore does one of two things:
+
+- **Share.** If the backup is in the unified layout, in the location of the table, the components are already where the table needs them. The restore copies nothing. The restore creates only the `system.sstables` entry and the node reference `refs/nodes/{host_id}/{generation}`. Sharing needs the `SSTABLE_REFERENCE_SHARING` cluster feature.
+- **Copy.** In all other cases, the object storage copies the components into the location of the table. The copy gets a new `sstable_id`, because the `sstable_id` is the prefix of the object names, and two replicas which restore the same backup SSTable must not write the same objects. `Scylla.db` contains the `sstable_id`, so the restore writes `Scylla.db` again instead of copying it.
+
+An object storage can copy an object only inside one endpoint. So the backup and the table must use the same endpoint. The restore rejects a backup location on another endpoint before it starts.
+
+The restore recognizes a backup in the unified layout when the backup has the same endpoint, bucket and prefix as the table. The object names of such a backup do not contain the generation. The restore takes the `sstable_id` from `system_distributed.snapshot_sstables`, and the generation, version and format from the `toc_name` of the manifest.
+
+The snapshot can be dropped while the restore runs. So after the restore creates the node reference of a shared SSTable, the restore checks that the snapshot still has its reference `refs/snapshot-{tag}/{generation}`. If not, the restore removes the node reference and the entry, and fails. The components are deleted if no other reference is left.
+
+No backup writes the unified layout yet. `/storage_service/backup` and the cluster backup keep the generation in the component names. So today every restore copies.
+
+The restore creates each entry with the `creating` status, before it writes any object. The entry gets the `sealed` status when the restored SSTable is attached to the table. So after a failed or aborted restore, the entries which are not `sealed` are left. Boot time garbage collection removes them and their objects. For a shared SSTable, garbage collection removes only the node reference. The components stay while another reference exists.
+
 ## Downloading, deleting, uploading SSTables
 
 To manually manage sstables on S3, AWS CLI commands can be used, but first it's mandatory to have awscli  
