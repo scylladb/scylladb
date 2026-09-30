@@ -2229,8 +2229,7 @@ def find_active_sstables():
     """ Yields sstable* once for each active sstable reader. """
     sstable_ptr_type = gdb.lookup_type('sstables::sstable').pointer()
     for reader in find_single_sstable_readers():
-        sstable_ptr = reader['_sst']['_p']
-        yield sstable_ptr.reinterpret_cast(sstable_ptr_type)
+        yield shared_sstable_get(reader['_sst']).reinterpret_cast(sstable_ptr_type)
 
 
 class schema_ptr:
@@ -4782,6 +4781,17 @@ class scylla_cache(gdb.Command):
             gdb.write("\n")
 
 
+def shared_sstable_get(ref):
+    """Returns an sstables::sstable* from a sstables::shared_sstable.
+
+    shared_sstable is a boost::intrusive_ptr<sstable>; older versions used seastar::lw_shared_ptr<sstable>.
+    """
+    typ = ref.type.strip_typedefs()
+    if str(typ).startswith('boost::intrusive_ptr'):
+        return ref['px']
+    return seastar_lw_shared_ptr(ref).get()
+
+
 def sstables_in_set(sstable_set, table_name):
     """Yields pointers to the sstables of a sstables::sstable_set value."""
     impl = downcast_vptr(std_unique_ptr(sstable_set['_impl']).get()).dereference()
@@ -4791,13 +4801,13 @@ def sstables_in_set(sstable_set, table_name):
             yield from sstables_in_set(seastar_lw_shared_ptr(s).get().dereference(), table_name)
     elif impl_type == 'sstables::time_series_sstable_set':
         for _, sst in std_map(seastar_lw_shared_ptr(impl['_sstables']).get().dereference()):
-            yield seastar_lw_shared_ptr(sst).get()
+            yield shared_sstable_get(sst)
     elif impl_type == 'replica::tablet_sstable_set':
         for _, tablet_set in absl_container(impl['_sstable_sets']):
             yield from sstables_in_set(seastar_lw_shared_ptr(tablet_set).get().dereference(), table_name)
     elif impl_type == 'sstables::partitioned_sstable_set':
         for sst in std_unordered_set(seastar_lw_shared_ptr(impl['_all']).get().dereference()):
-            yield seastar_lw_shared_ptr(sst).get()
+            yield shared_sstable_get(sst)
     else:
         gdb.write('warning: unsupported sstable_set implementation %s, skipping table %s\n' % (impl_type, table_name))
 
@@ -5949,8 +5959,8 @@ class scylla_sstable_summary(gdb.Command):
         typ = arg.type.strip_typedefs()
         if typ.code == gdb.TYPE_CODE_PTR:
             sst = arg.dereference()
-        elif typ.name.startswith("seastar::lw_shared_ptr"):
-            sst = seastar_lw_shared_ptr(arg).get().dereference()
+        elif typ.name.startswith("seastar::lw_shared_ptr") or typ.name.startswith("boost::intrusive_ptr"):
+            sst = shared_sstable_get(arg).dereference()
         else:
             sst = arg
         ms_version = int(gdb.parse_and_eval('sstables::sstable_version_types::ms'))
@@ -6027,8 +6037,8 @@ class scylla_sstable_index_cache(gdb.Command):
         if typ.name == "sstables::partition_index_cache":
             cache = arg
         else:
-            if typ.name.startswith("seastar::lw_shared_ptr"):
-                sst = seastar_lw_shared_ptr(arg).get()
+            if typ.name.startswith("seastar::lw_shared_ptr") or typ.name.startswith("boost::intrusive_ptr"):
+                sst = shared_sstable_get(arg)
             else:
                 sst = arg
             cache = std_unique_ptr(sst['_index_cache']).get().dereference()
