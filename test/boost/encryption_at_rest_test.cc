@@ -7,6 +7,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <stdint.h>
+#include <fstream>
 #include <random>
 #include <regex>
 
@@ -24,6 +25,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <fmt/ranges.h>
 
@@ -53,6 +55,7 @@
 #include "compaction/compaction_manager.hh"
 #include "tasks/types.hh"
 #include "cql3/untyped_result_set.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
 #include "utils/http.hh"
 #include "utils/azure/identity/exceptions.hh"
@@ -518,6 +521,114 @@ SEASTAR_TEST_CASE(test_local_file_provider) {
     tmpdir tmp;
     auto keyfile = tmp.path() / "secret_key";
     co_await test_provider(fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string()), tmp);
+}
+
+// The encryption options of a commitlog segment are stored in a hidden file next to it.
+static fs::path encryption_options_file(const fs::path& segment) {
+    return segment.parent_path() / ("." + segment.filename().native());
+}
+
+static std::string read_whole_file(const fs::path& path) {
+    std::ifstream f(path);
+    return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+// Writes a commitlog segment with a single entry to `dir` and returns its path.
+static fs::path write_commitlog_segment(const fs::path& dir, const db::extensions& exts) {
+    fs::create_directories(dir);
+
+    db::commitlog::config cfg;
+    cfg.commit_log_location = dir.native();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.max_reserve_segments = 0;
+    cfg.extensions = &exts;
+    cfg.warn_about_segments_left_on_disk_after_shutdown = false;
+    auto cl = db::commitlog::create_commitlog(std::move(cfg)).get();
+
+    const sstring data = "data";
+    // Release the handle without marking the data as flushed, so that the segment is kept on disk after shutdown.
+    cl.add_mutation(table_id(utils::UUID_gen::get_time_UUID()), data.size(), db::commitlog::force_sync::yes, [&data] (db::commitlog::output& out) {
+        out.write(data.data(), data.size());
+    }).get().release();
+    cl.shutdown().get();
+    cl.release().get();
+
+    std::vector<fs::path> segments;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.path().filename().native().starts_with(db::commitlog::descriptor::FILENAME_PREFIX)) {
+            segments.push_back(entry.path());
+        }
+    }
+    BOOST_REQUIRE_EQUAL(segments.size(), 1);
+    return segments.front();
+}
+
+static size_t count_commitlog_entries(const fs::path& segment, const db::extensions* exts) {
+    size_t count = 0;
+    db::commitlog::read_log_file(segment.native(), db::commitlog::descriptor::FILENAME_PREFIX,
+            [&count] (db::commitlog::buffer_and_replay_position) {
+        ++count;
+        return make_ready_future<>();
+    }, 0, exts).get();
+    return count;
+}
+
+static void check_rename_encrypted_commitlog_segment(const tmpdir& tmp, const db::extensions& exts,
+        bool stale_options_file_in_destination) {
+    BOOST_REQUIRE(!exts.commitlog_file_extensions().empty());
+
+    const fs::path segment = write_commitlog_segment(tmp.path() / "src", exts);
+    const std::string options = read_whole_file(encryption_options_file(segment));
+    BOOST_REQUIRE(!options.empty());
+    // Sanity check: the segment can't be read without its encryption options.
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(segment, nullptr), size_t(0));
+
+    const fs::path destination = tmp.path() / "dst" / segment.filename();
+    fs::create_directories(destination.parent_path());
+    if (stale_options_file_in_destination) {
+        std::ofstream(encryption_options_file(destination)) << "stale";
+    }
+
+    db::commitlog::rename_segment(segment.native(), destination.native(), &exts).get();
+
+    BOOST_REQUIRE(!fs::exists(segment));
+    BOOST_REQUIRE(!fs::exists(encryption_options_file(segment)));
+    BOOST_REQUIRE(fs::exists(destination));
+    BOOST_REQUIRE(fs::exists(encryption_options_file(destination)));
+    BOOST_REQUIRE_EQUAL(read_whole_file(encryption_options_file(destination)), options);
+    BOOST_REQUIRE_EQUAL(count_commitlog_entries(destination, &exts), size_t(1));
+}
+
+// An encrypted commitlog segment moved with commitlog::rename_segment() must stay readable,
+// i.e. its encryption options file must follow it. A stale options file in the destination
+// (e.g. left by an interrupted rename) must be replaced.
+static void do_test_rename_encrypted_commitlog_segment(bool stale_options_file_in_destination) {
+    tmpdir tmp;
+    test_provider_args args{ .tmp = tmp };
+    auto [cfg, ext] = make_commitlog_config(args, {
+        { "key_provider", "LocalFileSystemKeyProviderFactory" },
+        { "secret_key_file", (tmp.path() / "secret_key").string() },
+    });
+    auto notify_set = configurable::init_all(*cfg, *ext).get();
+
+    std::exception_ptr ex;
+    try {
+        check_rename_encrypted_commitlog_segment(tmp, *ext, stale_options_file_in_destination);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    notify_set.notify_all(configurable::system_state::stopped).get();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rename_encrypted_commitlog_segment) {
+    do_test_rename_encrypted_commitlog_segment(false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rename_encrypted_commitlog_segment_replaces_stale_options_file) {
+    do_test_rename_encrypted_commitlog_segment(true);
 }
 
 static std::string local_key_options(const fs::path& keyfile) {
