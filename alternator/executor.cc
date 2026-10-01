@@ -52,6 +52,9 @@
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/object_storage_client.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
@@ -294,6 +297,7 @@ public:
 };
 
 executor::executor(gms::gossiper& gossiper,
+         cql3::query_processor& qp,
          service::storage_proxy& proxy,
          service::storage_service& ss,
          service::migration_manager& mm,
@@ -304,6 +308,7 @@ executor::executor(gms::gossiper& gossiper,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _qp(qp),
       _ss(ss),
       _proxy(proxy),
       _mm(mm),
@@ -5530,6 +5535,22 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     return props.as_ks_metadata(sstring(keyspace_name), *sp.get_token_metadata_ptr(), feat, sp.local_db().get_config());
 }
 
+seastar::shared_ptr<s3::client> executor::get_s3_client(sstring bucket_name) {
+    // The bucket is not tied to an endpoint in the configuration, so we require
+    // exactly one S3 endpoint in object_storage_endpoints and use it for all buckets.
+    auto& sstm = _proxy.local_db().get_user_sstables_manager();
+    auto endpoints = sstm.endpoints(db::object_storage_endpoint_param::s3_type);
+    if (endpoints.size() != 1) {
+        throw std::runtime_error(fmt::format("S3 client not configured for bucket '{}': expected exactly one S3 endpoint in object_storage_endpoints, found {}",
+                bucket_name, endpoints.size()));
+    }
+    auto client = sstables::get_s3_client(sstm.get_endpoint_client(endpoints.front()));
+    if (!client) {
+        on_internal_error(elogger, fmt::format("object storage endpoint {} is not an S3 endpoint", endpoints.front()));
+    }
+    return client;
+}
+
 future<> executor::start() {
     // Currently, nothing to do on initialization. We delay the keyspace
     // creation (create_keyspace()) until a table is actually created.
@@ -5537,6 +5558,8 @@ future<> executor::start() {
 }
 
 future<> executor::stop() {
+    _export_abort_source.request_abort();
+    co_await _export_gate.close();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

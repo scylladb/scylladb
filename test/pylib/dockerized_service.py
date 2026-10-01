@@ -10,6 +10,7 @@ import asyncio
 import pathlib
 import re
 import subprocess
+import threading
 import uuid
 from typing import Callable
 
@@ -177,7 +178,26 @@ class DockerizedServer:
                 if f:
                     loop.call_soon_threadsafe(f.set_exception, e)
 
-        self.echo_thread = loop.run_in_executor(None, process_io)
+        # Read the container's output on a daemon thread rather than on an
+        # executor worker: the interpreter joins executor workers at exit before
+        # running atexit handlers, so a caller that stops the container from an
+        # atexit handler would deadlock with the reader blocked in readline().
+        # stop() still waits for the thread to finish through echo_done.
+        echo_done = loop.create_future()
+
+        def run_process_io():
+            try:
+                process_io()
+            finally:
+                try:
+                    loop.call_soon_threadsafe(echo_done.set_result, None)
+                except RuntimeError:
+                    # The loop was closed without stop() being called, so
+                    # nobody is waiting for this thread.
+                    pass
+
+        threading.Thread(target=run_process_io, name=f'{name}-log', daemon=True).start()
+        self.echo_thread = echo_done
         ok = await ready_fut
         if not ok:
             # is_failure_line matched (e.g. "address already in use"); this is a

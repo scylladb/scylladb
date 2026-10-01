@@ -25,6 +25,7 @@
 
 namespace cql3 {
 class query_processor;
+class untyped_result_set;
 }
 
 namespace cdc {

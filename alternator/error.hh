@@ -100,6 +100,12 @@ public:
     static api_error payload_too_large(std::string msg) {
         return api_error("PayloadTooLarge", std::move(msg), status_type::payload_too_large);
     }
+    static api_error export_not_found(std::string msg) {
+        return api_error("ExportNotFoundException", std::move(msg));
+    }
+    static api_error export_conflict(std::string msg) {
+        return api_error("ExportConflictException", std::move(msg));
+    }
 
     // Provide the "std::exception" interface, to make it easier to print this
     // exception in log messages. Note that this function is *not* used to

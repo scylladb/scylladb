@@ -15,6 +15,7 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "alternator/serialization.hh"
+#include "alternator/system_distributed_helper.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "db/consistency_level.hh"
@@ -546,8 +547,6 @@ public:
     }
 };
 
-// TODO: uncomment this function after #31703 is merged
-#if 0
 // S3 reports the etag as an RFC 9110 entity-tag, i.e. wrapped in double quotes. The manifest
 // files report it the way DynamoDB does - as a bare string - so drop the quotes.
 // The returned view points into the caller's buffer, which has to outlive it.
@@ -558,7 +557,6 @@ static std::string_view strip_etag_quotes(std::string_view etag) {
     }
     return etag;
 }
-#endif
 
 /// Writes data to an S3 object. The data is passed to `s3::client` object, which will upload it to S3 asynchronously.
 /// The upload is completed when `flush_and_close()` is called.
@@ -578,12 +576,7 @@ public:
     s3_storage_sink(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
         : _client(std::move(client))
         , _object_name(std::move(object_name))
-#if 0
-        // revert this once #31703 is merged
         , _upload_stream(std::make_unique<output_stream<char>>(_client->make_upload_jumbo_sink(_object_name, s3::object_metadata{}, std::nullopt, as, _etag)))
-#else
-        , _upload_stream(std::make_unique<output_stream<char>>(_client->make_upload_jumbo_sink(_object_name, s3::object_metadata{}, std::nullopt, as)))
-#endif
         , _as(as)
     {
     }
@@ -622,11 +615,7 @@ public:
         auto info = co_await _client->get_object_info(_object_name, _as);
         
         // TODO: replace default return with this line after #31703 is merged
-#if 0
-            co_return _result.finalize(sstring(strip_etag_quotes(info.etag)));
-#endif
-
-        co_return _result.finalize(sstring(""));
+        co_return _result.finalize(sstring(strip_etag_quotes(info.etag)));
     }
 };
 
@@ -875,11 +864,281 @@ future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::v
     std::rethrow_exception(exception);
 }
 
+// --- Export orchestration helpers ---
+
+// This uniquely identifies a node incarnation and changes on reboot.
+live_node_identifier executor::get_self_node_id() {
+    auto host_id = _gossiper.my_host_id();
+    auto ep_state = _gossiper.get_this_endpoint_state_ptr();
+    auto generation = ep_state->get_heart_beat_state().get_generation();
+    return live_node_identifier{ .host_id = fmt::to_string(host_id), .gossip_generation = std::uint32_t(generation.value()) };
+}
+
+future<std::unordered_set<live_node_identifier>> executor::get_live_nodes() {
+    auto live_members = _gossiper.get_live_members();
+    std::unordered_set<live_node_identifier> result;
+    result.reserve(live_members.size());
+    for (const auto& host_id : live_members) {
+        auto ep_state = _gossiper.get_endpoint_state_ptr(host_id);
+        if (!ep_state) {
+            continue;
+        }
+        auto generation = ep_state->get_heart_beat_state().get_generation();
+        result.insert(live_node_identifier{ .host_id = fmt::to_string(host_id), .gossip_generation = std::uint32_t(generation.value()) });
+    }
+    co_return result;
+}
+
+// Canonicalize a JSON request by sorting object members alphabetically.
+// This produces a deterministic string representation for idempotency checks.
+static sstring canonicalize_request(const rjson::value& request) {
+    if (!request.IsObject()) {
+        return rjson::print(request);
+    }
+    // Collect member names and sort them
+    std::vector<std::string_view> names;
+    names.reserve(request.MemberCount());
+    for (auto it = request.MemberBegin(); it != request.MemberEnd(); ++it) {
+        names.push_back(std::string_view(it->name.GetString(), it->name.GetStringLength()));
+    }
+    std::sort(names.begin(), names.end());
+
+    // Build sorted JSON object
+    rjson::value sorted = rjson::empty_object();
+    for (auto& name : names) {
+        const auto* val = rjson::find(request, name);
+        if (val) {
+            rjson::add_with_string_name(sorted, name, rjson::copy(*val));
+        }
+    }
+    return rjson::print(sorted);
+}
+
+// Generate random hex string of specified length (in hex chars).
+static sstring generate_random_hex(size_t hex_chars) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    static constexpr std::string_view characters = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    sstring result;
+    result.resize(hex_chars);
+    for (size_t i = 0; i < hex_chars; ++i) {
+        result[i] = characters[rng() % characters.size()];
+    }
+    return result;
+}
+
+// Generate a unique export ARN.
+// Format: arn:scylla:alternator:::table/{table_name}/export/{epoch_millis_zero_padded}-{16_hex_chars}
+static sstring generate_export_arn(std::string_view keyspace_name, std::string_view table_name) {
+    auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    auto random_suffix = generate_random_hex(16);
+    return fmt::format("arn:scylla:alternator:{}:scylla:table/{}/export/{:019d}-{}",
+        keyspace_name, table_name, epoch_millis, random_suffix);
+}
+
+static std::string_view get_table_arn_from_export_arn(std::string_view export_arn) {
+    // Expected format: arn:scylla:alternator:::table/<name>/export/<id>
+    // or AWS format: arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>
+    auto pos = export_arn.find("/export/");
+    if (pos == std::string::npos) {
+        throw std::invalid_argument(fmt::format("Invalid Export ARN format: {}", export_arn));
+    }
+    return export_arn.substr(0, pos);
+}
+
+// Build an ExportDescription JSON response from a CQL result row.
+static rjson::value build_export_description_response(const export_row& row) {
+    rjson::value export_desc = rjson::empty_object();
+
+    auto export_arn = row.export_arn;
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+    xlogger.error("QWERTY export_arn {}", export_arn);
+    auto table_arn = get_table_arn_from_export_arn(export_arn);
+    xlogger.error("QWERTY table_arn {}", table_arn);
+    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(row.export_status));
+
+    if (!row.export_manifest.empty()) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(row.export_manifest));
+    }
+
+    if (row.accepted_at != db_clock::time_point{}) {
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            row.accepted_at.time_since_epoch()).count();
+        rjson::add(export_desc, "StartTime", rjson::value(seconds));
+        rjson::add(export_desc, "ExportTime", rjson::value(seconds));
+    }
+    if (row.completed_at != db_clock::time_point{}) {
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            row.completed_at.time_since_epoch()).count();
+        rjson::add(export_desc, "EndTime", rjson::value(seconds));
+        rjson::add(export_desc, "ItemCount", rjson::value(row.item_count));
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(0));
+    }
+    if (!row.failure_code.empty()) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(row.failure_code));
+    }
+    if (!row.failure_message.empty()) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(row.failure_message));
+    }
+    if (!row.client_token.empty() && row.client_token.starts_with("u:")) {
+        rjson::add(export_desc, "ClientToken", rjson::from_string(row.client_token.substr(2)));
+    }
+
+    // Parse the stored request to extract S3 bucket/prefix/format info
+    if (!row.request.empty()) {
+        try {
+            auto req_json = rjson::parse(row.request);
+            if (auto v = rjson::find(req_json, "ExportFormat")) {
+                rjson::add(export_desc, "ExportFormat", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            else {
+                rjson::add(export_desc, "ExportFormat", rjson::from_string("DYNAMODB_JSON"));
+            }
+            if (auto v = rjson::find(req_json, "ExportType")) {
+                rjson::add(export_desc, "ExportType", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            if (auto v = rjson::find(req_json, "S3Bucket")) {
+                rjson::add(export_desc, "S3Bucket", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            if (auto v = rjson::find(req_json, "S3Prefix")) {
+                auto prefix = rjson::to_string_view(*v);
+                if (!prefix.empty()) {
+                    rjson::add(export_desc, "S3Prefix", rjson::from_string(prefix));
+                }
+            }
+        } catch (...) {
+            // If we can't parse the stored request, just skip these fields
+        }
+    }
+    // BilledSizeBytes - we always report 0 (not applicable for Scylla)
+    if (row.item_count > 0) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(int64_t(0)));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    return response;
+}
+
+future<> executor::garbage_collect_s3_exports() {
+    auto client_tokens = co_await get_all_client_tokens(_qp);
+    auto exports = co_await get_all_exports(_qp);
+    auto live_nodes = co_await get_live_nodes();
+    auto self_node_id = get_self_node_id();
+
+    xlogger.debug("Garbage collection: {} client tokens, {} exports, {} live nodes, self node_id={}",
+        client_tokens.size(), exports.size(), live_nodes.size(), self_node_id);
+        
+    auto is_node_alive = [&](const live_node_identifier& node_id) {
+        return live_nodes.find(node_id) != live_nodes.end();
+    };
+
+    std::unordered_map<sstring, export_row&> export_arn_to_export;
+    for (auto& export_row : exports) {
+        // We ignore rows, which are under control of node, which is alive, those are fine.
+        if (!is_node_alive(export_row.node_id)) {
+            xlogger.debug("Export row {} is under control of dead node {}", export_row.export_arn, export_row.node_id);
+            export_arn_to_export.insert({ export_row.export_arn, export_row });
+        }
+    }
+    for(auto &ct : client_tokens) {
+        // We ignore rows, which are under control of node, which is alive, those are fine.
+        if (is_node_alive(ct.node_id)) continue;
+
+        // Handle special case, where node died before writing export row (so it won't show up in export_rows)
+        xlogger.debug("Client token row {} is under control of dead node {}", ct.client_token, ct.node_id);
+        auto it = export_arn_to_export.find(ct.export_arn);
+        if (it == export_arn_to_export.end()) {
+            // Node died before writing the export row, let's fill in the missing row with `FAILED` status.
+            // The export itself never happened, so there's nothing to clean up here on S3.
+
+            xlogger.debug("Client token row {} has no corresponding export row, creating a FAILED export row", ct.client_token);
+            // Parse user request from client token row.
+            rjson::value request;
+            try {
+                request = rjson::parse(ct.request);
+            } catch (...) {
+                xlogger.debug("Failed to parse request from client token row {}: {}", ct.client_token, ct.request);
+                // This can't happen in normal operation.
+                // If we can't parse the request, we will invent data on the fly.
+                request = rjson::empty_object();
+            }
+
+            xlogger.debug("Creating FAILED export row for client token {}: export_arn={}", ct.client_token, ct.export_arn);
+            co_await insert_export(_qp, {
+                .export_arn = ct.export_arn,
+                .client_token = ct.client_token,
+                .request = ct.request,
+                .export_status = "FAILED",
+                .failure_code = "NodeFailure",
+                .failure_message = "The node that initiated the export has failed before the export could start.",
+                .export_id_token = "",
+                .accepted_at = db_clock::now(),
+                .completed_at = db_clock::time_point{},
+                .node_id = self_node_id,
+            });
+        }
+    }
+
+    for(auto &export_row : exports) {
+        if (is_node_alive(export_row.node_id)) {
+            // Node is alive, nothing to collect here.
+            continue;
+        }
+
+        if (export_row.export_status == "COMPLETED" || export_row.export_status == "FAILED") {
+            // The export completed - nothing to collect.
+            xlogger.debug("Export row {} is already in terminal state {}, skipping", export_row.export_arn, export_row.export_status);
+            continue;
+        }
+
+        // Either the export is in progress or is in progress of cleaning up, in both cases the node handling it is dead.
+        // We take over by first updating `node_id` and `export_status` to show our ownership and a new state.
+
+        auto new_export_row = export_row;
+        new_export_row.export_status = "FAILING";
+        new_export_row.node_id = self_node_id;
+        xlogger.debug("Marking export row {} as FAILING", export_row.export_arn);
+
+        if (!co_await update_export(_qp, new_export_row, export_row.export_status, export_row.node_id)) {
+            // Other node is already handling it and is quicker, so we just skip this.
+            xlogger.debug("Failed to update export row {} to FAILING, it may have been updated by another node", export_row.export_arn);
+            continue;
+        }
+
+        // TODO: update TTLs
+        // Note: we purposely don't clean up S3 data - the user needs to do it on it's own (maybe we should?).
+
+        xlogger.debug("Marking export row {} as FAILED", export_row.export_arn);
+        new_export_row.export_status = "FAILED";
+        if (!co_await update_export(_qp, new_export_row, export_row.export_status, export_row.node_id)) {
+            // This should never happen:
+            // - either there was some write issue and node_id / export_status were not correctly updated, or
+            // - another node took over and updated the row to a different status.
+            // In both cases we can't do anything about it, so we just skip - either the other node will handle it (case 2) or
+            // we will try again on next time of garbage collection.
+            xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", export_row.export_arn);
+            continue;
+        }
+    }
+    xlogger.debug("Garbage collection: finished");
+}
+
+future<> executor::garbage_collector_for_s3_exports() {
+    while(true) {
+        co_await seastar::sleep(std::chrono::hours(4));
+        co_await garbage_collect_s3_exports();
+    }
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
     // Required parameter
     auto table_arn = get_non_empty_string_attribute(request, "TableArn");
+    xlogger.error("QWERTY table_arn {}", table_arn);
 
     // Validate that the table exists
     arn_parts parts;
@@ -915,14 +1174,129 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // Optional parameters
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
 
+    // AWS checks client token duplication first, so we will validate those later
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    auto export_type = get_non_empty_string_attribute(request, "ExportType", "");
+
+    // ExportTime - only "now" (or close to now) is supported
+    // If not specified, use current time. If specified, must be within 5 minutes of now.
+    auto now = (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto export_time = now;
+    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
+    auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+
+    auto node_id = get_self_node_id();
+
+    // Canonicalize the request for idempotency checking
+    auto canonical_request = canonicalize_request(request);
+
+    // Handle ClientToken: prefix with "u:" for user-supplied, "r:" for random
+    sstring client_token;
+    if (user_client_token.empty()) {
+        client_token = fmt::format("r:{}", generate_random_hex(16));
+    } else {
+        client_token = fmt::format("u:{}", user_client_token);
+    }
+
+    // Generate export_id_token (random identifier used in S3 key paths)
+    auto export_id_token = generate_random_hex(16);
+
+    // Generate a unique export ARN
+    auto export_arn = generate_export_arn(parts.keyspace_name, parts.table_name);
+    xlogger.error("QWERTY export_arn {}", export_arn);
+
+    // Build the S3 key prefix for this export
+    auto s3_key_prefix = s3_prefix.empty()
+        ? fmt::format("AWSDynamoDB/{}/", export_id_token)
+        : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, export_id_token);
+
+    auto accepted_at = db_clock::now();
+
+    // Start a garbage collection thread on shard 0 if it's not already running.
+    // We need to do this before first writing a client token row to make sure
+    // if something goes wrong during export the written rows will be clean up eventually.
+    co_await container().invoke_on(0, [](executor &ex) {
+        if (ex._garbage_collection_thread_for_s3_export_running) return;
+        ex._garbage_collection_thread_for_s3_export_running = true;
+        (void)ex.garbage_collector_for_s3_exports();
+
+    });
+
+    // We have all we need, let's publish the export request to the database.
+    // We need to do this in two steps - first insert a client token row, then insert the export metadata row.
+    // The order matters, because it's possible that another node is running the export with the same client token,
+    // in which case we need to handle one of such requests as duplicate (we can't start two exports with the same client token).
+    // We check for client token in client token table first (and we insert the row first as well),
+    // only one node can succeed in inserting the client token row (insert-if-not-exists mechanic) and that node will
+    // continue to run the export.
+    auto client_token_inserted = co_await insert_client_row(_qp, client_row{
+        .client_token = client_token,
+        .export_arn = export_arn,
+        .request = canonical_request,
+        .node_id = node_id,
+    });
+    auto build_export_row = [&]() {
+        return export_row{
+            .export_arn = export_arn,
+            .client_token = client_token,
+            .request = canonical_request,
+            .export_status = "IN_PROGRESS",
+            .export_id_token = export_id_token,
+            .accepted_at = accepted_at,
+            .completed_at = db_clock::time_point{},
+            .node_id = node_id,
+        };
+    };
+
+    if (!client_token_inserted) {
+        // Export with this client token already exists. We need to check if request is the same or different.
+        // If the same - return the export is in progress (or completed or failed - the state is in the row itself) as if DescribeExport was called.
+        // If not the same - return export conflict error as Amazon requires us to do.
+
+        xlogger.debug("ClientToken {} already exists", client_token);
+        auto existing_client_row = co_await get_client_row(_qp, client_token);
+        if (!existing_client_row) {
+            // The row existed a moment ago, but is gone now (expired or garbage collected in the meantime).
+            // Treat it as a new export and continue.
+            xlogger.debug("ClientToken {} row disappeared, returning IN_PROGRESS status", client_token);
+            auto response = build_export_description_response(build_export_row());
+            co_return rjson::print(std::move(response));
+        }
+        auto& client_row = *existing_client_row;
+        if (canonical_request != client_row.request) {
+            // Easy - different request, so we fail with export conflict as Amazon requires.
+            xlogger.debug("Export conflict: different parameters");
+            co_return api_error::export_conflict("Duplicate request detected - an export with this ClientToken already exists with different parameters");
+        }
+
+        // We need an export row for this client token - the export might be in progress or completed or failed.
+        auto export_row = co_await get_export(_qp, client_row.export_arn);
+        xlogger.debug("Export row for ClientToken {}: {}", client_token, export_row ? "found" : "not found");
+        if (!export_row) {
+            // Export row doesn't exist. Two possibilities:
+            // - the other node is doing the export in the same moment and hasn't inserted the export row yet (but managed
+            //   to insert client token row first), or
+            // - the other node doing the export died before inserting the export row, leaving a dangling client token row
+            //   (it's possible the node is gone but we don't know it yet, so we can't be sure).
+            // In both cases we will return IN_PROGRESS status - the dangling client token row will be taken care of by
+            // garbage collection thread.
+            xlogger.debug("Returning IN_PROGRESS status for ClientToken {}", client_token);
+            export_row = build_export_row();
+        }
+        else {
+            // Export row exists, other node is (or was) running the export. Return as if DescribeExport was called.
+            xlogger.debug("Returning existing export description for ClientToken {}", client_token);
+        }
+        auto response = build_export_description_response(*export_row);
+        co_return rjson::print(std::move(response));
+    }
+
     if (export_format != "DYNAMODB_JSON") {
         co_return api_error::validation(
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
     }
 
-    auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
-    if (export_type != "FULL_EXPORT") {
+    if (!export_type.empty() && export_type != "FULL_EXPORT") {
         co_return api_error::validation(
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
@@ -939,11 +1313,6 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
     }
 
-    // ExportTime - only "now" (or close to now) is supported
-    // If not specified, use current time. If specified, must be within 5 minutes of now.
-    auto now = (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    auto export_time = now;
-    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
         if (!export_time_v->IsNumber()) {
             co_return api_error::validation("Expected a number attribute ExportTime");
@@ -959,41 +1328,24 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
     }
 
-    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+    // We need a scope here, because above is a `goto build_in_progress_response` and c++ doesn't allow jump over variable initialization,
+    // that is visible from the landing point of the goto. So we need to put the variable initialization in a separate scope to tell a compiler
+    // that those variables will be deleted before the landing point.
+    auto erow = build_export_row();
+    auto export_row_inserted = co_await insert_export(_qp, erow);
+
+    if (!export_row_inserted) {
+        xlogger.debug("(?) Failed to insert export row for ClientToken {} and ExportArn {}", client_token, export_arn);
+        on_internal_error(xlogger, fmt::format("Failed to insert export row for ClientToken {} and ExportArn {}", client_token, export_arn));
+    }
+
+    // Launch background export fiber (fire-and-forget, gate-guarded)
+    xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
+    (void)run_export(_export_gate.hold(), schema, erow, table_arn, s3_bucket, s3_prefix, s3_key_prefix, export_id_token);
 
     // Build the ExportDescription response
-    // The actual export functionality is not implemented yet - this just returns
-    // a FAILED status to indicate the export has been accepted, but immediately failed.
-    rjson::value export_desc = rjson::empty_object();
-
-    // FIXME: Currently, when export is called without a client token, we use
-    // the fixed name "<empty>". This is wrong - we should return a uniquely
-    // generated client token, like AWS does, not a fixed one.
-    if (client_token.empty()) {
-        client_token = "<empty>";
-    }
-    rjson::add(export_desc, "ClientToken", rjson::from_string(client_token));
-
-    // FIXME: We create fake arn here, the content up to `/export/` will be likely the same in future,
-    // the last part (after `/export/`) will change - we need to encode a unique identifier of some sort there to
-    // recognise the export in future (we don't have it yet so we don't do it now).
-    rjson::add(export_desc, "ExportArn",
-            rjson::from_string(fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}@{}/export/export-placeholder",
-                    parts.keyspace_name, parts.table_name)));
-    rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
-    rjson::add(export_desc, "ExportStatus", "FAILED");
-    rjson::add(export_desc, "FailureCode", "NotImplemented");
-    rjson::add(export_desc, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the export API.");
-    rjson::add(export_desc, "ExportTime", rjson::value(export_time));
-    rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
-    rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
-    if (!s3_prefix.empty()) {
-        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
-    }
-    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
-
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ExportDescription", std::move(export_desc));
+    xlogger.debug("Returning IN_PROGRESS response for ClientToken {}", client_token);
+    auto response = build_export_description_response(erow);
     co_return rjson::print(std::move(response));
 }
 
@@ -1201,6 +1553,311 @@ seastar::future<> export_scan_table(
             co_await coroutine::maybe_yield();
         }
     }
+}
+
+// Manifest files report times as ISO 8601 UTC with millisecond precision,
+// e.g. "2020-11-04T07:28:34.028Z".
+static sstring format_manifest_time(db_clock::time_point tp) {
+    auto millis = tp.time_since_epoch().count() % 1000;
+    return fmt::format("{:%FT%T}.{:03}Z", fmt::gmtime(db_clock::to_time_t(tp)), millis);
+}
+
+future<> executor::run_export(
+        seastar::gate::holder gate_holder,
+        schema_ptr schema,
+        export_row row,
+        std::string table_arn,
+        std::string s3_bucket,
+        std::string s3_prefix,
+        std::string s3_key_prefix,
+        std::string export_id_token) {
+    int64_t item_count = 0;
+    auto node_id = get_self_node_id();
+    
+    auto [ error_msg, error_code ] = co_await ([&]() -> future<std::tuple<std::string, std::string>> {
+        try {
+#define Q xlogger.error("QWERTY {}", __LINE__);
+            Q auto client = get_s3_client(s3_bucket);
+            // s3::client addresses objects as "/bucket/key".
+            Q auto s3_object_name = [&s3_bucket](std::string_view key) {
+                return fmt::format("/{}/{}", s3_bucket, key);
+            };
+            // Each manifest file is accompanied by a ".md5" object holding the base64 encoded md5 of its content.
+            Q auto put_object_with_md5 = [&client, &s3_object_name](std::string_view json_key, std::string_view md5_key, std::string content) -> future<> {
+                md5_hasher hasher;
+                hasher.update(content.data(), content.size());
+                auto md5_content = base64_encode(hasher.finalize());
+                co_await client->put_object(s3_object_name(json_key), temporary_buffer<char>(content.data(), content.size()));
+                co_await client->put_object(s3_object_name(md5_key), temporary_buffer<char>(md5_content.data(), md5_content.size()));
+            };
+
+            // Create the data file object key
+            Q auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, export_id_token);
+
+            // Create S3 sink pipeline
+            Q auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &_export_abort_source }, gzip_compression{});
+            std::exception_ptr exception;
+
+            try {
+                // Create empty _started object
+                co_await client->put_object(s3_object_name(fmt::format("{}_started", s3_key_prefix)), temporary_buffer<char>());
+            }
+            catch(std::exception &e) {
+                auto msg = std::string_view{ e.what() };
+                // we are wild guessing here, but the message checks with S3Mock from Adobe and (hopefully) with Amazon (not yet tested).
+                if (msg.find("bucket") != std::string_view::npos && msg.find("exist") != std::string_view::npos) {
+                    co_return std::make_tuple("The specified bucket does not exist", "S3NoSuchBucket");
+                }
+                co_return std::make_tuple(e.what(), "Exception");
+            }
+            try {
+                // Scan the table and feed items through the pipeline
+                Q co_await export_scan_table(_proxy, schema, _export_abort_source, empty_service_permit(), [&pipeline, &item_count](rjson::value item) -> future<> {
+                    rjson::value wrapper = rjson::empty_object();
+                    rjson::add(wrapper, "Item", std::move(item));
+                    co_await pipeline->process(wrapper);
+                    ++item_count;
+                });
+            }
+            catch(...) {
+                Q exception = std::current_exception();
+            }
+            Q row.completed_at = db_clock::now();
+            row.item_count = item_count;
+
+            export_pipeline_interface::result export_result;
+            try {
+                export_result = co_await pipeline->flush_and_close();
+                xlogger.error("QWERTY {}: flush successful", __LINE__);
+            }
+            catch(...) {
+                xlogger.error("QWERTY {}: flush failed", __LINE__);
+                if (!exception) exception = std::current_exception();
+            }
+            xlogger.error("QWERTY {}: etag {}", __LINE__, export_result.etag);
+            if (exception) std::rethrow_exception(std::move(exception));
+
+            // Generate and upload manifest files
+
+            // manifest-files.json - JSON lines, one object per data file.
+            auto manifest_files_key = fmt::format("{}manifest-files.json", s3_key_prefix);
+            rjson::value data_file_entry = rjson::empty_object();
+            rjson::add(data_file_entry, "itemCount", rjson::value(item_count));
+            rjson::add(data_file_entry, "md5Checksum", rjson::from_string(export_result.md5));
+            rjson::add(data_file_entry, "etag", rjson::from_string(export_result.etag));
+            rjson::add(data_file_entry, "dataFileS3Key", rjson::from_string(data_object_key));
+            auto manifest_files_content = rjson::print(data_file_entry) + "\n";
+            co_await put_object_with_md5(manifest_files_key, fmt::format("{}manifest-files.md5", s3_key_prefix), std::move(manifest_files_content));
+
+            // manifest-summary.json
+            auto manifest_summary_key = fmt::format("{}manifest-summary.json", s3_key_prefix);
+            rjson::value summary = rjson::empty_object();
+            rjson::add(summary, "version", "2020-06-30");
+            rjson::add(summary, "exportArn", rjson::from_string(row.export_arn));
+            rjson::add(summary, "startTime", rjson::from_string(format_manifest_time(row.accepted_at)));
+            rjson::add(summary, "endTime", rjson::from_string(format_manifest_time(row.completed_at)));
+            rjson::add(summary, "tableArn", rjson::from_string(table_arn));
+            rjson::add(summary, "tableId", rjson::from_string(fmt::to_string(schema->id())));
+            // We don't support point-in-time exports from the past - the table is scanned
+            // as of the moment the export was accepted.
+            rjson::add(summary, "exportTime", rjson::from_string(format_manifest_time(row.accepted_at)));
+            rjson::add(summary, "s3Bucket", rjson::from_string(s3_bucket));
+            rjson::add(summary, "s3Prefix", rjson::from_string(s3_prefix));
+            rjson::add(summary, "s3SseAlgorithm", rjson::from_string(""));
+            rjson::add(summary, "s3SseKmsKeyId", rjson::from_string(""));
+            rjson::add(summary, "manifestFilesS3Key", rjson::from_string(manifest_files_key));
+            rjson::add(summary, "billedSizeBytes", rjson::value(int64_t(0)));
+            rjson::add(summary, "itemCount", rjson::value(int64_t(row.item_count)));
+            xlogger.debug("Processed item count: {}", item_count);
+            rjson::add(summary, "outputFormat", "DYNAMODB_JSON");
+            auto manifest_summary_content = rjson::print(summary);
+            co_await put_object_with_md5(manifest_summary_key, fmt::format("{}manifest-summary.md5", s3_key_prefix), std::move(manifest_summary_content));
+
+            auto export_manifest = fmt::format("{}manifest-summary.json", s3_key_prefix);
+            row.item_count = item_count;
+            row.export_status = "COMPLETED";
+            row.export_manifest = export_manifest;
+            auto updated = co_await update_export(_qp, row, "IN_PROGRESS", node_id);
+            if (!updated) {
+                xlogger.debug("Export {} failed to update status to COMPLETED after completion", row.export_arn);
+                co_return std::make_tuple("Export completed, but failed to update state", "Exception");
+            }
+            xlogger.debug("Export {} completed successfully with {} items", row.export_arn, item_count);
+            co_return std::make_tuple("", "" );
+        } catch (std::exception &e) {
+            co_return std::make_tuple(e.what(), "Exception");
+        } catch(...) {
+            co_return std::make_tuple("Unknown error", "Exception");
+        }
+    }());
+    // We have failed with an exception, let's report it.
+    row.completed_at = db_clock::now();
+    xlogger.debug("Export {} failed with exception: {}", row.export_arn, error_msg);
+    row.export_status = "FAILED";
+    row.failure_code = std::move(error_code);
+    row.failure_message = std::move(error_msg);
+    auto updated = co_await update_export(_qp, row, "IN_PROGRESS", node_id);
+    if (!updated) {
+        xlogger.debug("Export {} failed to update status to FAILED after completion", row.export_arn);
+        co_return;
+    }
+    xlogger.debug("Export {} failed with {} items", row.export_arn, item_count);
+}
+
+// // Helper to update export status to FAILED, used after catching exceptions
+// // in run_export (where co_await is not allowed inside catch blocks).
+// future<> executor::update_export_status_to_failed(
+//         const sstring& export_arn, const live_node_identifier& node_id,
+//         int64_t item_count, const sstring& failure_message) {
+//     try {
+//         co_await _sdks.update_export_status(
+//             export_arn, "FAILED",
+//             item_count, db_clock::now(), std::nullopt,
+//             sstring("INTERNAL_ERROR"), sstring(failure_message));
+//     } catch (...) {
+//         xlogger.error("Export {} failed to update status after failure: {}",
+//             export_arn, std::current_exception());
+//     }
+// }
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+
+    // Validate that the ARN looks like an export ARN.
+    // Expected format: arn:scylla:alternator:::table/<name>/export/<id>
+    // or AWS format: arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>
+    if (!export_arn.starts_with("arn:")) {
+        co_return api_error::validation(
+            fmt::format("Invalid Export ARN: {}", export_arn));
+    }
+
+    try {
+        // Amazon returns access denied rather than validation exception, when ARN is malformed
+        // so try to parse it here and return correct error if parsing failed
+        parse_arn(export_arn, "ExportArn", "table", "/export/");
+    }
+    catch(std::exception &e) {
+        co_return api_error::access_denied(fmt::format("Invalid Export ARN {}: {}", export_arn, e.what()));
+    }
+    
+    xlogger.debug("Describing export {}", export_arn);
+    auto result = co_await get_export(_qp, sstring(export_arn));
+    if (!result) {
+        co_return api_error::validation(
+            fmt::format("Invalid Export ARN {}", export_arn));
+    }
+
+    auto response = build_export_description_response(*result);
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    // Optional filter by TableArn
+    std::string table_arn_filter;
+    const rjson::value* table_arn_v = rjson::find(request, "TableArn");
+    if (table_arn_v && table_arn_v->IsString()) {
+        table_arn_filter = std::string(rjson::to_string_view(*table_arn_v));
+    }
+
+    // MaxResults (default 25, max 25 per DynamoDB spec)
+    int max_results = 25;
+    const rjson::value* max_results_v = rjson::find(request, "MaxResults");
+    if (max_results_v && max_results_v->IsNumber()) {
+        max_results = std::min(25, static_cast<int>(max_results_v->GetInt()));
+        if (max_results < 1) {
+            max_results = 1;
+        }
+    }
+
+    // NextToken for pagination (last-seen export_arn)
+    std::string next_token;
+    const rjson::value* next_token_v = rjson::find(request, "NextToken");
+    if (next_token_v && next_token_v->IsString()) {
+        next_token = std::string(rjson::to_string_view(*next_token_v));
+        try {
+            parse_arn(next_token, "NextToken", "table", "/export/");
+        }
+        catch(std::exception &e) {
+            co_return api_error::validation(fmt::format("Invalid NextToken ARN {}: {}", next_token, e.what()));
+        }
+    }
+
+    auto result = co_await get_all_exports(_qp);
+
+    // Collect and filter results
+    struct export_summary {
+        sstring export_arn;
+        sstring export_status;
+        sstring table_arn;
+    };
+    std::vector<export_summary> summaries;
+    for (const auto& row : result) {
+        // Filter by table_arn if specified
+        auto table_arn = get_table_arn_from_export_arn(row.export_arn);
+        if (!table_arn_filter.empty() && table_arn != table_arn_filter) {
+            continue;
+        }
+        arn_parts parts;
+        try {
+            parts = parse_arn(table_arn, "TableArn", "table", "");
+        }
+        catch(std::exception &e) {
+            xlogger.error("Failed to parse ARN `{}` from all-exports: {}", table_arn, e.what());
+            continue;
+        }
+
+        try {
+            _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
+        } catch (const data_dictionary::no_such_column_family&) {
+            continue;
+        }
+        
+        summaries.push_back({row.export_arn, row.export_status, sstring{ table_arn }});
+    }
+
+    // Sort by export_arn descending (AWS requires us to return results descending for each table)
+    std::sort(summaries.begin(), summaries.end(),
+        [](const export_summary& a, const export_summary& b) {
+            return a.export_arn > b.export_arn;
+        });
+
+    // Apply pagination: skip past next_token
+    auto it = summaries.begin();
+    if (!next_token.empty()) {
+        it = std::find_if(summaries.begin(), summaries.end(),
+            [&next_token](const export_summary& s) {
+                return s.export_arn < next_token;
+            });
+    }
+
+    // Build response
+    rjson::value export_summaries = rjson::empty_array();
+    int count = 0;
+    sstring last_arn;
+    while (it != summaries.end() && count < max_results) {
+        rjson::value summary = rjson::empty_object();
+        rjson::add(summary, "ExportArn", rjson::from_string(it->export_arn));
+        rjson::add(summary, "ExportStatus", rjson::from_string(it->export_status));
+        rjson::add(summary, "ExportType", rjson::from_string("FULL_EXPORT"));
+        rjson::push_back(export_summaries, std::move(summary));
+        last_arn = it->export_arn;
+        ++it;
+        ++count;
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", std::move(export_summaries));
+
+    // If there are more results, include NextToken
+    if (it != summaries.end()) {
+        rjson::add(response, "NextToken", rjson::from_string(last_arn));
+    }
+
+    co_return rjson::print(std::move(response));
 }
 
 } // namespace alternator
