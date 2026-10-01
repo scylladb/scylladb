@@ -1140,7 +1140,8 @@ def unknown_export_arn(table):
 
 
 # Test that DescribeExport reports as ValidationException an export ARN without the `arn:` prefix,
-# one with too few parts, and one naming another resource type.
+# one with too few parts, one with a different resource type, and one with an incorrect export id
+# (the correct format is 14 digits, a dash and 8 hex digits).
 def test_describe_export_incorrect_arns(test_table_s):
     client = test_table_s.meta.client
     export_arn = unknown_export_arn(test_table_s)
@@ -1150,6 +1151,17 @@ def test_describe_export_incorrect_arns(test_table_s):
         client.describe_export(ExportArn=arn_with_part(export_arn, 4, None))  # account dropped
     with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
         client.describe_export(ExportArn=export_arn.replace(':table/', ':qwerty/', 1))
+    table_arn, export_id = export_arn.rsplit('/export/', 1)
+    digits, hex_digits = export_id.split('-')
+    for incorrect_id in ['abc',
+                         f'{digits[:-1]}-{hex_digits}',  # 13 digits
+                         f'{digits}0-{hex_digits}',      # 15 digits
+                         f'{digits}-{hex_digits[:-1]}',  # 7 hex digits
+                         f'{digits}-{hex_digits}0',      # 9 hex digits
+                         f'{digits}_{hex_digits}',       # `_` instead of the dash
+                         'a/b', '/', f'{export_id}/']:
+        with pytest.raises(ClientError, match='ValidationException.*Export ?(ARN|Arn)'):
+            client.describe_export(ExportArn=f'{table_arn}/export/{incorrect_id}')
 
 
 # Test that DescribeExport reports as ValidationException an export ARN naming another partition,
@@ -1421,7 +1433,7 @@ def two_listed_exports(request, table):
                    ClientToken=str(uuid.uuid4()))['ExportDescription']['ExportArn'] for _ in range(2)]
         return
     cql = request.getfixturevalue('cql')
-    arns = [unstarted_export_arn(client, table_arn) for _ in range(2)]
+    arns = [unstarted_export_arn(table_arn) for _ in range(2)]
     with ExitStack() as seeded:
         for export_arn in arns:
             seeded.enter_context(export_metadata(cql, export_arn, accepted_export_row(table_arn)))
@@ -1519,7 +1531,6 @@ def test_export_table_basic(test_table_s_for_export_only, scylla_only):
     assert export_desc['ExportFormat'] == 'DYNAMODB_JSON'
     assert export_desc['ClientToken'] == client_token
     assert export_desc['TableArn'] == table_arn
-    assert export_desc['ExportArn'].startswith("arn:aws:dynamodb:")
 
 
 # Test that ExportTableToPointInTime echoes ExportType only when the request carried one. The
@@ -1680,9 +1691,8 @@ def test_export_table_huge_export_time(dynamodb, test_table_s_for_export_only, s
 # only run against Scylla, since they reach into Alternator's own tables.
 
 # An export ARN in the shape ExportTableToPointInTime hands out, for an export nobody started.
-def unstarted_export_arn(client, table_arn):
-    accepted = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
-    return accepted['ExportDescription']['ExportArn'].rsplit('/', 1)[0] + '/' + unknown_export_id()
+def unstarted_export_arn(table_arn):
+    return f'{table_arn}/export/{unknown_export_id()}'
 
 
 # The columns every export row carries from the moment the export is accepted, whatever state the
@@ -1773,7 +1783,7 @@ OPTIONAL_EXPORT_DESCRIPTION_FIELDS = ['S3Prefix', 'ExportType', 'ExportManifest'
 def test_describe_export_states(test_table_s_for_export_only, cql, request_fields, columns, status, optional_fields):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
-    export_arn = unstarted_export_arn(client, table_arn)
+    export_arn = unstarted_export_arn(table_arn)
     row = accepted_export_row(table_arn, **request_fields) | columns
     with export_metadata(cql, export_arn, row):
         desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
@@ -1802,7 +1812,7 @@ def test_describe_export_states(test_table_s_for_export_only, cql, request_field
 def test_describe_export_corrupt_row(test_table_s_for_export_only, cql, corrupt):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
-    export_arn = unstarted_export_arn(client, table_arn)
+    export_arn = unstarted_export_arn(table_arn)
     row = accepted_export_row(table_arn)
     corrupt(row)
     with export_metadata(cql, export_arn, row):
@@ -1818,7 +1828,7 @@ def test_describe_export_table_deleted(dynamodb, cql):
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
         client = table.meta.client
         table_arn = get_table_arn(table)
-        export_arn = unstarted_export_arn(client, table_arn)
+        export_arn = unstarted_export_arn(table_arn)
     row = accepted_export_row(table_arn)
     with export_metadata(cql, export_arn, row):
         desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
@@ -1840,16 +1850,16 @@ def test_list_exports_summaries(test_table_s_for_export_only, test_table_s, cql)
     other_table_arn = get_table_arn(test_table_s)
     # export ARN -> (the stored row, the fields of the expected ExportSummary)
     rows = {
-        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn, ExportType='INCREMENTAL_EXPORT') | {'export_status': 'COMPLETED'},
+        unstarted_export_arn(table_arn): (accepted_export_row(table_arn, ExportType='INCREMENTAL_EXPORT') | {'export_status': 'COMPLETED'},
                                                   {'ExportStatus': 'COMPLETED', 'ExportType': 'INCREMENTAL_EXPORT'}),
-        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn) | {'export_status': 'FAILED'},
+        unstarted_export_arn(table_arn): (accepted_export_row(table_arn) | {'export_status': 'FAILED'},
                                                   {'ExportStatus': 'FAILED', 'ExportType': 'FULL_EXPORT'}),
-        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn),
+        unstarted_export_arn(table_arn): (accepted_export_row(table_arn),
                                                   {'ExportStatus': 'IN_PROGRESS', 'ExportType': 'FULL_EXPORT'}),
-        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn) | {'export_status': 'NOT_STARTED'},
+        unstarted_export_arn(table_arn): (accepted_export_row(table_arn) | {'export_status': 'NOT_STARTED'},
                                                   {'ExportStatus': 'IN_PROGRESS', 'ExportType': 'FULL_EXPORT'}),
     }
-    other_arn = unstarted_export_arn(client, other_table_arn)
+    other_arn = unstarted_export_arn(other_table_arn)
     # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
     with ExitStack() as seeded:
         for export_arn, (row, _) in rows.items():
@@ -1869,7 +1879,7 @@ def test_list_exports_summaries(test_table_s_for_export_only, test_table_s, cql)
 def test_list_exports_paging(test_table_s_for_export_only, cql):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
-    arns = sorted((unstarted_export_arn(client, table_arn) for _ in range(5)), reverse=True)
+    arns = sorted((unstarted_export_arn(table_arn) for _ in range(5)), reverse=True)
     # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
     with ExitStack() as seeded:
         for export_arn in arns:
@@ -1903,7 +1913,7 @@ def test_list_exports_table_deleted(dynamodb, cql):
                 AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
             client = table.meta.client
             table_arn = get_table_arn(table)
-            export_arn = unstarted_export_arn(client, table_arn)
+            export_arn = unstarted_export_arn(table_arn)
             seeded.enter_context(export_metadata(cql, export_arn, accepted_export_row(table_arn)))
             # Sanity check: the export is listed while its table exists.
             assert [summary['ExportArn'] for summary in client.list_exports(TableArn=table_arn)['ExportSummaries']] == [export_arn]
@@ -1921,8 +1931,8 @@ def test_list_exports_table_deleted(dynamodb, cql):
 def test_list_exports_corrupt_row(test_table_s_for_export_only, cql, make_arn, columns):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
-    export_arn = unstarted_export_arn(client, table_arn)
-    corrupt_arn = make_arn(unstarted_export_arn(client, table_arn))
+    export_arn = unstarted_export_arn(table_arn)
+    corrupt_arn = make_arn(unstarted_export_arn(table_arn))
     with export_metadata(cql, export_arn, accepted_export_row(table_arn)), \
          export_metadata(cql, corrupt_arn, accepted_export_row(table_arn) | columns):
         summaries = client.list_exports(TableArn=table_arn)['ExportSummaries']

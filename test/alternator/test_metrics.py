@@ -378,7 +378,7 @@ def test_export_table_operations(test_table_s, metrics):
 def test_describe_export_operations(test_table_s, cql, metrics):
     client = test_table_s.meta.client
     table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
-    export_arn = unstarted_export_arn(client, table_arn)
+    export_arn = unstarted_export_arn(table_arn)
     with export_metadata(cql, export_arn, accepted_export_row(table_arn)):
         with check_increases_operation(metrics, ['DescribeExport']):
             with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):

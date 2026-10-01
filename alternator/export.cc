@@ -970,6 +970,33 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
     }
 }
 
+// Generates a unique export id in the DynamoDB format, see is_valid_export_id().
+static sstring generate_export_id(db_clock::time_point accepted_at) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(accepted_at.time_since_epoch()).count();
+    return fmt::format("{:014d}-{:08x}", epoch_millis, std::uint32_t(rng()));
+}
+
+// An export ARN is a table ARN, `/export/` and the export id. Expected format:
+// arn:scylla:alternator:<keyspace>:scylla:table/<name>/export/<id>, or AWS format:
+// arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>.
+static constexpr std::string_view export_arn_infix = "/export/";
+
+// A DynamoDB export id is the start time in milliseconds since the epoch (14 digits), a dash,
+// and 8 hex digits (e.g. `01695353076000-06e2188f`). DynamoDB returns ValidationException for
+// an id with a different format. generate_export_id() uses the same format.
+static bool is_valid_export_id(std::string_view export_id) {
+    static constexpr size_t digit_count = 14;
+    static constexpr size_t hex_digit_count = 8;
+    if (export_id.size() != digit_count + 1 + hex_digit_count || export_id[digit_count] != '-') {
+        return false;
+    }
+    auto is_digit = [] (char c) { return c >= '0' && c <= '9'; };
+    auto is_hex_digit = [&] (char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+    return std::ranges::all_of(export_id.substr(0, digit_count), is_digit)
+            && std::ranges::all_of(export_id.substr(digit_count + 1), is_hex_digit);
+}
+
 // Returns true if the status is final.
 static bool is_terminal_status(std::string_view export_status) {
     return export_status == "COMPLETED" || export_status == "FAILED";
@@ -1202,19 +1229,21 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         co_return api_error::validation("ClientToken attribute is required");
     }
 
+    auto accepted_at = db_clock::now();
+
+    // As in DynamoDB, the export id is also the name of the S3 directory of the export. The ARN is
+    // the table ARN and `/export/<export id>`.
+    auto export_id_token = generate_export_id(accepted_at);
+    auto export_arn = fmt::format("{}/export/{}",
+            rjson::to_string_view(generate_arn_for_table(parts.keyspace_name, parts.table_name)), export_id_token);
+
     // Build the ExportDescription response
     // The actual export functionality is not implemented yet - this just returns
     // a FAILED status to indicate the export has been accepted, but immediately failed.
     rjson::value export_desc = rjson::empty_object();
 
     rjson::add(export_desc, "ClientToken", rjson::from_string(user_client_token));
-
-    // FIXME: We create fake arn here, the content up to `/export/` will be likely the same in future,
-    // the last part (after `/export/`) will change - we need to encode a unique identifier of some sort there to
-    // recognise the export in future (we don't have it yet so we don't do it now).
-    rjson::add(export_desc, "ExportArn",
-            rjson::from_string(fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}@{}/export/export-placeholder",
-                    parts.keyspace_name, parts.table_name)));
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
     rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
     rjson::add(export_desc, "ExportStatus", "FAILED");
     rjson::add(export_desc, "FailureCode", "NotImplemented");
@@ -1238,15 +1267,13 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
 // An export ARN is a table ARN followed by `/export/<id>`.
 static arn_parts parse_export_arn(std::string_view export_arn, std::string_view arn_field_name) {
-    static constexpr std::string_view export_infix = "/export/";
-    auto parts = parse_arn_reporting_validation(export_arn, arn_field_name, "Export", export_infix);
-    // parse_arn accepts an empty export id.
-    if (parts.postfix.size() == export_infix.size()) {
-        throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - no export id after `{}`",
-                arn_field_name, export_arn, export_infix));
+    auto parts = parse_arn_reporting_validation(export_arn, arn_field_name, "Export", export_arn_infix);
+    // parse_arn accepts all export ids, also an empty id.
+    auto export_id = parts.postfix.substr(export_arn_infix.size());
+    if (!is_valid_export_id(export_id)) {
+        throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - `{}` after `{}` is not an export id",
+                arn_field_name, export_arn, export_id, export_arn_infix));
     }
-    // FIXME: DynamoDB also answers an id of any shape but its own with ValidationException. Check
-    // that once SCYLLADB-1893 mints ids of that shape.
     return parts;
 }
 
@@ -1668,7 +1695,6 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
 
     // DynamoDB documents this order, ExportArn descending. Within one table it is also newest first,
     // because an export id starts with its zero-padded start time.
-    // FIXME: not until SCYLLADB-1893 mints export ids - ExportTableToPointInTime's is a placeholder.
     std::ranges::sort(listed, [] (const export_summary_row* lhs, const export_summary_row* rhs) {
         return lhs->export_arn > rhs->export_arn;
     });
