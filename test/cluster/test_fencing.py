@@ -288,7 +288,9 @@ async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
             metric_name = 'scylla_storage_proxy_replica_fenced_out_requests'
             result = 0
             for m in metrics:
-                result += m.get(metric_name) or 0
+                # Internal requests of the stale node, like TTL scans, are fenced out too, but in other scheduling groups.
+                # We don't want them counted here.
+                result += m.get(metric_name, {'scheduling_group_name': 'sl:default'}) or 0
             return result
 
         assert await fenced_out_requests() == 0
