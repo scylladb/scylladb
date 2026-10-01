@@ -541,6 +541,7 @@ public:
     named_value<tri_mode_restriction> restrict_replication_simplestrategy;
     named_value<tri_mode_restriction> restrict_dtcs;
     named_value<tri_mode_restriction> restrict_twcs_without_default_ttl;
+    named_value<tri_mode_restriction> restrict_mixed_storage_clusters;
     named_value<bool> restrict_future_timestamp;
 
     named_value<bool> ignore_truncation_record;
