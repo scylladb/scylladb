@@ -129,26 +129,21 @@ def _assert_audit_entries(rows, expected, ks_name=None, table_name=None):
 
     # Include the operation text in the simplified actual rows, and keep the
     # expected structure as (category, consistency, error, keyspace_name,
-    # table_name, [fragments...]). Sort both lists by the first five fields
-    # and then compare element-by-element, treating the last field specially.
-    actual_simple = sorted(_simplify_rows(relevant), key=lambda r: r[:5])
-    expected_simple = sorted(expected, key=lambda e: e[:5])
-
-    assert len(actual_simple) == len(expected_simple), f"Unexpected audit entries: expected={expected_simple}, actual={actual_simple}"
-
-    for actual_entry, expected_entry in zip(actual_simple, expected_simple):
-        # Compare the basic audit fields one-to-one.
-        assert actual_entry[:5] == expected_entry[:5], f"Unexpected audit entry fields: expected={expected_entry[:5]}, actual={actual_entry[:5]}"
-        actual_operation = actual_entry[5]
-        expected_fragments = expected_entry[5]
-        # Basic sanity for the recorded operation text.
-        assert actual_operation, "Audit entry has empty operation string"
+    # table_name, [fragments...]). Match each expected entry to an actual row
+    # with the same first five fields whose operation text has all the
+    # fragments. Do not pair them by the order of the rows: entries with the
+    # same first five fields can come in any order. The entries with more
+    # fragments go first, so that an entry whose fragments are a subset of
+    # another one's does not take that one's row.
+    unmatched = _simplify_rows(relevant)
+    for expected_entry in sorted(expected, key=lambda e: -len(e[5])):
+        matching = [a for a in unmatched
+                    if a[:5] == expected_entry[:5] and a[5] and all(f in a[5] for f in expected_entry[5])]
+        assert matching, f"No audit entry matches {expected_entry}, unmatched entries: {unmatched}"
+        actual_operation = matching[0][5]
         if table_name:
             assert table_name in actual_operation, f"Table name {table_name} not found in operation {actual_operation}"
-        # The last element of the expected tuple is a list of fragments
-        # that should all appear in the operation text.
-        for fragment in expected_fragments:
-            assert fragment in actual_operation, f"Expected substring '{fragment}' not found in operation {actual_operation}"
+        unmatched.remove(matching[0])
 
 
 # Assert that no entries in `rows` match the given filters.
