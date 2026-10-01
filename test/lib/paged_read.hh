@@ -53,8 +53,9 @@ class cql_test_env;
 // The query function plays the coordinator. For each partition range, it
 // runs the production decisions of service/read_page_resolution.hh:
 // foreground_reply_collector and decide_digest_page() in the first round,
-// and prepare_mutation_read() and resolve_mutation_page() in the
-// reconciliation rounds. It merges the results of several ranges with
+// and frontier_reconciliation in the reconciliation rounds, or
+// prepare_mutation_read() and resolve_mutation_page() without
+// read_frontiers. It merges the results of several ranges with
 // query::result_merger, like storage_proxy::query_singular() and
 // storage_proxy::query_partition_key_range().
 //
@@ -78,8 +79,9 @@ class cql_test_env;
 //   reply has none, so its read keeps the per-partition limit. The frontier
 //   of a short reply must be a stop, and the stop must be
 //   after the start of the page;
-// - fails a reconciliation when a round repeats the limits of an earlier
-//   round, with each limit clamped to the history's bounds. storage_proxy
+// - fails a reconciliation when a round repeats an earlier round: the
+//   limits, with each limit clamped to the history's bounds, and for
+//   frontier_reconciliation also the range and the slice. storage_proxy
 //   would retry until the read times out;
 // - reports a short result which has neither a partition nor a cursor as a
 //   failed read. The pager would fail an assertion on it;
@@ -151,7 +153,9 @@ struct read_options {
     // Whether the cluster feature read_frontiers is enabled. A cluster which
     // enables it also enables native_reverse_queries. With it, the replicas
     // compute digests which cover only the partitions of the result, like
-    // storage_proxy's digest_algorithm(). Without it, replicas which disagree
+    // storage_proxy's digest_algorithm(), and the coordinator asks the
+    // replicas for frontiers and decides pages by them, see
+    // service::frontier_reconciliation. Without it, replicas which disagree
     // about a static-only row can have matching digests.
     bool read_frontiers = true;
     // Whether each replica keeps its queriers between pages in a querier

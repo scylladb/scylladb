@@ -387,6 +387,208 @@ SEASTAR_THREAD_TEST_CASE(test_witness_of_stop_inside_range_tombstone) {
     });
 }
 
+// Cases which catch defects of the pre-READ_FRONTIERS decision of a page:
+// of the reconciliation, and of the lowering of the cursor after a digest
+// match. With each defect, its case returns a wrong answer or fails. Each
+// comment describes the defect.
+SEASTAR_THREAD_TEST_CASE(test_witnesses_of_frontier_reconciliation) {
+    const std::vector<read_case> witnesses{
+        // In a DISTINCT read, each replica stops at its first live row. Each
+        // replica deleted the other's first row. The merge keeps the row of the
+        // replica which read further, though the other replica deleted it in the
+        // part which it did not read. The query returns a deleted partition.
+        read_case{
+            placed_history{
+                {range_deletion{1, bound{1, true}, bound{3, true}, 12}, 0b10},
+                {regular_cell_write{1, 5, regular_column::v1, 4, 10, lifetime::expiring}, 0b10},
+                {row_marker_write{1, 2, 6, lifetime::expiring}, 0b1},
+                {range_deletion{1, bound{4, true}, std::nullopt, 11}, 0b1},
+            },
+            select_query{.distinct = true, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 2},
+        },
+        // The same, under LIMIT and without short reads, after a retry.
+        read_case{
+            placed_history{
+                {range_deletion{2, bound{1, true}, bound{5, false}, 16}, 0b1},
+                {regular_cell_write{2, 3, regular_column::v2, 2, 8, lifetime::permanent}, 0b10},
+                {regular_cell_write{2, 5, regular_column::v1, 0, 7, lifetime::permanent}, 0b1},
+                {range_deletion{2, bound{4, false}, bound{6, false}, 11}, 0b10},
+            },
+            select_query{.distinct = true, .select_s = false, .select_v1 = false, .select_v2 = false, .limit = 1},
+            read_options{.replica_count = 2, .page_size = 5},
+        },
+        // Under LIMIT 1, one replica stops after a row which the other replica
+        // deleted. The other replica has only a static cell left. The merge
+        // returns a static-only row, though the first replica holds a live row
+        // after its stop.
+        read_case{
+            placed_history{
+                {regular_cell_write{1, 3, regular_column::v2, 1, 3, lifetime::permanent}, 0b1},
+                {static_cell_write{1, 3, 7, lifetime::expiring}, 0b10},
+                {regular_cell_write{1, 4, regular_column::v1, 3, 9, lifetime::permanent}, 0b1},
+                {range_deletion{1, bound{2, true}, std::nullopt, 6}, 0b10},
+            },
+            select_query{.select_s = false, .select_v1 = false, .limit = 1},
+            read_options{.replica_count = 2, .page_size = 100},
+        },
+        // Under LIMIT 1, one replica stops after a row which the other replica
+        // deleted. The merge returns the other replica's row of a later
+        // partition. The row of a partition in between, which only the first
+        // replica holds, is lost.
+        read_case{
+            placed_history{
+                {row_marker_write{4, 3, 8, lifetime::permanent}, 0b1},
+                {regular_cell_write{3, 2, regular_column::v2, 4, 5, lifetime::permanent}, 0b10},
+                {static_cell_write{1, 4, 4, lifetime::permanent}, 0b1},
+                {row_deletion{2, 4, 7}, 0b10},
+                {regular_cell_write{2, 4, regular_column::v2, 6, 2, lifetime::permanent}, 0b1},
+            },
+            select_query{.ck_end = bound{6, true}, .select_v1 = false, .limit = 1},
+            read_options{.replica_count = 2, .page_size = 0},
+        },
+        // A reconciled DISTINCT page is short, with its cursor inside a
+        // partition, before the partition's first live row. The next page moves
+        // past the partition, so the partition is lost.
+        read_case{
+            placed_history{
+                {row_deletion{2, 1, 11}, 0b1},
+                {range_deletion{1, std::nullopt, bound{3, true}, 1}, 0b1},
+                {regular_cell_write{2, 2, regular_column::v1, 8, 3, lifetime::permanent}, 0b10},
+                {regular_cell_write{1, 2, regular_column::v2, 5, 10, lifetime::expiring}, 0b1},
+                {static_cell_write{4, 3, 4, lifetime::permanent}, 0b1},
+                {regular_cell_write{1, 1, regular_column::v2, std::nullopt, 17, lifetime::permanent}, 0b1},
+            },
+            select_query{.distinct = true, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 777},
+        },
+        // An unpaged read under LIMIT 1 retries the reconciliation with the same
+        // limits, so it gets the same replies, and retries until it times out.
+        read_case{
+            placed_history{
+                {regular_cell_write{1, 1, regular_column::v1, 9, 7, lifetime::permanent}, 0b100},
+                {static_cell_write{4, 0, 5, lifetime::permanent}, 0b1},
+                {regular_cell_write{1, 3, regular_column::v2, 4, 11, lifetime::permanent}, 0b10},
+                {row_deletion{1, 1, 12}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false, .select_v2 = false, .limit = 1},
+            read_options{.replica_count = 3, .page_size = 0},
+        },
+        // The digests match. The replica with data stopped at its tombstone
+        // limit. The other replicas have no data and send no last position, so
+        // lowering the page's cursor to the earliest one removes it. The page is
+        // short, but has neither a partition nor a cursor. The pager would fail
+        // an assertion on it.
+        read_case{
+            placed_history{
+                {row_marker_write{2, 5, 8, lifetime::permanent}, 0b1},
+                {regular_cell_write{2, 1, regular_column::v1, 6, 7, lifetime::permanent}, 0b1},
+                {range_deletion{1, std::nullopt, bound{4, true}, 4}, 0b1},
+                {range_deletion{2, bound{0, false}, bound{5, false}, 6}, 0b1},
+            },
+            select_query{.select_v2 = false},
+            read_options{.replica_count = 3, .extra_replicas = 2, .page_size = 1, .tombstone_limit = 1, .querier_cache = true, .schedule_seed = 4178336223},
+        },
+        // The digests match. The digest replica stopped at its tombstone limit,
+        // before a live row of partition 1. The data replica has no data and
+        // reached the end of the range. If the page ends where the data reply
+        // ended, it has no cursor, and the row is lost.
+        read_case{
+            placed_history{
+                {row_marker_write{4, 5, 13, lifetime::permanent}, 0b10},
+                {row_deletion{1, 1, 9}, 0b1},
+                {regular_cell_write{1, 3, regular_column::v2, 4, 11, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 3, .tombstone_limit = 1, .schedule_seed = 2049622551},
+        },
+        // In each of these cases, a reconciled page holds no live row after the
+        // merge. The resolver marks it short, but gives it neither a partition
+        // nor a cursor. The pager would fail an assertion on it.
+        read_case{
+            placed_history{
+                {partition_deletion{1, 12}, 0b1},
+                {row_marker_write{1, 4, 6, lifetime::expired}, 0b11},
+                {row_marker_write{1, 5, 5, lifetime::permanent}, 0b10},
+            },
+            select_query{.select_s = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 44, .querier_cache = true},
+        },
+        read_case{
+            placed_history{
+                {row_marker_write{3, 2, 8, lifetime::expiring}, 0b1},
+                {static_cell_write{2, 1, 9, lifetime::permanent}, 0b1},
+                {regular_cell_write{1, 5, regular_column::v2, 8, 7, lifetime::permanent}, 0b1},
+                {regular_cell_write{2, 5, regular_column::v1, std::nullopt, 2, lifetime::permanent}, 0b10},
+                {row_marker_write{4, 3, 4, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 1, .querier_cache = true, .schedule_seed = 3230499980},
+        },
+        read_case{
+            placed_history{
+                {range_deletion{1, bound{2, true}, std::nullopt, 15}, 0b1},
+                {row_marker_write{1, 3, 9, lifetime::expired}, 0b11},
+                {row_marker_write{3, 5, 8, lifetime::expiring}, 0b11},
+                {regular_cell_write{2, 2, regular_column::v2, 1, 16, lifetime::permanent}, 0b1},
+                {regular_cell_write{1, 5, regular_column::v1, 4, 5, lifetime::permanent}, 0b11},
+            },
+            select_query{.select_s = false, .select_v2 = false},
+            read_options{.replica_count = 2, .extra_replicas = 1, .page_size = 3, .page_size_in_bytes = 25, .querier_cache = true, .schedule_seed = 3651344462},
+        },
+        read_case{
+            placed_history{
+                {row_marker_write{1, 2, 13, lifetime::permanent}, 0b101},
+                {range_deletion{1, bound{2, false}, bound{6, false}, 14}, 0b110},
+                {range_deletion{2, bound{1, true}, bound{2, false}, 1}, 0b101},
+                {regular_cell_write{1, 1, regular_column::v2, 1, 3, lifetime::expiring}, 0b1},
+                {static_cell_write{1, 3, 2, lifetime::permanent}, 0b10},
+            },
+            select_query{.ck_end = bound{3, false}, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 3, .extra_replicas = 1, .page_size = 3, .page_size_in_bytes = 37, .querier_cache = true, .schedule_seed = 2743198667},
+        },
+        read_case{
+            placed_history{
+                {static_cell_write{2, 0, 3, lifetime::permanent}, 0b10},
+                {row_marker_write{2, 4, 8, lifetime::expired}, 0b1},
+                {row_marker_write{4, 1, 1, lifetime::permanent}, 0b10},
+            },
+            select_query{.select_s = false},
+            read_options{.replica_count = 2, .page_size = 1},
+        },
+        read_case{
+            placed_history{
+                {static_cell_write{2, std::nullopt, 11, lifetime::permanent}, 0b10},
+                {regular_cell_write{3, 5, regular_column::v1, 8, 1, lifetime::expiring}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 4},
+        },
+        read_case{
+            placed_history{
+                {regular_cell_write{1, 5, regular_column::v2, std::nullopt, 8, lifetime::permanent}, 0b1},
+                {regular_cell_write{2, 4, regular_column::v1, 0, 15, lifetime::permanent}, 0b1},
+                {static_cell_write{1, 4, 5, lifetime::expiring}, 0b10},
+            },
+            select_query{.select_s = false, .select_v1 = false},
+            read_options{.replica_count = 2, .page_size = 1, .schedule_seed = 3637446295},
+        },
+        read_case{
+            placed_history{
+                {static_cell_write{1, 1, 9, lifetime::expiring}, 0b1},
+                {range_deletion{4, bound{5, true}, std::nullopt, 8}, 0b10},
+            },
+            select_query{.select_s = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 2},
+        },
+    };
+    with_harness([&] (harness& hs) {
+        for (const auto& c : witnesses) {
+            run_and_check(hs, c);
+        }
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.

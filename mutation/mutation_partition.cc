@@ -2204,7 +2204,11 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     if (r.is_short_read()) {
         builder.mark_as_short_read();
     }
-    co_return builder.build(compaction_state->current_full_position());
+    auto result = builder.build(compaction_state->current_full_position());
+    if (slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+        result.set_frontier(compaction_state->frontier());
+    }
+    co_return result;
 }
 
 query::result

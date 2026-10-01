@@ -465,6 +465,10 @@ public:
         return _short_read;
     }
 
+    void set_short_read(short_read sr) {
+        _short_read = sr;
+    }
+
     const std::optional<uint32_t>& partition_count() const {
         return _partition_count;
     }
