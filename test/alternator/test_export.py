@@ -21,9 +21,11 @@ import gzip
 import decimal
 
 from botocore.exceptions import ClientError
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string, scylla_config_read
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -1368,3 +1370,36 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
             S3Bucket='my-bucket',
             ExportTime=int(time.time()) + 60 * 5 + 60,
         )
+
+# Test that the internal system-distributed tables for alternator export to S3 exist and are queryable.
+@pytest.mark.parametrize("table_name", ['alternator_export_to_s3_exports', 'alternator_export_to_s3_client_tokens'])
+def test_export_to_s3_checks_if_internal_tables_exist(cql, table_name):
+    statement = SimpleStatement(f"SELECT * FROM system_distributed.{table_name} LIMIT 1", consistency_level=ConsistencyLevel.ONE)
+    # we don't care about the results, we just want to make sure the read succeeds
+    cql.execute(statement)
+
+# Test that the Alternator TTL scanner expires rows of the internal
+# alternator_export_to_s3_exports table (which has the TTL tag set on the
+# metadata_expires_at column) also on a single-node cluster, where the RF=3
+# system_distributed keyspace cannot achieve LOCAL_QUORUM.
+def test_export_to_s3_exports_table_rows_expire(dynamodb, cql):
+    period = scylla_config_read(dynamodb, 'alternator_ttl_period_in_seconds')
+    assert period is not None
+    if float(period) > 1:
+        pytest.skip('need alternator_ttl_period_in_seconds <= 1')
+    export_arn = f'export-{random_string()}'
+    # Note that the TTL scanner ignores expiration times more than 5 years
+    # in the past, so use a recent one.
+    expires_at_ms = int((time.time() - 60) * 1000)
+    cql.execute(SimpleStatement(
+        f"INSERT INTO system_distributed.alternator_export_to_s3_exports (export_arn, metadata_expires_at) VALUES ('{export_arn}', {expires_at_ms})",
+        consistency_level=ConsistencyLevel.ONE))
+    select = SimpleStatement(
+        f"SELECT export_arn FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = '{export_arn}'",
+        consistency_level=ConsistencyLevel.ONE)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if not list(cql.execute(select)):
+            return
+        time.sleep(0.1)
+    pytest.fail(f'row {export_arn} was not expired')
