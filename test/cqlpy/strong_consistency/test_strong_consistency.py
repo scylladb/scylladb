@@ -13,38 +13,15 @@
 
 import collections
 import re
+import time
 
 import pytest
 from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
-from test.pylib.skip_types import skip_env
-
 from .. import nodetool
 from ..util import new_materialized_view, new_test_table, unique_name
-
-
-# A keyspace whose tables are strongly consistent. Cassandra and the --vnodes
-# mode have nothing to say about it, and neither has a build which runs without
-# the strongly-consistent-tables experimental feature. Every other rejection of
-# the keyspace is a regression, so it has to reach the test as a failure rather
-# than as a skip.
-@pytest.fixture(scope="module")
-def sc_keyspace(cql, scylla_only, has_tablets):
-    if not has_tablets:
-        skip_env('Strongly consistent tables need a tablet based keyspace')
-    keyspace = unique_name()
-    try:
-        cql.execute(f"CREATE KEYSPACE {keyspace} WITH replication = "
-                    "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
-                    "AND tablets = {'initial': 1} AND consistency = 'global'")
-    except ConfigurationException as e:
-        if 'strongly_consistent_tables' not in str(e):
-            raise
-        skip_env('Strongly consistent tables need the strongly-consistent-tables feature on')
-    yield keyspace
-    cql.execute(f"DROP KEYSPACE {keyspace}")
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -70,6 +47,61 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
                 INSERT INTO {table} (pk, v) VALUES (0, 14);
                 APPLY BATCH
             """)
+        # A native protocol batch refers to statements prepared earlier, so
+        # the refusal has to land on PREPARE, before there is a batch at all.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?) USING TIMESTAMP ?")
+
+
+def test_protocol_timestamp_ignored_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    The CQL USING TIMESTAMP clause is rejected on a strongly consistent table,
+    but the protocol level timestamp - which every driver with client side
+    timestamps on, python's among them, puts on every request - is silently
+    ignored instead: the raft leader assigns the timestamp and never looks at
+    what the client sent. Rejecting it would refuse every statement from such
+    a driver, so ignoring is the deliberate choice, and it means the same
+    client code orders writes differently on the two kinds of table.
+
+    The eventually consistent half is not decoration, it is the control: it is
+    what shows the client timestamp is still being sent at all. Were the driver
+    to stop consulting the generator, both writes would get ordinary timestamps
+    and that half would fail, instead of the strongly consistent half passing
+    for the wrong reason.
+
+    A last write, with a client timestamp far above the row, is the sanity
+    check: honoured or ignored, it is the newest write, so it has to land on
+    both tables. It is what shows a write sent with a custom client timestamp
+    is applied at all, which the shadowed write on the eventually consistent
+    table cannot show.
+    """
+    def insert_with_client_timestamp(table, v, timestamp):
+        # The driver has no per-statement client timestamp, so the generator
+        # on the cluster is the only lever - and that cluster is shared with
+        # every other test in the run, hence the restore.
+        generator = cql.cluster.timestamp_generator
+        cql.cluster.timestamp_generator = lambda: timestamp
+        try:
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, {v})")
+        finally:
+            cql.cluster.timestamp_generator = generator
+
+    # A day ahead, in microseconds: far above the row, yet well within the 3
+    # days restrict_future_timestamp tolerates.
+    far_above = int((time.time() + 24 * 60 * 60) * 1_000_000)
+    for keyspace, honours_client_timestamp in [(sc_keyspace, False), (test_keyspace, True)]:
+        kind = "eventually" if honours_client_timestamp else "strongly"
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int") as table:
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+            insert_with_client_timestamp(table, 2, 1000)  # 1970, far below the row
+            # Honoured, the write is shadowed by the older row; ignored, it wins.
+            expected = 1 if honours_client_timestamp else 2
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == expected, \
+                f"{kind} consistent table: expected v={expected}"
+
+            insert_with_client_timestamp(table, 3, far_above)
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 3, \
+                f"{kind} consistent table: expected the write far above the row to land"
 
 
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
@@ -346,6 +378,39 @@ def test_lwt_on_sc_table(cql, sc_keyspace):
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
 
 
+def test_reject_data_prefetch_on_sc_table(cql, sc_keyspace):
+    """
+    The strongly consistent write path does not support read-before-write
+    yet: the coordinator builds the mutation from the statement alone, with
+    no prefetched row, so a statement whose operations need the current row
+    is refused when it is prepared, rather than computed from nothing.
+
+    The operations which need the row are those reporting requires_read():
+    three list operations - removing by value, setting by index, deleting by
+    index - and setting a regular column from an expression over a non-key
+    column, like SET v = v + 1. The last one is refused on every table unless
+    it carries a condition, which is what makes it atomic, so it reaches the
+    strongly consistent refusal only with IF EXISTS; the prefetch check runs
+    before the refusal of conditions, which is why the message is still the
+    prefetch one.
+
+    An append needs no read and goes through, which is what separates a
+    refusal about prefetching from a refusal about collections.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int, l list<int>") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v, l) VALUES (1, 1, [10, 20, 30])")
+        error_msg = "Strongly consistent updates don't support data prefetch"
+        for statement in [f"UPDATE {table} SET l = l - [20] WHERE pk = 1",
+                          f"UPDATE {table} SET l[0] = 99 WHERE pk = 1",
+                          f"DELETE l[0] FROM {table} WHERE pk = 1",
+                          f"UPDATE {table} SET v = v + 1 WHERE pk = 1 IF EXISTS"]:
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(statement)
+
+        cql.execute(f"UPDATE {table} SET l = l + [40] WHERE pk = 1")
+        assert list(cql.execute(f"SELECT v, l FROM {table} WHERE pk = 1")) == [(1, [10, 20, 30, 40])]
+
+
 def test_batch_attributes_on_sc_table(cql, sc_keyspace):
     """
     Batch-level USING TTL and USING TIMESTAMP are rejected on strongly
@@ -394,6 +459,43 @@ def test_batch_consistency_level_on_sc_table(cql, sc_keyspace):
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 2
 
 
+def test_read_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent read accepts QUORUM/LOCAL_QUORUM, which it serves as
+    a linearizable read, and ONE/LOCAL_ONE, which it serves off a single
+    replica, and rejects every other consistency level - a wider set than the
+    write path takes, which is QUORUM/LOCAL_QUORUM only. The two lists below
+    are all the levels there are. The check precedes the generic validation of
+    a read level, so even a write-only level like ANY is refused with this
+    message rather than with the usual complaint about ANY not being a read
+    level.
+
+    Which of the two paths a level actually takes is not visible here: on a
+    single node with RF=1 a linearizable read and one served off a single
+    replica return the same thing. This pins the accept/reject split only; the
+    difference in behaviour belongs in test/cluster.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        select = f"SELECT v FROM {table} WHERE pk = 1"
+
+        accepted = [ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM,
+                    ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]
+        refused = [ConsistencyLevel.ANY, ConsistencyLevel.TWO, ConsistencyLevel.THREE,
+                   ConsistencyLevel.ALL, ConsistencyLevel.EACH_QUORUM,
+                   ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL]
+        # The claim of the test is that these are all of them.
+        assert set(accepted) | set(refused) == set(ConsistencyLevel.name_to_value.values())
+
+        for cl in accepted:
+            assert cql.execute(SimpleStatement(select, consistency_level=cl)).one().v == 2
+
+        cl_error = "Strongly consistent reads must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE"
+        for cl in refused:
+            with pytest.raises(InvalidRequest, match=cl_error):
+                cql.execute(SimpleStatement(select, consistency_level=cl))
+
+
 def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
     """
     A CQL text batch that mixes statements on strongly consistent and
@@ -420,6 +522,16 @@ def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
                     INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
                     APPLY BATCH
                 """)
+
+            # A mixed batch is classified in two independent places - here in
+            # batch_statement::prepare() for the textual form, and in
+            # transport/server.cc for the native protocol one - and has already
+            # been let through once, when the textual path asked only about the
+            # keyspace of the first statement. The eventually consistent half
+            # is the telling one: it is written through the ordinary path, so
+            # it would leak whatever the raft group did.
+            assert list(cql.execute(f"SELECT pk, v FROM {sc_table} WHERE pk = 1")) == []
+            assert list(cql.execute(f"SELECT pk, v FROM {ec_table} WHERE pk = 1")) == []
 
 
 def test_group_by_on_sc_table(cql, sc_keyspace):
