@@ -26,8 +26,12 @@
 
 namespace s3 { class client; }
 namespace service { class storage_proxy; }
+namespace db { struct alternator_export_row; }
 
 namespace alternator {
+
+// A row of the exports table, as stored (see db/system_distributed_keyspace.hh).
+using export_row = db::alternator_export_row;
 
 // Compression type selection for export/import pipelines.
 // Pass one of these structs to create_sink_pipeline / create_source_pipeline to select compression mode.

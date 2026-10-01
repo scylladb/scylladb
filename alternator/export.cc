@@ -21,9 +21,7 @@
 #include "db/timeout_clock.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
-#include "partition_slice_builder.hh"
 #include "query/query-request.hh"
-#include "query/query-result-set.hh"
 #include "replica/database.hh"
 #include "schema/schema.hh"
 #include "service_permit.hh"
@@ -33,6 +31,7 @@
 #include "service/storage_proxy.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/overloaded_functor.hh"
@@ -66,6 +65,40 @@
 namespace alternator {
 
 static logging::logger xlogger("alternator-export");
+
+// `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
+// RequestLimitExceeded, so that the client retries (the same as
+// create_api_error_from_coordinators_exception() does for data tables).
+// The reads below convert errors for all callers.
+template <typename T>
+static future<T> translate_coordinator_errors(future<T> f) {
+    try {
+        co_return co_await std::move(f);
+    } catch (const exceptions::rate_limit_exception& e) {
+        throw api_error::request_limit_exceeded(e.what());
+    } catch (const exceptions::overloaded_exception& e) {
+        throw api_error::request_limit_exceeded(e.what());
+    }
+}
+
+// `qs` is the query state of the client request. Background fibers give null, and the read
+// uses the internal query state.
+static future<std::optional<export_row>> get_export(db::system_distributed_keyspace& sdks, const sstring& export_arn,
+        service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_export(export_arn, qs));
+}
+
+// The export columns that ListExports and the garbage collector use. ExportType comes from
+// `request`.
+using export_summary_row = db::alternator_export_table_helper::export_summary_row;
+
+// Returns all exports, in no specified order. If set, `as` aborts the scan.
+static future<utils::chunked_vector<export_summary_row>> get_all_exports(db::system_distributed_keyspace& sdks,
+        const abort_source* as = nullptr, service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_all_exports(as, qs));
+}
 
 // Interfaces for `sink` / `source` pipelines.
 // The `sink` pipeline consists of 3 stages:
@@ -1072,79 +1105,6 @@ static arn_parts parse_export_arn(std::string_view export_arn, std::string_view 
     return parts;
 }
 
-// The persisted state of a single Alternator "export to S3", as needed to answer DescribeExport.
-// The columns above the optional ones must all be written by the statement that creates the export
-// row, so that a row is either complete or not there at all. Everything that describes a finished
-// export is optional, because it is only filled in as the export runs.
-struct export_row {
-    sstring client_token;
-    // The original ExportTableToPointInTime request, as JSON. It is the source of truth for the
-    // request-derived fields of ExportDescription (S3Bucket, ExportFormat, TableArn, ...).
-    sstring request;
-    sstring export_status;
-    ::table_id table_id;  // The exported table, as resolved when the export was accepted
-    db_clock::time_point export_time;  // The point in time the data was exported from
-    db_clock::time_point accepted_at;
-    std::optional<sstring> export_manifest;
-    std::optional<sstring> failure_code;
-    std::optional<sstring> failure_message;
-    std::optional<int64_t> item_count;
-    std::optional<int64_t> billed_size_bytes;
-    std::optional<db_clock::time_point> completed_at;
-};
-
-// Reads at most `row_limit` rows of the given partitions of the exports table, whose schema is `schema`.
-static future<foreign_ptr<lw_shared_ptr<query::result>>> read_exports(service::storage_proxy& proxy, schema_ptr schema, dht::partition_range_vector partition_ranges,
-        const query::partition_slice& partition_slice, query::row_limit row_limit, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
-            proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()), row_limit);
-    // system_distributed has RF=3, and QUORUM of that cannot be reached with a single token owner.
-    auto cl = proxy.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, std::move(trace_state)));
-    if (!rqr) {
-        co_await coroutine::return_exception(create_api_error_from_coordinators_exception(std::move(rqr).assume_error()));
-    }
-    co_return std::move(rqr.assume_value().query_result);
-}
-
-// Returns the export with the given ARN, or nullopt if there is no such export.
-static future<std::optional<export_row>> get_export(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, sstring export_arn) {
-    using sdks = db::system_distributed_keyspace;
-    schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
-    partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(export_arn));
-    dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
-    const query::partition_slice& partition_slice = schema->full_slice();
-    auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit::max, client_state, std::move(trace_state), std::move(permit));
-    query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
-    if (rs.empty()) {
-        co_return std::nullopt;
-    }
-    const query::result_set_row& row = rs.row(0);
-    // The statement creating the export row must fill all of these in, so a row missing any of them
-    // is corrupt.
-    for (auto column : {"client_token", "request", "export_status", "table_id", "export_time", "accepted_at"}) {
-        if (!row.get_data_value(column)) {
-            throw std::runtime_error(fmt::format("Export '{}' has no {} in {}.{}", export_arn, column, sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
-        }
-    }
-    co_return export_row {
-        .client_token = row.get_nonnull<sstring>("client_token"),
-        .request = row.get_nonnull<sstring>("request"),
-        .export_status = row.get_nonnull<sstring>("export_status"),
-        .table_id = ::table_id(row.get_nonnull<utils::UUID>("table_id")),
-        .export_time = row.get_nonnull<db_clock::time_point>("export_time"),
-        .accepted_at = row.get_nonnull<db_clock::time_point>("accepted_at"),
-        .export_manifest = row.get<sstring>("export_manifest"),
-        .failure_code = row.get<sstring>("failure_code"),
-        .failure_message = row.get<sstring>("failure_message"),
-        .item_count = row.get<int64_t>("item_count"),
-        .billed_size_bytes = row.get<int64_t>("billed_size_bytes"),
-        .completed_at = row.get<db_clock::time_point>("completed_at"),
-    };
-}
-
 future<executor::request_return_type> executor::describe_export(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.describe_export++;
 
@@ -1166,7 +1126,8 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
     // Unlike the export itself, needs no permission on the table, which may have been deleted since.
     co_await verify_object_storage_permission(_enforce_authorization, _warn_authorization, client_state, auth::permission::SELECT, _stats);
 
-    auto exp = co_await get_export(_proxy, client_state, std::move(trace_state), std::move(permit), sstring(export_arn));
+    service::query_state qs(client_state, std::move(trace_state), std::move(permit));
+    auto exp = co_await get_export(_sdks, sstring(export_arn), &qs);
     // DynamoDB answers ExportNotFoundException also when the ARN names a table it does not have,
     // but ValidationException when no table can have the name the ARN gives.
     if (!exp) {
@@ -1175,6 +1136,19 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         }
         validate_table_name(parts.table_name, "ExportArn: Invalid Export ARN - table name");
         co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+    // The insert of the export row writes these columns, so a row without one of them is corrupt.
+    for (auto [column, missing] : {
+            std::pair{"client_token", exp->client_token.empty()},
+            std::pair{"request", exp->request.empty()},
+            std::pair{"export_status", exp->export_status.empty()},
+            std::pair{"table_id", !exp->table_id},
+            std::pair{"export_time", exp->export_time == db_clock::time_point{}},
+            std::pair{"accepted_at", exp->accepted_at == db_clock::time_point{}}}) {
+        if (missing) {
+            throw std::runtime_error(fmt::format("Export '{}' has no {} in {}.{}", export_arn, column,
+                    db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
+        }
     }
 
     rjson::value export_desc = rjson::empty_object();
@@ -1495,50 +1469,6 @@ seastar::future<> export_scan_table(
     }
 }
 
-// An export reduced to what ListExports reports about it. The optional members are unset in a row
-// which lacks the column.
-struct export_summary_row {
-    sstring export_arn;
-    // The export's status, as stored. ListExports reports it as ExportStatus.
-    std::optional<sstring> status;
-    // The original ExportTableToPointInTime request, as JSON. ExportType is read back from it.
-    std::optional<sstring> request;
-};
-
-// Returns every export there is, in no particular order. The table is read a page at a time, as an
-// unpaged read fails once its result outgrows max_memory_for_unlimited_query_hard_limit.
-static future<std::vector<export_summary_row>> get_all_exports(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    using sdks = db::system_distributed_keyspace;
-    static constexpr uint64_t page_size = 1000;
-    schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
-    auto partition_slice = partition_slice_builder(*schema)
-            .with_regular_column(to_bytes("export_status"))
-            .with_regular_column(to_bytes("request"))
-            .with_option<query::partition_slice::option::allow_short_read>()
-            .build();
-    dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
-    std::vector<export_summary_row> exports;
-    while (true) {
-        auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit(page_size), client_state, trace_state, permit);
-        query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
-        for (const query::result_set_row& row : rs.rows()) {
-            exports.push_back(export_summary_row {
-                .export_arn = row.get_nonnull<sstring>("export_arn"),
-                .status = row.get<sstring>("export_status"),
-                .request = row.get<sstring>("request"),
-            });
-        }
-        // As in query_pager, a short read can end a page early, even before any row.
-        if (rs.rows().size() < page_size && !result->is_short_read()) {
-            co_return exports;
-        }
-        // Each partition holds a single row, so the next page starts after the last partition read.
-        auto last_key = dht::decorate_key(*schema, result->get_or_calculate_last_position().partition);
-        partition_ranges = {dht::partition_range::make_starting_with(dht::partition_range::bound(std::move(last_key), false))};
-        co_await coroutine::maybe_yield();
-    }
-}
-
 // Throws std::runtime_error for an incomplete row, or for a row whose request is not valid JSON.
 static rjson::value make_export_summary(const export_summary_row& exp) {
     if (!exp.status || !exp.request) {
@@ -1629,7 +1559,8 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         co_return rjson::print(rjson::empty_object());
     }
 
-    auto exports = co_await get_all_exports(_proxy, client_state, std::move(trace_state), std::move(permit));
+    service::query_state qs(client_state, std::move(trace_state), std::move(permit));
+    auto exports = co_await get_all_exports(_sdks, nullptr, &qs);
 
     // The exports table is partitioned by export ARN, so the TableArn filter is applied here, to the
     // table part of each export ARN. A row with a malformed ARN is skipped with a warning.
