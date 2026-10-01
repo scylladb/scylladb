@@ -584,7 +584,7 @@ cql_server::forward_cql(
             if (try_catch<seastar::rpc::timeout_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC timeout. Will return blanket timeout exception", target_host, target_shard);
                 if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
+                    co_await on_forwarding_finished(eptr);
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
@@ -594,7 +594,7 @@ cql_server::forward_cql(
             } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
                 if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
+                    co_await on_forwarding_finished(eptr);
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
@@ -614,7 +614,7 @@ cql_server::forward_cql(
             clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
             tracing::trace(trace_state, "Forwarded CQL request executed successfully on replica: {}", target_host);
             if (on_forwarding_finished) {
-                on_forwarding_finished(current_host);
+                co_await on_forwarding_finished(current_host);
             }
             co_return std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body));
         case forward_cql_status::error: {
