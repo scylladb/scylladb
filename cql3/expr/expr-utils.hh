@@ -97,7 +97,8 @@ size_t count_if(const expression& e, const noncopyable_function<bool (const bina
 // A call that counts every row: countRows(), or count(<non-null constant>). A
 // constant argument is never null, so counting its non-null occurrences yields
 // the row count, exactly like countRows(). count(<column>) does not qualify: it
-// counts only the rows where the column is non-null.
+// counts only the rows where the column is non-null. "Constant" is checked after
+// prepare-time folding, so count(blobasint(0x00000001)) qualifies too.
 bool is_count_rows_call(const function_call& fc);
 
 inline const binary_operator* find(const expression& e, oper_t op) {
