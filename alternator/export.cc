@@ -77,6 +77,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <zlib.h>
@@ -237,7 +238,9 @@ static future<bool> write_final_export_row(db::system_distributed_keyspace& sdks
 // `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
 // RequestLimitExceeded, so that the client retries (the same as
 // create_api_error_from_coordinators_exception() does for data tables).
-// The reads below convert errors for all callers.
+// The reads below convert errors for all callers. Only the garbage collector reads the client
+// tokens, and it calls the helper directly, thus that read does not convert the errors. For
+// writes, the request path converts the errors. Background fibers retry all errors.
 template <typename T>
 static future<T> translate_coordinator_errors(future<T> f) {
     try {
@@ -1395,6 +1398,50 @@ static rjson::value build_export_description_response(const export_row& exp) {
     return response;
 }
 
+// Returns the FAILED export row for a client token row whose node stopped between its two
+// writes. Uses the times of the original request (the accept time from the ARN and the
+// ExportTime of the request), not the time of this round.
+static export_row failed_row_for_orphaned_client_token(const client_row& ct, const live_node_identifier& self_node_id) {
+    // Parse the user request of the client token row.
+    rjson::value request;
+    sstring stored_request = ct.request;
+    try {
+        request = rjson::parse(ct.request);
+    } catch (...) {
+        xlogger.debug("Failed to parse request from client token row {}: {}", ct.client_token, ct.request);
+        // This does not occur in normal operation. Make a replacement request and store
+        // it, so that DescribeExport can describe the FAILED export.
+        request = rjson::empty_object();
+        // Do not use a default view: rjson::from_string() throws if data() is null.
+        auto split = split_export_arn(ct.export_arn);
+        std::string_view table_arn = split ? split->first : "";
+        // The export description requires TableArn and S3Bucket, so always set them.
+        rjson::add(request, "TableArn", rjson::from_string(table_arn));
+        rjson::add(request, "S3Bucket", rjson::from_string(""));
+        stored_request = sstring(rjson::print(request));
+    }
+
+    auto now = db_clock::now();
+    auto accepted_at = accept_time_from_export_arn(ct.export_arn).value_or(now);
+
+    return export_row{
+        .export_arn = ct.export_arn,
+        .client_token = ct.client_token,
+        .request = std::move(stored_request),
+        // The client token row has no table id. The table of the same name can be a different
+        // table (dropped and created again), so the id stays nil and DescribeExport has no TableId.
+        .table_id = ::table_id(),
+        .export_status = "FAILED",
+        .failure_code = "NodeFailure",
+        .failure_message = "The node that initiated the export has failed before the export could start.",
+        .export_id_token = "",
+        .export_time = export_time_of_request(request, accepted_at),
+        .accepted_at = accepted_at,
+        .completed_at = now,
+        .node_id = self_node_id.to_string(),
+    };
+}
+
 // Marks as FAILED the export row `exp` of a node which cannot run it. `exp` must be the full
 // row, because the conditional write sets all non-key columns.
 // Does nothing if the row changed since the caller read it: a different node took the export, or
@@ -1448,6 +1495,8 @@ static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::sy
     }
     auto self_node_id = std::move(*self_node_id_opt);
 
+    db::alternator_export_table_helper helper(sdks.qp());
+    auto client_tokens = co_await helper.get_all_client_tokens(&as);
     auto exports = co_await get_all_exports(sdks, &as);
     // We can take a row if its node is not in `running_nodes` (see `node_unreachable_timeout()`).
     // Rows of previous incarnations of this node are always taken, because the current
@@ -1457,12 +1506,57 @@ static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::sy
     // owner again with the current state (see collect_export_row()).
     auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr());
 
-    xlogger.debug("Garbage collection: {} exports, {} nodes which may be running an export, self node_id={}",
-        exports.size(), running_nodes.generations.size(), self_node_id);
+    xlogger.debug("Garbage collection: {} client tokens, {} exports, {} nodes which may be running an export, self node_id={}",
+        client_tokens.size(), exports.size(), running_nodes.generations.size(), self_node_id);
+
+    // The ARNs of the export rows of all owners. A collector does not rewrite the `node_id` of a
+    // client token row, so the export row of a dead node's token can belong to a live node now.
+    std::unordered_set<std::string_view> existing_export_arns;
+    existing_export_arns.reserve(exports.size());
+    for (const auto& e : exports) {
+        co_await coroutine::maybe_yield();
+        existing_export_arns.insert(e.export_arn);
+    }
 
     // We catch errors for each row and continue with the next row. If one bad row stopped the
-    // round, each round would stop at the same row.
+    // round, each round would stop at the same row, and the loop over the export rows below
+    // would never run.
     size_t uncollected_rows = 0;
+
+    for (auto& ct : client_tokens) {
+        as.check();
+        // Most rows do not await, so yield here.
+        co_await coroutine::maybe_yield();
+        // Skip a client token row of a node that can still run.
+        if (running_nodes.may_be_running(live_node_identifier::from_string(ct.node_id))) {
+            continue;
+        }
+
+        if (!existing_export_arns.contains(ct.export_arn)
+                && !get_running_nodes(gossiper, *proxy.get_token_metadata_ptr()).may_be_running(
+                        live_node_identifier::from_string(ct.node_id))) {
+            // The node stopped between its two writes (checked again with the current gossip
+            // state, as in collect_export_row()). Write a FAILED export row for the token ARN.
+            xlogger.debug("Client token row {} of dead node {} has no export row {}, creating a FAILED export row",
+                    ct.client_token, ct.node_id, ct.export_arn);
+            try {
+                auto existing = co_await insert_export(sdks, failed_row_for_orphaned_client_token(ct, self_node_id));
+                if (existing) {
+                    // The scan did not see the row, but the insert did. A Paxos round of the dead
+                    // node had accepted the row without a commit, and our insert completed that
+                    // round. The loop below uses the scan, thus it does not collect the row.
+                    // Collect it here.
+                    xlogger.info("Export row {} of client token {} appeared after the scan, collecting it",
+                            ct.export_arn, ct.client_token);
+                    co_await collect_export_row(proxy, sdks, gossiper, self_node_id, *existing);
+                }
+            } catch (...) {
+                xlogger.warn("Failed to create the FAILED export row {} of client token {}: {}",
+                        ct.export_arn, ct.client_token, std::current_exception());
+                ++uncollected_rows;
+            }
+        }
+    }
 
     for (auto& summary : exports) {
         as.check();
@@ -1491,7 +1585,7 @@ static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::sy
             // have taken the export after the scan.
             co_await collect_export_row(proxy, sdks, gossiper, self_node_id, *row);
         } catch (...) {
-            // A later round collects this row.
+            // Same as the loop above: a later round collects this row.
             xlogger.warn("Failed to collect export row {} of node {}: {}",
                     summary.export_arn, node_id, std::current_exception());
             ++uncollected_rows;
@@ -2168,11 +2262,11 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
     }
     // The insert of the export row writes these columns, so a row without one of them is corrupt.
+    // table_id is not checked: the garbage collector can write a FAILED row with a nil table_id.
     for (auto [column, missing] : {
             std::pair{"client_token", exp->client_token.empty()},
             std::pair{"request", exp->request.empty()},
             std::pair{"export_status", exp->export_status.empty()},
-            std::pair{"table_id", !exp->table_id},
             std::pair{"export_time", exp->export_time == db_clock::time_point{}},
             std::pair{"accepted_at", exp->accepted_at == db_clock::time_point{}}}) {
         if (missing) {

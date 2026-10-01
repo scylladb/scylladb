@@ -1396,10 +1396,15 @@ def test_describe_export(test_table_s, s3):
         assert 'BilledSizeBytes' in desc
 
 
-# An export id that no export has, in the format of DynamoDB's export ids: the StartTime of the
-# export in milliseconds since the epoch, padded to 14 digits, a dash, and 8 hex digits.
+# An export id in the DynamoDB format: the StartTime in milliseconds since the epoch (14 digits),
+# a dash, and 8 hex digits. `accepted_at` is the StartTime in seconds since the epoch.
+def export_id_accepted_at(accepted_at):
+    return f'{int(accepted_at * 1000):014d}-{uuid.uuid4().hex[:8]}'
+
+
+# An export id that no export has.
 def unknown_export_id():
-    return f'{int(time.time() * 1000):014d}-{uuid.uuid4().hex[:8]}'
+    return export_id_accepted_at(time.time())
 
 
 # Test that DescribeExport rejects with ValidationException an ARN which carries no export id: an
@@ -2836,6 +2841,31 @@ def in_progress_export(cql, table_arn, node_id, export_status='IN_PROGRESS'):
     return export_metadata(cql, unstarted_export_arn(table_arn),
         accepted_export_row(table_arn) | {'node_id': node_id, 'export_status': export_status})
 
+# Inserts a ClientToken row with the given columns.
+def insert_client_token_row(cql, client_token, export_arn, request, node_id):
+    cql.execute(SimpleStatement(
+        "INSERT INTO system_distributed.alternator_export_to_s3_client_tokens (client_token, export_arn, request, node_id) "
+        "VALUES (%s, %s, %s, %s)",
+        consistency_level=ConsistencyLevel.ONE), [client_token, export_arn, request, node_id])
+
+# Inserts a ClientToken row of the given node without an export row (as a node that died between
+# the two inserts), and yields the reserved ARN. On exit, removes the ClientToken row and the export
+# row of the reserved ARN.
+@contextmanager
+def client_token_reservation(cql, table_arn, node_id, export_id=None):
+    export_arn = f'{table_arn}/export/{export_id}' if export_id else unstarted_export_arn(table_arn)
+    columns = accepted_export_row(table_arn)
+    insert_client_token_row(cql, columns['client_token'], export_arn, columns['request'], node_id)
+    try:
+        yield export_arn
+    finally:
+        cql.execute(SimpleStatement(
+            "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+            consistency_level=ConsistencyLevel.ONE), [export_arn])
+        cql.execute(SimpleStatement(
+            "DELETE FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+            consistency_level=ConsistencyLevel.ONE), [columns['client_token']])
+
 # Test that the garbage collector marks as FAILED an IN_PROGRESS export of a
 # dead node (e.g. a restarted node). It must not change an IN_PROGRESS export of
 # a live node or a finished export of a dead node.
@@ -2876,3 +2906,54 @@ def test_export_garbage_collection_fails_export_of_removed_node(cql, scylla_only
             desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
             assert desc['ExportStatus'] == 'FAILED'
             assert desc['FailureCode'] == 'NodeFailure'
+
+# Test that the garbage collector writes a FAILED export row if a node died
+# after the ClientToken row insert and before the export row insert.
+def test_export_garbage_collection_creates_failed_export_for_client_token_of_dead_node(cql, scylla_only, rest_api, test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    live_node_id = node_id_of(rest_api)
+
+    # A ClientToken row of a dead node without an export row, for an export accepted one
+    # hour ago.
+    accepted_at = time.time() - 3600
+    with client_token_reservation(cql, table_arn, dead_node_id(live_node_id),
+                                  export_id=export_id_accepted_at(accepted_at)) as export_arn, \
+         export_garbage_collection(rest_api) as run_garbage_collection:
+        run_garbage_collection()
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+        assert desc['ExportStatus'] == 'FAILED'
+        assert desc['FailureCode'] == 'NodeFailure'
+        # StartTime and ExportTime are the accept time from the export id (the request has no
+        # ExportTime). Only EndTime is the time of the round.
+        assert desc['StartTime'].timestamp() == pytest.approx(int(accepted_at * 1000) / 1000, abs=1e-3)
+        assert desc['ExportTime'] == desc['StartTime']
+        assert desc['EndTime'].timestamp() > accepted_at + 1800
+        # The ClientToken row has no table id, and the table found by name can be another one.
+        assert 'TableId' not in desc
+
+# Test that an unreadable ClientToken row of a dead node (the request is not JSON, and the ARN
+# has no export id) does not stop the round: the export of that node still becomes FAILED.
+def test_export_garbage_collection_unreadable_client_token_row(cql, scylla_only, rest_api, test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    live_node_id = node_id_of(rest_api)
+
+    with export_garbage_collection(rest_api) as run_garbage_collection:
+        client_token = random_string(20)
+        malformed_export_arn = f'{table_arn}-not-an-export-arn'
+        insert_client_token_row(cql, client_token, malformed_export_arn, 'not json', dead_node_id(live_node_id))
+        try:
+            with in_progress_export(cql, table_arn, dead_node_id(live_node_id)) as dead_export_arn:
+                run_garbage_collection()
+                assert client.describe_export(ExportArn=dead_export_arn)['ExportDescription']['ExportStatus'] == 'FAILED'
+        finally:
+            # The round wrote an export row with the malformed ARN, which nothing else removes
+            # until its TTL expires. Every later ListExports of this cluster would warn about
+            # that ARN, so remove the row and the ClientToken row which caused it.
+            cql.execute(SimpleStatement(
+                "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+                consistency_level=ConsistencyLevel.ONE), [malformed_export_arn])
+            cql.execute(SimpleStatement(
+                "DELETE FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+                consistency_level=ConsistencyLevel.ONE), [client_token])
