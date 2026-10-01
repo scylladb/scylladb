@@ -244,6 +244,12 @@ struct compaction_descriptor {
     // timestamp comparison, similar to memtables, is performed.
     bool gc_check_only_compacting_sstables = false;
 
+    // If set to true, gc will not check the memtables to collect tombstones, see
+    // compaction_group_view::skip_memtable_for_tombstone_gc(). It is up to the caller to set
+    // it, from the same view of the table its sstable set for tombstone gc was selected with,
+    // so the two cannot disagree if the table's tombstone_gc mode changes in the meantime.
+    bool skip_memtable_for_tombstone_gc = false;
+
     // The gc state the compaction decides tombstone collection with. It is up to the caller to
     // provide it, usually the table's (compaction_group_view::get_tombstone_gc_state()); the
     // default collects no tombstones.
