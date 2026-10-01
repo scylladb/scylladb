@@ -3574,6 +3574,7 @@ future<> database::drain() {
     co_await _object_storage_writes_gate.close();
     co_await flush_non_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
+    co_await utils::get_local_injector().inject("database_drain_after_user_flush", utils::wait_for_message(5min));
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
