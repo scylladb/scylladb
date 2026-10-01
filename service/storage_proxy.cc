@@ -1310,6 +1310,14 @@ query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
     return proxy.features().read_frontiers ? query::digest_algorithm::xxHash_without_empty_partitions : query::digest_algorithm::xxHash;
 }
 
+// The digest algorithm of a read which asks for frontiers, or does not. Both
+// come with the READ_FRONTIERS cluster feature, so a read decides both at
+// once, see storage_proxy::do_query().
+static inline
+query::digest_algorithm digest_algorithm(bool read_frontiers) {
+    return read_frontiers ? query::digest_algorithm::xxHash_without_empty_partitions : query::digest_algorithm::xxHash;
+}
+
 static inline
 const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
@@ -5011,9 +5019,10 @@ public:
             got_response();
         }
     }
-    void add_digest(locator::host_id from, query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos) {
+    void add_digest(locator::host_id from, query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos,
+            std::optional<query::read_frontier> frontier) {
         if (!_request_failed) {
-            _replies.add_digest(waiting_for(from), std::move(digest), last_modified, std::move(last_pos));
+            _replies.add_digest(waiting_for(from), std::move(digest), last_modified, std::move(last_pos), std::move(frontier));
             got_response();
         }
     }
@@ -5171,7 +5180,8 @@ public:
                          , _effective_replication_map_ptr(std::move(ermp))
                          , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info), _cl(cl),
-                           _native_reversed_queries_enabled(_proxy->features().native_reverse_queries) {
+                           _native_reversed_queries_enabled(_proxy->features().native_reverse_queries),
+                           _read_frontiers(_cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
     }
@@ -5189,18 +5199,20 @@ public:
     }
 
 protected:
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, locator::host_id ep, clock_type::time_point timeout) {
+    // `range` must stay alive until the request completes.
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd,
+            const dht::partition_range& range, locator::host_id ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->apply_fence_on_ready(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
+            return _proxy->apply_fence_on_ready(_proxy->query_mutations_locally(_schema, cmd, range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
             const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
 
-            auto f = _proxy->remote().send_read_mutation_data(ep, timeout, _trace_state, *cmd, _partition_range, fence);
+            auto f = _proxy->remote().send_read_mutation_data(ep, timeout, _trace_state, *cmd, range, fence);
             if (format_reverse_required) {
                 f = f.then([](auto r) {
                     auto&& [result, hit_rate] = r;
@@ -5215,7 +5227,7 @@ protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(locator::host_id ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->get_stats().data_read_attempts.get_ep_stat(get_topology(), ep);
         auto opts = want_digest
-                  ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
+                  ? query::result_options{query::result_request::result_and_digest, digest_algorithm(_read_frontiers)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
@@ -5234,19 +5246,21 @@ protected:
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->apply_fence_on_ready(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
+                        timeout, digest_algorithm(_read_frontiers), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
-            return _proxy->remote().send_read_digest(ep, timeout, _trace_state, *cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info, fence);
+            return _proxy->remote().send_read_digest(ep, timeout, _trace_state, *cmd, _partition_range, digest_algorithm(_read_frontiers), _rate_limit_info, fence);
         }
     }
-    void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
+    // `range` is the range of the round. The requests keep it alive.
+    void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const dht::partition_range> range, data_resolver_ptr resolver,
+            targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
         for (const locator::host_id& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+            (void)make_mutation_data_request(cmd, *range, ep, timeout).then_wrapped([this, resolver, ep, start, range, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5308,7 +5322,13 @@ protected:
                     auto v = f.get();
                     tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<2>(v));
-                    resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
+                    // The replica sent its frontier in the place of the
+                    // last position, if the command asked for it.
+                    if (_read_frontiers) {
+                        resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::nullopt, query::read_frontier{std::get<3>(std::move(v))});
+                    } else {
+                        resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)), std::nullopt);
+                    }
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
@@ -5333,6 +5353,78 @@ protected:
     }
     virtual void got_cl() {}
     virtual void adjust_targets_for_reconciliation() {}
+    // Repairs the replicas, and then returns the reconciled page.
+    void accept_reconciled_page(accepted_mutation_page page, shared_ptr<abstract_read_executor> exec) {
+        tracing::trace(_trace_state, "Read stage is done for read-repair");
+
+        auto result = ::make_foreign(::make_lw_shared<query::result>(std::move(page.result)));
+        qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
+
+        // wait for write to complete before returning result to prevent multiple concurrent read requests to
+        // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
+        // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
+        // Waited on indirectly.
+        (void)_proxy->schedule_repair(_effective_replication_map_ptr, std::move(page.repair_diffs), _cl, _trace_state, _permit).then(utils::result_wrap([this, result = std::move(result)] () mutable {
+            _result_promise.set_value(std::move(result));
+            return make_ready_future<::result<>>(bo::success());
+        })).then_wrapped([this, exec] (future<::result<>>&& f) {
+            // All errors are handled, it's OK to discard the result.
+            (void)utils::result_try([&] {
+                return f.get();
+            },  utils::result_catch<mutation_write_timeout_exception>([&] (const auto&) -> ::result<> {
+                // convert write error to read error
+                _result_promise.set_value(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
+                return bo::success();
+            }), utils::result_catch_dots([&] (auto&& handle) -> ::result<> {
+                handle.forward_to_promise(_result_promise);
+                return bo::success();
+            }));
+            on_read_resolved();
+        });
+    }
+    // Runs a round of `reconciliation`, and the rounds after it until one
+    // decides the page. See frontier_reconciliation.
+    void reconcile_by_frontiers(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<frontier_reconciliation> reconciliation) {
+        adjust_targets_for_reconciliation();
+        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
+        auto exec = shared_from_this();
+
+        // Waited on indirectly.
+        make_mutation_data_requests(reconciliation->round_command(), make_lw_shared<const dht::partition_range>(reconciliation->round_range()), data_resolver,
+                _targets.begin(), _targets.end(), timeout);
+
+        // Waited on indirectly.
+        (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), reconciliation_ = std::move(reconciliation),
+                cl_ = cl, timeout_ = timeout] (future<result<>> f) mutable -> future<> {
+            // move captures to coroutine stack frame
+            // to prevent use after free
+            auto exec = std::move(exec_);
+            auto data_resolver = std::move(data_resolver_);
+            auto reconciliation = std::move(reconciliation_);
+            auto cl = cl_;
+            auto timeout = timeout_;
+            try {
+                result<> res = f.get();
+                if (!res) {
+                    _result_promise.set_value(std::move(res).as_failure());
+                    on_read_resolved();
+                    co_return;
+                }
+                auto page = co_await reconciliation->add_round(data_resolver->take_replies());
+                if (page) {
+                    accept_reconciled_page(std::move(*page), std::move(exec));
+                } else {
+                    tracing::trace(_trace_state, "The replies do not decide the page, reading another round for read-repair");
+                    _proxy->get_stats().read_retries++;
+                    slogger.trace("Reading another round with command {} and range {}", *reconciliation->round_command(), reconciliation->round_range());
+                    reconcile_by_frontiers(cl, timeout, std::move(reconciliation));
+                }
+            } catch (...) {
+                _result_promise.set_exception(std::current_exception());
+                on_read_resolved();
+            }
+        });
+    }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         adjust_targets_for_reconciliation();
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
@@ -5341,7 +5433,7 @@ protected:
         prepare_mutation_read(*cmd, _proxy->features().empty_replica_mutation_pages);
 
         // Waited on indirectly.
-        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
+        make_mutation_data_requests(cmd, make_lw_shared<const dht::partition_range>(_partition_range), data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
         (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), cmd_ = std::move(cmd), cl_ = cl, timeout_ = timeout] (future<result<>> f) mutable -> future<> {
@@ -5362,32 +5454,7 @@ protected:
                 auto resolution = co_await resolve_mutation_page(_schema, *_cmd, *cmd, data_resolver->take_replies()); // reconciliation happens here
 
                 if (auto* page = std::get_if<accepted_mutation_page>(&resolution)) {
-                    tracing::trace(_trace_state, "Read stage is done for read-repair");
-
-                    auto result = ::make_foreign(::make_lw_shared<query::result>(std::move(page->result)));
-                    qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
-
-                    // wait for write to complete before returning result to prevent multiple concurrent read requests to
-                    // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
-                    // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
-                    // Waited on indirectly.
-                    (void)_proxy->schedule_repair(_effective_replication_map_ptr, std::move(page->repair_diffs), _cl, _trace_state, _permit).then(utils::result_wrap([this, result = std::move(result)] () mutable {
-                        _result_promise.set_value(std::move(result));
-                        return make_ready_future<::result<>>(bo::success());
-                    })).then_wrapped([this, exec] (future<::result<>>&& f) {
-                        // All errors are handled, it's OK to discard the result.
-                        (void)utils::result_try([&] {
-                            return f.get();
-                        },  utils::result_catch<mutation_write_timeout_exception>([&] (const auto&) -> ::result<> {
-                            // convert write error to read error
-                            _result_promise.set_value(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
-                            return bo::success();
-                        }), utils::result_catch_dots([&] (auto&& handle) -> ::result<> {
-                            handle.forward_to_promise(_result_promise);
-                            return bo::success();
-                        }));
-                        on_read_resolved();
-                    });
+                    accept_reconciled_page(std::move(*page), std::move(exec));
                 } else {
                     tracing::trace(_trace_state, "Not enough data, need a retry for read-repair");
                     _proxy->get_stats().read_retries++;
@@ -5403,7 +5470,11 @@ protected:
         });
     }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout) {
-        reconcile(cl, timeout, _cmd);
+        if (_read_frontiers) {
+            reconcile_by_frontiers(cl, timeout, make_lw_shared<frontier_reconciliation>(_schema, _cmd, _partition_range));
+        } else {
+            reconcile(cl, timeout, _cmd);
+        }
     }
 
 public:
@@ -5430,8 +5501,8 @@ public:
                 if (!res) {
                     return std::move(res).as_failure();
                 }
-                auto decision = decide_digest_page(*exec->_schema, std::move(res).value(), digest_resolver->replies(),
-                        exec->_proxy->features().empty_replica_pages);
+                auto decision = decide_digest_page(*exec->_schema, *exec->_cmd, std::move(res).value(), digest_resolver->replies(),
+                        exec->_proxy->features().empty_replica_pages, exec->_read_frontiers);
 
                 if (auto* page = std::get_if<accepted_digest_page>(&decision)) {
                     exec->_result_promise.set_value(std::move(page->result));
@@ -5515,6 +5586,11 @@ protected:
     bool _foreground = true;
 private:
     const bool _native_reversed_queries_enabled;
+protected:
+    // Whether the command asks the replicas for frontiers, so that the
+    // executor decides by them. See storage_proxy::do_query(), which decides
+    // it once for the whole read.
+    const bool _read_frontiers;
 };
 
 class never_speculating_read_executor : public abstract_read_executor {
@@ -6272,6 +6348,16 @@ storage_proxy::do_query(schema_ptr s,
         utils::latency_counter lc;
         lc.start();
         auto p = shared_from_this();
+
+        // The replicas then report how far they read, and the executors
+        // decide by that. See frontier_reconciliation and
+        // decide_digest_page(). The read checks the feature only here, so
+        // that all its executors decide alike, also if the feature becomes
+        // enabled during the read. The feature is never disabled, so a
+        // command which already asks for frontiers keeps asking.
+        if (features().read_frontiers) {
+            cmd->slice.options.set<query::partition_slice::option::send_read_frontier>();
+        }
 
         if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
             try {

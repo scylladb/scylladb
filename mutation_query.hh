@@ -225,6 +225,11 @@ public:
     reconcilable_result consume_end_of_stream();
 };
 
+// Converts the mutations of a reconciled page to the page's rows, within the
+// limits. The result's last position is the position of the last fragment
+// which the conversion consumed. If the slice asks for a frontier, the result
+// holds a frontier instead, which tells how far the conversion read: where
+// the limits stopped it, or the end if it converted every partition.
 future<query::result> to_data_query_result(
         const reconcilable_result&,
         schema_ptr,
