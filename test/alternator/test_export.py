@@ -349,16 +349,19 @@ def fetch_all_exported_items(s3, bucket):
 # Test for ION will skip S3 file content verification for now until we get python ion library set up for testing -
 #   directory content will still be verified and as will be manifest files.
 # Test is parameterized to run with both supported export formats and with/without S3 prefix.
-@pytest.mark.parametrize('s3_prefix_value', [None, 'dira/dirb/dirc'])
-@pytest.mark.parametrize('export_format_value', ['DYNAMODB_JSON', 'ION'])
-def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, s3, request):
+# A prefix that ends with '/' must not add an empty directory before "AWSDynamoDB".
+# The empty table is tested only once, as DYNAMODB_JSON without a prefix.
+@pytest.mark.parametrize('num_items,export_format_value,s3_prefix_value',
+    [(10, 'DYNAMODB_JSON', p) for p in [None, 'dira/dirb/dirc', 'dira/dirb/']] +
+    [(10, 'ION', p) for p in [None, 'dira/dirb/dirc', 'dira/dirb/']] +
+    [(0, 'DYNAMODB_JSON', None)])
+def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, num_items, s3, request):
     if export_format_value == 'ION' and not is_aws(dynamodb):
         request.node.add_marker(pytest.mark.xfail(reason="ION export format not yet implemented on Scylla"))
     with new_table_s(dynamodb) as table:
         # Insert some items
         inserted_items_as_text = []
 
-        num_items = 10
         for i in range(num_items):
             table.put_item(Item={'p': f'item{i}',
                                  'd01': f'value{i}',
@@ -416,6 +419,7 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, s
 
             # Wait for a completion of the export (successful).
             final = wait_for_export(client, response['ExportDescription']['ExportArn'])
+
             assert final['ExportStatus'] == 'COMPLETED'
             assert final['ItemCount'] == num_items
 
@@ -430,8 +434,9 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, s
                         dr[k] = ''
 
             if s3_prefix_value:
-                # Every entry must start with `s3_prefix_value`
-                for p in s3_prefix_value.split('/'):
+                # Every entry must start with `s3_prefix_value`. Skip empty parts (from a
+                # trailing '/').
+                for p in filter(None, s3_prefix_value.split('/')):
                     if p not in root_dir:
                         # Something is wrong, so we will print whole tree for easier debugging.
                         # since values in the tree contain a lot of data, which is not really useful,
@@ -471,9 +476,11 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, s
             assert set(root_dir.keys()) == { 'AWSDynamoDB' }
             root_dir = root_dir['AWSDynamoDB']
 
-            # Next is some unique-str (randomly choosen by AWS) - there must be an single entry, so we just take it.
+            # The next directory is the export id: the part of the ExportArn after `/export/`.
             assert len(root_dir) == 1
-            root_dir = next(iter(root_dir.values()))
+            export_id = final['ExportArn'].rsplit('/export/', 1)[1]
+            assert set(root_dir.keys()) == {export_id}, root_dir.keys()
+            root_dir = root_dir[export_id]
 
             # Top level content directory (the one with `data` and `_started`)
             assert set(root_dir.keys()) == { 'data', 'manifest-files.json', 'manifest-files.md5', 'manifest-summary.json', 'manifest-summary.md5', '_started' }
