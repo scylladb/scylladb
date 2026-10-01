@@ -150,6 +150,9 @@ static future<bool> update_export(db::system_distributed_keyspace& sdks, const e
 // (the export can fail before the row is written). Then we insert the row. If the insert
 // fails, a row exists that we must not overwrite, unless it is our IN_PROGRESS row.
 static future<bool> try_write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row) {
+    // Tests fail this write, to reach finish_export_in_background().
+    utils::get_local_injector().inject("alternator_export_to_s3_final_write",
+            [] { throw std::runtime_error("injected failure alternator_export_to_s3_final_write"); });
     // Tests make the update miss the row, as the case below does.
     if (!utils::get_local_injector().enter("alternator_export_to_s3_final_write_update_not_applied")
             && co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
@@ -2293,6 +2296,10 @@ static future<std::optional<export_row>> run_export(
     // The full export is maintenance work, not only the scan. The fiber starts in the scheduling
     // group of the request, so change it.
     co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+    // Tests throw an exception that escapes this function (as bad_alloc can), to check that the
+    // caller writes FAILED.
+    utils::get_local_injector().inject("alternator_export_to_s3_unexpected_exception",
+            [] { throw std::runtime_error("injected failure alternator_export_to_s3_unexpected_exception"); });
 
     int64_t item_count = 0;
 

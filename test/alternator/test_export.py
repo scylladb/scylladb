@@ -2375,6 +2375,26 @@ def test_export_error_injection_after_export_row_insertion(scylla_only, rest_api
         assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
 
 
+# Test that an exception which escapes the export fiber (e.g. bad_alloc) does not leave the export
+# IN_PROGRESS. The garbage collector does not take the rows of a running node, so the code that
+# starts the fiber writes FAILED. Its message is fixed: a message from a bad_alloc could fail too.
+def test_export_error_injection_unexpected_exception(scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+
+    with new_s3_bucket(s3) as bucket:
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_unexpected_exception', one_shot=True):
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+            )['ExportDescription']['ExportArn']
+            desc = wait_for_export(client, export_arn)
+        assert desc['ExportStatus'] == 'FAILED', desc
+        assert desc['FailureCode'] == 'Exception', desc
+        assert desc['FailureMessage'] == 'Unknown error', desc
+        assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
+
+
 # Test that the request writes FAILED to its IN_PROGRESS export row also when the conditional
 # update of that write misses the row. This can happen if the insert of the row timed out after
 # only a minority of the replicas accepted it: the Paxos round of the update may not see the row,
@@ -2616,6 +2636,8 @@ def test_export_error_injection_client_token_conflict_failure(cql, scylla_only, 
         assert not uploads, uploads
 
 
+# Test that a background fiber retries a failed write of the final state. While the write fails,
+# the export stays IN_PROGRESS. After the write succeeds, the export is COMPLETED.
 # Yields a list, and appends to it the shard which served the ExportTableToPointInTime request sent
 # in the context (if the context exits without an exception). It uses the per-shard count of the
 # requests, which the request increases first, also if it is refused. Tests run one at a time, so
@@ -2634,3 +2656,85 @@ def export_request_shard(metrics):
     grown = [i for i in range(num_shards) if after[i] != before[i]]
     assert len(grown) == 1 and after[grown[0]] == before[grown[0]] + 1, (before, after)
     shard.append(grown[0])
+
+def test_export_error_injection_final_write_retried_in_background(dynamodb, scylla_only, rest_api, s3, metrics,
+                                                                  new_dynamodb_session):
+    injection = 'alternator_export_to_s3_final_write'
+    with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
+        table.put_item(Item={'p': 'item'})
+        client = table.meta.client
+        table_arn = get_table_arn(table)
+        # A request goes to the shard of its connection, and the client does not promise to keep
+        # one connection. Thus the requests below which must reach the shard of the export use new
+        # connections until one does. Returns the shard of the request and the ARN of its export,
+        # or None if the shard is full. The exports which start on other shards are kept in
+        # `other_exports`, and the test waits for them at the end.
+        sessions = []
+        other_exports = []
+        def start_export(request_client):
+            with export_request_shard(metrics) as shard:
+                try:
+                    arn = request_client.export_table_to_point_in_time(
+                        TableArn=table_arn,
+                        S3Bucket=bucket,
+                    )['ExportDescription']['ExportArn']
+                except ClientError as e:
+                    assert e.response['Error']['Code'] == 'LimitExceededException', e
+                    arn = None
+            return shard[0], arn
+        def new_client():
+            sessions.append(new_dynamodb_session())
+            return sessions[-1].meta.client
+
+        with scylla_config_temporary(dynamodb, 'alternator_max_concurrent_exports_per_shard', '1'):
+            with scylla_inject_error(rest_api, injection, one_shot=False):
+                with export_request_shard(metrics) as export_shard:
+                    export_arn = client.export_table_to_point_in_time(
+                        TableArn=table_arn,
+                        S3Bucket=bucket,
+                    )['ExportDescription']['ExportArn']
+                # The write of the export fiber fails, and one retry of the background fiber also
+                # fails. Thus the background fiber runs, and it does not give up the row.
+                scylla_wait_for_injection_enters(rest_api, injection, 2)
+                desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+                assert desc['ExportStatus'] == 'IN_PROGRESS'
+                # The background fiber holds the slot of the export, so a new export on the
+                # shard of the export is refused.
+                request_client = client
+                for _ in range(100):
+                    probe_shard, probe_arn = start_export(request_client)
+                    if probe_shard == export_shard[0]:
+                        assert probe_arn is None, 'an export on the shard of the export was accepted'
+                        break
+                    if probe_arn:
+                        other_exports.append(probe_arn)
+                    request_client = new_client()
+                else:
+                    pytest.fail('no request reached the shard of the export')
+
+            # The injection is off, so the next retry writes the final state.
+            desc = wait_for_export(client, export_arn)
+            assert desc['ExportStatus'] == 'COMPLETED'
+            assert 'ExportManifest' in desc
+            assert_listed_with_status(client, table_arn, export_arn, 'COMPLETED')
+
+            # The background fiber gives back the export slot. With a limit of one export per shard,
+            # a new export on the same shard is accepted only after that. The fiber gives the slot
+            # back shortly after the write, so retry until the deadline. Only an export on the shard
+            # of the export shows the release.
+            deadline = time.time() + 30
+            while True:
+                assert time.time() < deadline, 'The background fiber did not give back the export slot within 30s'
+                accepted_shard, accepted_arn = start_export(request_client)
+                if accepted_shard == export_shard[0]:
+                    if accepted_arn:
+                        break
+                    time.sleep(0.05)
+                    continue
+                if accepted_arn:
+                    other_exports.append(accepted_arn)
+                else:
+                    time.sleep(0.05)
+                request_client = new_client()
+            for arn in [accepted_arn] + other_exports:
+                assert wait_for_export(client, arn)['ExportStatus'] == 'COMPLETED'
