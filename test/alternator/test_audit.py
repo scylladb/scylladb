@@ -622,15 +622,12 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
         export_arn = response['ExportDescription']['ExportArn']
         expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
-        # DescribeExport
-        # FIXME: ExportTableToPointInTime does not create the metadata entry yet, so there is nothing
-        # to look up and the call must fail. Once it actually starts creating the export
-        # (SCYLLADB-1893), this test will start failing loudly, which is good, because that is
-        # exactly when this place needs correcting.
-        with pytest.raises(ClientError, match='ExportNotFoundException'):
-            client.describe_export(ExportArn=export_arn)
-        expected.append(("QUERY", "", True, ks_name, table.name, ["DescribeExport", export_arn]))
-        # ListExports (the table it is filtered by)
+        # DescribeExport. ExportTableToPointInTime above already wrote the export's metadata entry,
+        # so the lookup succeeds (the export itself runs in the background, and whether it has
+        # finished by now doesn't matter here).
+        desc_export = client.describe_export(ExportArn=export_arn)
+        assert desc_export['ExportDescription']['ExportArn'] == export_arn
+        expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeExport", export_arn]))
         client.list_exports(TableArn=table_arn)
         expected.append(("QUERY", "", False, ks_name, table.name, ["ListExports", table_arn]))
         # ListTables (empty keyspace)

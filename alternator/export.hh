@@ -129,7 +129,7 @@ struct in_memory_target_config {
 };
 
 // Configuration for the S3 target of either pipeline. The sink writes the object with
-// `s3::client::make_upload_jumbo_sink`, the source reads it with
+// `s3::client::make_upload_jumbo_sink_and_get_etag`, the source reads it with
 // `s3::client::make_chunked_download_source`; see utils/s3/client.hh for the object size limits.
 // `as`, if set, is handed to the S3 client by both pipelines:
 //  - source: an abort makes `read_all()` fail with an exception; `close()` is still required,
@@ -163,6 +163,11 @@ future<std::unique_ptr<export_pipeline_interface>> create_sink_pipeline(std::var
 // compression that is where the object's completeness is checked, see `import_pipeline_interface::close()`.
 future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item, compression_type compression);
 
+
+// Canonicalize a JSON request by sorting members of every object alphabetically, recursively.
+// This produces a deterministic string representation for idempotency checks - two requests
+// differing only in the order of object members produce the same string.
+sstring canonicalize_request(const rjson::value& request);
 
 /// Full table scan of an Alternator table, calling `cb` with every item (DynamoDB-style JSON).
 ///

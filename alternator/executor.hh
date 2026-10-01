@@ -12,8 +12,14 @@
 #include "audit/audit.hh"
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <optional>
+#include <set>
+#include <utility>
+#include <vector>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -79,6 +85,7 @@ namespace alternator {
 enum class table_status;
 class rmw_operation;
 class put_or_delete_item;
+struct export_row;
 
 namespace parsed {
 class expression_cache;
@@ -104,6 +111,60 @@ class executor : public peering_sharded_service<executor> {
 
     struct describe_table_info_manager;
     std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
+
+    // Owns the background fibers of the S3 export feature - the workers running the
+    // individual exports and the garbage collector - and the state which keeps them
+    // alive. The member functions are defined in export.cc, next to the code they
+    // start.
+    class s3_exports {
+        executor& _e;
+        // Gate protecting the background export fibers; closed in stop() to ensure
+        // all in-flight exports have finished (after being aborted, see _as below)
+        // before the executor is destroyed.
+        seastar::gate _gate;
+        // Aborted in stop(), before closing _gate, to make in-flight exports stop
+        // early.
+        seastar::abort_source _as;
+        // The number of export fibers running on this shard, see try_reserve_export_slot().
+        size_t _running_exports = 0;
+    public:
+        explicit s3_exports(executor& e) : _e(e) {}
+        // A reservation of one of this shard's export slots. The export fiber holds it for
+        // as long as it runs; destroying it - at the end of the fiber, or on a path which
+        // never got to start one - gives the slot back.
+        class slot {
+            s3_exports* _owner;
+            friend class s3_exports;
+            explicit slot(s3_exports& owner) noexcept : _owner(&owner) { ++_owner->_running_exports; }
+        public:
+            slot(slot&& other) noexcept : _owner(std::exchange(other._owner, nullptr)) {}
+            ~slot() { if (_owner) { --_owner->_running_exports; } }
+        };
+        // Reserves a slot for one more export on this shard, or returns nullopt when
+        // alternator_max_concurrent_exports_per_shard of them are already running. Every
+        // export scans an entire table and holds an S3 multipart upload open for as long as
+        // it runs, so their number has to be bounded - DynamoDB caps concurrent exports too.
+        std::optional<slot> try_reserve_export_slot();
+        // Garbage collects the S3 exports of every node gossip does not list as live -
+        // including this node's own previous incarnations - running one round right after
+        // startup and then periodically; does nothing else.
+        // Started on shard 0 of every node by executor::start(), and runs until stop().
+        future<> run_garbage_collector();
+        // Starts a background fiber performing the export described by `row` and returns
+        // immediately. The fiber reports its outcome by updating the export row, and holds
+        // `export_slot` until it is done.
+        void start_export(slot export_slot, schema_ptr schema, export_row row, std::string table_arn, std::string s3_bucket,
+                std::string s3_prefix, std::string s3_key_prefix, std::string export_id_token);
+        // Starts a background fiber writing the terminal state of an export row this node owns
+        // but no longer runs, retrying until the write lands or the node stops, and returns
+        // immediately. Used when that write fails on a path which cannot wait for it: a row left
+        // IN_PROGRESS under this node's live incarnation is nobody else's to finish, the garbage
+        // collector takes over only the rows of the nodes gossip no longer lists as live.
+        void finish_export_in_background(export_row row);
+        // Aborts the fibers above and waits for them to finish.
+        future<> stop();
+    };
+    s3_exports _s3_exports;
 
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);

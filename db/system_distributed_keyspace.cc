@@ -25,7 +25,11 @@
 #include "replica/schema_describe_helper.hh"
 
 #include "service/migration_manager.hh"
+#include "service/cas_shard.hh"
 #include "locator/host_id.hh"
+#include "locator/token_metadata.hh"
+#include "dht/i_partitioner.hh"
+#include "keys/keys.hh"
 #include "view_info.hh"
 
 #include <seastar/core/seastar.hh>
@@ -312,7 +316,8 @@ schema_ptr alternator_export_to_s3_exports() {
                 .with_column("accepted_at", timestamp_type)
                 // When the export reached a terminal state (COMPLETED or FAILED)
                 .with_column("completed_at", timestamp_type)
-                // Host ID of the node which drives this export
+                // The incarnation of the node which drives this export, as "{host_id}:{gossip_generation}"
+                // (see live_node_identifier in alternator/export.cc).
                 .with_column("node_id", utf8_type)
                 .set_comment("Alternator export to S3 export metadata")
                 .with_hash_version()
@@ -332,10 +337,11 @@ schema_ptr alternator_export_to_s3_client_tokens() {
                 // ARN of that export - the key into alternator_export_to_s3_exports
                 .with_column("export_arn", utf8_type)
                 // The request this token was used with, as JSON. Needed because repeating a token
-                // with a different request is an error (IdempotentParameterMismatch), so the two
+                // with a different request is an error (ExportConflictException), so the two
                 // requests have to be compared.
                 .with_column("request", utf8_type)
-                // Host ID of the node which accepted that request
+                // The incarnation of the node which accepted that request, as "{host_id}:{gossip_generation}";
+                // the garbage collector uses it the same way as node_id in alternator_export_to_s3_exports.
                 .with_column("node_id", utf8_type)
                 .set_comment("Alternator export to S3 client token idempotency")
                 .set_default_time_to_live(std::chrono::hours(8))
@@ -667,6 +673,116 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
             cql3::query_processor::cache_internal::no);
 
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
+}
+
+alternator_export_table_helper::alternator_export_table_helper(cql3::query_processor& qp)
+    : _qp(qp)
+{}
+
+// system_distributed uses SimpleStrategy with RF=3, but in a cluster with a single token owner
+// there is only one replica, so QUORUM (computed from RF) can never be reached - hence
+// quorum_if_many(), as everywhere else in this file. The export tables are not written on behalf
+// of a topology operation, so the number of token owners is read here instead of being passed in
+// a context.
+static db::consistency_level export_table_consistency_level(cql3::query_processor& qp) {
+    return quorum_if_many(qp.proxy().get_token_metadata_ptr()->count_normal_token_owners());
+}
+
+// The TTL of a write, as the `USING TTL ?` of the statements below takes it: unset, which leaves
+// the statement as if it had no USING TTL clause at all, when no TTL was asked for.
+static data_value_or_unset ttl_value(std::optional<std::chrono::seconds> ttl) {
+    if (!ttl) {
+        return unset_value{};
+    }
+    return data_value(int32_t(ttl->count()));
+}
+
+// Conditional (LWT) statements must be executed on the shard owning the partition's Paxos state -
+// otherwise they return a bounce_to_shard message, which query_internal() doesn't handle. Runs
+// `query` on the owning shard of partition `key` (a single text partition key column) of the given
+// table and returns whether the condition was met.
+static future<bool> execute_conditionally(cql3::query_processor& qp, std::string_view table, const sstring& key,
+        const sstring& query, const query_data_vector& values) {
+    auto schema = qp.db().find_schema(system_distributed_keyspace::NAME, table);
+    auto pk = partition_key::from_single_value(*schema, utf8_type->decompose(key));
+    auto shard = service::cas_shard(*schema, dht::get_token(*schema, pk)).shard();
+    co_return co_await qp.container().invoke_on(shard, [&query, &values] (cql3::query_processor& local_qp) -> future<bool> {
+        bool was_applied = false;
+        co_await local_qp.query_internal(
+            query,
+            export_table_consistency_level(local_qp),
+            values,
+            1, // batch size
+            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+                was_applied = row.get_as<bool>("[applied]");
+                co_return stop_iteration::yes;
+            });
+        co_return was_applied;
+    });
+}
+
+future<bool> alternator_export_table_helper::insert_export(const export_row& row, std::chrono::seconds ttl) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (export_arn, client_token, request, table_id, export_status,"
+        " failure_code, failure_message, item_count, billed_size_bytes, export_id_token,"
+        " export_time, accepted_at, completed_at, node_id, export_manifest)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS USING TTL ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, row.export_arn, query,
+        { row.export_arn, row.client_token, row.request, row.table_id.uuid(), row.export_status,
+          row.failure_code, row.failure_message, row.item_count, row.billed_size_bytes, row.export_id_token,
+          row.export_time, row.accepted_at, row.completed_at, row.node_id, row.export_manifest,
+          ttl_value(ttl) });
+}
+
+future<bool> alternator_export_table_helper::update_export(const export_row& row, const sstring& expected_export_status,
+        const sstring& expected_node_id, std::optional<std::chrono::seconds> ttl) {
+    static const sstring query = format(
+        "UPDATE {}.{} USING TTL ? SET client_token = ?, request = ?, table_id = ?, export_status = ?,"
+        " failure_code = ?, failure_message = ?, item_count = ?, billed_size_bytes = ?, export_id_token = ?,"
+        " export_time = ?, accepted_at = ?, completed_at = ?, node_id = ?, export_manifest = ?"
+        " WHERE export_arn = ? IF export_status = ? AND node_id = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, row.export_arn, query,
+        { ttl_value(ttl),
+          row.client_token, row.request, row.table_id.uuid(), row.export_status,
+          row.failure_code, row.failure_message, row.item_count, row.billed_size_bytes, row.export_id_token,
+          row.export_time, row.accepted_at, row.completed_at, row.node_id, row.export_manifest,
+          row.export_arn, expected_export_status, expected_node_id });
+}
+
+future<bool> alternator_export_table_helper::insert_client_token(const client_token_row& row) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (client_token, export_arn, request, node_id) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, row.client_token, query,
+        { row.client_token, row.export_arn, row.request, row.node_id });
+}
+
+future<utils::chunked_vector<alternator_export_table_helper::client_token_row>>
+alternator_export_table_helper::get_all_client_tokens(const seastar::abort_source* as) const {
+    static const sstring query = format(
+        "SELECT client_token, export_arn, request, node_id FROM {}.{}",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+    utils::chunked_vector<client_token_row> results;
+    co_await _qp.query_internal(
+        query,
+        export_table_consistency_level(_qp),
+        {},
+        cql3::query_processor::default_internal_page_size,
+        [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+            if (as) {
+                as->check();
+            }
+            results.push_back(client_token_row{
+                .client_token = row.get_as<sstring>("client_token"),
+                .export_arn = row.get_or<sstring>("export_arn", sstring()),
+                .request = row.get_or<sstring>("request", sstring()),
+                .node_id = row.get_or<sstring>("node_id", sstring()),
+            });
+            co_return stop_iteration::no;
+        });
+    co_return results;
 }
 
 // TODO: this is very hardcoded.
