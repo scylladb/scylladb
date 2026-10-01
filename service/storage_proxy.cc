@@ -880,14 +880,15 @@ private:
             s = s->get_reversed();
         }
 
-        co_await utils::get_local_injector().inject("storage_proxy::handle_read", [s] (auto& handler) -> future<> {
-            const auto cf_name = handler.get("cf_name");
-            SCYLLA_ASSERT(cf_name);
-            if (s->cf_name() != cf_name) {
-                co_return;
+        // Filter before entering, so that reads of other tables don't consume a one-shot injection.
+        auto& injector = utils::get_local_injector();
+        if (injector.is_enabled("storage_proxy::handle_read")) {
+            const auto cf_name = injector.inject_parameter("storage_proxy::handle_read", "cf_name");
+            throwing_assert(cf_name);
+            if (*cf_name == s->cf_name()) {
+                co_await injector.inject("storage_proxy::handle_read", utils::wait_for_message(std::chrono::minutes{1}));
             }
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
-        });
+        }
 
         // This erm ensures that tablet migrations wait for replica requests,
         // even if the coordinator is no longer available.
