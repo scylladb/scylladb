@@ -54,6 +54,11 @@ std::vector<raft::log_entry_ptr> drop_truncated_copies(segment_cursors& cursors,
 struct buffered_entry {
     raft::log_entry_ptr entry;
     db::segment_id_type segment{0};
+    // Set on the entry a batch's chain link contradicted and on everything above it:
+    // a later leader replaced that entry, and the batch holding the replacement was
+    // never read. drain_committed() stops at an unverified entry and finish_replay()
+    // refuses the group, unless a superseding batch pops the entry and its mark together.
+    bool unverified = false;
 };
 
 // How many of the buffered entries `first`, the head of an arriving batch,
@@ -82,8 +87,17 @@ class raft_commitlog_replay_buffer {
         bool known = false;
         table_id table;
 
-        // The running commit index and the term of the entry at it.
+        // The running commit index.
         raft::index_t commit_idx{0};
+        // The floor the row was loaded with. A link to an index below it names an entry
+        // already durable in an sstable, which no segment read can check.
+        service::strong_consistency::raft_term_and_index loaded_floor;
+        // Highest index this pass has applied, with its term. Seeded from the floor,
+        // so a batch that starts one above the floor links to the floor's term.
+        service::strong_consistency::raft_term_and_index last_consumed;
+        // Index whose committed copy a later batch's chain link contradicted.
+        // finish_replay() refuses the boot.
+        std::optional<raft::index_t> broken_chain_at;
         // How far an unbroken run of indexes read in this pass reaches, starting from
         // the floor the row was loaded with. A run that stops below commit_idx means a
         // committed entry was lost, which refuses the boot; see finish_replay().
@@ -105,6 +119,14 @@ class raft_commitlog_replay_buffer {
         uint64_t applied = 0;
         uint64_t dropped_truncated = 0;
         uint64_t superseded = 0;
+
+        // Keep the earliest index a chain link contradicted, so the refusal names where
+        // the log stopped chaining.
+        void note_broken_chain(raft::index_t idx) {
+            if (!broken_chain_at) {
+                broken_chain_at = idx;
+            }
+        }
     };
 
     std::unordered_map<raft::group_id, group_state> _groups;
@@ -136,11 +158,15 @@ class raft_commitlog_replay_buffer {
     // Note a committed entry's term and configuration.
     static void note_committed(group_state& group, const raft::log_entry_ptr& entry);
 
+    // Compare a batch's chain link against what replay has read, and record a break.
+    static void check_chain_link(raft::group_id group_id, group_state& group,
+        raft::index_t first_idx, raft::term_t prev_term);
+
 public:
     // Called once per raft batch during replay, in write order.
     future<> add_batch(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks,
         raft::group_id group_id, db::segment_id_type segment, raft::index_t commit_idx,
-        const std::vector<raft::log_entry_ptr>& entries);
+        raft::term_t prev_term, const std::vector<raft::log_entry_ptr>& entries);
 
     // Called after commitlog replay completes, but before the old segments are
     // deleted and the memtables flushed. Persists each group's recovered descriptor

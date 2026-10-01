@@ -1671,6 +1671,9 @@ const auto replay_term = raft::term_t{1};
 struct replayed_batch {
     db::segment_id_type segment;
     raft::index_t commit_idx;
+    // Term of the entry just below entries.front(), the chain link a real batch
+    // carries. The floor's term for a batch that starts one above the floor.
+    raft::term_t prev_term;
     std::vector<raft::log_entry_ptr> entries;
 };
 
@@ -1703,6 +1706,13 @@ cql_test_config sc_replay_config() {
     cfg.db_config->auto_snapshot.set(false);
     cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
     cfg.initial_tablets = 1;
+    return cfg;
+}
+
+// The same, with a commitlog too small to hold a whole recovered tail in one entry.
+cql_test_config sc_replay_config_small_segments() {
+    auto cfg = sc_replay_config();
+    cfg.db_config->commitlog_segment_size_in_mb.set(1);
     return cfg;
 }
 
@@ -1753,6 +1763,8 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                 std::vector<service::strong_consistency::truncation_record> truncations) {
             seed_at(gid, raft::index_t(0), std::move(truncations));
         };
+        // Every entry here and every floor seed_at() writes is term 1, so a batch that
+        // does link to what replay holds links with term 1.
         const auto run = [&](raft::group_id gid, raft::index_t first, raft::index_t last,
                 raft::index_t commit_idx, db::segment_id_type segment,
                 db::raft_commitlog_replay_buffer& buffer) {
@@ -1761,7 +1773,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+                    gid, segment, commit_idx, raft::term_t(1), batch).get();
         };
         const auto run_in_term = [&](raft::group_id gid, raft::term_t term, raft::index_t first,
                 raft::index_t last, raft::index_t commit_idx, db::segment_id_type segment,
@@ -1771,7 +1783,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                 batch.push_back(make_dummy_entry(term, i));
             }
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+                    gid, segment, commit_idx, raft::term_t(1), batch).get();
         };
         const auto refuses_with = [](db::raft_commitlog_replay_buffer& buffer, cql_test_env& env,
                 const sstring& detail) {
@@ -1888,7 +1900,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                     entries.push_back(make_dummy_entry(term, i));
                 }
                 buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, segment, commit_idx, entries).get();
+                        gid, segment, commit_idx, raft::term_t(1), entries).get();
             };
             batch(raft::term_t(1), raft::index_t(1), raft::index_t(2), raft::index_t(0), 1);
             batch(raft::term_t(2), raft::index_t(1), raft::index_t(1), raft::index_t(0), 2);
@@ -1920,7 +1932,7 @@ SEASTAR_TEST_CASE(test_the_damage_override_does_not_start_a_node_over_a_gap) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+                    gid, segment, commit_idx, raft::term_t(1), batch).get();
         };
 
         // The gap of the first case in test_replay_refuses_a_gap_below_the_commit_index:
@@ -1964,7 +1976,7 @@ SEASTAR_TEST_CASE(test_a_refused_replay_leaves_the_row_untouched) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+                    gid, segment, commit_idx, raft::term_t(1), batch).get();
         };
         const auto refuses_with = [&](db::raft_commitlog_replay_buffer& buffer,
                 const sstring& missing, const sstring& detail) {
@@ -2033,7 +2045,7 @@ struct damaged_segment_fixture {
             make_dummy_entry(raft::term_t(1), raft::index_t(6)),
         };
         buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 2, raft::index_t(5), batch).get();
+                gid, 2, raft::index_t(5), raft::term_t(1), batch).get();
     }
 };
 
@@ -2191,7 +2203,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
 
         db::raft_commitlog_replay_buffer buffer;
         buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), batch).get();
+                gid, 1, raft::index_t(0), raft::term_t(0), batch).get();
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
         drop_sc_tablet_metadata(env, table).get();
 
@@ -2206,7 +2218,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
 
         db::raft_commitlog_replay_buffer owned_buffer;
         owned_buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), batch).get();
+                gid, 1, raft::index_t(0), raft::term_t(0), batch).get();
         owned_buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
         // Nothing is committed - the floor is 0 - so both entries are kept for the
@@ -2235,7 +2247,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
 
         db::raft_commitlog_replay_buffer buffer;
         buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
+                gid, 1, raft::index_t(0), raft::term_t(0), std::vector<raft::log_entry_ptr>{
                     make_dummy_entry(raft::term_t(1), raft::index_t(1)),
                     make_dummy_entry(raft::term_t(1), raft::index_t(2)),
                 }).get();
@@ -2278,7 +2290,7 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
                 buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, batch.segment, batch.commit_idx, batch.entries).get();
+                        gid, batch.segment, batch.commit_idx, batch.prev_term, batch.entries).get();
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
             auto data = buffer.take_replayed_group_entries(gid);
@@ -2291,11 +2303,15 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
         };
 
         const auto tail = index_range(replay_floor + raft::index_t{1}, replay_tail_end);
+        // Links as the writer took them: nothing below index 1, and replay_term for
+        // every batch that follows an entry index_range() made.
         const std::vector<replayed_batch> old_segments = {
-            {old_segment_id, raft::index_t{0}, index_range(raft::index_t{1}, replay_floor)},
-            {old_segment_id, raft::index_t{0}, index_range(replay_floor + raft::index_t{1},
-                    raft::index_t{8})},
-            {old_segment_id, replay_floor, index_range(raft::index_t{9}, replay_tail_end)},
+            {old_segment_id, raft::index_t{0}, raft::term_t{0},
+                    index_range(raft::index_t{1}, replay_floor)},
+            {old_segment_id, raft::index_t{0}, replay_term,
+                    index_range(replay_floor + raft::index_t{1}, raft::index_t{8})},
+            {old_segment_id, replay_floor, replay_term,
+                    index_range(raft::index_t{9}, replay_tail_end)},
         };
         const auto expected_tail = log_shape(raft::log_entries(tail.begin(), tail.end()));
 
@@ -2328,7 +2344,7 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
         // last: superseded_by() reads the equal terms as a second copy and keeps the
         // buffer, then the duplicate check drops the rewrite's copies.
         auto old_segments_and_rewrite = old_segments;
-        old_segments_and_rewrite.push_back({rewrite_segment_id, replay_floor,
+        old_segments_and_rewrite.push_back({rewrite_segment_id, replay_floor, replay_term,
                 index_range(replay_floor + raft::index_t{1}, replay_tail_end)});
         const auto third = replay(old_segments_and_rewrite);
         BOOST_REQUIRE_EQUAL(log_shape(third.entries), expected_tail);
@@ -2419,10 +2435,12 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
 
         // Fresh entry objects per call, so two calls stand for two passes.
         const auto old_segments = [&] {
+            // The term-2 leader truncated at 6, so index 5 keeps term 1 and the batch
+            // that starts at 6 links to it.
             return std::vector<replayed_batch>{
-                {seg_term1, raft::index_t{0}, entries(term1, 1, 8)},
-                {seg_term2, raft::index_t{0}, entries(term2, 6, 10)},
-                {seg_term2, recovered_floor, entries(term2, 11, 11)},
+                {seg_term1, raft::index_t{0}, raft::term_t{0}, entries(term1, 1, 8)},
+                {seg_term2, raft::index_t{0}, term1, entries(term2, 6, 10)},
+                {seg_term2, recovered_floor, term2, entries(term2, 11, 11)},
             };
         };
 
@@ -2430,7 +2448,7 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
                 buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, batch.segment, batch.commit_idx, batch.entries).get();
+                        gid, batch.segment, batch.commit_idx, batch.prev_term, batch.entries).get();
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
             auto data = buffer.take_replayed_group_entries(gid);
@@ -2480,11 +2498,47 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
         BOOST_REQUIRE_EQUAL(log_shape(second.entries), expected_tail);
         BOOST_REQUIRE_EQUAL(persisted().idx, recovered_floor);
         BOOST_REQUIRE_EQUAL(persisted().term, term2);
-        // The row still holds the record, so a third pass would drop those copies
-        // too. Weak: store_descriptor() returns early at an equal index.
-        BOOST_REQUIRE(persisted().truncations == expected_truncations);
+        // store_descriptor() returns early at an equal index, so the second pass
+        // leaves the record in place for a third.
         require_committed_rows();
     }, sc_replay_config());
+}
+
+// Test: a recovered tail too large for one commitlog entry is rewritten as several
+// batches that chain.
+//
+// finish_replay() links the first rewritten batch to the floor's term and every later
+// batch to the entry below its own first index. A wrong link on any batch but the first
+// refuses the next replay, and only a tail spanning two terms shows it.
+SEASTAR_TEST_CASE(test_rewritten_tail_chains_every_batch) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto table = table_id(utils::UUID_gen::get_time_UUID());
+        const auto my_id = env.local_db().get_token_metadata().get_my_id();
+        const auto gid = make_group_id();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(1),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, table, gid,
+                locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
+
+        // Nothing is committed, so the whole run is the recovered tail. 16 x 64KB over
+        // two terms is more than one commitlog entry holds.
+        std::vector<raft::log_entry_ptr> tail;
+        for (int i = 1; i <= 16; ++i) {
+            tail.push_back(make_command_entry_sized(
+                    raft::term_t(i <= 8 ? 1 : 2), raft::index_t(i), 64 * 1024));
+        }
+        db::raft_commitlog_replay_buffer buffer;
+        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(0), raft::term_t(1), tail).get();
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
+
+        const auto batches = read_raft_batches(*env.local_db().commitlog(), gid).get();
+        require_batches_chain(batches, raft::term_t(1));
+        BOOST_REQUIRE_EQUAL(batches.front().entries.front()->idx, raft::index_t(1));
+        BOOST_REQUIRE_EQUAL(batches.back().entries.back()->idx, raft::index_t(16));
+        buffer.stop().get();
+    }, sc_replay_config_small_segments());
 }
 
 // Test: replay persists the configuration a committed entry carried (SCYLLADB-3842).
@@ -2510,13 +2564,13 @@ SEASTAR_TEST_CASE(test_replay_persists_the_committed_configuration) {
         db::raft_commitlog_replay_buffer buffer;
         // 1..3 are committed, so the configuration at 2 is the one raft agreed on.
         buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(3),
+                gid, 1, raft::index_t(3), raft::term_t(0),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(1)),
                         committed_config,
                         make_dummy_entry(raft::term_t(1), raft::index_t(3))}).get();
         buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 2, raft::index_t(3),
+                gid, 2, raft::index_t(3), raft::term_t(1),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(4)),
                         uncommitted_config}).get();
@@ -2553,20 +2607,20 @@ SEASTAR_TEST_CASE(test_replay_keeps_the_floors_configuration_over_an_older_copy)
                 locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
 
         const auto older_config = make_config_entry(raft::term_t(1), raft::index_t(5));
-        const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
+        const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx, raft::term_t prev_term,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, entries).get();
+                    gid, segment, commit_idx, prev_term, entries).get();
         };
 
         db::raft_commitlog_replay_buffer buffer;
         // A segment older than the floor still holds the configuration at 5.
-        add(1, raft::index_t(0), {older_config}, buffer);
+        add(1, raft::index_t(0), raft::term_t(1), {older_config}, buffer);
         // 11 and 12 are committed by the header of the batch after them, which raises the
         // floor to 12 so that the descriptor is written at all.
-        add(2, raft::index_t(10), {make_dummy_entry(raft::term_t(1), raft::index_t(11)),
+        add(2, raft::index_t(10), raft::term_t(1), {make_dummy_entry(raft::term_t(1), raft::index_t(11)),
                 make_dummy_entry(raft::term_t(1), raft::index_t(12))}, buffer);
-        add(3, raft::index_t(12), {make_dummy_entry(raft::term_t(1), raft::index_t(13)),
+        add(3, raft::index_t(12), raft::term_t(1), {make_dummy_entry(raft::term_t(1), raft::index_t(13)),
                 make_dummy_entry(raft::term_t(1), raft::index_t(14))}, buffer);
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
@@ -2597,29 +2651,213 @@ SEASTAR_TEST_CASE(test_replay_takes_the_commit_term_from_the_entry_at_the_floor)
         set_sc_tablet_metadata(env, table, gid,
                 locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
 
-        const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
+        const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx, raft::term_t prev_term,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
             buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, entries).get();
+                    gid, segment, commit_idx, prev_term, entries).get();
         };
 
         db::raft_commitlog_replay_buffer buffer;
         // 6 to 10 in term 3 raise the floor from 5 to 10, so term 3 is the term at the floor.
-        add(1, raft::index_t(10), {make_dummy_entry(raft::term_t(3), raft::index_t(6)),
+        add(1, raft::index_t(10), raft::term_t(1), {make_dummy_entry(raft::term_t(3), raft::index_t(6)),
                 make_dummy_entry(raft::term_t(3), raft::index_t(7)),
                 make_dummy_entry(raft::term_t(3), raft::index_t(8)),
                 make_dummy_entry(raft::term_t(3), raft::index_t(9)),
                 make_dummy_entry(raft::term_t(3), raft::index_t(10))}, buffer);
-        // A later segment still holds the copy of 7 that term 2 wrote. Every entry of the
-        // batch before it was committed and drained, so the buffer is empty and the dedupe
-        // against the buffered tail does not run. The copy reaches note_committed().
-        add(2, raft::index_t(10), {make_dummy_entry(raft::term_t(2), raft::index_t(7))}, buffer);
+        // A later segment still holds a copy of 4, below the loaded floor, so the chain
+        // check does not apply to it. Every entry of the batch before it was committed and
+        // drained, so the buffer is empty and the dedupe against the buffered tail does not
+        // run. The copy reaches note_committed().
+        add(2, raft::index_t(10), raft::term_t(1), {make_dummy_entry(raft::term_t(1), raft::index_t(4))}, buffer);
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
         const auto persisted = service::strong_consistency::raft_groups_storage::load_descriptor(
                 env.local_qp(), gid, this_shard_id()).get();
         BOOST_REQUIRE_EQUAL(persisted.idx, raft::index_t(10));
         BOOST_REQUIRE_EQUAL(persisted.term, raft::term_t(3));
+        buffer.stop().get();
+    }, sc_replay_config());
+}
+
+// Test: replay refuses a log whose batches do not chain (SCYLLADB-4893).
+//
+// check_chain_link() states the rule. Without the link, a superseded copy stands in for
+// the missing entry: replay applies the superseded copy, persists a floor over it, and
+// the replica diverges from the quorum permanently. So the assertions cover the rows as
+// much as the refusal.
+SEASTAR_TEST_CASE(test_replay_refuses_a_log_that_does_not_chain) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.d (pk int primary key, v int)").get();
+        e.execute_cql("create table ks.g (pk int primary key)").get();
+        const auto s = e.local_db().find_schema("ks", "d");
+        const auto my_id = e.local_db().get_token_metadata().get_my_id();
+
+        const auto term1 = raft::term_t{1};
+        const auto term2 = raft::term_t{2};
+        const auto floor_idx = raft::index_t{5};
+        constexpr api::timestamp_type ts = 1000;
+        constexpr int32_t term1_value_base = 100;
+        constexpr int32_t term2_value_base = 200;
+        // The cases run against one table, because only the first tablet table created
+        // here is sure to have its tablet on this shard, and a TRUNCATE between the cases needs
+        // a cluster this environment does not have. So each case writes partitions of its
+        // own: the entry at index i writes pk = 10 * case + i, carrying the value base of
+        // the term that wrote it, and a row therefore names the copy that produced it.
+        int32_t replay_case = 0;
+        const auto entries = [&] (raft::term_t term, int from, int to) {
+            const auto base = term == term1 ? term1_value_base : term2_value_base;
+            std::vector<raft::log_entry_ptr> v;
+            for (int i = from; i <= to; ++i) {
+                v.push_back(make_mutation_entry(s, term, raft::index_t(i),
+                        10 * replay_case + i, base + i, ts));
+            }
+            return v;
+        };
+
+        // A fresh group whose row carries a floor at 5 in term 1, as it does once the
+        // entries up to 5 are committed and flushed.
+        const auto seed = [&] {
+            ++replay_case;
+            const auto gid = make_group_id();
+            set_sc_tablet_metadata(e, e.local_db().find_schema("ks", "g")->id(), gid,
+                    locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
+            service::strong_consistency::raft_groups_storage::store_descriptor(
+                    e.local_qp(), gid, this_shard_id(), floor_idx, term1,
+                    raft::configuration{}, {}).get();
+            return gid;
+        };
+        const auto feed = [&] (raft::group_id gid, db::raft_commitlog_replay_buffer& buffer,
+                const std::vector<replayed_batch>& batches) {
+            for (const auto& batch : batches) {
+                buffer.add_batch(e.local_db(), e.local_qp(), e.get_system_keyspace().local(),
+                        gid, batch.segment, batch.commit_idx, batch.prev_term, batch.entries).get();
+            }
+        };
+        const auto refuses_at = [&] (raft::group_id gid,
+                const std::vector<replayed_batch>& batches, const sstring& detail) {
+            db::raft_commitlog_replay_buffer buffer;
+            feed(gid, buffer, batches);
+            BOOST_REQUIRE_EXCEPTION(
+                    buffer.finish_replay(e.local_db(), e.local_qp()).get(),
+                    std::runtime_error,
+                    [&](const std::runtime_error& error) {
+                        const sstring what(error.what());
+                        return what.find("the log does not chain") != sstring::npos
+                                && what.find(detail) != sstring::npos;
+                    });
+            // The floor stays where the row had it, so the next pass reads the same log.
+            const auto persisted = service::strong_consistency::raft_groups_storage::load_descriptor(
+                    e.local_qp(), gid, this_shard_id()).get();
+            BOOST_REQUIRE_EQUAL(persisted.idx, floor_idx);
+            BOOST_REQUIRE_EQUAL(persisted.term, term1);
+            buffer.stop().get();
+        };
+        // The rows this case's indexes 6 to 9 produced, named by index and value, read
+        // back through the partitions only this case writes.
+        const auto rows_are = [&] (const std::vector<std::pair<int32_t, int32_t>>& expected) {
+            std::vector<sstring> keys;
+            for (int i = 6; i <= 9; ++i) {
+                keys.push_back(fmt::format("{}", 10 * replay_case + i));
+            }
+            std::vector<std::vector<bytes_opt>> rows;
+            for (const auto& [idx, value] : expected) {
+                rows.push_back({int32_type->decompose(10 * replay_case + idx),
+                        int32_type->decompose(value)});
+            }
+            assert_that(e.execute_cql(fmt::format("select pk, v from ks.d where pk in ({})",
+                    fmt::join(keys, ","))).get()).is_rows().with_rows_ignore_order(rows);
+        };
+
+        // The term-1 leader wrote 6 and 7. The term-2 leader truncated at 7, wrote its own
+        // 7 into a segment that is gone, then wrote 8 with a header committing 7. The
+        // batch at 8 links to term 2 at index 7, and the only copy of 7 replay holds is
+        // the term-1 copy the truncation retired.
+        {
+            const auto gid = seed();
+            refuses_at(gid, {
+                {1, floor_idx, term1, entries(term1, 6, 7)},
+                {3, raft::index_t{7}, term2, entries(term2, 8, 8)},
+            }, "at index 7");
+            // 6 is the current copy under a truncation at 7 and its commit is honest, so
+            // it applies. The contradicted 7 does not, and 8 is above the commit index.
+            rows_are({{6, term1_value_base + 6}});
+        }
+
+        // The same loss one index lower, so the contradicted copy ends up under a batch
+        // that does chain. The term-2 leader truncated at 6: its 6 went into the lost
+        // segment and its 7 survived. The batch at 7 links to term 2 at index 6 and
+        // contradicts the term-1 copy of 6. The supersede at 7 pops the term-1 copy of 7
+        // and takes its mark with it. The batch at 8 then commits 7, whose drain runs
+        // straight into the contradicted 6.
+        {
+            const auto gid = seed();
+            refuses_at(gid, {
+                {1, floor_idx, term1, entries(term1, 6, 7)},
+                {3, floor_idx, term2, entries(term2, 7, 7)},
+                {3, raft::index_t{7}, term2, entries(term2, 8, 8)},
+            }, "at index 6");
+            // The drain stops on 6, so nothing below it is reached either.
+            rows_are({});
+        }
+
+        // The contradicted copy is gone from the buffer by the time the link meets it:
+        // the batch at 6 commits 7, so 6 and 7 apply as they arrive and the term of the
+        // last entry replay consumed is the only record of 7 left (SCYLLADB-4094).
+        {
+            const auto gid = seed();
+            refuses_at(gid, {
+                {1, raft::index_t{7}, term1, entries(term1, 6, 7)},
+                {3, raft::index_t{7}, term2, entries(term2, 8, 8)},
+            }, "at index 7");
+            rows_are({{6, term1_value_base + 6}, {7, term1_value_base + 7}});
+        }
+
+        // A break no header commits over is refused too. Raft checks one index per
+        // AppendEntries, so a leader matching at 8 never looks down at 7: the leader appends
+        // above 7 and commits 7. Handing the tail over rewrites 8's link to the term-1
+        // copy of 7, erasing the contradiction the term-2 batch recorded.
+        {
+            const auto gid = seed();
+            refuses_at(gid, {
+                {1, floor_idx, term1, entries(term1, 6, 7)},
+                {3, floor_idx, term2, entries(term2, 8, 8)},
+            }, "at index 7");
+            rows_are({});
+        }
+
+        // A chain that holds under the same losses: the term-2 leader truncated at 7 and
+        // its 7 survived, so the batch at 7 links to the term-1 copy of 6 replay holds and
+        // the batch at 8 to the term-2 copy of 7. The node starts and the term-1 copy of 7
+        // is superseded, not applied.
+        {
+            const auto gid = seed();
+            db::raft_commitlog_replay_buffer buffer;
+            feed(gid, buffer, {
+                {1, floor_idx, term1, entries(term1, 6, 7)},
+                {3, floor_idx, term1, entries(term2, 7, 7)},
+                {3, raft::index_t{7}, term2, entries(term2, 8, 8)},
+            });
+            BOOST_REQUIRE_NO_THROW(buffer.finish_replay(e.local_db(), e.local_qp()).get());
+            const auto data = buffer.take_replayed_group_entries(gid);
+            BOOST_REQUIRE_EQUAL(log_shape(data.entries), "2:8");
+            buffer.stop().get();
+            rows_are({{6, term1_value_base + 6}, {7, term2_value_base + 7}});
+        }
+    }, sc_replay_config());
+}
+
+// Test: replay refuses a batch that holds no entries. prev_term names the term of the
+// entry below the batch's first index, and a batch without entries has no first index.
+// store_log_entries() writes no such batch, so an empty batch on disk is corruption.
+// The refusal runs before the group is resolved, so an unhosted group is refused too.
+SEASTAR_TEST_CASE(test_replay_refuses_a_batch_without_entries) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::raft_commitlog_replay_buffer buffer;
+        BOOST_REQUIRE_THROW(
+                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                        make_group_id(), 1, raft::index_t(0), raft::term_t(0),
+                        std::vector<raft::log_entry_ptr>{}).get(),
+                std::runtime_error);
         buffer.stop().get();
     }, sc_replay_config());
 }

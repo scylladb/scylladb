@@ -163,7 +163,8 @@ Key points:
   `raft_commitlog::prev_term_for()` reads `prev_term` from the newest `segment_record`,
   or from the floor the last release wrote once the queue is empty. A split run reads
   `prev_term` per batch, after `account_batch()` has moved the log end, so each run links
-  to the last entry of the run before it.
+  to the last entry of the run before it. Replay checks the link; see the chain rule
+  below.
 - The group does not keep a handle per index. It keeps a queue of `segment_record`s,
   one per commitlog segment its entries landed in. A later batch in the same
   segment only advances that record's `max_index`, because retention is accounted
@@ -307,15 +308,23 @@ first batch of this group: read its row from system.raft_groups
     │
     ▼
 raise the floor to the header's commit_idx (it only ever advances)
-and drain everything buffered at or below it: a header is written
-only after the final copy of every index it covers, so what is below
-the floor is final and can be applied now
     │
     ▼
 drop_truncated_copies(): drop the copies a truncation superseded. Each
 truncation record of this segment is a cursor; the copy is claimed by
-the oldest cursor *waiting for that index*, not simply by the oldest
-one, because truncations of one segment can reach back past each other
+the oldest cursor *waiting for that index*, not by the oldest one,
+because truncations of one segment can reach back past each other
+    │
+    ▼
+check_chain_link(): compare the header's prev_term against the copy
+replay holds just below the batch's first index. A mismatch marks that
+copy and everything above it unverified
+    │
+    ▼
+drain everything buffered at or below the floor: a header is written
+only after the final copy of every index it covers, so what is below
+the floor is final and can be applied now. An unverified entry stops
+the drain and is recorded as a broken chain
     │
     ▼
 supersede: an entry at index N in a different term replaces anything
@@ -342,6 +351,40 @@ them: the row goes through CQL, and `system.raft_groups` carries
 A rewritten batch on disk therefore always has a durable base row. The rewrite is also
 what gives the tail fresh references in the new session, through the same
 `account_batch()` the write path uses.
+
+The pass also refuses to finish when a batch's `prev_term` contradicts the copy replay
+holds at the index below the batch's first index (SCYLLADB-4893). Log matching makes
+`(index, term)` name one entry, so a copy carrying another term is a copy a later leader
+replaced. The batch that carried the replacement was in a segment replay never read.
+Without the link the superseded copy stands in for the missing entry: the copy sits at
+or below some later header's `commit_idx`, so replay applies the copy and persists a
+floor over it, and the replica diverges from the quorum with no error anywhere. The copy
+is compared against what replay holds: the buffered entry at that index, or, once that
+index has already been applied, the term of the last entry the pass consumed, which is
+seeded from the floor. An index below the floor is accepted, because it is durable in an
+sstable and the segments say nothing about it. A batch whose copies
+`drop_truncated_copies()` retired, in part or in whole, is skipped, so the link at its
+first index goes unchecked. The skip loses coverage and never adds a refusal.
+
+The refusal waits until the end of the pass, before the first `store_descriptor()`.
+`apply_in_memory()` can flush a memtable under memory pressure long before
+`finish_replay()` runs. A flushed row cannot be taken back, so a contradicted copy is
+held back where it is met. A later batch carrying the replacement supersedes the held
+copies and clears the hold; a copy still held when the pass ends refuses the boot.
+
+The refusal does not take back what the pass applied. A throw from `finish_replay()`
+unwinds through the database shutdown, which flushes every memtable, so entries the
+pass applied are durable even though the boot failed. When the lost segment held a
+replacement for those indexes, the superseded copies stay in the table. Startup
+deletes the old segments only after a replay that finished, so the next boot reads
+the same bytes.
+
+An uncommitted fork is refused the same way. Raft checks one index per `AppendEntries`,
+the index below the entries the leader sends, so a leader matching at the tip of the recovered
+tail never looks down at the replaced entry. The leader appends above the replaced entry
+and advances the follower's commit index past it, and the replica applies a copy the
+quorum replaced. The rewrite at the end of the pass also gives every batch a fresh link,
+so the contradiction leaves the disk.
 
 The pass refuses to finish when a group's unbroken run of read indexes stops below
 the highest `commit_idx` a batch header declared. The floor it writes says every

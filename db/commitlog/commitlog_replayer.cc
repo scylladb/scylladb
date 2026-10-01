@@ -256,17 +256,18 @@ future<> db::commitlog_replayer::impl::process(
 
         if (std::holds_alternative<raft_commitlog_batch>(read_entry)) {
             // One raft batch: its entries, and how far the group had committed
-            // when it was written.
+            // when the batch was written.
             const auto& batch = std::get<raft_commitlog_batch>(read_entry);
             SCYLLA_ASSERT(_raft_buffer);
-            rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, commit_idx {}",
-                    batch.group_id, rp, batch.entries.size(), batch.commit_idx);
+            rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, "
+                    "commit_idx {}, prev_term {}",
+                    batch.group_id, rp, batch.entries.size(), batch.commit_idx, batch.prev_term);
             SCYLLA_ASSERT(_qp);
             // Everything for this batch is decided as it arrives: see
             // raft_commitlog_replay_buffer.
             try {
                 co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(), _sys_ks.local(),
-                        batch.group_id, rp.id, batch.commit_idx, batch.entries);
+                        batch.group_id, rp.id, batch.commit_idx, batch.prev_term, batch.entries);
             } catch (...) {
                 std::throw_with_nested(raft_replay_error(fmt::format(
                         "failed to replay raft batch for group {} at {}", batch.group_id, rp)));

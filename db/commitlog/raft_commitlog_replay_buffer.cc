@@ -172,6 +172,10 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // pass has to establish starts there.
     group.contiguous_to = persisted.idx;
     group.commit_term = persisted.term;
+    group.loaded_floor = service::strong_consistency::raft_term_and_index{
+            .idx = persisted.idx, .term = persisted.term};
+    // Nothing is consumed yet, so a batch starting one index above the floor links to it.
+    group.last_consumed = group.loaded_floor;
     group.config = std::move(persisted.config);
     // The persisted configuration sits at the floor, so only a configuration entry
     // above the floor supersedes it.
@@ -196,10 +200,70 @@ void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft
     if (entry->idx == group.commit_idx) {
         group.commit_term = entry->term;
     }
+    if (entry->idx >= group.last_consumed.idx) {
+        group.last_consumed = service::strong_consistency::raft_term_and_index{
+                .idx = entry->idx, .term = entry->term};
+    }
     if (std::holds_alternative<raft::configuration>(entry->data) && entry->idx >= group.config_idx) {
         group.config = std::get<raft::configuration>(entry->data);
         group.config_idx = entry->idx;
     }
+}
+
+// A batch carries the term of the entry below its first index, the link raft checks in
+// AppendEntries. Log matching makes (index, term) name one entry, so a copy at that index
+// carrying another term is a copy a later leader replaced.
+void raft_commitlog_replay_buffer::check_chain_link(raft::group_id group_id, group_state& group,
+        const raft::index_t first_idx, const raft::term_t prev_term) {
+    const raft::index_t previous = first_idx - raft::index_t{1};
+    const auto previous_it = std::lower_bound(group.buf.begin(), group.buf.end(), previous,
+            [](const raft_buffer_detail::buffered_entry& buffered, raft::index_t idx) {
+                return buffered.entry->idx < idx;
+            });
+    if (previous_it != group.buf.end() && previous_it->entry->idx == previous) {
+        if (previous_it->entry->term == prev_term) {
+            return;
+        }
+        // The batch replaced the copy at `previous`, so the buffered copy and the run above
+        // `previous` are a fork. apply_in_memory() can flush a memtable before finish_replay()
+        // runs, and a flushed entry cannot be taken back. Mark the run, and finish_replay()
+        // refuses unless a later batch supersedes the marked entries.
+        logger.warn("group {}: a batch at {} links to term {}, but the entry read at {} carries "
+                "term {}; the entries from {} up are held back", group_id, first_idx, prev_term,
+                previous, previous_it->entry->term, previous);
+        for (auto entry_it = previous_it; entry_it != group.buf.end(); ++entry_it) {
+            entry_it->unverified = true;
+        }
+        return;
+    }
+    if (previous == group.last_consumed.idx) {
+        if (prev_term == group.last_consumed.term) {
+            return;
+        }
+        // The entry at `previous` already reached a memtable under another term, so the
+        // batch replaced an index replay committed. Every index above `previous` rests on
+        // a replaced entry.
+        group.note_broken_chain(previous);
+        return;
+    }
+    if (previous == group.loaded_floor.idx) {
+        if (prev_term != group.loaded_floor.term) {
+            group.note_broken_chain(previous);
+        }
+        return;
+    }
+    if (previous < group.loaded_floor.idx) {
+        // Committed before the floor was persisted, so the entry at `previous` is durable
+        // in an sstable. The segments carry no copy of that entry, so nothing checks the link.
+        return;
+    }
+    if (previous > group.last_consumed.idx) {
+        // Nothing read reaches `previous`. The contiguity checks report the hole.
+        return;
+    }
+    // Consumed and no longer held, so the term the batch links to cannot be checked
+    // against the copy that was applied.
+    group.note_broken_chain(previous);
 }
 
 future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
@@ -218,7 +282,8 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
 
 future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db::system_keyspace& sys_ks,
         group_state& group) {
-    while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx) {
+    while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx
+            && !group.buf.front().unverified) {
         auto entry = std::move(group.buf.front().entry);
         group.buf.pop_front();
         note_committed(group, entry);
@@ -226,11 +291,24 @@ future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db
         ++group.applied;
         co_await seastar::coroutine::maybe_yield();
     }
+    if (!group.buf.empty() && group.buf.front().unverified
+            && group.buf.front().entry->idx <= group.commit_idx) {
+        // A header commits an index whose only copy a later batch contradicted, and the
+        // batch holding the replacement was never read. Applying the copy would persist a
+        // floor over an entry no leader committed.
+        group.note_broken_chain(group.buf.front().entry->idx);
+    }
 }
 
 future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::query_processor& qp,
         db::system_keyspace& sys_ks, raft::group_id group_id, db::segment_id_type segment,
-        raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
+        raft::index_t commit_idx, raft::term_t prev_term,
+        const std::vector<raft::log_entry_ptr>& entries) {
+    if (entries.empty()) {
+        throw std::runtime_error(fmt::format(
+                "cannot replay the raft log: a batch for group {} in segment {} holds no "
+                "entries, so the batch's prev_term links to no index", group_id, segment));
+    }
     auto& group = _groups[group_id];
     if (!group.resolved) {
         co_await resolve_group(db, qp, group_id, group);
@@ -240,10 +318,6 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
     }
     _total_entries += entries.size();
     group.commit_idx = std::max(group.commit_idx, commit_idx);
-    // Raft never replaces a committed entry, so every index at or below this
-    // header's commit_idx had its current copy written before the batch and
-    // already read by replay. The entries the buffer holds there are final.
-    co_await drain_committed(db, sys_ks, group);
 
     // Drop the copies a truncation superseded.
     std::vector<raft::log_entry_ptr> remaining_entries = entries;
@@ -252,6 +326,18 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
                 cursors_it->second, entries);
         group.dropped_truncated += entries.size() - remaining_entries.size();
     }
+
+    // Check the link only when the truncation cursor retired none of the batch's copies.
+    // A batch the cursor retired in part or in whole is skipped, so the link at its first
+    // index goes unchecked: the skip loses coverage and never adds a refusal.
+    if (remaining_entries.size() == entries.size()) {
+        check_chain_link(group_id, group, entries.front()->idx, prev_term);
+    }
+
+    // Raft never replaces a committed entry, so every index the buffer holds at or below
+    // this header's commit_idx has its final copy, written before the batch and already
+    // read. The header can also commit the batch's own entries, inserted after the drain.
+    co_await drain_committed(db, sys_ks, group);
 
     if (remaining_entries.empty()) {
         co_return;
@@ -338,6 +424,14 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
 }
 
 future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3::query_processor& qp) {
+    // The gap refusal and the chain refusal say where the missing bytes went.
+    const auto missing_note = [this](std::string_view subject) {
+        return _unreadable_segments.empty()
+            ? fmt::format("No segment was reported damaged, so {} in a segment file that is "
+                    "no longer there.", subject)
+            : fmt::format("Segments {} could not be read in full.", _unreadable_segments);
+    };
+
     // The floor persisted below says every index at or below commit_idx reached a
     // memtable. An index between the loaded floor and commit_idx that no batch carried
     // breaks that, and a group with no batch at all declares no commit_idx, so this
@@ -355,16 +449,46 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
                 "would persist a commit index covering entries that were never applied. "
                 "{} Recovering means restoring the segment files that held them, or "
                 "rebuilding this replica once they are gone for good",
-                fmt::join(lost, "; "),
-                _unreadable_segments.empty()
-                    ? sstring("No segment was reported damaged, so the entries were in a "
-                              "segment file that is no longer there.")
-                    : sstring(fmt::format("Segments {} could not be read in full.",
-                            _unreadable_segments))));
+                fmt::join(lost, "; "), missing_note("the entries were")));
+    }
+    // A batch names a term at an index whose copy replay already applied, or commits
+    // over a copy a later batch contradicted. The entry raft would recover there is an
+    // entry a leader replaced, and the batch carrying the replacement was never read.
+    std::vector<sstring> forks;
+    for (const auto& [group_id, group] : _groups) {
+        if (!group.known) {
+            continue;
+        }
+        std::optional<raft::index_t> fork_at = group.broken_chain_at;
+        // A contradicted copy still held is a fork no later batch superseded. Handing the
+        // tail to raft rewrites the tail with a fresh link, erasing the contradiction. Raft
+        // checks one index per AppendEntries, so a leader matching at the tip never looks
+        // down at the replaced entry, which the replica then applies.
+        if (!fork_at) {
+            for (const auto& buffered : group.buf) {
+                if (buffered.unverified) {
+                    fork_at = buffered.entry->idx;
+                    break;
+                }
+            }
+        }
+        if (fork_at) {
+            forks.push_back(fmt::format("{} at index {}", group_id, *fork_at));
+        }
+    }
+    if (!forks.empty()) {
+        throw std::runtime_error(fmt::format(
+                "cannot replay the raft log: the log does not chain: {}. A batch links to a "
+                "term other than the term the entry read at that index carries, so a later "
+                "leader replaced that entry and the batch holding the replacement is gone. "
+                "Starting would commit the replaced entry. {} Recovering means restoring the "
+                "segment files that held the replacement, or rebuilding this replica once "
+                "they are gone for good",
+                fmt::join(forks, "; "), missing_note("the replacement was")));
     }
     // A damaged segment may have taken raft batches with it. A lost tail leaves no evidence:
-    // the batch that would have declared the higher commit_idx went down with the unread
-    // bytes, so no index check sees a log short of entries the node acknowledged.
+    // the batch declaring the higher commit_idx went down with the unread bytes, so no
+    // index check sees a log short of entries the node acknowledged.
     if (!_unreadable_segments.empty()) {
         if (!_group_to_table) {
             _group_to_table = build_group_to_table_map(db);

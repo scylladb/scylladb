@@ -96,12 +96,13 @@ public:
 // One raft batch as stored in the commitlog: the group id, the group's commit
 // index at write time, the term of the entry the batch follows, and the entries
 // the batch appended. One commitlog entry, so one position. An oversized batch is
-// rejected; the commitlog would otherwise fragment it across segments.
+// rejected, since the commitlog fragments an oversized entry across segments.
 //
-// prev_term links the batch to the entry below its first index, raft's AppendEntries
-// consistency check applied to the on-disk log: replay refuses a log whose chain is
-// broken by a batch it never read. The term is stored alone. The index is always
-// entries.front()->idx - 1, because a raft log has no holes and a batch is never empty.
+// prev_term links the batch to the entry below its first index: raft's AppendEntries
+// consistency check, applied to the on-disk log. Replay refuses a log whose chain is
+// broken by a missing batch. The term is stored alone. The index is always
+// entries.front()->idx - 1: a raft log has no holes, and replay refuses a batch that
+// holds no entries.
 struct raft_commitlog_batch {
     raft::group_id group_id;
     raft::index_t commit_idx;
