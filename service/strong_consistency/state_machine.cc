@@ -74,6 +74,10 @@ public:
         });
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
+            if (!command.empty()) {
+                logger.trace("Tablet {}, raft group {}, applies {} entries, indexes {} to {}.",
+                    _tablet, _group_id, command.size(), command.front()->idx, command.back()->idx);
+            }
             // Get replay positions for the commands.
             replay_positions = _persistence.acquire_replay_position_handles_for(command);
             // Make sure we got replay positions for all commands.
@@ -151,8 +155,8 @@ public:
         }
          catch (...) {
             throw std::runtime_error(::format(
-                "tablet {}, group id {}: error while applying mutations {}",
-                _tablet, _group_id, std::current_exception()));
+                "tablet {}, group id {}: error while applying mutations of entries {} to {}: {}",
+                _tablet, _group_id, command.front()->idx, command.back()->idx, std::current_exception()));
         }
     }
 
@@ -234,8 +238,13 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
         auto [schema, cm_ptr] = co_await get_schema(table, schema_version);
         if (!schema) {
             if (const auto trigger = std::exchange(_barrier_trigger, nullptr)) {
+                logger.debug("Table {} has no local schema version {}, running a group0 read barrier.",
+                    table, schema_version);
                 co_await trigger();
                 std::tie(schema, cm_ptr) = co_await get_schema(table, schema_version);
+                if (schema) {
+                    logger.debug("Table {} has schema version {} after the group0 read barrier.", table, schema_version);
+                }
             }
         }
         if (!schema) {
@@ -246,6 +255,10 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
             // or `no_such_keyspace` will be thrown earlier.
             on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}",
                     table, schema_version));
+        }
+        if (cm_ptr) {
+            logger.trace("Upgrading mutations of table {} from schema version {} to {}.",
+                table, schema_version, schema->version());
         }
         it = _schema_mappings.insert({schema_version, {std::move(schema), cm_ptr}}).first;
     }
