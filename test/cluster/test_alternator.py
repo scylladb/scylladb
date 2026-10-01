@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import time
+import datetime
 import boto3
 import botocore
 from botocore.exceptions import ClientError, ConnectionClosedError, SSLError
@@ -2409,3 +2410,105 @@ async def test_export_of_a_node_which_stays_down_fails(manager: ScyllaClusterMan
     desc = await describe_finished_export(servers[1], export_arn)
     assert desc['ExportStatus'] == 'FAILED', desc
     assert desc['FailureCode'] == 'NodeFailure', desc
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_dies_soon_after_another_node_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """A node-down event soon after an earlier one gets its own garbage collection round.
+
+    Each node-down event asks for a round after the unreachable timeout. The round of the
+    first event comes before the timeout of the second one, so it does not take the export
+    of the second node. If the second event did not get its own round, the export would
+    stay IN_PROGRESS until the periodic round, 4 hours later.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    # The timeout leaves a margin on both sides of the second event: the round of the first
+    # event must come after the second event, and must see the node of the export down for
+    # less than this timeout.
+    unreachable_timeout = 30
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': str(unreachable_timeout)})
+    # The first event: each of the two other nodes sees the other one die once. The nodes
+    # do not stop, so gossip marks them up again soon. Each node asks for a round after
+    # `unreachable_timeout` + 1 seconds.
+    a, b, c = servers
+    a_host_id, b_host_id, c_host_id = await asyncio.gather(*(manager.get_host_id(s.server_id) for s in servers))
+    # The collectors log their rounds and the exports they mark FAILED at debug level.
+    await asyncio.gather(*(manager.api.set_logger_level(s.ip_addr, 'alternator-export', 'debug') for s in (b, c)))
+    logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in (b, c)))
+    marks = await asyncio.gather(*(log.mark() for log in logs))
+    first_event_time = time.monotonic()
+    await asyncio.gather(manager.api.convict(b.ip_addr, c_host_id), manager.api.convict(c.ip_addr, b_host_id))
+    # The second event comes before the round of the first one. That round sees the node of
+    # the export down for only about `unreachable_timeout` - 9 seconds, so it does not take
+    # the export. The round of the second event comes `unreachable_timeout` + 1 seconds after
+    # the kill. The round of the first event logs its start after its scans (see below). Its
+    # time is rounded up by up to `unreachable_timeout` / 10 (see request_gc_round()), so the
+    # scans have at least about 6 seconds before the round sees the node down for the timeout.
+    await asyncio.sleep(10)
+    # server_stop(convict=True) ignores the errors of the conviction, which would leave the
+    # second event to the failure detector, at an unknown time. Thus convict here: a
+    # conviction returns after the node ran its node-down notifications, or it fails.
+    await manager.server_stop(a.server_id, convict=False)
+    await asyncio.gather(manager.api.convict(b.ip_addr, a_host_id), manager.api.convict(c.ip_addr, a_host_id))
+    # The round of the first event starts at least `unreachable_timeout` + 1 seconds after
+    # the first event, and the convictions return after the second event. If the second
+    # event came after that round (a slow test), it would get its own round anyway, and the
+    # test would pass without checking anything.
+    assert time.monotonic() - first_event_time < unreachable_timeout, \
+        'the second node-down event came after the garbage collection round of the first one'
+    # The round of the first event must not take the export. If it came late, it would see the
+    # node of the export down for longer than the timeout and take it, and the test would pass
+    # without the round of the second event. On each collecting node, that round starts
+    # `unreachable_timeout` + 1 seconds after the node logged the first event, or a little
+    # later (the time is rounded up). The times are those of the node's own log. Another round
+    # which starts then (e.g. the retry of a failed round) sees the same downtime of the node of
+    # the export, so it serves as well.
+    def log_time(line):
+        stamp = re.search(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}', line).group(0)
+        return datetime.datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S,%f').timestamp()
+    marked_failed = f'Marking export row {re.escape(export_arn)} as FAILED'
+    second_down_times = []
+    for log, mark, other_host_id in zip(logs, marks, (c_host_id, b_host_id)):
+        pos, [(first_down, _)] = await log.wait_for(rf'InetAddress {other_host_id}\S* is now DOWN', from_mark=mark, timeout=60)
+        _, [(second_down, _)] = await log.wait_for(rf'InetAddress {a_host_id}\S* is now DOWN', from_mark=pos, timeout=60)
+        second_down_times.append(log_time(second_down))
+        # The log time has milliseconds, the scheduled time is a little later.
+        first_round_at = log_time(first_down) + unreachable_timeout + 1 - 0.1
+        while True:
+            pos, [(round_start, _)] = await log.wait_for(r'Garbage collection: \d+ client tokens', from_mark=pos, timeout=60)
+            if log_time(round_start) >= first_round_at:
+                break
+        # The round logs this line after its scans, right after it reads the downtimes, and it
+        # reads them again just before it marks an export. Thus a round which logs this line
+        # before this bound practically never sees the node of the export down for the timeout.
+        # A later line would let the round take the export, and the test would not check the
+        # round of the second event.
+        assert log_time(round_start) < log_time(second_down) + unreachable_timeout, \
+            'no garbage collection round for the first node-down event before the node of the export was down for the timeout'
+        # No round may mark the export FAILED before its node is down for the timeout. The round
+        # of the first event checks the downtime again just before it marks the export, so under
+        # load, it can validly mark it a little after the timeout.
+        await log.wait_for('Garbage collection: finished|Garbage collection of S3 exports failed', from_mark=pos, timeout=60)
+        for line, _ in await log.grep(marked_failed, from_mark=mark):
+            # The downtime starts a little before the node logs the event.
+            assert log_time(line) >= log_time(second_down) + unreachable_timeout - 0.5, \
+                'the export was marked FAILED before its node was down for the timeout'
+    desc = await describe_finished_export(b, export_arn, timeout=60)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+    # The second event got its own round on each collecting node: a round starts
+    # `unreachable_timeout` + 1 seconds after the node logged the event, or a little later (the
+    # time is rounded up, and the line comes after the scans). Whichever round marked the export
+    # FAILED, this is what the test is about. A round which failed is retried only a minute
+    # later, so its retry does not count.
+    for log, mark, second_down_time in zip(logs, marks, second_down_times):
+        second_round_at = second_down_time + unreachable_timeout + 1 - 0.1
+        pos = mark
+        while True:
+            pos, [(round_start, _)] = await log.wait_for(r'Garbage collection: \d+ client tokens', from_mark=pos, timeout=60)
+            if log_time(round_start) >= second_round_at:
+                break
+        assert log_time(round_start) < second_round_at + 20, \
+            'no garbage collection round for the second node-down event'
