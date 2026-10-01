@@ -586,7 +586,7 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
 // emitted by disabling tablet balancing.
 //
 // Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-4011.
-SEASTAR_TEST_CASE(test_request_completes_after_local_apply, *boost::unit_test::expected_failures(1)) {
+SEASTAR_TEST_CASE(test_request_completes_after_local_apply) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         static constexpr std::string_view apply_pause = "group0_pause_before_topology_transition";
         static constexpr std::string_view request_pause = "topology_request_pause_before_wait";
