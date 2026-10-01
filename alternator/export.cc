@@ -26,6 +26,7 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 #include "locator/host_id.hh"
 #include "locator/token_metadata.hh"
 #include "query/query-request.hh"
@@ -1191,6 +1192,10 @@ static std::optional<live_node_identifier> get_self_node_id(gms::gossiper& gossi
 // the export and write to S3 after we marked it FAILED. A dead node does not come back with
 // the same incarnation, so a long timeout only delays the cleanup.
 static std::chrono::seconds node_unreachable_timeout() {
+    // A test makes the timeout short, to collect the exports of a node which stays down.
+    if (auto s = utils::get_local_injector().inject_parameter<std::uint32_t>("alternator_export_to_s3_node_unreachable_timeout_s")) {
+        return std::chrono::seconds(*s);
+    }
     return std::chrono::hours(1);
 }
 
@@ -1626,8 +1631,35 @@ static constexpr std::string_view s3_exports_gc_wakeup_injection = "alternator_e
 // (e.g. one whose wait timed out) cannot end the wait of this test.
 static constexpr std::string_view s3_exports_gc_finished_injection = "alternator_export_to_s3_gc_finished";
 
-// Waits for the time of the next garbage collection round of S3 exports, `_gc_round_at`. If the
-// wakeup error injection is enabled, waits for its message instead.
+// The collector sleeps in steps of this length, and looks at the time of the next round after
+// each step. A gossip event can move the next round earlier, see request_gc_round().
+static constexpr std::chrono::minutes s3_exports_gc_poll_period{1};
+
+// Node-down events in the same slot of this length (slots start at multiples of the length, see
+// request_gc_round()) ask for one round, not one round each: a rolling restart
+// would otherwise make each node run a round per restarted node, back to back, an hour later.
+// request_gc_round() moves a requested time later, never earlier: an earlier round would come
+// before the node of the event is unreachable for `node_unreachable_timeout()`, and would not
+// take its exports.
+static constexpr std::chrono::minutes s3_exports_gc_request_merge_period{1};
+
+void executor::s3_exports::request_gc_round(lowres_clock::duration delay) {
+    // Round the time up to a multiple of `bucket`, so that the requests of one bucket are one
+    // element of the set. A test makes `delay` a few seconds; a bucket of a tenth of it keeps the
+    // round of each event of the test its own.
+    auto at = lowres_clock::now() + delay;
+    auto bucket = std::min<lowres_clock::duration>(s3_exports_gc_request_merge_period, delay / 10);
+    if (bucket > lowres_clock::duration::zero()) {
+        if (auto rem = at.time_since_epoch() % bucket; rem != lowres_clock::duration::zero()) {
+            at += bucket - rem;
+        }
+    }
+    _gc_round_requests.insert(at);
+}
+
+// Waits for the time of the next garbage collection round of S3 exports: the earliest of
+// `_gc_round_at` and `_gc_round_requests`. If the wakeup error injection is enabled, waits for
+// its message instead.
 // Returns true if error injection started the round (a test), false otherwise.
 future<bool> executor::s3_exports::wait_for_next_gc_round() {
     auto& injector = utils::get_local_injector();
@@ -1646,11 +1678,15 @@ future<bool> executor::s3_exports::wait_for_next_gc_round() {
             co_return true;
         }
         auto now = lowres_clock::now();
-        auto round_at = _gc_round_at;
+        auto round_at = _gc_round_requests.empty()
+                ? _gc_round_at : std::min(_gc_round_at, *_gc_round_requests.begin());
         if (now >= round_at) {
+            // The round which starts now answers all the requests which are due. A request
+            // which comes during the round stays, and asks for the round after this one.
+            _gc_round_requests.erase(_gc_round_requests.begin(), _gc_round_requests.upper_bound(now));
             co_return false;
         }
-        lowres_clock::duration step = round_at - now;
+        lowres_clock::duration step = std::min<lowres_clock::duration>(round_at - now, s3_exports_gc_poll_period);
         // A sleeping collector must also see when a test enables `s3_exports_gc_wakeup_injection`.
         // Thus, with error injection, sleep in 1 second steps.
         if constexpr (std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
@@ -1659,6 +1695,34 @@ future<bool> executor::s3_exports::wait_for_next_gc_round() {
         co_await seastar::sleep_abortable(step, _as);
     }
 }
+
+// Asks for a garbage collection round after a node died or left the cluster. The design of the
+// export asks for a round on each node-down event. The round does not start immediately: the
+// collector takes an export only after its node was unreachable for `node_unreachable_timeout()`.
+// Thus a round before that time takes nothing. The round starts one second later, because the
+// collector compares the downtime with the timeout. A round can take the exports of a removed
+// node immediately, but the delay is the same. The delay also gives the token metadata of this
+// node sufficient time to show the removal.
+// Without these rounds, the exports of a node which stays down stay IN_PROGRESS until the next
+// periodic round, a maximum of `s3_exports_gc_period` later. The rounds of all nodes can start
+// at the same time. This is safe: a round reads only the IN_PROGRESS rows, and the conditional
+// write prevents a second collection.
+class executor::s3_exports::gc_node_down_subscriber : public gms::i_endpoint_state_change_subscriber {
+    executor::s3_exports& _s3_exports;
+    void request_round() {
+        _s3_exports.request_gc_round(node_unreachable_timeout() + std::chrono::seconds(1));
+    }
+public:
+    explicit gc_node_down_subscriber(executor::s3_exports& owner) noexcept : _s3_exports(owner) {}
+    future<> on_dead(gms::inet_address, locator::host_id, gms::endpoint_state_ptr, gms::permit_id) override {
+        request_round();
+        return make_ready_future<>();
+    }
+    future<> on_remove(gms::inet_address, locator::host_id, gms::permit_id) override {
+        request_round();
+        return make_ready_future<>();
+    }
+};
 
 future<> executor::s3_exports::stop() {
     _as.request_abort();
@@ -1671,6 +1735,9 @@ future<> executor::s3_exports::run_garbage_collector() {
         // The executor is stopping.
         co_return;
     }
+    // A node-down event asks for a round, see gc_node_down_subscriber.
+    auto subscriber = seastar::make_shared<gc_node_down_subscriber>(*this);
+    _e._gossiper.register_(subscriber);
     // The delay of the next retry, see `s3_exports_gc_max_retry_period`.
     std::chrono::minutes retry_period = s3_exports_gc_retry_period;
     // `_gc_round_at` is in the past, thus the first round does not wait.
@@ -1708,6 +1775,7 @@ future<> executor::s3_exports::run_garbage_collector() {
             retry_period = std::min(retry_period * 2, s3_exports_gc_max_retry_period);
         }
     }
+    co_await _e._gossiper.unregister_(subscriber);
 }
 
 static bool is_ascii_alnum(char c) {

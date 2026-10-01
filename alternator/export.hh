@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <utility>
@@ -226,8 +227,19 @@ class executor::s3_exports {
     // is in the past, so that the first round does not wait.
     // run_garbage_collector() sets it after each round.
     seastar::lowres_clock::time_point _gc_round_at = seastar::lowres_clock::time_point::min();
-    // Waits for `_gc_round_at`, see run_garbage_collector().
+    // The times of the rounds which node-down events asked for. One time for
+    // all events loses an event which comes before the round of an earlier
+    // event.
+    std::set<seastar::lowres_clock::time_point> _gc_round_requests;
+    // Waits for the earliest of `_gc_round_at` and `_gc_round_requests`, see
+    // run_garbage_collector().
     future<bool> wait_for_next_gc_round();
+    // Asks for a garbage collection round in `delay`. Only
+    // gc_node_down_subscriber calls it.
+    void request_gc_round(seastar::lowres_clock::duration delay);
+    // The gossip subscriber which asks for a round after a node-down event.
+    // Defined in export.cc.
+    class gc_node_down_subscriber;
 public:
     explicit s3_exports(executor& e) : _e(e) {}
     // True after stop() aborted the exports, i.e. during a clean shutdown.
@@ -256,7 +268,8 @@ public:
     //  - is unreachable for a long time (DOWN alone is not sufficient).
     // A member the gossiper does not know yet counts as running, so its
     // exports are not collected.
-    // Runs one round at startup, then periodically, until stop().
+    // Runs one round at startup, then periodically, until stop(). A node-down
+    // event from the gossiper also starts a round.
     // executor::start() starts it on shard 0 of each node.
     future<> run_garbage_collector();
     // Starts a background fiber that does the export of `row`, with

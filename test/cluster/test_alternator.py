@@ -2384,3 +2384,28 @@ async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, o
     assert len(keys) == 1 and keys[0].endswith(f'AWSDynamoDB/{export_id}/_started'), keys
     uploads = export_multipart_uploads(object_storage)
     assert len(uploads) == upload_count, uploads
+
+
+# The garbage collector takes the export of a node which stays down only after that node was
+# unreachable for an hour. This injection makes the hour short, so that the test is fast. The
+# `value` parameter is the time in seconds.
+export_unreachable_timeout_injection = 'alternator_export_to_s3_node_unreachable_timeout_s'
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_stays_down_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """Another node marks FAILED the export of a node which stays down.
+
+    The cluster has three nodes, because the export tables are in
+    system_distributed, which the readers and the writers access at QUORUM.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': '1'})
+    # The node stays down. Conviction makes the other nodes see the death at once, and the
+    # garbage collector of each of them starts a round after the timeout above.
+    await manager.server_stop(servers[0].server_id, convict=True)
+    desc = await describe_finished_export(servers[1], export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
