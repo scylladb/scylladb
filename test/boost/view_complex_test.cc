@@ -1809,4 +1809,80 @@ SEASTAR_TEST_CASE(test_3362_row_deletion_2) {
     });
 }
 
+// Reproduces SCYLLADB-4069: an INSERT naming only key columns changes the
+// base row's marker but no cell. The view row carries the base row's marker,
+// so it has to receive the new marker too - otherwise it keeps the old TTL
+// and expires while the base row is still live.
+SEASTAR_TEST_CASE(test_marker_only_insert_clears_view_row_ttl) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select * from cf "
+                      "where p is not null and c is not null "
+                      "primary key (c, p)").get();
+
+        e.execute_cql("insert into cf (p, c) values (1, 7) using ttl 100").get();
+        e.execute_cql("insert into cf (p, c) values (1, 7)").get();
+        forward_jump_clocks(101s);
+        eventually([&] {
+            auto msg = e.execute_cql("select p, c from cf").get();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(7)} }});
+            msg = e.execute_cql("select p, c from vcf").get();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(7)} }});
+        });
+    });
+}
+
+// Reproduces SCYLLADB-4238: a row deletion which shadows the base row's
+// marker but not a newer cell changes no cell's liveness. The view row has
+// to receive the row tombstone anyway - otherwise it keeps the live marker
+// and outlives the base row once the cell expires.
+SEASTAR_TEST_CASE(test_row_deletion_shadowing_only_the_marker_reaches_view) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select * from cf "
+                      "where p is not null and c is not null "
+                      "primary key (c, p)").get();
+
+        e.execute_cql("insert into cf (p, c) values (1, 1) using timestamp 5").get();
+        e.execute_cql("update cf using timestamp 20 and ttl 100 set v = 1 where p = 1 and c = 1").get();
+        e.execute_cql("delete from cf using timestamp 15 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select p, c, v from vcf").get();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        forward_jump_clocks(101s);
+        eventually([&] {
+            auto msg = e.execute_cql("select * from cf").get();
+            assert_that(msg).is_rows().is_empty();
+            msg = e.execute_cql("select * from vcf").get();
+            assert_that(msg).is_rows().is_empty();
+        });
+    });
+}
+
+// Reproduces SCYLLADB-4239: re-inserting a row moves the base row's marker
+// to a newer timestamp without changing any cell. The view row has to
+// receive the newer marker - otherwise a partition deletion timestamped
+// between the two markers kills the view row but not the base row. The view
+// partition key is a permutation of the base partition key, so the partition
+// deletion is applied to the view partition as a whole.
+SEASTAR_TEST_CASE(test_partition_deletion_between_marker_timestamps_keeps_view_row) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p1 int, p2 int, c int, v int, primary key ((p1, p2), c))").get();
+        e.execute_cql("create materialized view vcf as select * from cf "
+                      "where p1 is not null and p2 is not null and c is not null "
+                      "primary key ((p2, p1), c)").get();
+
+        e.execute_cql("insert into cf (p1, p2, c) values (1, 2, 7) using timestamp 3000").get();
+        e.execute_cql("insert into cf (p1, p2, c) values (1, 2, 7) using timestamp 8000").get();
+        e.execute_cql("delete from cf using timestamp 5000 where p1 = 1 and p2 = 2").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select p1, p2, c from cf").get();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(7)} }});
+            msg = e.execute_cql("select p1, p2, c from vcf").get();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(7)} }});
+        });
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
