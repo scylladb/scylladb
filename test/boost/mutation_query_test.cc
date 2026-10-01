@@ -87,7 +87,7 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
     auto querier = replica::querier(source, s, std::move(permit), range, slice, {}, tombstone_gc_state::for_tests());
     auto close_querier = deferred_close(querier);
     auto rrb = reconcilable_result_builder(*s, slice, make_accounter());
-    return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
+    return querier.consume_page(std::move(rrb), slice, row_limit, partition_limit, query_time).get();
 }
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
@@ -541,7 +541,7 @@ static void data_query(schema_ptr s, reader_permit permit, const mutation_source
     auto querier = replica::querier(source, s, std::move(permit), range, slice, {}, tombstone_gc_state::no_gc());
     auto close_querier = deferred_close(querier);
     auto qrb = query_result_builder(*s, builder);
-    querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+    querier.consume_page(std::move(qrb), slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {

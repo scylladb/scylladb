@@ -228,8 +228,18 @@ class query_result_builder {
     std::optional<mutation_querier> _mutation_consumer;
     // We need to remember that we requested stop, to mark the read as short in the end.
     stop_iteration _stop;
+    // The partition which the page starts inside, if any.
+    [[maybe_unused]] const partition_key* _start_partition;
 public:
-    query_result_builder(const schema& s, query::result::builder& rb) noexcept;
+    // `start_partition` is the partition which the page starts inside, if
+    // any. See start_partition_of(). It must stay alive while the builder
+    // consumes.
+    query_result_builder(const schema& s, query::result::builder& rb, const partition_key* start_partition = nullptr) noexcept;
+
+    // The partition which a page of `range` starts inside, if any: the first
+    // partition of the range, if the range includes it. It belongs to
+    // `range`.
+    static const partition_key* start_partition_of(const dht::partition_range& range);
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);

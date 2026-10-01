@@ -170,14 +170,17 @@ public:
         return  _compaction_state->are_limits_reached();
     }
 
+    /// Reads a page. `slice` is the page's slice, which must stay alive until
+    /// the page ends.
     template <typename Consumer>
     requires CompactedFragmentsConsumer<Consumer>
     auto consume_page(Consumer&& consumer,
+            const query::partition_slice& slice,
             uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
             tracing::trace_state_ptr trace_ptr = {}) {
-        return ::replica::consume_page(std::get<mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
+        return ::replica::consume_page(std::get<mutation_reader>(_reader), _compaction_state, slice, std::move(consumer), row_limit,
                 partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s) ({} live, {} dead), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead), {} range tombstone(s) and {} cell(s) ({} live, {} dead)",
