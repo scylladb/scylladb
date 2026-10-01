@@ -217,6 +217,9 @@ class executor::s3_exports {
     // stop() aborts it before it closes _gate, to stop the exports early.
     seastar::abort_source _as;
     // The number of export fibers running on this shard, see try_reserve_export_slot().
+    // A fiber of finish_export_in_background() also counts. It holds the slot
+    // of its export until it writes the terminal state. Until then
+    // DescribeExport still reports that export as IN_PROGRESS.
     size_t _running_exports = 0;
 public:
     explicit s3_exports(executor& e) : _e(e) {}
@@ -238,9 +241,22 @@ public:
     // Starts a background fiber that does the export of `row`, with
     // `s3_client`, the client of the S3 endpoint which the request checked.
     // The fiber writes the result to the export row and holds `export_slot`
-    // until it finishes. Throws only before the fiber starts.
+    // until it finishes. If that write fails, or an unexpected exception
+    // stops the export before it writes the result, the fiber passes the row
+    // (as FAILED in the second case) and the slot to
+    // finish_export_in_background(). Throws only before the fiber starts.
     void start_export(slot export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
             std::string table_arn, std::string s3_bucket, std::string s3_prefix);
+    // Starts a background fiber that writes the terminal state of `row`.
+    // It retries until the write succeeds or the node stops. Use it when
+    // that write fails and the caller cannot wait. The garbage collector
+    // does not collect IN_PROGRESS rows of the current incarnation, so
+    // this node must finish them.
+    // The fiber never gives up the write. It keeps `export_slot`, which the
+    // caller must hold for the export of `row`. Thus the number of these
+    // fibers, and of the rows they hold, has the same bound as the number
+    // of exports. A write which keeps failing stops new exports.
+    void finish_export_in_background(slot export_slot, export_row row);
     // Aborts the fibers above and waits for them to finish.
     future<> stop();
 };
