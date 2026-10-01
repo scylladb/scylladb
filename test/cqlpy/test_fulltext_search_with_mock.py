@@ -486,6 +486,19 @@ def test_bm25_drops_a_row_whose_score_is_not_finite(cql, fts_table, vector_store
     assert [(row.id, row.r) for row in rows] == expected
 
 
+def test_bm25_key_named_twice_is_one_row(cql, fts_table, vector_store_mock):
+    """A malformed answer naming a key twice gives one row, with the score and rank the index gave
+    it first. The repeat still takes up its place, so the next key is ranked 3."""
+    table, _ = fts_table
+    vector_store_mock.set_next_bm25_response(200, bm25_response([1, 1, 2], scores=[3.0, 2.0, 1.0]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25_SCORE(content, 'hello') AS s, BM25_RANK(content, 'hello') AS r FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 3"))
+
+    assert [(row.id, row.s, row.r) for row in rows] == [(1, 3.0, 1), (2, 1.0, 3)]
+
+
 def test_bm25_unaliased_column_names(cql, fts_setup_with_mock):
     """An unaliased selector is named after the call the user wrote.
 
