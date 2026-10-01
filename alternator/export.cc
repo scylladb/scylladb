@@ -1891,6 +1891,13 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
     co_return rjson::print(std::move(response));
 }
 
+// Manifest files report times as ISO 8601 UTC with millisecond precision,
+// e.g. "2020-11-04T07:28:34.028Z".
+static sstring format_manifest_time(db_clock::time_point tp) {
+    auto millis = tp.time_since_epoch().count() % 1000;
+    return fmt::format("{:%FT%T}.{:03}Z", fmt::gmtime(db_clock::to_time_t(tp)), millis);
+}
+
 // The fiber of one export. The state is the pair (export_status, node_id) of the export row.
 // The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
 // changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
@@ -1925,6 +1932,18 @@ static future<> run_export(
         // s3::client addresses objects as "/bucket/key".
         auto s3_object_name = [&s3_bucket](std::string_view key) {
             return fmt::format("/{}/{}", s3_bucket, key);
+        };
+        // Writes the manifest file "<name>.json" and the object "<name>.md5" with the base64 md5
+        // of its content. Returns the key of the .json object.
+        auto put_manifest = [&client, &s3_object_name, &s3_key_prefix, &as](std::string_view name, std::string content) -> future<sstring> {
+            sstring json_key = fmt::format("{}{}.json", s3_key_prefix, name);
+            auto md5_key = fmt::format("{}{}.md5", s3_key_prefix, name);
+            md5_hasher hasher;
+            hasher.update(content.data(), content.size());
+            auto md5_content = base64_encode(hasher.finalize());
+            co_await client->put_object(s3_object_name(json_key), temporary_buffer<char>(content.data(), content.size()), s3::object_metadata{}, &as);
+            co_await client->put_object(s3_object_name(md5_key), temporary_buffer<char>(md5_content.data(), md5_content.size()), s3::object_metadata{}, &as);
+            co_return json_key;
         };
 
         // Create the data file object key
@@ -1972,14 +1991,49 @@ static future<> run_export(
             flushed.ignore_ready_future();
             std::rethrow_exception(scan.get_exception());
         }
-        flushed.get();
+        auto export_result = flushed.get();
 
         row.completed_at = db_clock::now();
         row.item_count = item_count;
         // ScyllaDB does not bill exports.
         row.billed_size_bytes = 0;
 
+        // Make and upload the manifest files.
+        // manifest-files.json - JSON lines, one object for each data file.
+        rjson::value data_file_entry = rjson::empty_object();
+        rjson::add(data_file_entry, "itemCount", rjson::value(item_count));
+        rjson::add(data_file_entry, "md5Checksum", rjson::from_string(export_result.md5));
+        rjson::add(data_file_entry, "etag", rjson::from_string(export_result.etag));
+        rjson::add(data_file_entry, "dataFileS3Key", rjson::from_string(data_object_key));
+        auto manifest_files_content = rjson::print(data_file_entry) + "\n";
+        auto manifest_files_key = co_await put_manifest("manifest-files", std::move(manifest_files_content));
+
+        // manifest-summary.json
+        rjson::value summary = rjson::empty_object();
+        rjson::add(summary, "version", "2020-06-30");
+        rjson::add(summary, "exportArn", rjson::from_string(row.export_arn));
+        rjson::add(summary, "startTime", rjson::from_string(format_manifest_time(row.accepted_at)));
+        rjson::add(summary, "endTime", rjson::from_string(format_manifest_time(*row.completed_at)));
+        rjson::add(summary, "tableArn", rjson::from_string(table_arn));
+        rjson::add(summary, "tableId", rjson::from_string(fmt::to_string(schema->id())));
+        // We do not support point-in-time exports, and the scan is not a snapshot: each page has
+        // a new timestamp, between `startTime` and `endTime`. We report `exportTime` for
+        // compatibility. It is the requested time, in the 5 minutes before the accept time.
+        rjson::add(summary, "exportTime", rjson::from_string(format_manifest_time(row.export_time)));
+        rjson::add(summary, "s3Bucket", rjson::from_string(s3_bucket));
+        rjson::add(summary, "s3Prefix", rjson::from_string(s3_prefix));
+        // Alternator does not know the encryption of the bucket.
+        rjson::add(summary, "s3SseAlgorithm", rjson::null_value());
+        rjson::add(summary, "s3SseKmsKeyId", rjson::null_value());
+        rjson::add(summary, "manifestFilesS3Key", rjson::from_string(manifest_files_key));
+        rjson::add(summary, "billedSizeBytes", rjson::value(int64_t(0)));
+        rjson::add(summary, "itemCount", rjson::value(item_count));
+        rjson::add(summary, "outputFormat", "DYNAMODB_JSON");
+        auto manifest_summary_content = rjson::print(summary);
+        auto manifest_summary_key = co_await put_manifest("manifest-summary", std::move(manifest_summary_content));
+
         row.export_status = "COMPLETED";
+        row.export_manifest = manifest_summary_key;
         if (!co_await try_write_final_export_row(sdks, row)) {
             // The garbage collector took the row. A write of FAILED does not apply either.
             xlogger.warn("Export {} completed, but the garbage collector took its row before", row.export_arn);
