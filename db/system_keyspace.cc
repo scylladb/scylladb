@@ -1155,8 +1155,7 @@ schema_ptr system_keyspace::sstables_registry() {
 }
 
 schema_ptr system_keyspace::tablets() {
-    static thread_local auto schema = replica::make_tablets_schema();
-    return schema;
+    return replica::get_tablets_schema();
 }
 
 schema_ptr system_keyspace::service_levels_v2() {
