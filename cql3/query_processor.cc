@@ -1382,6 +1382,11 @@ future<> query_processor::group0_read_barrier() {
     co_await remote_.get().group0_client.read_barrier();
 }
 
+future<utils::UUID> query_processor::last_group0_state_id() {
+    auto [remote_, holder] = remote();
+    co_return co_await remote_.get().group0_client.get_last_group0_state_id();
+}
+
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
     query_processor::consistency_level_set result;
     for (const auto& opt : levels) {

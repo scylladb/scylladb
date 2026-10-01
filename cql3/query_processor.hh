@@ -542,6 +542,7 @@ public:
             bool group0_barrier = false);
 
     future<> group0_read_barrier();
+    future<utils::UUID> last_group0_state_id();
 
     void update_authorized_prepared_cache_config();
 
