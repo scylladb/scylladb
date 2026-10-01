@@ -27,6 +27,7 @@ class database;
 }
 
 struct minimal_sst_info;
+class download_progress;
 struct restore_result {
 };
 
@@ -119,6 +120,11 @@ private:
             table_id, std::vector<sstables::shared_sstable> sstables,
             bool_class<struct primary_replica_only_tag> primary_replica_only, bool unlink_sstables, stream_scope scope,
             shared_ptr<stream_progress> progress);
+
+    // Downloads the sstables from the object store and streams them with load_and_stream()
+    // on every shard, reporting through the progress. Called on the shard that owns the task.
+    future<> download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
+            const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, bool_class<struct primary_replica_only_tag> primary_replica, abort_source& as);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
     future<> download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard&);

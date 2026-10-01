@@ -809,7 +809,9 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     download_progress _progress;
 
 protected:
-    virtual future<> run() override;
+    virtual future<> run() override {
+        return _loader.local().download_and_stream(_progress, _endpoint, _bucket, _ks, _cf, _prefix, _sstables, _scope, _primary_replica, _as);
+    }
 
 public:
     download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
@@ -854,38 +856,39 @@ public:
     }
 };
 
-future<> sstables_loader::download_task_impl::run() {
+future<> sstables_loader::download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
+        const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, primary_replica_only primary_replica, abort_source& as) {
     // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
     // that might otherwise consume a significant amount of memory.
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
-    llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    llog.debug("Loading sstables from {}({}/{})", endpoint, bucket, prefix);
 
-    auto ep_type = _loader.local()._storage_manager.get_endpoint_type(_endpoint);
+    auto ep_type = _storage_manager.get_endpoint_type(endpoint);
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, ep_type, _bucket, _prefix, cfg, [&] {
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_db, ks, cf, sstable_names, endpoint, ep_type, bucket, prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
-    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    llog.debug("Streaming sstables from {}({}/{})", endpoint, bucket, prefix);
     std::exception_ptr ex;
-    named_gate g("sstables_loader::download_task_impl");
+    named_gate g("sstables_loader::download_and_stream");
     try {
-        _as.check();
+        as.check();
 
-        auto s = _as.subscribe([&]() noexcept {
+        auto s = as.subscribe([&]() noexcept {
             try {
                 auto h = g.hold();
-                (void)smp::invoke_on_all([&shard_aborts, ex = _as.abort_requested_exception_ptr()] {
+                (void)smp::invoke_on_all([&shard_aborts, ex = as.abort_requested_exception_ptr()] {
                     shard_aborts[this_shard_id()].request_abort_ex(ex);
                 }).finally([h = std::move(h)] {});
             } catch (...) {
             }
         });
-        co_await _progress.start();
-        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
-                                            _progress.local());
+        co_await progress.start();
+        co_await container().invoke_on_all([&, table_id] (sstables_loader& loader) mutable -> future<> {
+            co_await loader.load_and_stream(ks, cf, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica, false, scope,
+                                            progress.local());
         });
     } catch (...) {
         ex = std::current_exception();
@@ -893,14 +896,14 @@ future<> sstables_loader::download_task_impl::run() {
 
     co_await g.close();
 
-    if (_as.abort_requested()) {
+    if (as.abort_requested()) {
         if (!ex) {
-            ex = _as.abort_requested_exception_ptr();
+            ex = as.abort_requested_exception_ptr();
         }
     }
 
     if (ex) {
-        co_await _loader.invoke_on_all([&sstables_on_shards] (sstables_loader&) {
+        co_await container().invoke_on_all([&sstables_on_shards] (sstables_loader&) {
             sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
         });
         co_await coroutine::return_exception_ptr(std::move(ex));
