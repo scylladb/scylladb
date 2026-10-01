@@ -728,6 +728,74 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     co_return;
 }
 
+// The progress of a download task: one stream_progress per shard, fed by
+// load_and_stream(), reduced on demand.
+class download_progress {
+    struct progress_holder {
+        // Wrap stream_progress in a smart pointer to enable polymorphism.
+        // This allows derived progress types to be passed down for per-tablet
+        // progress tracking while maintaining the base interface.
+        shared_ptr<stream_progress> progress = make_shared<stream_progress>();
+    };
+    mutable shared_mutex _progress_mutex;
+    // user could query for the progress even before _progress_per_shard
+    // is completed started, and the task's state does not reflect the
+    // state of progress, so we have to track it separately.
+    enum class progress_state {
+        uninitialized,
+        initialized,
+        finalized,
+    } _progress_state = progress_state::uninitialized;
+    sharded<progress_holder> _progress_per_shard;
+    tasks::task_manager::task::progress _final_progress;
+
+public:
+    future<> start() {
+        co_await _progress_per_shard.start();
+        _progress_state = progress_state::initialized;
+    }
+
+    // This shard's progress; valid between start() and stop().
+    shared_ptr<stream_progress> local() const {
+        return _progress_per_shard.local().progress;
+    }
+
+    future<> stop() noexcept {
+        // preserve the final progress, so we can access it after the task is
+        // finished
+        _final_progress = co_await get();
+        co_await with_lock(_progress_mutex, [this] -> future<> {
+            if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
+                co_await _progress_per_shard.stop();
+            }
+        });
+    }
+
+    future<tasks::task_manager::task::progress> get() const {
+        co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
+            switch (_progress_state) {
+            case progress_state::uninitialized:
+                co_return tasks::task_manager::task::progress{};
+            case progress_state::finalized:
+                co_return _final_progress;
+            case progress_state::initialized:
+                break;
+            }
+            auto p = co_await _progress_per_shard.map_reduce(
+                adder<stream_progress>{},
+                [] (const progress_holder& holder) -> stream_progress {
+                  auto p = holder.progress;
+                  SCYLLA_ASSERT(p);
+                  return *p;
+                });
+            co_return tasks::task_manager::task::progress {
+                .completed = p.completed,
+                .total = p.total,
+            };
+        });
+    }
+};
+
 class sstables_loader::download_task_impl : public tasks::task_manager::task::impl {
     sharded<sstables_loader>& _loader;
     sstring _endpoint;
@@ -738,23 +806,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstables_loader::stream_scope _scope;
     std::vector<sstring> _sstables;
     const primary_replica_only _primary_replica;
-    struct progress_holder {
-        // Wrap stream_progress in a smart pointer to enable polymorphism.
-        // This allows derived progress types to be passed down for per-tablet
-        // progress tracking while maintaining the base interface.
-        shared_ptr<stream_progress> progress = make_shared<stream_progress>();
-    };
-    mutable shared_mutex _progress_mutex;
-    // user could query for the progress even before _progress_per_shard
-    // is completed started, and this._status.state does not reflect the
-    // state of progress, so we have to track it separately.
-    enum class progress_state {
-        uninitialized,
-        initialized,
-        finalized,
-    } _progress_state = progress_state::uninitialized;
-    sharded<progress_holder> _progress_per_shard;
-    tasks::task_manager::task::progress _final_progress;
+    download_progress _progress;
 
 protected:
     virtual future<> run() override;
@@ -794,38 +846,11 @@ public:
     }
 
     virtual future<> release_resources() noexcept override {
-        // preserve the final progress, so we can access it after the task is
-        // finished
-        _final_progress = co_await get_progress();
-        co_await with_lock(_progress_mutex, [this] -> future<> {
-            if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
-                co_await _progress_per_shard.stop();
-            }
-        });
+        return _progress.stop();
     }
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
-            switch (_progress_state) {
-            case progress_state::uninitialized:
-                co_return tasks::task_manager::task::progress{};
-            case progress_state::finalized:
-                co_return _final_progress;
-            case progress_state::initialized:
-                break;
-            }
-            auto p = co_await _progress_per_shard.map_reduce(
-                adder<stream_progress>{},
-                [] (const progress_holder& holder) -> stream_progress {
-                  auto p = holder.progress;
-                  SCYLLA_ASSERT(p);
-                  return *p;
-                });
-            co_return tasks::task_manager::task::progress {
-                .completed = p.completed,
-                .total = p.total,
-            };
-        });
+        return _progress.get();
     }
 };
 
@@ -857,11 +882,10 @@ future<> sstables_loader::download_task_impl::run() {
             } catch (...) {
             }
         });
-        co_await _progress_per_shard.start();
-        _progress_state = progress_state::initialized;
+        co_await _progress.start();
         co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
             co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
-                                            _progress_per_shard.local().progress);
+                                            _progress.local());
         });
     } catch (...) {
         ex = std::current_exception();
