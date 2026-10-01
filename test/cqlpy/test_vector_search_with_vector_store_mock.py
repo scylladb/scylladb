@@ -406,3 +406,15 @@ def test_custom_indexes_several_keyspaces(cql, test_keyspace, this_dc, vector_st
         for keyspace, index in [(test_keyspace, vector_index), (other_keyspace, fulltext_index)]:
             rows = list(cql.execute(f"SELECT index_name FROM system.custom_indexes WHERE keyspace_name = '{keyspace}'"))
             assert [r.index_name for r in rows] == [index]
+
+
+# Validates fix for VECTOR-179: a vector search with tracing enabled
+# used to crash Scylla instead of returning an error.
+def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, vector_store_mock, scylla_only, skip_without_tablets):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        cql.execute(
+            f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
+            trace=True,
+        )
