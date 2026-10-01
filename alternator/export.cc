@@ -1122,6 +1122,11 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
 
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+
+    auto now = to_epoch_seconds(db_clock::now());
+    // If there is no ExportTime, use the current time (see the validation below).
+    auto export_time = now;
+    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
 
     if (export_format != "DYNAMODB_JSON") {
@@ -1169,27 +1174,28 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 "and no \".\" or \"..\" segment between slashes", s3_prefix));
     }
 
-    // ExportTime - only "now" (or close to now) is supported
-    // If not specified, use current time. If specified, must be within 5 minutes of now.
-    auto now = to_epoch_seconds(db_clock::now());
-    auto export_time = now;
-    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
         if (!export_time_v->IsNumber()) {
             co_return api_error::validation("Expected a number attribute ExportTime");
         }
         export_time = export_time_v->GetDouble();
-        if (std::isnan(export_time) || std::isinf(export_time) || export_time < 0) {
+        // ExportTime becomes int64 milliseconds (db_clock). The cap, 9999-12-31T23:59:59Z, is far
+        // below the limit of that type, so the conversions below cannot overflow.
+        constexpr double max_export_time = 253402300799; // 9999-12-31T23:59:59Z
+        if (std::isnan(export_time) || export_time < 0 || export_time > max_export_time) {
             co_return api_error::invalid_export_time("ExportTime number is out of range of valid values for this field");
-        }
-        auto diff = export_time > now ? export_time - now : now - export_time;
-        if (diff > 300) {
-            co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
-                                "ExportTime: {} s , current time: {} s", export_time, now));
         }
         // DynamoDB rounds a requested ExportTime to the nearest millisecond.
         export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
                 std::chrono::duration<double>(export_time))).count();
+        // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
+        // `now` is cut down to the millisecond, while ExportTime is rounded to the nearest
+        // millisecond. Thus a request for the current time can be one millisecond after `now`.
+        auto to_millis = [] (double seconds) { return std::llround(seconds * 1000); };
+        if (to_millis(export_time) > to_millis(now) + 1 || now - export_time > 300) {
+            co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
+                                "ExportTime: {} s , current time: {} s", export_time, now));
+        }
     }
 
     if (user_client_token.empty()) {

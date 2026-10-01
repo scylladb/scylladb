@@ -1648,9 +1648,8 @@ def test_export_table_invalid_export_time_before_now(test_table_s_for_export_onl
             ExportTime=int(time.time()) - 60 * 5 - 1,
         )
 
-# Test that ExportTime in the future (more than 5 minutes) is rejected.
-# We add additional time (1 minute) to avoid a race (where enough time will pass before the request is processed).
-def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only, scylla_only):
+# Test that ExportTime in the future is rejected. DynamoDB also refuses it.
+def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
 
@@ -1658,8 +1657,17 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
         client.export_table_to_point_in_time(
             TableArn=table_arn,
             S3Bucket='my-bucket',
-            ExportTime=int(time.time()) + 60 * 5 + 60,
+            ExportTime=int(time.time()) + 10,
         )
+
+
+# Test that an ExportTime after 9999-12-31T23:59:59Z is refused before its conversion to
+# milliseconds. boto3 cannot send such a time, so the request is written out.
+def test_export_table_huge_export_time(dynamodb, test_table_s_for_export_only, scylla_only):
+    payload = json.dumps({'TableArn': get_table_arn(test_table_s_for_export_only),
+                          'S3Bucket': 'my-bucket', 'ExportTime': 1e300})
+    with pytest.raises(ManualRequestError, match='InvalidExportTimeException'):
+        manual_request(dynamodb, 'ExportTableToPointInTime', payload)
 
 
 # ---------------------------------------------------------------------------
