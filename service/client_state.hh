@@ -137,8 +137,8 @@ private:
     // going through normal auth, while still treating queries as external.
     bool _bypass_auth_checks;
 
-    // Set for a statement forwarded by another node; such a statement is
-    // executed here and never forwarded again.
+    // Set for a statement forwarded by another node, or run here after a
+    // failed forward; such a statement is never forwarded again.
     bool _forwarded = false;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
@@ -322,6 +322,10 @@ public:
 
     bool is_forwarded() const {
         return _forwarded;
+    }
+
+    void set_forwarded() {
+        _forwarded = true;
     }
 
     bool bypass_auth_checks() const {
