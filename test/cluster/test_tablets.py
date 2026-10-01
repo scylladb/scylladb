@@ -2669,26 +2669,46 @@ async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
     2. Block the topology coordinator right before it goes to sleep
     3. Create a table, which should wake up the coordinator
     4. Verify that the coordinator didn't go to sleep
+
+    Any other event in the window (a completed load stats refresh, for one) would wake the
+    coordinator too, so the trap is set by an ALTER TABLE, periodic refreshes are off, the
+    system keyspaces stay on vnodes (their splits refresh), and no refresh may complete.
     """
-    server = await manager.server_add()
+    cfg = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes'],
+           'tablet_load_stats_refresh_interval_in_seconds': 3600}
+    server = await manager.server_add(config=cfg)
     log = await manager.server_open_log(server.server_id)
     cql = manager.get_cql()
 
+    # The coordinator refreshes the load stats when it starts; let that refresh complete
+    # first, so that the wait below is for the one started by the table creation.
+    await log.wait_for("Refreshed table load stats for all DC", timeout=60)
+    mark = await log.mark()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        # A table to ALTER for the trap; creating it starts a load stats refresh, so let
+        # that complete and the coordinator go back to sleep before arming the injection.
+        await cql.run_async(f"CREATE TABLE {ks}.other (pk int PRIMARY KEY, c int);")
+        await log.wait_for("Refreshed table load stats for all DC", from_mark=mark)
+        async def coordinator_asleep():
+            lines = await log.grep(r"topology coordinator fiber (has nothing to do\. Sleeping\.|got an event)", from_mark=mark)
+            return True if lines and "Sleeping" in lines[-1][0] else None
+        await wait_for(coordinator_asleep, time.time() + 60)
+
         # Block coordinator right before going to sleep
-        # We use node bootstrap as an operation which is going to be trapped on exit, but it's arbitrary.
         mark = await log.mark()
         await manager.api.enable_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep', one_shot=True)
-        await manager.server_add()
-        await log.wait_for('wait-before-topology-coordinator-goes-to-sleep: wait', from_mark=mark)
+        await cql.run_async(f"ALTER TABLE {ks}.other WITH comment = 'wake up';")
+        trap_pos, _ = await log.wait_for('wait-before-topology-coordinator-goes-to-sleep: wait', from_mark=mark)
 
         # Create a table, which should prevent the coordinator from sleeping
         await manager.api.enable_injection(server.ip_addr, 'wait-after-topology-coordinator-gets-event', one_shot=True)
         mark = await log.mark()
+        assert not await log.grep("Refreshed table load stats for all DC", from_mark=trap_pos), \
+            "a load stats refresh completed after the trap, it would wake the coordinator on its own"
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-        # Verify it didn't go to sleep. If it did, the wait for wakeup would be 30s on average,
-        # up to stats refresh period, which is 60s. So use a small timeout.
+        # Verify it didn't go to sleep. If it did, nothing would wake it up before the next
+        # periodic stats refresh, an hour away. So use a small timeout.
         await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
         await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)
 
