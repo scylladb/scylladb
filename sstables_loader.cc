@@ -1237,28 +1237,21 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     };
 }
 
-class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
-    sharded<sstables_loader>& _loader;
+class tablet_restore_progress {
+    replica::database& _db;
+    db::system_distributed_keyspace& _sys_dist_ks;
     table_id _tid;
     sstring _snap_name;
-    size_t _tablet_count;
-    // Pre-restore tablet hints, recovered by restore_tablets() from the schema
-    // persisted in system_distributed.snapshot_tables; run() alters the table
-    // back to them once the restore is done.
-    std::optional<size_t> _original_min_tablet_count;
-    std::optional<size_t> _original_max_tablet_count;
     tasks::task_manager::task::progress _progress;
     seastar::named_gate _gate{"progress_updater"};
     timer<seastar::lowres_clock> _progress_update_timer;
 
     future<> update_progress() {
-        auto& loader = _loader.local();
-        auto& db = loader._db.local();
-        auto s = db.find_schema(_tid);
-        auto md = db.get_token_metadata_ptr();
+        auto s = _db.find_schema(_tid);
+        auto md = _db.get_token_metadata_ptr();
         const auto& topo = md->get_topology();
 
-        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        db::snapshot_table_helper sth(_sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
         for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
             co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
@@ -1271,16 +1264,11 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     }
 
 public:
-    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name, manifest_summary ms,
-            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) noexcept
-        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-        , _loader(loader)
+    tablet_restore_progress(replica::database& db, db::system_distributed_keyspace& sys_dist_ks, table_id tid, sstring snap_name, size_t total)
+        : _db(db)
+        , _sys_dist_ks(sys_dist_ks)
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
-        , _tablet_count(ms.tablet_count)
-        , _original_min_tablet_count(original_min_tablet_count)
-        , _original_max_tablet_count(original_max_tablet_count)
         , _progress_update_timer([this] {
             if (auto gh = _gate.try_hold()) {
                 std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
@@ -1291,9 +1279,52 @@ public:
             }
         })
     {
-        _status.progress_units = "sstables";
-        _progress.total = ms.nr_sstables;
+        _progress.total = total;
         _progress_update_timer.arm(lowres_clock::now());
+    }
+
+    tasks::task_manager::task::progress get() const noexcept {
+        return _progress;
+    }
+
+    // The total was known upfront, so mark it all completed and stop polling.
+    void complete() noexcept {
+        _progress_update_timer.cancel();
+        _progress.completed = _progress.total;
+    }
+
+    future<> stop() noexcept {
+        _progress_update_timer.cancel();
+        co_await _gate.close();
+    }
+};
+
+class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
+    sharded<sstables_loader>& _loader;
+    table_id _tid;
+    sstring _snap_name;
+    size_t _tablet_count;
+    // Pre-restore tablet hints, recovered by restore_tablets() from the schema
+    // persisted in system_distributed.snapshot_tables; run() alters the table
+    // back to them once the restore is done.
+    std::optional<size_t> _original_min_tablet_count;
+    std::optional<size_t> _original_max_tablet_count;
+    tablet_restore_progress _progress;
+
+public:
+    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
+            table_id tid, sstring snap_name, manifest_summary ms,
+            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) noexcept
+        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
+        , _loader(loader)
+        , _tid(std::move(tid))
+        , _snap_name(std::move(snap_name))
+        , _tablet_count(ms.tablet_count)
+        , _original_min_tablet_count(original_min_tablet_count)
+        , _original_max_tablet_count(original_max_tablet_count)
+        , _progress(loader.local()._db.local(), loader.local()._sys_dist_ks, _tid, _snap_name, ms.nr_sstables)
+    {
+        _status.progress_units = "sstables";
     }
 
     virtual std::string type() const override {
@@ -1324,12 +1355,11 @@ public:
     }
 
     future<tasks::task_manager::task::progress> get_progress() const override {
-        co_return _progress;
+        co_return _progress.get();
     }
 
     future<> release_resources() noexcept override {
-        _progress_update_timer.cancel();
-        co_await _gate.close();
+        return _progress.stop();
     }
 
 protected:
@@ -1360,10 +1390,7 @@ protected:
             std::rethrow_exception(eptr);
         }
 
-        // Restore complete. The total was known upfront from manifest parsing.
-        // Mark all progress as complete and stop the background update timer.
-        _progress_update_timer.cancel();
-        _progress.completed = _progress.total;
+        _progress.complete();
     }
 };
 
