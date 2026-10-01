@@ -962,6 +962,73 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
     }
 }
 
+// Returns true if the status is final.
+static bool is_terminal_status(std::string_view export_status) {
+    return export_status == "COMPLETED" || export_status == "FAILED";
+}
+
+// DynamoDB has only IN_PROGRESS, COMPLETED and FAILED. We report any other stored status
+// as IN_PROGRESS.
+static rjson::value reported_status(std::string_view export_status) {
+    return rjson::from_string(is_terminal_status(export_status) ? export_status : "IN_PROGRESS");
+}
+
+// Builds the ExportDescription of an export row for DescribeExport and ExportTableToPointInTime.
+static rjson::value build_export_description_response(const export_row& exp) {
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(exp.export_arn));
+    rjson::add(export_desc, "ExportStatus", reported_status(exp.export_status));
+    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp.accepted_at)));
+
+    // Copy these fields from the original request (ExportFormat has a default). We validated the
+    // request when we accepted it, so a parse error is a corrupt row, not a caller error.
+    try {
+        auto exported_request = rjson::parse(exp.request);
+        rjson::add(export_desc, "TableArn", rjson::copy(rjson::get(exported_request, "TableArn")));
+        rjson::add(export_desc, "S3Bucket", rjson::copy(rjson::get(exported_request, "S3Bucket")));
+        if (const rjson::value* s3_prefix = rjson::find(exported_request, "S3Prefix")) {
+            rjson::add(export_desc, "S3Prefix", rjson::copy(*s3_prefix));
+        }
+        const rjson::value* export_format = rjson::find(exported_request, "ExportFormat");
+        rjson::add(export_desc, "ExportFormat", export_format ? rjson::copy(*export_format) : rjson::from_string("DYNAMODB_JSON"));
+        if (const rjson::value* export_type = rjson::find(exported_request, "ExportType")) {
+            rjson::add(export_desc, "ExportType", rjson::copy(*export_type));
+        }
+    } catch (const rjson::error& e) {
+        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", exp.export_arn, e.what()));
+    }
+
+    // TableId identifies the table the export was taken from, not whatever table now answers to
+    // the export's name - names can be reused, ids cannot.
+    rjson::add(export_desc, "TableId", rjson::from_string(exp.table_id.to_sstring()));
+    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp.export_time)));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp.client_token));
+
+    // These fields are set only when the export finishes.
+    if (exp.export_manifest) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp.export_manifest));
+    }
+    if (exp.failure_code) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp.failure_code));
+    }
+    if (exp.failure_message) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp.failure_message));
+    }
+    if (exp.item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp.item_count));
+    }
+    if (exp.billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp.billed_size_bytes));
+    }
+    if (exp.completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp.completed_at)));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    return response;
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -1151,62 +1218,7 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         }
     }
 
-    rjson::value export_desc = rjson::empty_object();
-    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
-    // DynamoDB reports no ExportStatus but these three, so any other stored status is reported as
-    // IN_PROGRESS.
-    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->export_status == "COMPLETED" || exp->export_status == "FAILED" ? exp->export_status : "IN_PROGRESS"));
-    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp->accepted_at)));
-
-    // The fields describing the request are echoed back from the request that started the export,
-    // with the ExportFormat ExportTableToPointInTime defaults to. That request was validated when it
-    // was accepted, so one that cannot be read back is a corrupt row, like a row missing a column,
-    // and not the caller's error.
-    try {
-        auto exported_request = rjson::parse(exp->request);
-        rjson::add(export_desc, "TableArn", rjson::copy(rjson::get(exported_request, "TableArn")));
-        rjson::add(export_desc, "S3Bucket", rjson::copy(rjson::get(exported_request, "S3Bucket")));
-        if (const rjson::value* s3_prefix = rjson::find(exported_request, "S3Prefix")) {
-            rjson::add(export_desc, "S3Prefix", rjson::copy(*s3_prefix));
-        }
-        const rjson::value* export_format = rjson::find(exported_request, "ExportFormat");
-        rjson::add(export_desc, "ExportFormat", export_format ? rjson::copy(*export_format) : rjson::from_string("DYNAMODB_JSON"));
-        if (const rjson::value* export_type = rjson::find(exported_request, "ExportType")) {
-            rjson::add(export_desc, "ExportType", rjson::copy(*export_type));
-        }
-    } catch (const rjson::error& e) {
-        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", export_arn, e.what()));
-    }
-
-    // TableId identifies the table the export was taken from, not whatever table now answers to
-    // the export's name - names can be reused, ids cannot.
-    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
-    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp->export_time)));
-    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
-
-    // Everything below describes a finished export, so it is only there once one has run.
-    if (exp->export_manifest) {
-        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->export_manifest));
-    }
-    if (exp->failure_code) {
-        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
-    }
-    if (exp->failure_message) {
-        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
-    }
-    if (exp->item_count) {
-        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
-    }
-    if (exp->billed_size_bytes) {
-        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
-    }
-    if (exp->completed_at) {
-        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp->completed_at)));
-    }
-
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print(build_export_description_response(*exp));
 }
 
 // Consistency level of the scan: LOCAL_QUORUM for NetworkTopologyStrategy, QUORUM otherwise
@@ -1476,8 +1488,7 @@ static rjson::value make_export_summary(const export_summary_row& exp) {
     }
     rjson::value summary = rjson::empty_object();
     rjson::add(summary, "ExportArn", rjson::from_string(exp.export_arn));
-    // DynamoDB's ExportStatus is IN_PROGRESS, COMPLETED or FAILED; report any other value as IN_PROGRESS.
-    rjson::add(summary, "ExportStatus", rjson::from_string(*exp.status == "COMPLETED" || *exp.status == "FAILED" ? *exp.status : "IN_PROGRESS"));
+    rjson::add(summary, "ExportStatus", reported_status(*exp.status));
     // ListExports always reports ExportType, also when the ExportTableToPointInTime request did not
     // specify ExportType. Then report the default value, FULL_EXPORT.
     try {
