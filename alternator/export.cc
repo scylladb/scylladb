@@ -2363,6 +2363,8 @@ static future<std::optional<export_row>> run_export(
 
         // Scan the table and feed items through the pipeline
         auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &as](rjson::value item) -> future<> {
+            utils::get_local_injector().inject("alternator_export_to_s3_in_item_handler",
+                    [] { throw std::runtime_error("injected failure alternator_export_to_s3_in_item_handler"); });
             // Stops the export fiber during the scan, so that a test can interrupt a running
             // export (e.g. kill the node) while the row is IN_PROGRESS. The wait ends on a
             // message, when the injection is disabled, or when the node stops.

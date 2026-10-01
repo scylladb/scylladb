@@ -2341,6 +2341,62 @@ def test_export_table_old_export_time_of_retry(cql, scylla_only, test_table_s_fo
 # Error injection tests
 # ---------------------------------------------------------------------------
 
+# Test that a failure in the background export fiber makes the export FAILED,
+# that DescribeExport reports the failure, and that the export cleans up: it
+# does not leave the multipart upload of the data file open (the data already
+# uploaded to S3 can stay). The scan fails after the upload was started.
+def test_export_error_injection_fails_export(dynamodb, scylla_only, rest_api, s3):
+    injection = 'alternator_export_to_s3_in_item_handler'
+    # The sink of the data file starts the multipart upload with the first full
+    # part of 5 MiB of compressed data. The items hold random bytes, which do not
+    # compress, so the items before the pause are more than one part.
+    item_count = 25
+    item_size = 350 * 1024
+    pause_after_items = 20
+    with new_table_s(dynamodb) as table:
+        with table.batch_writer() as batch:
+            for i in range(item_count):
+                batch.put_item(Item={'p': f'item{i}', 'v': os.urandom(item_size)})
+        client = table.meta.client
+        table_arn = get_table_arn(table)
+
+        with new_s3_bucket(s3) as bucket:
+            with scylla_inject_error(rest_api, EXPORT_PAUSE_INJECTION, one_shot=False,
+                                     parameters={'pause_after_items': pause_after_items}):
+                response = client.export_table_to_point_in_time(
+                    TableArn=table_arn,
+                    S3Bucket=bucket,
+                )
+                export_arn = response['ExportDescription']['ExportArn']
+                # The injection enters for each item, and it stops the fiber at the item
+                # after the first `pause_after_items` items.
+                scylla_wait_for_injection_enters(rest_api, EXPORT_PAUSE_INJECTION, pause_after_items + 1)
+                uploads = s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
+                assert len(uploads) == 1, uploads
+                # The item handler checks the failure injection before the pause, so the
+                # stopped item continues, and the next item fails the scan.
+                with scylla_inject_error(rest_api, injection, one_shot=False):
+                    scylla_injection_message(rest_api, EXPORT_PAUSE_INJECTION)
+                    desc = wait_for_export(client, export_arn)
+            assert desc['ExportStatus'] == 'FAILED'
+            assert desc['FailureCode'] == 'Exception'
+            assert f'injected failure {injection}' in desc['FailureMessage']
+            # A finished export has an end time.
+            assert 'EndTime' in desc
+
+            response = s3.list_objects_v2(Bucket=bucket)
+            keys = [obj['Key'] for obj in response.get('Contents', [])]
+            assert not [k for k in keys if 'manifest' in k], keys
+            # After a failed scan, the export completes the upload of the data file.
+            assert [k for k in keys if '/data/' in k], keys
+            # A failed export must not leave a multipart upload (the listing above does not
+            # show it, but it is stored and paid for).
+            uploads = s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
+            assert not uploads, uploads
+
+            assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
+
+
 # Test that a failure after the export row insert (before the fiber starts) fails the export. The
 # request writes FAILED to the row, ExportTableToPointInTime returns FAILED, and DescribeExport
 # and ListExports report the same ARN as FAILED.
