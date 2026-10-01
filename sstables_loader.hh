@@ -176,7 +176,6 @@ public:
         return _db.local();
     }
 
-    class download_task_impl;
     class tablet_restore_task_impl;
 };
 

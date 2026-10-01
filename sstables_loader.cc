@@ -728,6 +728,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     co_return;
 }
 
+static constexpr auto download_sstables_task_type = "download_sstables";
+
 // The progress of a download task: one stream_progress per shard, fed by
 // load_and_stream(), reduced on demand.
 class download_progress {
@@ -793,66 +795,6 @@ public:
                 .total = p.total,
             };
         });
-    }
-};
-
-class sstables_loader::download_task_impl : public tasks::task_manager::task::impl {
-    sharded<sstables_loader>& _loader;
-    sstring _endpoint;
-    sstring _bucket;
-    sstring _ks;
-    sstring _cf;
-    sstring _prefix;
-    sstables_loader::stream_scope _scope;
-    std::vector<sstring> _sstables;
-    const primary_replica_only _primary_replica;
-    download_progress _progress;
-
-protected:
-    virtual future<> run() override {
-        return _loader.local().download_and_stream(_progress, _endpoint, _bucket, _ks, _cf, _prefix, _sstables, _scope, _primary_replica, _as);
-    }
-
-public:
-    download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
-            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables,
-            sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
-        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-        , _loader(loader)
-        , _endpoint(std::move(endpoint))
-        , _bucket(std::move(bucket))
-        , _ks(std::move(ks))
-        , _cf(std::move(cf))
-        , _prefix(std::move(prefix))
-        , _scope(scope)
-        , _sstables(std::move(sstables))
-        , _primary_replica(primary_replica)
-    {
-        _status.progress_units = "batches";
-    }
-
-    virtual std::string type() const override {
-        return "download_sstables";
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::no;
-    }
-
-    virtual tasks::is_user_task is_user_task() const noexcept override {
-        return tasks::is_user_task::yes;
-    }
-
-    tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    virtual future<> release_resources() noexcept override {
-        return _progress.stop();
-    }
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return _progress.get();
     }
 };
 
@@ -955,8 +897,24 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     }
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
-    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>(tasks::make_empty_task_info(), container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
-                                                                                       std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
+    auto progress = make_lw_shared<download_progress>();
+    tasks::task_manager::task_builder task_builder{_task_manager_module, download_sstables_task_type};
+    task_builder.set_scope("node")
+                .set_keyspace(ks_name)
+                .set_progress_units("batches")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] {
+                    return progress->get();
+                })
+                .set_finalizer([progress] () noexcept {
+                    return progress->stop();
+                });
+    auto task = co_await std::move(task_builder).build([this, progress, endpoint = std::move(endpoint), bucket = std::move(bucket), ks_name = std::move(ks_name), cf_name = std::move(cf_name),
+            prefix = std::move(prefix), sstables = std::move(sstables), scope, primary_replica] (tasks::task_manager::task::impl& self) {
+        return download_and_stream(*progress, endpoint, bucket, ks_name, cf_name, prefix, sstables, scope, primary_replica_only(primary_replica), self.get_abort_source());
+    });
     co_return task->id();
 }
 
@@ -1066,7 +1024,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     using sstables_col = std::vector<sstables::shared_sstable>;
     using prefix_sstables = std::vector<sstables_col>;
 
-    // Per-shard abort sources for the object-store download pipeline (cf. download_task_impl::run).
+    // Per-shard abort sources for the object-store download pipeline (cf. download_and_stream()).
     // They are wired to the session abort only after the sstables are opened (see below).
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
 
