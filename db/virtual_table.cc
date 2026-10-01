@@ -108,12 +108,15 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             // Valid until handle.is_terminated(), which is set to true when the
             // queue_reader dies.
             const dht::partition_range* pr;
+            const query::clustering_row_ranges* clustering_ranges;
             mutation_reader::forwarding fwd_mr;
 
-            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr, queue_reader_handle&& handle)
+            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr,
+                    const query::clustering_row_ranges* clustering_ranges, queue_reader_handle&& handle)
                 : result_collector(s, p)
                 , handle(std::move(handle))
                 , pr(pr)
+                , clustering_ranges(clustering_ranges)
             { }
 
             // result_collector
@@ -128,10 +131,17 @@ mutation_source streaming_virtual_table::as_mutation_source() {
                 }
                 return *pr;
             }
+
+            const query::clustering_row_ranges& clustering_row_ranges() const override {
+                if (handle.is_terminated()) {
+                    throw std::runtime_error("read abandoned");
+                }
+                return *clustering_ranges;
+            }
         };
 
         auto reader_and_handle = make_queue_reader(table_schema, permit);
-        auto consumer = std::make_unique<my_result_collector>(table_schema, permit, &pr, std::move(reader_and_handle.second));
+        auto consumer = std::make_unique<my_result_collector>(table_schema, permit, &pr, &slice.default_row_ranges(), std::move(reader_and_handle.second));
         auto f = execute(permit, *consumer, *consumer);
 
         // It is safe to discard this future because:

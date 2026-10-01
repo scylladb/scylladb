@@ -107,6 +107,49 @@ Example output:
 
    10.0.0.72
 
+Querying over CQL
+-----------------
+
+The same sampler is available remotely as the ``system.toppartitions`` virtual table, for superusers only.
+The sampling window is the statement timeout, set with ``USING TIMEOUT``; ``capacity`` and ``list_size``
+(nodetool's ``-s`` and ``-k``) are passed as equality restrictions, and ``kind`` selects the sampler (``-a``).
+``kind`` follows ``capacity`` and ``list_size`` in the clustering key, so restricting it requires either
+both of them or ``ALLOW FILTERING``.
+Every page starts a new sampling window, so fetch the result in a single page (``PAGING OFF`` in cqlsh).
+
+.. code-block:: cql
+
+   SELECT kind, rank, partition_key, count, error FROM system.toppartitions
+   WHERE keyspace_name = 'ks' AND table_name = 't'
+     AND capacity = 64 AND list_size = 5
+   USING TIMEOUT 3000ms;
+
+Example output (``t`` has an ``int`` partition key, so ``partition_key`` is the stringified integer):
+
+.. code-block:: text
+
+    kind  | rank | partition_key | count | error
+   -------+------+---------------+-------+-------
+    write |    0 |             0 |  4102 |     0
+    write |    1 |             1 |    92 |     0
+    write |    2 |             6 |    92 |     0
+    write |    3 |             2 |    91 |     0
+    write |    4 |             8 |    91 |     0
+     read |    0 |             0 |  4102 |     0
+     read |    1 |             1 |    92 |     0
+     read |    2 |             6 |    92 |     0
+     read |    3 |             2 |    91 |     0
+     read |    4 |             8 |    91 |     0
+
+   -- several tables, writes only
+   SELECT * FROM system.toppartitions
+   WHERE keyspace_name = 'ks' AND table_name IN ('t1', 't2')
+     AND capacity = 256 AND list_size = 10 AND kind = 'write'
+   USING TIMEOUT 5s;
+
+   -- all tables in all keyspaces
+   SELECT * FROM system.toppartitions USING TIMEOUT 10s;
+
 Additional Information
 ----------------------
 
