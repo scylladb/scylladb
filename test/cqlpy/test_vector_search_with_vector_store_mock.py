@@ -281,3 +281,15 @@ def test_vector_search_503_from_ann_when_vector_store_is_serving(cql, test_keysp
         with pytest.raises(InvalidRequest, match="503.*still being constructed"):
             cql.execute(
                 f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
+
+
+# Validates fix for VECTOR-179: a vector search with tracing enabled
+# used to crash Scylla instead of returning an error.
+def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, vector_store_mock, scylla_only, skip_without_tablets):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        cql.execute(
+            f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
+            trace=True,
+        )
