@@ -2674,7 +2674,20 @@ async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
     log = await manager.server_open_log(server.server_id)
     cql = manager.get_cql()
 
+    mark = await log.mark()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        # Creating the keyspace woke the coordinator: it re-evaluates the racks
+        # eligible for the auto-RF system keyspaces on every keyspace change. Let
+        # it finish that pass and go back to sleep before arming the injection
+        # below. Armed while the coordinator is still awake, the injection catches
+        # it on its way to sleep right now, before the second node has sent its
+        # join request, and the join then stalls behind the injection's message
+        # wait until it times out and takes the node down.
+        async def coordinator_asleep():
+            lines = await log.grep(r"topology coordinator fiber (has nothing to do\. Sleeping\.|got an event)", from_mark=mark)
+            return True if lines and "Sleeping" in lines[-1][0] else None
+        await wait_for(coordinator_asleep, time.time() + 60)
+
         # Block coordinator right before going to sleep
         # We use node bootstrap as an operation which is going to be trapped on exit, but it's arbitrary.
         mark = await log.mark()
