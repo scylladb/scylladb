@@ -359,10 +359,11 @@ schema_ptr alternator_export_to_s3_client_tokens() {
                 // ARN of that export - the key into alternator_export_to_s3_exports
                 .with_column("export_arn", utf8_type)
                 // The request this token was used with, as JSON. Needed because repeating a token
-                // with a different request is an error (IdempotentParameterMismatch), so the two
+                // with a different request is an error (ExportConflictException), so the two
                 // requests have to be compared.
                 .with_column("request", utf8_type)
-                // Host ID of the node which accepted that request
+                // The node incarnation that accepted the request, as "{host_id}:{gossip_generation}".
+                // Same use as node_id in alternator_export_to_s3_exports.
                 .with_column("node_id", utf8_type)
                 .set_comment("Alternator export to S3 client token idempotency")
                 .set_default_time_to_live(std::chrono::hours(8))

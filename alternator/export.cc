@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -108,6 +109,10 @@ struct live_node_identifier {
 
     auto operator<=>(const live_node_identifier&) const = default;
 };
+
+// The rows are used as stored (export_row is in alternator/export.hh): the `node_id` member
+// stays the text of a live_node_identifier, which we parse only to compare it.
+using client_row = db::alternator_export_table_helper::client_token_row;
 
 } // namespace alternator
 
@@ -180,6 +185,12 @@ static future<T> translate_coordinator_errors(future<T> f) {
 
 // `qs` is the query state of the client request. Background fibers give null, and the read
 // uses the internal query state.
+static future<std::optional<client_row>> get_client_row(db::system_distributed_keyspace& sdks, const sstring& client_token,
+        service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_client_token(client_token, qs));
+}
+
 static future<std::optional<export_row>> get_export(db::system_distributed_keyspace& sdks, const sstring& export_arn,
         service::query_state* qs = nullptr) {
     db::alternator_export_table_helper helper(sdks.qp());
@@ -1118,6 +1129,16 @@ static sstring generate_export_id(db_clock::time_point accepted_at) {
 // arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>.
 static constexpr std::string_view export_arn_infix = "/export/";
 
+// Returns the table ARN and the export id of an export ARN, or nullopt if there is no `/export/`.
+// The last `/export/` is the delimiter: a table can be named `export`, and an export id has no `/`.
+static std::optional<std::pair<std::string_view, std::string_view>> split_export_arn(std::string_view export_arn) {
+    auto pos = export_arn.rfind(export_arn_infix);
+    if (pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    return std::pair{export_arn.substr(0, pos), export_arn.substr(pos + export_arn_infix.size())};
+}
+
 // A DynamoDB export id is the start time in milliseconds since the epoch (14 digits), a dash,
 // and 8 hex digits (e.g. `01695353076000-06e2188f`). DynamoDB returns ValidationException for
 // an id with a different format. generate_export_id() uses the same format.
@@ -1131,6 +1152,25 @@ static bool is_valid_export_id(std::string_view export_id) {
     auto is_hex_digit = [&] (char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
     return std::ranges::all_of(export_id.substr(0, digit_count), is_digit)
             && std::ranges::all_of(export_id.substr(digit_count + 1), is_hex_digit);
+}
+
+// Returns the accept time of an export from the export id in its ARN (see
+// generate_export_id()). If the export row is missing, the ARN is the only record of this
+// time. Returns nullopt if the ARN has no valid export id.
+static std::optional<db_clock::time_point> accept_time_from_export_arn(std::string_view export_arn) {
+    auto split = split_export_arn(export_arn);
+    if (!split) {
+        return std::nullopt;
+    }
+    auto export_id = split->second;
+    if (!is_valid_export_id(export_id)) {
+        return std::nullopt;
+    }
+    // is_valid_export_id() checked the 14 digits, so this cannot fail.
+    std::int64_t epoch_millis = 0;
+    std::from_chars(export_id.data(), export_id.data() + export_id.find('-'), epoch_millis);
+    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(
+            std::chrono::milliseconds(epoch_millis)));
 }
 
 // Returns the time of the export data: the ExportTime of the request, or the accept time if
@@ -1182,9 +1222,12 @@ static rjson::value build_export_description_response(const export_row& exp) {
         throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", exp.export_arn, e.what()));
     }
 
-    // TableId identifies the table the export was taken from, not whatever table now answers to
-    // the export's name - names can be reused, ids cannot.
-    rjson::add(export_desc, "TableId", rjson::from_string(exp.table_id.to_sstring()));
+    // TableId is the id of the exported table (a name can be reused, an id cannot). The id is
+    // nil if the export row was not written by its node: the garbage collector writes it, or a
+    // retry with the ClientToken finds no export row. Then we do not report TableId.
+    if (exp.table_id) {
+        rjson::add(export_desc, "TableId", rjson::from_string(exp.table_id.to_sstring()));
+    }
     rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp.export_time)));
     rjson::add(export_desc, "ClientToken", rjson::from_string(exp.client_token));
 
@@ -1289,10 +1332,14 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
     }
 
+    // As in DynamoDB, a retry of a deleted table also gets TableNotFoundException.
     schema_ptr schema;
     try {
         schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
     } catch (const data_dictionary::no_such_column_family&) {
+        // `schema` stays null.
+    }
+    if (!schema) {
         co_return api_error::table_not_found(
                 fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
     }
@@ -1317,6 +1364,12 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
 
+    // Validate the parameters before the ClientToken lookup, the same as DynamoDB: an invalid
+    // request with a used token gets the validation error, not ExportConflictException. Then the
+    // corrected request can use the same token. Also, an invalid request must not insert a client
+    // token row or a FAILED export row.
+    // Conditions that can change after we accept a request (ExportTime too old, no single S3
+    // endpoint) are checked after the ClientToken lookup, so that a retry can find its export.
     if (export_format != "DYNAMODB_JSON") {
         co_return api_error::validation(
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
@@ -1375,14 +1428,6 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         // DynamoDB rounds a requested ExportTime to the nearest millisecond.
         export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
                 std::chrono::duration<double>(export_time))).count();
-        // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
-        // `now` is cut down to the millisecond, while ExportTime is rounded to the nearest
-        // millisecond. Thus a request for the current time can be one millisecond after `now`.
-        auto to_millis = [] (double seconds) { return std::llround(seconds * 1000); };
-        if (to_millis(export_time) > to_millis(now) + 1 || now - export_time > 300) {
-            co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
-                                "ExportTime: {} s , current time: {} s", export_time, now));
-        }
     }
 
     if (user_client_token.empty()) {
@@ -1417,18 +1462,91 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto export_arn = fmt::format("{}/export/{}",
             rjson::to_string_view(generate_arn_for_table(parts.keyspace_name, parts.table_name)), export_id_token);
 
-    // The row of the new export. A failure below writes it as FAILED, so we create it first.
-    export_row erow{
-        .export_arn = export_arn,
-        .client_token = client_token,
-        .request = stored_request,
-        .table_id = schema->id(),
-        .export_status = "IN_PROGRESS",
-        .export_id_token = export_id_token,
-        .export_time = export_time_of_request(request_to_compare, accepted_at),
-        .accepted_at = accepted_at,
-        .node_id = node_id.to_string(),
+    // `row_accepted_at` is the accept time of the export: now for a new export, or the accept time
+    // of the original request for a retry that did not find the export row.
+    auto build_export_row = [&](const sstring& arn, db_clock::time_point row_accepted_at) {
+        return export_row{
+            .export_arn = arn,
+            .client_token = client_token,
+            .request = stored_request,
+            .table_id = schema->id(),
+            .export_status = "IN_PROGRESS",
+            .export_id_token = export_id_token,
+            .export_time = export_time_of_request(request_to_compare, row_accepted_at),
+            .accepted_at = row_accepted_at,
+            .node_id = node_id.to_string(),
+        };
     };
+    // The row of the new export. A failure below writes it as FAILED, so we create it first.
+    auto erow = build_export_row(export_arn, accepted_at);
+
+    // The reads below use the query state of this request.
+    service::query_state qs(client_state, {}, permit);
+
+    // DynamoDB makes a parameter with its default value equal to the absent parameter. We add the
+    // default values before the comparison, but we do not store them: DescribeExport shows
+    // ExportType only if the request had it.
+    auto with_defaults = [] (rjson::value r) {
+        for (auto [name, value] : {std::pair{"ExportFormat", "DYNAMODB_JSON"}, std::pair{"ExportType", "FULL_EXPORT"}}) {
+            if (!rjson::find(r, name)) {
+                rjson::add_with_string_name(r, name, rjson::from_string(value));
+            }
+        }
+        return r;
+    };
+
+    // Answers a retry of a used ClientToken: describes the export of the token row, the same as
+    // DescribeExport. If the parameters are different, returns the conflict error (as DynamoDB).
+    auto describe_token_export = [&] (const client_row& crow) -> future<sstring> {
+        // rjson comparison ignores the order of object members. A stored request that does not
+        // parse does not occur in normal operation. We treat it as different.
+        auto stored = rjson::try_parse(crow.request);
+        if (!stored || with_defaults(std::move(*stored)) != with_defaults(rjson::copy(request_to_compare))) {
+            // Different request: return the export conflict error, as DynamoDB does.
+            xlogger.debug("Export conflict: different parameters");
+            throw api_error::export_conflict("Duplicate request detected - an export with this ClientToken already exists with different parameters");
+        }
+
+        // Read the export row of this client token (in progress, completed or failed).
+        auto token_export_row = co_await get_export(_sdks, crow.export_arn, &qs);
+        xlogger.debug("Export row for ClientToken {}: {}", client_token, token_export_row ? "found" : "not found");
+        if (!token_export_row) {
+            // The owner did not write the export row yet, or it died and the garbage collector
+            // will write it. Report IN_PROGRESS with the times of the original request (the accept
+            // time from the ARN), not with the time of this retry. The ClientToken row has no
+            // table id, and the table of this name can be a different one (dropped and created
+            // again), so report no TableId.
+            xlogger.debug("Returning IN_PROGRESS status for ClientToken {}", client_token);
+            token_export_row = build_export_row(crow.export_arn,
+                    accept_time_from_export_arn(crow.export_arn).value_or(accepted_at));
+            token_export_row->table_id = ::table_id();
+        }
+        else {
+            // The export row exists. Return the same response as DescribeExport.
+            xlogger.debug("Returning existing export description for ClientToken {}", client_token);
+        }
+        co_return rjson::print(build_export_description_response(*token_export_row));
+    };
+
+    // A retry does not start an export, so answer it before the slot check below. If a different
+    // request inserts the token row after this read, the insert below finds it.
+    if (auto existing_client_row = co_await get_client_row(_sdks, client_token, &qs)) {
+        xlogger.debug("ClientToken {} already exists", client_token);
+        co_return co_await describe_token_export(*existing_client_row);
+    }
+
+    // From here, the request starts a new export. Check the two conditions that can change after
+    // we accept a request. A retry skips them, so that it always finds its export.
+    // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
+    if (export_time_v) {
+        // `now` is cut down to the millisecond, while ExportTime is rounded to the nearest
+        // millisecond. Thus a request for the current time can be one millisecond after `now`.
+        auto to_millis = [] (double seconds) { return std::llround(seconds * 1000); };
+        if (to_millis(export_time) > to_millis(now) + 1 || now - export_time > 300) {
+            co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
+                                "ExportTime: {} s , current time: {} s", export_time, now));
+        }
+    }
 
     // The S3 endpoint comes from the configuration, which must have exactly one. The export
     // uses the client of the endpoint which we check here: a live update of the configuration
@@ -1441,9 +1559,38 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     auto s3_client = get_s3_client(_proxy, endpoints.front());
 
+    // Only the request that inserts the client token row runs the export. After that insert (it
+    // can apply even if it throws), a failure must write the FAILED export row, because the
+    // garbage collector does that only for dead nodes.
+    // `own_export_arn` is true if the ARN of `erow` belongs to this request.
+    bool own_export_arn = true;
     std::exception_ptr failure;
 
     try {
+        db::alternator_export_table_helper helper(_sdks.qp());
+        // The insert returns the existing token row if it did not apply.
+        const client_row new_client_row{
+            .client_token = client_token,
+            .export_arn = export_arn,
+            .request = stored_request,
+            .node_id = node_id.to_string(),
+        };
+        auto existing_client_row = co_await translate_coordinator_errors(helper.insert_client_token(new_client_row));
+
+        if (existing_client_row) {
+            // A different request reserved this ClientToken. Answer as a retry of that request.
+            xlogger.debug("ClientToken {} already exists", client_token);
+            // If the row has our ARN, it is our row, reported as "not applied": a concurrent CAS
+            // can commit the value of our CAS. Only this request knows this ARN. Continue and run
+            // the export.
+            if (existing_client_row->export_arn != export_arn) {
+                // The token row belongs to a different request. No row points to our ARN, so we
+                // have no export to mark FAILED.
+                own_export_arn = false;
+                co_return co_await describe_token_export(*existing_client_row);
+            }
+        }
+
         // The export row below is ours, so from here a failure writes FAILED. This includes a
         // failed insert, because a write that timed out can still apply.
         // The insert returns the existing export row if it did not apply.
@@ -1480,6 +1627,10 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         co_return std::move(response);
     }
     catch (...) {
+        if (!own_export_arn) {
+            // The token row has a different ARN. We have no export to mark FAILED.
+            throw;
+        }
         // Keep the failure for the failure message of the export row below.
         failure = std::current_exception();
     }
@@ -1506,7 +1657,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         xlogger.warn("Export {}: failed to write the FAILED state: {}", erow.export_arn, std::current_exception());
         throw;
     }
-    // The export row is FAILED. Answer with it.
+    // The token row has our ARN. Answer with the FAILED export, also for an api_error such as
+    // RequestLimitExceeded. An SDK retries such an error with the same ClientToken, and the retry
+    // finds this FAILED export.
     co_return rjson::print(build_export_description_response(erow));
 }
 

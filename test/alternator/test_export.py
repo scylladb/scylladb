@@ -639,7 +639,6 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, n
             assert manifest_summary['outputFormat'] == export_format_value
 
 # Test that sending the same ClientToken twice returns the same export.
-@pytest.mark.xfail(reason="ClientToken idempotency is not yet implemented on Scylla")
 def test_export_client_token_idempotent(test_table_s, s3):
     table = test_table_s
     client = enable_pitr(table)
@@ -715,36 +714,54 @@ def test_export_client_token_changed_export_format(dynamodb, test_table_s, test_
 
 
 # Test that trying to export the table twice using the same client token but changing some parameter value fails with ExportConflictException.
-@pytest.mark.xfail(reason="ClientToken idempotency is not yet implemented on Scylla")
+# S3Bucket is treated differently, because parametrize is run once per import and values for S3Bucket in parametrize call would stay the same
+# when reruning the test. That would produce BucketAlreadyOwnedByYou error on S3Mock (we are reusing bucket essentially),
+# failing the test (note: we do not remove buckets from S3Mock as that was taking too much time).
 @pytest.mark.parametrize("param_values", [
     ('ExportFormat', 'DYNAMODB_JSON', 'ION'),
-    ('S3Bucket', unique_bucket_name(), unique_bucket_name() + 'a' ),
+    ('S3Bucket', None, None ),
     ('S3BucketOwner', None, '000000000000'),
     ('S3Prefix', None, 'prefix' ),
     ('S3SseAlgorithm', 'AES256', 'KMS'),
 ])
-def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_values):
-    client1 = enable_pitr(test_table_s)
-    table_arn1 = get_table_arn(test_table_s)
-    s3 = make_s3_client(dynamodb)
-    token = str(uuid.uuid4())
+def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_values, request, s3):
     param_name, first_param_value, second_param_value = param_values
 
-    with new_s3_bucket(s3, bucket_name=(first_param_value if param_name == 'S3Bucket' else None)) as bucket:
+    # Scylla checks the parameters before the ClientToken. If Scylla does not support a value, the
+    # request with it gets ValidationException, not ExportConflictException. The test is marked
+    # just before that request, so that a failure of an earlier request is not taken for it.
+    # Scylla does not support the first value of S3SseAlgorithm, and the second values of
+    # ExportFormat and S3BucketOwner.
+    def mark_unsupported_on_scylla():
+        if not is_aws(dynamodb):
+            request.node.add_marker(pytest.mark.xfail(
+                    reason=f"{param_name} value used here is not supported on Scylla"))
+    if param_name == 'S3SseAlgorithm':
+        mark_unsupported_on_scylla()
+
+    client1 = enable_pitr(test_table_s)
+    table_arn1 = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+    bucket_name = unique_bucket_name()
+
+    with new_s3_bucket(s3, bucket_name=(bucket_name if param_name == 'S3Bucket' else None)) as bucket:
         kwargs = {
             'S3Bucket': bucket,
         }
-        kwargs[param_name] = first_param_value
+        if param_name != 'S3Bucket':
+            kwargs[param_name] = first_param_value
         client1.export_table_to_point_in_time(
             TableArn=table_arn1,
             ClientToken=token,
             **{ k: v for k, v in kwargs.items() if v is not None }
         )
+        if param_name in ('ExportFormat', 'S3BucketOwner'):
+            mark_unsupported_on_scylla()
         with pytest.raises(ClientError, match='ExportConflictException.*Duplicate request detected'):
             kwargs = {
                 'S3Bucket': bucket,
             }
-            kwargs[param_name] = second_param_value
+            kwargs[param_name] = bucket_name + 'a' if param_name == 'S3Bucket' else second_param_value
             client1.export_table_to_point_in_time(
                 TableArn=table_arn1,
                 ClientToken=token,
@@ -978,7 +995,6 @@ def test_export_two_exports_without_client_token(test_table_s, s3):
 
 
 # Test that trying to export from two tables using the same client token fails.
-@pytest.mark.xfail(reason="ClientToken idempotency is not yet implemented on Scylla")
 def test_export_client_token_doesnt_work_on_two_tables(test_table_s, test_table_s_2, s3):
     client1 = enable_pitr(test_table_s)
     table_arn1 = get_table_arn(test_table_s)
