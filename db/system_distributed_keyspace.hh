@@ -23,6 +23,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
+#include <chrono>
 #include <optional>
 #include <unordered_map>
 
@@ -220,6 +221,23 @@ public:
     };
 
     explicit alternator_export_table_helper(cql3::query_processor&);
+
+    /* Inserts an export row if no row with the same ARN exists. Returns nullopt if it inserted
+     * the row, and the existing row if it did not. The insert must use `ttl`: an UPDATE cannot
+     * change the row marker, so without a TTL the key of the row stays after the updated columns
+     * expire. */
+    future<std::optional<export_row>> insert_export(const export_row&, std::chrono::seconds ttl);
+
+    /* Writes all non-key columns of an export row, if the row has status `expected_export_status`
+     * and node `expected_node_id`. Returns true if it wrote the row. Each update must set `ttl`,
+     * because the table has no default TTL and a write without TTL removes the TTL of the column. */
+    future<bool> update_export(const export_row&, const sstring& expected_export_status, const sstring& expected_node_id,
+            std::chrono::seconds ttl);
+
+    /* Inserts a client token row if no row with the same token exists. Returns nullopt if it
+     * inserted the row, and the existing row if it did not. The default TTL of the table
+     * applies. */
+    future<std::optional<client_token_row>> insert_client_token(const client_token_row&);
 
     /* Returns all client token rows, in no specified order. If set, `as` aborts the scan. */
     future<utils::chunked_vector<client_token_row>> get_all_client_tokens(const seastar::abort_source* as = nullptr) const;

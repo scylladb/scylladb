@@ -25,8 +25,11 @@
 #include "replica/schema_describe_helper.hh"
 
 #include "service/migration_manager.hh"
+#include "service/cas_shard.hh"
 #include "locator/host_id.hh"
 #include "locator/token_metadata.hh"
+#include "dht/i_partitioner.hh"
+#include "keys/keys.hh"
 #include "view_info.hh"
 
 #include <seastar/core/seastar.hh>
@@ -37,8 +40,10 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 
 #include <algorithm>
+#include <concepts>
 #include <optional>
 #include <type_traits>
+#include <variant>
 #include <vector>
 #include "service/raft/raft_group0_client.hh"
 #include "locator/tablets.hh"
@@ -785,6 +790,11 @@ static db::consistency_level export_table_consistency_level(cql3::query_processo
     return quorum_if_many(qp.proxy().get_token_metadata_ptr()->count_normal_token_owners());
 }
 
+// Converts a TTL to the value of `USING TTL ?`.
+static data_value ttl_value(std::chrono::seconds ttl) {
+    return data_value(int32_t(ttl.count()));
+}
+
 static alternator_export_table_helper::export_row to_export_row(const cql3::untyped_result_set_row& row) {
     return alternator_export_table_helper::export_row{
         .export_arn = row.get_as<sstring>("export_arn"),
@@ -812,6 +822,101 @@ static alternator_export_table_helper::client_token_row to_client_token_row(cons
         .request = row.get_or<sstring>("request", sstring()),
         .node_id = row.get_or<sstring>("node_id", sstring()),
     };
+}
+
+// Runs the conditional (LWT) `query` on the shard that owns partition `key` (a single text
+// partition key) of `table`. On a different shard, LWT returns bounce_to_shard, which
+// execute_internal() does not handle: the result holds no rows, and the `one()` call below then
+// fails with "One row required, 0 found". A reader who removes the `invoke_on()` thus gets that
+// unclear error, not a message about the shard.
+// `make_values` returns the bound values, and runs on the
+// target shard: a data_value holds a data_type, which is a per-shard thread_local shared_ptr,
+// so a data_value must not cross shards. Returns nullopt if the condition was met. If it was not,
+// returns the row that the statement returns together with `[applied]`, converted by
+// `convert_row`, which also runs on the target shard.
+// Only `IF NOT EXISTS` returns all columns of the existing row. With a column condition, the
+// statement returns the columns of that condition only.
+template <typename MakeValues, typename ConvertRow>
+requires std::same_as<std::invoke_result_t<MakeValues>, query_data_vector>
+static future<std::optional<std::invoke_result_t<ConvertRow, const cql3::untyped_result_set_row&>>>
+execute_conditionally(cql3::query_processor& qp, std::string_view table, const sstring& key,
+        const sstring& query, MakeValues make_values, ConvertRow convert_row) {
+    using row_type = std::invoke_result_t<ConvertRow, const cql3::untyped_result_set_row&>;
+    auto schema = qp.db().find_schema(system_distributed_keyspace::NAME, table);
+    auto pk = partition_key::from_single_value(*schema, utf8_type->decompose(key));
+    // Keep it for the full call. It pins the effective replication map, so that the statement
+    // selects the same shard again.
+    auto cas_shard = service::cas_shard(*schema, dht::get_token(*schema, pk));
+    co_return co_await qp.container().invoke_on(cas_shard.shard(),
+            [&query, &make_values, &convert_row] (cql3::query_processor& local_qp) -> future<std::optional<row_type>> {
+        query_data_vector values = make_values();
+        // LWT returns one row: `[applied]` and the old values of the columns.
+        auto rs = co_await local_qp.execute_internal(query, export_table_consistency_level(local_qp),
+                internal_distributed_query_state(), values, cql3::query_processor::cache_internal::yes);
+        const cql3::untyped_result_set_row& row = rs->one();
+        if (row.get_as<bool>("[applied]")) {
+            co_return std::nullopt;
+        }
+        co_return convert_row(row);
+    });
+}
+
+// The same, for a caller that does not need the existing row. Returns true if the condition was
+// met.
+template <typename MakeValues>
+requires std::same_as<std::invoke_result_t<MakeValues>, query_data_vector>
+static future<bool> execute_conditionally(cql3::query_processor& qp, std::string_view table, const sstring& key,
+        const sstring& query, MakeValues make_values) {
+    co_return !co_await execute_conditionally(qp, table, key, query, std::move(make_values),
+            [] (const cql3::untyped_result_set_row&) { return std::monostate{}; });
+}
+
+future<std::optional<alternator_export_table_helper::export_row>>
+alternator_export_table_helper::insert_export(const export_row& row, std::chrono::seconds ttl) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (export_arn, client_token, request, table_id, export_status,"
+        " failure_code, failure_message, item_count, billed_size_bytes, export_id_token,"
+        " export_time, accepted_at, completed_at, node_id, export_manifest)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS USING TTL ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, row.export_arn, query,
+        [&row, ttl] () -> query_data_vector {
+            return { row.export_arn, row.client_token, row.request, row.table_id.uuid(), row.export_status,
+                     row.failure_code, row.failure_message, row.item_count, row.billed_size_bytes, row.export_id_token,
+                     row.export_time, row.accepted_at, row.completed_at, row.node_id, row.export_manifest,
+                     ttl_value(ttl) };
+        },
+        to_export_row);
+}
+
+future<bool> alternator_export_table_helper::update_export(const export_row& row, const sstring& expected_export_status,
+        const sstring& expected_node_id, std::chrono::seconds ttl) {
+    static const sstring query = format(
+        "UPDATE {}.{} USING TTL ? SET client_token = ?, request = ?, table_id = ?, export_status = ?,"
+        " failure_code = ?, failure_message = ?, item_count = ?, billed_size_bytes = ?, export_id_token = ?,"
+        " export_time = ?, accepted_at = ?, completed_at = ?, node_id = ?, export_manifest = ?"
+        " WHERE export_arn = ? IF export_status = ? AND node_id = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, row.export_arn, query,
+        [&row, &expected_export_status, &expected_node_id, ttl] () -> query_data_vector {
+            return { ttl_value(ttl),
+                     row.client_token, row.request, row.table_id.uuid(), row.export_status,
+                     row.failure_code, row.failure_message, row.item_count, row.billed_size_bytes, row.export_id_token,
+                     row.export_time, row.accepted_at, row.completed_at, row.node_id, row.export_manifest,
+                     row.export_arn, expected_export_status, expected_node_id };
+        });
+}
+
+future<std::optional<alternator_export_table_helper::client_token_row>>
+alternator_export_table_helper::insert_client_token(const client_token_row& row) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (client_token, export_arn, request, node_id) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+    co_return co_await execute_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, row.client_token, query,
+        [&row] () -> query_data_vector {
+            return { row.client_token, row.export_arn, row.request, row.node_id };
+        },
+        to_client_token_row);
 }
 
 // Returns the query state for a statement on the export tables:
