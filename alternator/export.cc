@@ -2321,7 +2321,22 @@ static future<> run_export(
         auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &as }, gzip_compression{});
 
         // Scan the table and feed items through the pipeline
-        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count](rjson::value item) -> future<> {
+        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &as](rjson::value item) -> future<> {
+            // Stops the export fiber during the scan, so that a test can interrupt a running
+            // export (e.g. kill the node) while the row is IN_PROGRESS. The wait ends on a
+            // message, when the injection is disabled, or when the node stops.
+            // With the parameter "pause_after_items", the fiber exports that many items
+            // first. A test uses it to stop an export which already has an open multipart
+            // upload of the data file.
+            co_await utils::get_local_injector().inject("alternator_export_to_s3_pause_in_item_handler",
+                    [&item_count, &as] (auto& handler) -> future<> {
+                        auto pause_after_items = handler.template get<int64_t>("pause_after_items");
+                        if (pause_after_items && item_count < *pause_after_items) {
+                            co_return;
+                        }
+                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5}, &as);
+                    });
+
             rjson::value wrapper = rjson::empty_object();
             rjson::add(wrapper, "Item", std::move(item));
             co_await pipeline->process(wrapper);

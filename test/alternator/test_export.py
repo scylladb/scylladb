@@ -28,7 +28,8 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error, metrics, get_metric, get_metrics
+from test.alternator.test_expression_caching import scylla_shard_count
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.skip_types import skip_env
 
@@ -47,6 +48,17 @@ def scylla_injection_enter_count(rest_api, name):
     response = requests.get(f'{rest_api}/v2/error_injection/injection/{name}/enters', timeout=30)
     response.raise_for_status()
     return int(response.json())
+
+# Waits until Scylla entered the error injection `name` at least `count` times.
+def scylla_wait_for_injection_enters(rest_api, name, count, timeout=60):
+    deadline = time.time() + timeout
+    while scylla_injection_enter_count(rest_api, name) < count:
+        assert time.time() < deadline, f'error injection {name} was not entered {count} times within {timeout}s'
+        time.sleep(0.01)
+
+# Sends a message to the error injection `name`.
+def scylla_injection_message(rest_api, name):
+    requests.post(f'{rest_api}/v2/error_injection/injection/{name}/message', timeout=30).raise_for_status()
 
 # Wait until the table is deleted. This can take some time, because DynamoDB deletes a
 # table asynchronously.
@@ -229,8 +241,9 @@ def wait_for_export(client, export_arn):
 
 
 # Helper: wait for exports whose result the test does not examine. A test which leaves an export
-# running keeps a slot of its shard, and the export continues to write to the bucket. This can
-# make a later test fail.
+# running keeps a slot of its shard, and the export continues to write to the bucket. This makes
+# a later test fail: test_export_paused_export_holds_its_slot sets the limit to one export per
+# shard, and requires that its first export starts.
 def wait_for_exports(client, *export_arns):
     for export_arn in export_arns:
         wait_for_export(client, export_arn)
@@ -1128,6 +1141,95 @@ def test_export_concurrency_limit(dynamodb, scylla_only, test_table_s, s3):
         )['ExportDescription']
         assert desc['ExportArn'] == export_arn
         assert desc['ExportStatus'] == 'FAILED'
+
+
+# Stops each export during its scan (in the item handler of run_export()), so that a test can
+# keep a known number of exports running. The context manager yields two functions: one waits
+# until `count` exports are stopped, the other releases them. The injection is entered once for
+# each item, so each table must have one item. On exit, the injection is disabled, which
+# releases all exports.
+EXPORT_PAUSE_INJECTION = 'alternator_export_to_s3_pause_in_item_handler'
+
+@contextmanager
+def paused_exports(rest_api):
+    def wait_until_paused(count, timeout=60):
+        scylla_wait_for_injection_enters(rest_api, EXPORT_PAUSE_INJECTION, count, timeout)
+    # The exports share the messages, so one message releases all of them. A later export
+    # does not stop.
+    def release_paused():
+        scylla_injection_message(rest_api, EXPORT_PAUSE_INJECTION)
+    with scylla_inject_error(rest_api, EXPORT_PAUSE_INJECTION, one_shot=False):
+        yield wait_until_paused, release_paused
+
+
+# Test that a running export holds a slot of its shard and releases it when it ends. With a limit
+# of one export per shard, start exports until one is rejected. Then release the stopped exports.
+# After they complete, each shard which ran one of them must accept a new export. If a slot leaks,
+# the export on its shard is rejected.
+def test_export_paused_export_holds_its_slot(dynamodb, scylla_only, rest_api, s3, metrics, new_dynamodb_session):
+    with new_table_s(dynamodb) as table:
+        # One item, so that an export stops only once (see paused_exports()).
+        table.put_item(Item={'p': 'item'})
+        client = table.meta.client
+        table_arn = get_table_arn(table)
+        # Sends a request with `request_client`. Returns the shard which served it, and the ARN
+        # of the export, or None if the request was rejected because the shard is full.
+        def start_export(request_client, bucket):
+            with export_request_shard(metrics) as shard:
+                try:
+                    export_arn = request_client.export_table_to_point_in_time(
+                        TableArn=table_arn,
+                        S3Bucket=bucket,
+                    )['ExportDescription']['ExportArn']
+                except ClientError as e:
+                    assert e.response['Error']['Code'] == 'LimitExceededException', e
+                    export_arn = None
+            return shard[0], export_arn
+
+        with new_s3_bucket(s3) as bucket, \
+             scylla_config_temporary(dynamodb, 'alternator_max_concurrent_exports_per_shard', '1'):
+            with paused_exports(rest_api) as (wait_until_paused, release_paused):
+                running = []
+                occupied_shards = set()
+                # The shard of the connection serves the request. The requests below use one
+                # connection, so usually the second request is rejected. The loop does not
+                # require this.
+                max_requests = 64
+                for _ in range(max_requests):
+                    shard, export_arn = start_export(client, bucket)
+                    if not export_arn:
+                        # With a limit of one, only a running export fills a shard.
+                        assert shard in occupied_shards, f'shard {shard} is full, but no export of this test runs there: {occupied_shards}'
+                        break
+                    running.append(export_arn)
+                    occupied_shards.add(shard)
+                else:
+                    pytest.fail(f'No export was rejected in {max_requests} requests, so no shard reached its limit of one')
+                wait_until_paused(len(running))
+                release_paused()
+                for export_arn in running:
+                    assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
+            # The injection is disabled, so the exports below do not stop. Each shard which ran
+            # an export above must accept a new one. If a shard leaked its slot, it rejects the
+            # export. The fiber releases the slot shortly after it writes COMPLETED, so retry
+            # until the deadline. A request goes to the shard of its connection, so to reach
+            # another shard, use a new connection. Keep the old ones open, so that the new one
+            # is less likely to reach the same shard.
+            pending_shards = set(occupied_shards)
+            sessions = []
+            request_client = client
+            deadline = time.time() + 60
+            while pending_shards:
+                assert time.time() < deadline, f'Shards {pending_shards} did not accept a new export within 60s'
+                shard, export_arn = start_export(request_client, bucket)
+                if export_arn:
+                    assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
+                    pending_shards.discard(shard)
+                else:
+                    time.sleep(0.05)
+                if pending_shards and shard not in pending_shards:
+                    sessions.append(new_dynamodb_session())
+                    request_client = sessions[-1].meta.client
 
 
 # Test that trying to export from two tables using the same client token fails.
@@ -2512,3 +2614,23 @@ def test_export_error_injection_client_token_conflict_failure(cql, scylla_only, 
         assert not keys, keys
         uploads = s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
         assert not uploads, uploads
+
+
+# Yields a list, and appends to it the shard which served the ExportTableToPointInTime request sent
+# in the context (if the context exits without an exception). It uses the per-shard count of the
+# requests, which the request increases first, also if it is refused. Tests run one at a time, so
+# no other request changes the count.
+@contextmanager
+def export_request_shard(metrics):
+    num_shards = scylla_shard_count(metrics)
+    def counts():
+        the_metrics = get_metrics(metrics)
+        return [get_metric(metrics, 'scylla_alternator_operation', {'op': 'ExportTableToPointInTime', 'shard': str(shard)}, the_metrics)
+                for shard in range(num_shards)]
+    before = counts()
+    shard = []
+    yield shard
+    after = counts()
+    grown = [i for i in range(num_shards) if after[i] != before[i]]
+    assert len(grown) == 1 and after[grown[0]] == before[grown[0]] + 1, (before, after)
+    shard.append(grown[0])
