@@ -325,8 +325,8 @@ schema_ptr alternator_export_to_s3_exports() {
                 .with_column("failure_message", utf8_type)
                 // Number of items exported, set once the export completes
                 .with_column("item_count", long_type)
-                // Billable size of what the export wrote, set once the export completes
-                // (ExportDescription.BilledSizeBytes)
+                // Billable size of what the export wrote (ExportDescription.BilledSizeBytes).
+                // Set once the export completes, always to 0: ScyllaDB does not bill exports.
                 .with_column("billed_size_bytes", long_type)
                 // The identifier generated for this export: it forms both the part of export_arn which
                 // follows "/export/" and the AWSDynamoDB/<export id>/ prefix of the objects written to S3.

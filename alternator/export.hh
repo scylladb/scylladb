@@ -13,13 +13,16 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include "alternator/executor.hh"
 #include "schema/schema_fwd.hh"
 #include "service_permit.hh"
 #include "utils/rjson.hh"
@@ -32,6 +35,9 @@ namespace alternator {
 
 // A row of the exports table, as stored (see db/system_distributed_keyspace.hh).
 using export_row = db::alternator_export_row;
+
+// The S3 client of an export (see export.cc).
+struct export_s3_client;
 
 // Compression type selection for export/import pipelines.
 // Pass one of these structs to create_sink_pipeline / create_source_pipeline to select compression mode.
@@ -198,5 +204,26 @@ seastar::future<> export_scan_table(
     seastar::abort_source& as,
     service_permit permit,
     seastar::noncopyable_function<seastar::future<>(rjson::value)> cb);
+
+// Owns the background fibers of S3 export (the export workers and the
+// garbage collector) and their state. The member functions are in export.cc.
+class executor::s3_exports {
+    executor& _e;
+    // Holds the background fibers. stop() closes it, so that all fibers
+    // finish before the executor is destroyed.
+    seastar::gate _gate;
+    // stop() aborts it before it closes _gate, to stop the exports early.
+    seastar::abort_source _as;
+public:
+    explicit s3_exports(executor& e) : _e(e) {}
+    // Starts a background fiber that does the export of `row`, with
+    // `s3_client`, the client of the S3 endpoint which the request checked.
+    // The fiber writes the result to the export row. Throws only before the
+    // fiber starts.
+    void start_export(export_s3_client s3_client, schema_ptr schema, export_row row,
+            std::string table_arn, std::string s3_bucket, std::string s3_prefix);
+    // Aborts the fibers above and waits for them to finish.
+    future<> stop();
+};
 
 } // namespace alternator

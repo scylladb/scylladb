@@ -12,6 +12,7 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "alternator/consumed_capacity.hh"
+#include "alternator/export.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "cdc/log.hh"
@@ -332,6 +333,7 @@ executor::executor(gms::gossiper& gossiper,
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
+    _s3_exports = std::make_unique<s3_exports>(*this);
     register_metrics(_metrics, _stats);
 }
 
@@ -5905,6 +5907,7 @@ future<> executor::modify_tags(sstring ks, sstring cf, std::function<void(std::m
 }
 
 future<> executor::stop() {
+    co_await _s3_exports->stop();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

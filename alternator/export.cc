@@ -33,20 +33,24 @@
 #include "service/pager/paging_state.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
+#include "sstables/object_storage_client.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/hashers.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/rjson.hh"
 #include "utils/s3/client.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/defer.hh>
@@ -54,6 +58,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
@@ -125,6 +130,35 @@ static future<std::optional<export_row>> insert_export(db::system_distributed_ke
     // Set the TTL on insert. update_export() cannot change the row marker, so a row inserted
     // without a TTL does not expire.
     co_return co_await helper.insert_export(row, export_row_ttl);
+}
+
+static future<bool> update_export(db::system_distributed_keyspace& sdks, const export_row& row, const sstring& old_export_status,
+        const sstring& old_node_id, std::chrono::seconds ttl) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await helper.update_export(row, old_export_status, old_node_id, ttl);
+}
+
+// Writes the terminal state (COMPLETED / FAILED) of the `IN_PROGRESS` export row of this node.
+// Returns false if the row is not IN_PROGRESS under this node. The conditional update fails if
+// there is no row (the export can fail before the row is written). Then we insert the row. If
+// the insert fails, a row exists that we must not overwrite, unless it is our IN_PROGRESS row.
+static future<bool> try_write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row) {
+    if (co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
+        co_return true;
+    }
+    auto existing_row = co_await insert_export(sdks, row);
+    if (!existing_row) {
+        co_return true;
+    }
+    // The update can miss our IN_PROGRESS row. If its insert timed out after only a minority of
+    // the replicas accepted it, the Paxos round of the update may not see it, and the Paxos
+    // round of the insert above then completes it. Without a second update, the row would stay
+    // IN_PROGRESS, and the garbage collector does not take the rows of a running node.
+    if (existing_row->export_status == "IN_PROGRESS" && existing_row->node_id == row.node_id
+            && existing_row->client_token == row.client_token) {
+        co_return co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl);
+    }
+    co_return false;
 }
 
 // `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
@@ -1031,6 +1065,16 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
     }
 }
 
+// --- Export orchestration helpers ---
+
+// The S3 client of an export. `client` calls back into `endpoint_client` (for the clients of
+// other shards), so the export keeps `endpoint_client` alive while it uses `client`, also if the
+// endpoint is removed from the configuration meanwhile.
+struct export_s3_client {
+    seastar::shared_ptr<sstables::object_storage_client> endpoint_client;
+    seastar::shared_ptr<s3::client> client;
+};
+
 // Returns the identifier of this node incarnation (host_id + gossip_generation).
 // Returns nullopt if the gossiper has no state for this node, that is before gossip starts.
 static std::optional<live_node_identifier> get_self_node_id(gms::gossiper& gossiper) {
@@ -1150,6 +1194,11 @@ static rjson::value build_export_description_response(const export_row& exp) {
     return response;
 }
 
+future<> executor::s3_exports::stop() {
+    _as.request_abort();
+    co_await _gate.close();
+}
+
 static bool is_ascii_alnum(char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
@@ -1188,6 +1237,12 @@ static bool is_valid_s3_prefix(std::string_view prefix) {
         return s == "." || s == "..";
     });
 }
+
+// The failure code and the failure message of an export which a clean shutdown of its node
+// stopped. Only s3_exports::stop() aborts the export fibers, thus an abort is a shutdown.
+static constexpr std::string_view node_shutdown_failure_code = "NodeShutdown";
+static constexpr std::string_view node_shutdown_failure_message =
+        "The node that was performing the export was shut down before the export could finish.";
 
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
@@ -1835,4 +1890,144 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
 
     co_return rjson::print(std::move(response));
 }
+
+// The fiber of one export. The state is the pair (export_status, node_id) of the export row.
+// The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
+// changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
+// conditional on the pair, so a late worker cannot overwrite a takeover.
+static future<> run_export(
+        service::storage_proxy& proxy,
+        db::system_distributed_keyspace& sdks,
+        abort_source& as,
+        schema_ptr schema,
+        export_row row,
+        export_s3_client s3_client,
+        std::string table_arn,
+        std::string s3_bucket,
+        std::string s3_prefix) {
+    // The full export is maintenance work, not only the scan. The fiber starts in the scheduling
+    // group of the request, so change it.
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+
+    int64_t item_count = 0;
+
+    // The block below throws to report a failure. The message comes from the exception. A step
+    // that has a different failure code sets it before it throws.
+    std::string failure_code = "Exception";
+    std::string failure_message;
+    try {
+        // As in DynamoDB, all objects of the export are in a directory with the export id as name.
+        // Do not add a second '/' if the prefix ends with '/'.
+        auto s3_key_prefix = s3_prefix.empty() || s3_prefix.ends_with('/')
+            ? fmt::format("{}AWSDynamoDB/{}/", s3_prefix, row.export_id_token)
+            : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, row.export_id_token);
+        auto& client = s3_client.client;
+        // s3::client addresses objects as "/bucket/key".
+        auto s3_object_name = [&s3_bucket](std::string_view key) {
+            return fmt::format("/{}/{}", s3_bucket, key);
+        };
+
+        // Create the data file object key
+        auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, row.export_id_token);
+
+        try {
+            // Create empty _started object
+            co_await client->put_object(s3_object_name(fmt::format("{}_started", s3_key_prefix)), temporary_buffer<char>(), s3::object_metadata{}, &as);
+        }
+        catch (const storage_io_error& e) {
+            // s3::client maps all "not found" errors (NoSuchBucket, HTTP 404) to ENOENT, so we
+            // cannot be sure that the bucket is missing. Usually it is, so use the DynamoDB code,
+            // but put the server error in the message.
+            if (e.code().value() == ENOENT) {
+                failure_code = "S3NoSuchBucket";
+                throw std::runtime_error(fmt::format("The specified bucket does not exist or could not be reached: {}", e.what()));
+            }
+            // s3::client maps 401, 403 and AccessDenied to EACCES.
+            if (e.code().value() == EACCES) {
+                failure_code = "S3AccessDenied";
+                throw std::runtime_error(fmt::format("Access to the bucket was denied: {}", e.what()));
+            }
+            throw;
+        }
+
+        // Create the S3 sink pipeline.
+        // Always call `flush_and_close()`. It is asynchronous, so RAII is not possible. Thus we
+        // keep the result of the scan in a future and rethrow it after the close.
+        // After a failed scan, the close completes the upload, so the partial data file stays in
+        // the bucket. Only an abort aborts the multipart upload.
+        auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &as }, gzip_compression{});
+
+        // Scan the table and feed items through the pipeline
+        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count](rjson::value item) -> future<> {
+            rjson::value wrapper = rjson::empty_object();
+            rjson::add(wrapper, "Item", std::move(item));
+            co_await pipeline->process(wrapper);
+            ++item_count;
+        }));
+
+        auto flushed = co_await coroutine::as_future(pipeline->flush_and_close());
+        pipeline.reset();
+        if (scan.failed()) {
+            // The scan failed first, so report its exception.
+            flushed.ignore_ready_future();
+            std::rethrow_exception(scan.get_exception());
+        }
+        flushed.get();
+
+        row.completed_at = db_clock::now();
+        row.item_count = item_count;
+        // ScyllaDB does not bill exports.
+        row.billed_size_bytes = 0;
+
+        row.export_status = "COMPLETED";
+        if (!co_await try_write_final_export_row(sdks, row)) {
+            // The garbage collector took the row. A write of FAILED does not apply either.
+            xlogger.warn("Export {} completed, but the garbage collector took its row before", row.export_arn);
+            co_return;
+        }
+        xlogger.debug("Export {} completed successfully with {} items", row.export_arn, item_count);
+        co_return;
+    } catch (const std::exception& e) {
+        if (as.abort_requested()) {
+            failure_code = node_shutdown_failure_code;
+            failure_message = node_shutdown_failure_message;
+        } else {
+            failure_message = e.what();
+        }
+    } catch (...) {
+        failure_message = "Unknown error";
+    }
+
+    // The export failed. Report it.
+    row.completed_at = db_clock::now();
+    xlogger.debug("Export {} failed with exception: {}", row.export_arn, failure_message);
+    row.export_status = "FAILED";
+    row.failure_code = std::move(failure_code);
+    row.failure_message = std::move(failure_message);
+    // The failure can occur after the success path set these fields (e.g. if the COMPLETED
+    // write failed). update_export() writes all columns, so clear them.
+    row.export_manifest = std::nullopt;
+    row.item_count = std::nullopt;
+    row.billed_size_bytes = std::nullopt;
+    bool updated = co_await try_write_final_export_row(sdks, row);
+    xlogger.debug("Export {} failed with {} items{}", row.export_arn, item_count,
+            updated ? "" : ", but the row is not ours any more");
+}
+
+void executor::s3_exports::start_export(export_s3_client s3_client, schema_ptr schema, export_row row,
+        std::string table_arn, std::string s3_bucket, std::string s3_prefix) {
+    // Fire-and-forget, in the gate. `run_export()` writes failures to the export row, so an
+    // exception from it is unexpected (e.g. bad_alloc), and it is only logged. If with_gate()
+    // throws because the gate is closed (it throws at once, it does not return a failed future),
+    // the fiber does not start.
+    auto export_arn = row.export_arn;
+    (void)with_gate(_gate, [&] {
+        return futurize_invoke(run_export, _e._proxy, _e._sdks, _as, std::move(schema), std::move(row), std::move(s3_client),
+                std::move(table_arn), std::move(s3_bucket), std::move(s3_prefix))
+                .handle_exception([export_arn = std::move(export_arn)] (std::exception_ptr ep) {
+            xlogger.error("Background export fiber for {} failed unexpectedly: {}", export_arn, ep);
+        });
+    });
+}
+
 } // namespace alternator
