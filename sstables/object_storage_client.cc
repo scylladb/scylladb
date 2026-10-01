@@ -164,6 +164,9 @@ public:
         auto lc = _cf(host);
         return lc ? dynamic_pointer_cast<s3_client_wrapper>(lc)->_client : shared_ptr<s3::client>{};
     }
+    const shared_ptr<s3::client>& client() const noexcept {
+        return _client;
+    }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes, abort_source* as) override {
         return _client->put_object(name.str(), std::move(bufs), std::move(attributes), as);
@@ -210,6 +213,11 @@ public:
         return _client->close();
     }
 };
+
+shared_ptr<s3::client> sstables::get_s3_client(const shared_ptr<object_storage_client>& c) {
+    auto s3c = dynamic_pointer_cast<s3_client_wrapper>(c);
+    return s3c ? s3c->client() : shared_ptr<s3::client>{};
+}
 
 static shared_ptr<gcp::storage::client> make_gcs_client(const db::object_storage_endpoint_param& ep, semaphore& memory) {
     auto& epc = ep.get_gs_storage();
