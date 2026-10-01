@@ -2794,3 +2794,85 @@ def test_export_error_injection_final_write_retried_in_background(dynamodb, scyl
                 request_client = new_client()
             for arn in [accepted_arn] + other_exports:
                 assert wait_for_export(client, arn)['ExportStatus'] == 'COMPLETED'
+
+
+# ---------------------------------------------------------------------------
+# Garbage collection tests
+# ---------------------------------------------------------------------------
+
+# Lets a test control the garbage collection of exports. In the context, the
+# garbage collector does not run periodically. The yielded function starts one
+# round and waits until it finishes. The "owner" parameter of the injection
+# makes a round count only in the context which started it (see
+# s3_exports_gc_finished_injection in alternator/export.cc).
+@contextmanager
+def export_garbage_collection(rest_api):
+    wakeup = 'alternator_export_to_s3_gc_wakeup'
+    finished = 'alternator_export_to_s3_gc_finished'
+    def run_garbage_collection(timeout=60):
+        before = scylla_injection_enter_count(rest_api, finished)
+        scylla_injection_message(rest_api, wakeup)
+        scylla_wait_for_injection_enters(rest_api, finished, before + 1, timeout)
+    with scylla_inject_error(rest_api, finished, parameters={'owner': str(uuid.uuid4())}), \
+         scylla_inject_error(rest_api, wakeup):
+        yield run_garbage_collection
+
+# Returns the node_id (see live_node_identifier) of the node behind `rest_api`:
+# its host_id and gossip generation.
+def node_id_of(rest_api):
+    host_id = requests.get(f'{rest_api}/storage_service/hostid/local', timeout=30).json()
+    generation = requests.get(f'{rest_api}/storage_service/generation_number', timeout=30).json()
+    return f'{host_id}:{generation}'
+
+# Returns a node_id (see live_node_identifier) of a dead node: the host_id of
+# `node_id` with an old gossip generation.
+def dead_node_id(node_id):
+    host_id, _ = node_id.split(':')
+    return f'{host_id}:1'
+
+# Inserts an export row with the given status and node, yields its ARN, and
+# removes the row on exit (the garbage collector does not fail rows of live nodes).
+def in_progress_export(cql, table_arn, node_id, export_status='IN_PROGRESS'):
+    return export_metadata(cql, unstarted_export_arn(table_arn),
+        accepted_export_row(table_arn) | {'node_id': node_id, 'export_status': export_status})
+
+# Test that the garbage collector marks as FAILED an IN_PROGRESS export of a
+# dead node (e.g. a restarted node). It must not change an IN_PROGRESS export of
+# a live node or a finished export of a dead node.
+def test_export_garbage_collection_fails_export_of_dead_node(cql, scylla_only, rest_api, test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    live_node_id = node_id_of(rest_api)
+
+    with export_garbage_collection(rest_api) as run_garbage_collection:
+        with in_progress_export(cql, table_arn, live_node_id) as live_export_arn, \
+             in_progress_export(cql, table_arn, dead_node_id(live_node_id)) as dead_export_arn, \
+             in_progress_export(cql, table_arn, dead_node_id(live_node_id), export_status='COMPLETED') as finished_export_arn, \
+             in_progress_export(cql, table_arn, 'not-a-node-id') as malformed_export_arn:
+            run_garbage_collection()
+            assert client.describe_export(ExportArn=live_export_arn)['ExportDescription']['ExportStatus'] == 'IN_PROGRESS'
+            # A finished export of a dead node does not change.
+            assert client.describe_export(ExportArn=finished_export_arn)['ExportDescription']['ExportStatus'] == 'COMPLETED'
+            # A row with an incorrect node_id does not change, and the round continues.
+            assert client.describe_export(ExportArn=malformed_export_arn)['ExportDescription']['ExportStatus'] == 'IN_PROGRESS'
+            desc = client.describe_export(ExportArn=dead_export_arn)['ExportDescription']
+            assert desc['ExportStatus'] == 'FAILED'
+            assert desc['FailureCode'] == 'NodeFailure'
+            assert desc['FailureMessage']
+            assert desc['EndTime']
+
+# Test that the garbage collector marks as FAILED an IN_PROGRESS export of a node
+# which is not in the cluster any more (it was removed or replaced), and of which
+# the gossiper has no state. Only a member which the gossiper does not know keeps
+# its exports, because the gossip view of this node can still be incomplete.
+def test_export_garbage_collection_fails_export_of_removed_node(cql, scylla_only, rest_api, test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    removed_node_id = f'{uuid.uuid4()}:1'
+
+    with export_garbage_collection(rest_api) as run_garbage_collection:
+        with in_progress_export(cql, table_arn, removed_node_id) as export_arn:
+            run_garbage_collection()
+            desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+            assert desc['ExportStatus'] == 'FAILED'
+            assert desc['FailureCode'] == 'NodeFailure'

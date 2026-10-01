@@ -227,7 +227,7 @@ class executor::s3_exports {
     // run_garbage_collector() sets it after each round.
     seastar::lowres_clock::time_point _gc_round_at = seastar::lowres_clock::time_point::min();
     // Waits for `_gc_round_at`, see run_garbage_collector().
-    future<> wait_for_next_gc_round();
+    future<bool> wait_for_next_gc_round();
 public:
     explicit s3_exports(executor& e) : _e(e) {}
     // True after stop() aborted the exports, i.e. during a clean shutdown.

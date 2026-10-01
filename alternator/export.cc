@@ -75,6 +75,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1520,11 +1521,48 @@ static constexpr std::chrono::minutes s3_exports_gc_retry_period{1};
 // the delay to `s3_exports_gc_retry_period`.
 static constexpr std::chrono::minutes s3_exports_gc_max_retry_period = s3_exports_gc_period;
 
-// Waits for the time of the next garbage collection round of S3 exports, `_gc_round_at`.
-future<> executor::s3_exports::wait_for_next_gc_round() {
-    auto now = lowres_clock::now();
-    if (now < _gc_round_at) {
-        co_await seastar::sleep_abortable(_gc_round_at - now, _as);
+// Error injection that lets tests start the next garbage collection round. When enabled, the
+// garbage collector waits for a message, not for `s3_exports_gc_period`.
+static constexpr std::string_view s3_exports_gc_wakeup_injection = "alternator_export_to_s3_gc_wakeup";
+// Error injection entered after each round that `s3_exports_gc_wakeup_injection` started. Tests
+// use its enter count (`/v2/error_injection/injection/{injection}/enters`) to wait for the
+// round. Enable both injections: without the wakeup injection, the count does not increase.
+// The round enters it only if its parameter "owner" is the same at the end of the round as at
+// the start. A test enables it with an owner of its own, so a round that an earlier test started
+// (e.g. one whose wait timed out) cannot end the wait of this test.
+static constexpr std::string_view s3_exports_gc_finished_injection = "alternator_export_to_s3_gc_finished";
+
+// Waits for the time of the next garbage collection round of S3 exports, `_gc_round_at`. If the
+// wakeup error injection is enabled, waits for its message instead.
+// Returns true if error injection started the round (a test), false otherwise.
+future<bool> executor::s3_exports::wait_for_next_gc_round() {
+    auto& injector = utils::get_local_injector();
+    for (;;) {
+        if (injector.is_enabled(s3_exports_gc_wakeup_injection)) {
+            // Messages are not shared, so each message starts one round. A message sent
+            // before the wait is not lost.
+            co_await injector.inject(s3_exports_gc_wakeup_injection,
+                    utils::wait_for_message(s3_exports_gc_period, &_as), false);
+            // Disabling the injection also ends the wait, without a message. Such a wakeup
+            // must not start a round: the round could end after the next test enabled the
+            // injections again, and that test would take it for its own round.
+            if (!injector.is_enabled(s3_exports_gc_wakeup_injection)) {
+                continue;
+            }
+            co_return true;
+        }
+        auto now = lowres_clock::now();
+        auto round_at = _gc_round_at;
+        if (now >= round_at) {
+            co_return false;
+        }
+        lowres_clock::duration step = round_at - now;
+        // A sleeping collector must also see when a test enables `s3_exports_gc_wakeup_injection`.
+        // Thus, with error injection, sleep in 1 second steps.
+        if constexpr (std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+            step = std::min<lowres_clock::duration>(step, std::chrono::seconds(1));
+        }
+        co_await seastar::sleep_abortable(step, _as);
     }
 }
 
@@ -1544,7 +1582,27 @@ future<> executor::s3_exports::run_garbage_collector() {
     // `_gc_round_at` is in the past, thus the first round does not wait.
     while (!_as.abort_requested()) {
         try {
-            co_await wait_for_next_gc_round();
+            auto triggered_by_injection = co_await wait_for_next_gc_round();
+            std::optional<sstring> round_owner;
+            if (triggered_by_injection) {
+                if (auto owner = utils::get_local_injector().inject_parameter<std::string_view>(s3_exports_gc_finished_injection, "owner")) {
+                    round_owner = sstring(*owner);
+                }
+            }
+            auto notify = defer([triggered_by_injection, round_owner = std::move(round_owner)] () noexcept {
+                if (!triggered_by_injection) {
+                    return;
+                }
+                try {
+                    auto& injector = utils::get_local_injector();
+                    auto owner = injector.inject_parameter<std::string_view>(s3_exports_gc_finished_injection, "owner");
+                    if (owner.has_value() == round_owner.has_value() && (!owner || *owner == std::string_view(*round_owner))) {
+                        injector.enter(s3_exports_gc_finished_injection);
+                    }
+                } catch (...) {
+                    xlogger.warn("Failed to notify the end of a garbage collection round: {}", std::current_exception());
+                }
+            });
             co_await garbage_collect_s3_exports(_e._proxy, _e._sdks, _e._gossiper, _as);
             _gc_round_at = lowres_clock::now() + s3_exports_gc_period;
             retry_period = s3_exports_gc_retry_period;
