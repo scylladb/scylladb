@@ -36,18 +36,23 @@ public:
     // startup does.  The predicate is called from every shard.
     using table_filter = std::function<bool(table_id)>;
 
+    // Names the pass in its log lines.  A boot runs several of them over
+    // different sets of tables, and without this their output is identical.
+    static constexpr auto default_context = "user tables";
+
     commitlog_replayer(commitlog_replayer&&) noexcept;
     ~commitlog_replayer();
 
     static future<commitlog_replayer> create_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&,
-            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer = nullptr, table_filter filter = {});
+            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer = nullptr, table_filter filter = {},
+            sstring context = default_context);
 
     future<> recover(std::vector<sstring> files, sstring fname_prefix);
     future<> recover(sstring file, sstring fname_prefix);
 
 private:
     commitlog_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&,
-            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, table_filter filter);
+            seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer, table_filter filter, sstring context);
 
     class impl;
     std::unique_ptr<impl> _impl;
