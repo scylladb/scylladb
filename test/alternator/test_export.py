@@ -685,8 +685,7 @@ def test_export_table_arn_too_long(test_table_s):
 # Note: we postpone test for `S3SseKmsKeyId` (due to complexity of setting up KMS)
 
 # Test that trying to export a different table reusing the same client token fails with ExportConflictException.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_export_client_token_changed_export_format(dynamodb, test_table_s, test_table_s_2, s3):
+def test_export_client_token_changed_export_format(dynamodb, test_table_s, test_table_s_2, request, s3):
     client1 = enable_pitr(test_table_s)
     table_arn1 = get_table_arn(test_table_s)
     client2 = enable_pitr(test_table_s_2)
@@ -700,6 +699,11 @@ def test_export_client_token_changed_export_format(dynamodb, test_table_s, test_
             ExportFormat='DYNAMODB_JSON',
             ClientToken=token,
         )
+        if not is_aws(dynamodb):
+            # Scylla does not support ION, and checks the parameters before the ClientToken. Thus
+            # the request below gets ValidationException. Mark the test here, so that a failure
+            # of the request above is not taken for this one.
+            request.node.add_marker(pytest.mark.xfail(reason="ION export format not yet implemented on Scylla"))
         with pytest.raises(ClientError, match='ExportConflictException.*Duplicate request detected'):
             client2.export_table_to_point_in_time(
                 TableArn=table_arn2,
@@ -839,11 +843,12 @@ def test_export_bad_s3_prefix(test_table_s, scylla_only, prefix):
 
 # The same as test_export_setting_fields_to_weird_values_or_skipping_fail but only for S3SseKmsKeyId field
 # as it requires S3SseAlgorithm to be set
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
 @pytest.mark.parametrize('exception_field_error_and_value', [
     ('ValidationException', 'S3SseKmsKeyId', 's3SseKmsKeyId', ''),
 ])
-def test_export_setting_fields_to_weird_values_or_skipping_fail_for_S3SseKmsKeyId(dynamodb, test_table_s, exception_field_error_and_value):
+def test_export_setting_fields_to_weird_values_or_skipping_fail_for_S3SseKmsKeyId(dynamodb, test_table_s, exception_field_error_and_value, request):
+    if not is_aws(dynamodb):
+        request.node.add_marker(pytest.mark.xfail(reason="S3SseAlgorithm and S3SseKmsKeyId options are not supported on scylla"))
     client = enable_pitr(test_table_s)
     table_arn = get_table_arn(test_table_s)
     exception, field, error, value = exception_field_error_and_value
@@ -859,11 +864,11 @@ def test_export_setting_fields_to_weird_values_or_skipping_fail_for_S3SseKmsKeyI
 
 # Test that trying to export the table with incremental export specifications times (ExportFromTime and ExportToTime) too close to each other -
 # (less than 15 minutes) - should fail with InvalidExportTimeException
-@pytest.mark.xfail(reason="Not yet implemented on Scylla")
-def test_export_incremental_export_time_too_close(dynamodb, test_table_s):
+def test_export_incremental_export_time_too_close(test_table_s, s3, request):
+    if not is_aws(test_table_s.meta.client):
+        request.node.add_marker(pytest.mark.xfail(reason="INCREMENTAL_EXPORT is not supported on scylla"))
     client1 = enable_pitr(test_table_s)
     table_arn1 = get_table_arn(test_table_s)
-    s3 = make_s3_client(dynamodb)
     token = str(uuid.uuid4())
     export_time = int(datetime.datetime.now().timestamp())
     with new_s3_bucket(s3) as bucket:
@@ -882,13 +887,13 @@ def test_export_incremental_export_time_too_close(dynamodb, test_table_s):
 
 
 # Test that trying to export the table twice using the same client token but different IncrementalExportSpecification fails with ExportConflictException.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_export_client_token_changed_incremental_export_spec_fields(dynamodb, test_table_s, test_table_s_2):
+def test_export_client_token_changed_incremental_export_spec_fields(test_table_s, test_table_s_2, s3, request):
+    if not is_aws(test_table_s.meta.client):
+        request.node.add_marker(pytest.mark.xfail(reason="INCREMENTAL_EXPORT is not supported on scylla"))
     client1 = enable_pitr(test_table_s)
     table_arn1 = get_table_arn(test_table_s)
     client2 = enable_pitr(test_table_s_2)
     table_arn2 = get_table_arn(test_table_s_2)
-    s3 = make_s3_client(dynamodb)
     token = str(uuid.uuid4())
     export_time = int(datetime.datetime.now().timestamp())
     min_export_time_diff = 1
