@@ -52,8 +52,10 @@ struct search_source {
     const column_definition* column;
     /// The query vector, or the search term.
     expr::expression query_value;
-    /// Allocated by the first call asking for each value. None allocated means the search is only
-    /// ordered by.
+    /// Allocated by the first call that reads each value: a call in SELECT or in an ORDER BY
+    /// expression such as RRF(). A bare ORDER BY call, a WHERE relation and ANN_SCORE() of a
+    /// rescoring index allocate none: the first means the index's own order, the second is applied by
+    /// the index, and the third is computed by the coordinator from the stored vector.
     external_search::search_temporaries temporaries;
     std::vector<deferred_query_value> deferred;
     /// BM25 only: the WHERE clause's term, likewise compared by execution.
@@ -94,8 +96,9 @@ public:
         , _temporaries_allocator(temporaries_allocator) {
     }
 
-    /// Resolves the search the ORDER BY call names, if it names one.
-    void resolve_ordering(const expr::function_call& fc);
+    /// Adds the searches the ORDER BY call names. A bare ANN() or BM25() keeps the index's order;
+    /// any other call is replaced like a selector and becomes the score the rows are sorted by.
+    void resolve_ordering(const expr::expression& prepared_ordering);
 
     /// The score the rows are sorted by, when it is not the index's own order. select_statement::prepare()
     /// adds it as a hidden trailing selector for the comparator to read.
@@ -116,14 +119,6 @@ public:
         return _sources.empty();
     }
 
-    bool has_ann() const {
-        return find(functions::search_family::ann) != nullptr;
-    }
-
-    bool has_bm25() const {
-        return find(functions::search_family::bm25) != nullptr;
-    }
-
     const std::vector<search_source>& sources() const {
         return _sources;
     }
@@ -141,7 +136,6 @@ private:
     expr::expression replace_search_calls(const expr::expression& e, search_clause clause);
 
     const search_source* find(functions::search_family family) const;
-    search_source* find(functions::search_family family);
 };
 
 /// Orders by a score column of the result row, descending, rows without a usable score last.

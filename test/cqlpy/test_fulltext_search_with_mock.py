@@ -19,7 +19,7 @@ from test.pylib.skip_types import skip_env
 from cassandra.query import SimpleStatement
 from http import HTTPStatus
 
-from .util import new_test_table, unique_name
+from .util import new_function, new_test_table, unique_name
 
 NUM_ROWS = 5
 RESPONSE_PK_REVERSED = list(reversed(range(NUM_ROWS)))
@@ -67,6 +67,37 @@ def test_fts_basic_query_executes(cql, fts_setup_with_mock):
 
     rows = list(cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
     assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
+def test_bm25_score_alone_orders_by_the_index(cql, fts_setup_with_mock):
+    """ORDER BY BM25_SCORE() alone means the index's own order, as ORDER BY BM25() does."""
+    table, _ = fts_setup_with_mock
+
+    rows = cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                       f"ORDER BY BM25_SCORE(content, 'hello') LIMIT {NUM_ROWS}")
+    assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
+def test_bm25_rank_cannot_order_rows(cql, fts_table):
+    """A rank called directly is an int, not something ORDER BY can sort by."""
+    table, _ = fts_table
+    with pytest.raises(InvalidRequest, match=r"BM25_RANK\(\) cannot be used as a scoring function in ORDER BY"):
+        cql.prepare(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                    f"ORDER BY BM25_RANK(content, 'hello') LIMIT {NUM_ROWS}")
+
+
+def test_bm25_rank_orders_rows_through_a_function(cql, fts_setup_with_mock):
+    """Only a bare rank is rejected. A function of ranks is a score like any other, sorted highest
+    first, so it is the function that decides the order: 1 / rank gives the index's own, and the
+    rank itself the reverse."""
+    table, _ = fts_setup_with_mock
+    keyspace = table.split(".")[0]
+    for expression, expected in [("1 / r", RESPONSE_PK_REVERSED), ("r", list(reversed(RESPONSE_PK_REVERSED)))]:
+        body = f"(r int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE lua AS 'return {expression}'"
+        with new_function(cql, keyspace, body) as f:
+            rows = cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                               f"ORDER BY {keyspace}.{f}(BM25_RANK(content, 'hello')) LIMIT {NUM_ROWS}")
+            assert [r.id for r in rows] == expected
 
 
 def test_fts_bind_markers_execute(cql, fts_setup_with_mock):

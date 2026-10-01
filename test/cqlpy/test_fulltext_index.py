@@ -627,8 +627,8 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
-    """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
+    """A function call in ORDER BY that names no search must be rejected."""
+    with pytest.raises(InvalidRequest, match="must name at least one search"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 
@@ -820,9 +820,21 @@ def test_highlight_in_where_with_integer_rejected(cql, fulltext_table):
                     f"ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
+def test_aggregate_in_order_by_rejected(cql, fulltext_table):
+    """An aggregate collapses the rows it is computed over, so it cannot order them.
+
+    Without an explicit rejection the score selector added for the ordering would turn the whole
+    statement into an aggregation, and the query would silently return a single row.
+    """
+    for aggregate in ["SUM", "MIN", "MAX", "AVG", "COUNT"]:
+        with pytest.raises(InvalidRequest, match="Aggregation functions are not supported in the ORDER BY clause"):
+            cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                        f"ORDER BY {aggregate}(BM25_SCORE(content, 'hello')) LIMIT 10")
+
+
 def test_highlight_in_order_by_rejected(cql, fulltext_table):
     """The rows are ranked by relevance, never by a fragment."""
-    with pytest.raises(InvalidRequest, match=re.escape("Only ANN() and BM25() are supported as scoring functions in ORDER BY")):
+    with pytest.raises(InvalidRequest, match=r"BM25_HIGHLIGHT\(\) cannot be used as a scoring function in ORDER BY"):
         cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
                     f"ORDER BY BM25_HIGHLIGHT(content, 'hello') LIMIT 10")
 
