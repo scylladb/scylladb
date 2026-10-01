@@ -745,6 +745,56 @@ def test_export_setting_fields_to_weird_values_or_skipping_fail(dynamodb, test_t
         client.export_table_to_point_in_time(**{ k:v for k, v in kw.items() if v is not None })
 
 
+# S3Bucket and S3Prefix end up in the path of the requests which the export sends to S3, so a
+# character which has a meaning in an HTTP request line - a space, a CR or a LF - must not be
+# accepted: it would otherwise let the request add requests of its own. DynamoDB rejects such a
+# bucket name as well, as it accepts only letters, digits, '.', '-' and '_' in it, and requires a
+# letter or a digit as the first and the last character.
+@pytest.mark.parametrize('bucket', [
+    'alternator export test',
+    'alternator-export-test\r\nGET /other HTTP/1.1\r\nHost: h\r\n\r\n',
+    'alternator-export-test\n',
+    'alternator/export/test',
+    '-alternator-export-test',
+    'alternator-export-test-',
+])
+def test_export_bad_s3_bucket(dynamodb, test_table_s, bucket):
+    client = enable_pitr(test_table_s)
+    table_arn = get_table_arn(test_table_s)
+    # (?s) - DOTALL flag, because error message will have newline in it. Without the flag .* part of the regex
+    # won't consume newline
+    with pytest.raises(ClientError, match='(?s)ValidationException.*[sS]3Bucket'):
+        client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket)
+
+
+# The same for S3Prefix. DynamoDB takes any S3 key as a prefix, while Alternator accepts only
+# letters, digits and "/-_.", and no "." or ".." segment between slashes (see
+# docs/alternator/compatibility.md), so this test is for Alternator only.
+@pytest.mark.parametrize('prefix', [
+    'alternator export test',
+    'alternator-export-test\r\nGET /other HTTP/1.1\r\nHost: h\r\n\r\n',
+    'alternator-export-test\n',
+    'alternator?export=test',
+    'alternator!export',
+    'alternator*export',
+    "alternator'export",
+    'alternator(export)',
+    '.',
+    '..',
+    '../alternator-export-test',
+    'alternator/./export',
+    'alternator/..',
+])
+def test_export_bad_s3_prefix(test_table_s, scylla_only, prefix):
+    client = enable_pitr(test_table_s)
+    table_arn = get_table_arn(test_table_s)
+    # (?s) - DOTALL flag, because error message will have newline in it. Without the flag .* part of the regex
+    # won't consume newline
+    with pytest.raises(ClientError, match='(?s)ValidationException.*[sS]3Prefix'):
+        client.export_table_to_point_in_time(TableArn=table_arn,
+                S3Bucket=unique_bucket_name(), S3Prefix=prefix)
+
+
 # The same as test_export_setting_fields_to_weird_values_or_skipping_fail but only for S3SseKmsKeyId field
 # as it requires S3SseAlgorithm to be set
 @pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")

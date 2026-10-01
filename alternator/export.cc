@@ -1037,6 +1037,45 @@ static rjson::value build_export_description_response(const export_row& exp) {
     return response;
 }
 
+static bool is_ascii_alnum(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The bucket and the prefix of a request become part of the path of the S3 requests of the export
+// (see `s3_object_name()`). s3::client URI-encodes that path, but it keeps '/' and '.' as they are,
+// so a '/' in the bucket would send the requests to a different bucket. For the bucket, we accept
+// the characters and the length which DynamoDB accepts. DynamoDB also requires a letter or a digit
+// as the first and the last character, so we require it too.
+static bool is_valid_s3_bucket_name(std::string_view bucket) {
+    return bucket.size() >= 3 && bucket.size() <= 255
+            && is_ascii_alnum(bucket.front()) && is_ascii_alnum(bucket.back())
+            && std::ranges::all_of(bucket, [] (char c) {
+        return is_ascii_alnum(c) || c == '.' || c == '-' || c == '_';
+    });
+}
+
+// DynamoDB accepts any S3 key as a prefix, but for now we accept only letters, digits and "/-_."
+// (see docs/alternator/compatibility.md), which the URI encoding of the path leaves as they are.
+// Since s3::client encodes the path, other characters could be accepted too, but no test sends
+// them to S3 yet (SCYLLADB-6440).
+// A "." or ".." segment between slashes is refused: the encoding keeps it, and an HTTP server or
+// proxy can resolve such a segment, so the export would write elsewhere than DescribeExport
+// reports, e.g. to another bucket with "../".
+// The length limit is the one of DynamoDB, which is also the longest key S3 accepts (the export
+// appends to the prefix, so a prefix close to the limit cannot work, but that is for S3 to say).
+static bool is_valid_s3_prefix(std::string_view prefix) {
+    static constexpr std::string_view other_safe_characters = "/-_.";
+    if (prefix.size() > 1024 || !std::ranges::all_of(prefix, [] (char c) {
+            return is_ascii_alnum(c) || other_safe_characters.find(c) != std::string_view::npos;
+        })) {
+        return false;
+    }
+    return std::ranges::none_of(prefix | std::views::split('/'), [] (auto segment) {
+        std::string_view s(segment.begin(), segment.end());
+        return s == "." || s == "..";
+    });
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -1099,6 +1138,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         if (rjson::find(request, name)) {
             co_return api_error::validation(fmt::format("{} attribute is not supported", name));
         }
+    }
+
+    if (!is_valid_s3_bucket_name(s3_bucket)) {
+        co_return api_error::validation(fmt::format("S3Bucket attribute: `{}` is not a valid bucket name - "
+                "it must have 3 to 255 characters, each of them a letter, a digit, '.', '-' or '_'", s3_bucket));
+    }
+
+    if (!is_valid_s3_prefix(s3_prefix)) {
+        co_return api_error::validation(fmt::format("S3Prefix attribute: `{}` is not a valid key prefix - "
+                "it must have at most 1024 characters, each of them a letter, a digit or one of \"/-_.\", "
+                "and no \".\" or \"..\" segment between slashes", s3_prefix));
     }
 
     // ExportTime - only "now" (or close to now) is supported
