@@ -219,4 +219,26 @@ def test_cast_double_to_text(cql, table3):
         ftext = list(cql.execute(f"SELECT CAST(db AS text) FROM {table3} WHERE p={p}"))[0][0]
         assert n == float(ftext)
 
+# Casting a float or double outside the range of an integer type does what
+# Cassandra (Java) does: convert to bigint (for bigint) or int (otherwise),
+# saturating at that type's limits and taking NaN as 0, then wrap around into
+# the target type. Scylla's conversion used to be undefined behavior there,
+# which aborted debug builds; see cql_cast_test.py in dtest.
+def test_cast_float_out_of_range_to_integer(cql, table3):
+    p = unique_key_int()
+    # (value, tinyint, smallint, int, bigint)
+    cases = [(-564.0, -52, -564, -564, -564),
+             (1e10, -1, -1, 2147483647, 10000000000),
+             (-1e10, 0, 0, -2147483648, -10000000000),
+             (1e30, -1, -1, 2147483647, 9223372036854775807),
+             (math.inf, -1, -1, 2147483647, 9223372036854775807),
+             (-math.inf, 0, 0, -2147483648, -9223372036854775808),
+             (math.nan, 0, 0, 0, 0)]
+    for v, ti, si, i, bi in cases:
+        lit = 'NaN' if math.isnan(v) else 'Infinity' if v == math.inf else '-Infinity' if v == -math.inf else repr(v)
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {lit}, {lit})')
+        for col in ['f', 'db']:
+            assert [(ti, si, i, bi)] == list(cql.execute(
+                f"SELECT CAST({col} AS tinyint), CAST({col} AS smallint), CAST({col} AS int), CAST({col} AS bigint) FROM {table3} WHERE p={p}"))
+
 # TODO: test casts from more types.
