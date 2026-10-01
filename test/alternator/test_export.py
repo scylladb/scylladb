@@ -21,13 +21,14 @@ import gzip
 import decimal
 import os
 import re
+import requests
 
 from botocore.exceptions import ClientError
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_inject_error
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.skip_types import skip_env
 
@@ -40,6 +41,12 @@ def is_table_deleted(dynamodb, table_name: str) -> bool:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             return True
         raise
+
+# Returns how many times Scylla entered the error injection `name` since it was enabled.
+def scylla_injection_enter_count(rest_api, name):
+    response = requests.get(f'{rest_api}/v2/error_injection/injection/{name}/enters', timeout=30)
+    response.raise_for_status()
+    return int(response.json())
 
 # Wait until the table is deleted. This can take some time, because DynamoDB deletes a
 # table asynchronously.
@@ -2131,3 +2138,145 @@ def test_export_table_old_export_time_of_retry(cql, scylla_only, test_table_s_fo
         # A new ClientToken with the same ExportTime gets InvalidExportTimeException.
         with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
             client.export_table_to_point_in_time(ClientToken=str(uuid.uuid4()), **request)
+
+
+# ---------------------------------------------------------------------------
+# Error injection tests
+# ---------------------------------------------------------------------------
+
+# Test that a failure after the export row insert (before the fiber starts) fails the export. The
+# request writes FAILED to the row, ExportTableToPointInTime returns FAILED, and DescribeExport
+# and ListExports report the same ARN as FAILED.
+def test_export_error_injection_after_export_row_insertion(scylla_only, rest_api, test_table_s, s3):
+    injection = 'alternator_export_to_s3_after_export_row_insertion'
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+
+    with new_s3_bucket(s3) as bucket:
+        with scylla_inject_error(rest_api, injection, one_shot=True):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+            )['ExportDescription']
+        # The export did not start, so the response is not IN_PROGRESS.
+        assert desc['ExportStatus'] == 'FAILED'
+        assert desc['FailureCode'] == 'Exception'
+        assert f'injected failure {injection}' in desc['FailureMessage']
+        # A finished export has an end time.
+        assert 'EndTime' in desc
+
+        export_arn = desc['ExportArn']
+        assert client.describe_export(ExportArn=export_arn)['ExportDescription']['ExportStatus'] == 'FAILED'
+
+        # Nothing was exported: only the fiber writes to the bucket, and it did not run.
+        keys = [obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket).get('Contents', [])]
+        assert not keys, keys
+        # The listing above does not show multipart uploads, so check them separately.
+        uploads = s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
+        assert not uploads, uploads
+
+        assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
+
+
+# Test that the request writes FAILED to its IN_PROGRESS export row also when the conditional
+# update of that write misses the row. This can happen if the insert of the row timed out after
+# only a minority of the replicas accepted it: the Paxos round of the update may not see the row,
+# and the Paxos round of the insert which follows completes it. The second injection makes the
+# update miss the row. Without a second update, the row stays IN_PROGRESS while the request
+# answers FAILED.
+def test_export_error_injection_final_write_update_not_applied(scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+
+    with new_s3_bucket(s3) as bucket:
+        update_not_applied = 'alternator_export_to_s3_final_write_update_not_applied'
+        # Not one-shot: the count of a one-shot injection is gone when it is entered. The write
+        # checks the injection only before its first update, so the second update still applies.
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_after_export_row_insertion', one_shot=True), \
+             scylla_inject_error(rest_api, update_not_applied, one_shot=False):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+            )['ExportDescription']
+            # The update missed the row, so the write reached the second update.
+            assert scylla_injection_enter_count(rest_api, update_not_applied) >= 1
+        assert desc['ExportStatus'] == 'FAILED'
+        assert 'injected failure alternator_export_to_s3_after_export_row_insertion' in desc['FailureMessage']
+
+        export_arn = desc['ExportArn']
+        assert client.describe_export(ExportArn=export_arn)['ExportDescription']['ExportStatus'] == 'FAILED'
+        assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
+
+
+# Test that an overloaded coordinator on the export row insert gives the FAILED export, not
+# RequestLimitExceeded. The ClientToken row is already there, so no retry can start this export.
+# An SDK retries RequestLimitExceeded with the same ClientToken, and that retry must get the same
+# answer as the first call.
+def test_export_error_injection_export_row_insert_overloaded(cql, scylla_only, rest_api, test_table_s, s3):
+    injection = 'alternator_export_to_s3_export_row_insert_overloaded'
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        with scylla_inject_error(rest_api, injection, one_shot=True):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+                ClientToken=token,
+            )['ExportDescription']
+        assert desc['ExportStatus'] == 'FAILED'
+        assert desc['ClientToken'] == token
+        assert desc['FailureCode'] == 'Exception'
+        assert f'injected failure {injection}' in desc['FailureMessage']
+        assert 'EndTime' in desc
+
+        # The retry with the same ClientToken gets the same failed export.
+        assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc)
+
+        assert_listed_with_status(client, table_arn, desc['ExportArn'], 'FAILED')
+
+
+# Test that the export starts if the export row insert returns "not applied" but applied (this
+# can occur with a contended CAS). The row is ours. If we do not start the export, the row stays
+# IN_PROGRESS.
+def test_export_error_injection_export_row_insert_not_applied(scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+
+    with new_s3_bucket(s3) as bucket:
+        injection = 'alternator_export_to_s3_export_row_insert_not_applied'
+        # Not one-shot: the count of a one-shot injection is gone when it is entered. The request
+        # checks the injection once.
+        with scylla_inject_error(rest_api, injection, one_shot=False):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+            )['ExportDescription']
+            assert scylla_injection_enter_count(rest_api, injection) >= 1
+        assert desc['ExportStatus'] == 'IN_PROGRESS'
+
+        export_arn = desc['ExportArn']
+        final = wait_for_export(client, export_arn)
+        assert final['ExportStatus'] == 'COMPLETED'
+        assert 'ExportManifest' in final
+
+        assert_listed_with_status(client, table_arn, export_arn, 'COMPLETED')
+
+
+# Asserts that the failed export `desc` has the ARN which the ClientToken row of `token` holds,
+# that DescribeExport reports it as FAILED, and that a retry with the same token and the same
+# parameters reports the same failed export.
+def assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc):
+    row = cql.execute(SimpleStatement(
+        "SELECT export_arn FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+        consistency_level=ConsistencyLevel.ONE), [token]).one()
+    assert desc['ExportArn'] == row.export_arn
+    assert client.describe_export(ExportArn=desc['ExportArn'])['ExportDescription']['ExportStatus'] == 'FAILED'
+    again = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=bucket,
+        ClientToken=token,
+    )['ExportDescription']
+    assert again['ExportArn'] == desc['ExportArn']
+    assert again['ExportStatus'] == 'FAILED'

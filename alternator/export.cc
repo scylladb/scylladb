@@ -150,7 +150,9 @@ static future<bool> update_export(db::system_distributed_keyspace& sdks, const e
 // there is no row (the export can fail before the row is written). Then we insert the row. If
 // the insert fails, a row exists that we must not overwrite, unless it is our IN_PROGRESS row.
 static future<bool> try_write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row) {
-    if (co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
+    // Tests make the update miss the row, as the case below does.
+    if (!utils::get_local_injector().enter("alternator_export_to_s3_final_write_update_not_applied")
+            && co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
         co_return true;
     }
     auto existing_row = co_await insert_export(sdks, row);
@@ -1593,8 +1595,22 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
         // The export row below is ours, so from here a failure writes FAILED. This includes a
         // failed insert, because a write that timed out can still apply.
-        // The insert returns the existing export row if it did not apply.
-        auto existing_export_row = co_await translate_coordinator_errors(insert_export(_sdks, erow));
+        // The insert returns the existing export row if it did not apply. Tests use the injection
+        // to fail the insert as an overloaded coordinator does.
+        auto existing_export_row = co_await translate_coordinator_errors(seastar::futurize_invoke([&] {
+            utils::get_local_injector().inject("alternator_export_to_s3_export_row_insert_overloaded",
+                    [] { throw exceptions::overloaded_exception(sstring(
+                            "injected failure alternator_export_to_s3_export_row_insert_overloaded")); });
+            return insert_export(_sdks, erow);
+        }));
+
+        utils::get_local_injector().inject("alternator_export_to_s3_after_export_row_insertion",
+                [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_export_row_insertion"); });
+
+        // Same as for the client token row: tests use this injection to return "not applied".
+        if (utils::get_local_injector().enter("alternator_export_to_s3_export_row_insert_not_applied")) {
+            existing_export_row = erow;
+        }
 
         if (existing_export_row) {
             // Only the garbage collector can also write a row for this ARN (if this node is
