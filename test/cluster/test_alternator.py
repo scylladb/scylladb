@@ -32,6 +32,8 @@ import random
 import re
 
 from test.cluster.util import get_replication, FeatureConfig
+from test.pylib.internal_types import ServerInfo
+from test.pylib.object_storage import Storage, StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -51,7 +53,7 @@ alternator_config = {
     'alternator_write_isolation': 'only_rmw_uses_lwt',
     'alternator_ttl_period_in_seconds': '0.5',
 }
-def get_alternator(ip, user='alternator', passwd='secret_pass'):
+def get_alternator(ip, user='alternator', passwd='secret_pass', connect_timeout=60, read_timeout=300):
     url = f"http://{ip}:{alternator_config['alternator_port']}"
     return boto3.resource('dynamodb', endpoint_url=url,
         region_name='us-east-1',
@@ -59,7 +61,8 @@ def get_alternator(ip, user='alternator', passwd='secret_pass'):
         aws_secret_access_key=passwd,
         config=botocore.client.Config(
             retries={"max_attempts": 0},
-            read_timeout=300)
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout)
     )
 
 # Alternator convenience function for fetching the entire result set of a
@@ -2254,3 +2257,130 @@ async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterMana
     async def item_expired():
         return True if 'Item' not in table.get_item(Key={'p': 1}, ConsistentRead=True) else None
     assert await wait_for(item_expired, time.time() + 60)
+
+
+# Stops the export fiber during the table scan, so that the export stays
+# IN_PROGRESS while a test interrupts it.
+export_pause_injection = 'alternator_export_to_s3_pause_in_item_handler'
+
+# start_paused_export() pauses the export after `export_pause_after_items` items. The sink of the
+# data file starts the multipart upload with the first full part of 5 MiB of compressed data. The
+# items hold random bytes, which do not compress, so the items before the pause are more than
+# 5 MiB also in the data file. test_export_fails_when_the_node_stops needs that open upload: a
+# kill keeps it, and a clean shutdown aborts it.
+export_item_count = 30
+export_item_size = 350 * 1024
+export_pause_after_items = 20
+
+
+def export_object_keys(object_storage: Storage) -> list[str]:
+    """The keys of the objects that the exports wrote to the bucket.
+
+    The bucket of the fixture also holds an `sstables/` object, which is not from
+    an export. Thus take only the objects below an `AWSDynamoDB/` directory.
+    """
+    s3 = object_storage.get_resource().meta.client
+    contents = s3.list_objects_v2(Bucket=object_storage.bucket_name).get('Contents', [])
+    return [obj['Key'] for obj in contents if 'AWSDynamoDB/' in obj['Key']]
+
+
+def export_multipart_uploads(object_storage: Storage) -> list[dict]:
+    """The multipart uploads of the bucket, which a listing of the objects does not show."""
+    s3 = object_storage.get_resource().meta.client
+    return s3.list_multipart_uploads(Bucket=object_storage.bucket_name).get('Uploads', [])
+
+
+async def start_paused_export(manager: ScyllaClusterManager,
+                              object_storage_factory: StorageFactory,
+                              server_count: int = 1) -> tuple[list[ServerInfo], str, Storage]:
+    """Start a cluster of `server_count` nodes and an export that does not finish.
+
+    The first node runs the export. Its fiber waits in `export_pause_injection`
+    with the export row IN_PROGRESS and with an open multipart upload of the data
+    file. Returns the nodes, the export ARN and the object storage.
+    """
+    object_storage = await object_storage_factory('s3')
+    servers = await manager.servers_add(server_count, auto_rack_dc='dc1', config=alternator_config | {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+    })
+    server = servers[0]
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    for p in range(export_item_count):
+        table.put_item(Item={'p': p, 'v': os.urandom(export_item_size)})
+
+    client = table.meta.client
+    table_arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+    await manager.api.enable_injection(server.ip_addr, export_pause_injection, one_shot=False,
+                                       parameters={'pause_after_items': export_pause_after_items})
+    export_arn = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=object_storage.bucket_name,
+    )['ExportDescription']['ExportArn']
+    # The injection enters for each item, and it stops the fiber at the item after
+    # the first `export_pause_after_items` items.
+    await manager.api.wait_for_injection_enter(server.ip_addr, export_pause_injection,
+                                               threshold=export_pause_after_items + 1)
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == 1, uploads
+    return servers, export_arn, object_storage
+
+
+async def describe_finished_export(server: ServerInfo, export_arn: str, timeout: float = 120) -> dict:
+    """Call DescribeExport until the export is finished, and return its description.
+
+    An export that the garbage collector takes is IN_PROGRESS until the collector
+    writes the final row.
+    """
+    # A request that times out is retried by wait_for(). The short timeouts also end the thread of
+    # a request that the wait below gives up, so that it does not delay the teardown of the test.
+    client = get_alternator(server.ip_addr, connect_timeout=10, read_timeout=10).meta.client
+    deadline = time.time() + timeout
+    async def export_finished():
+        # The request runs in a thread, with the time left, so that a node which does not answer
+        # neither blocks the event loop nor makes the wait longer than `timeout`.
+        response = await asyncio.wait_for(asyncio.to_thread(client.describe_export, ExportArn=export_arn),
+                                          max(deadline - time.time(), 1))
+        desc = response['ExportDescription']
+        return desc if desc['ExportStatus'] != 'IN_PROGRESS' else None
+    return await wait_for(export_finished, deadline)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('graceful, failure_code, upload_count', [
+    # A killed node leaves its export IN_PROGRESS with the old incarnation. The first
+    # garbage collection round after the restart writes FAILED with NodeFailure. The
+    # dead node neither completed nor aborted the multipart upload of the data file,
+    # thus the upload stays in the bucket.
+    (False, 'NodeFailure', 1),
+    # A graceful shutdown aborts the running exports, and each export writes its own
+    # FAILED row with the failure code NodeShutdown. (The garbage collector writes
+    # NodeFailure, so this is not the garbage collector.) The shutdown also aborts the
+    # multipart upload of the data file.
+    (True, 'NodeShutdown', 0),
+], ids=['killed', 'shut_down'])
+async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, object_storage_factory,
+                                                graceful, failure_code, upload_count):
+    """A node that stops during an export makes the export FAILED."""
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory)
+    server = servers[0]
+    if graceful:
+        await manager.server_stop_gracefully(server.server_id)
+    else:
+        await manager.server_stop(server.server_id, convict=False)
+    # Start the node again for DescribeExport.
+    await manager.server_start(server.server_id)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == failure_code, desc
+    # The export did not write a data file. Thus the bucket holds only the _started
+    # object, and the data file is at most an incomplete multipart upload.
+    keys = export_object_keys(object_storage)
+    export_id = export_arn.rsplit('/export/', 1)[1]
+    assert len(keys) == 1 and keys[0].endswith(f'AWSDynamoDB/{export_id}/_started'), keys
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == upload_count, uploads
