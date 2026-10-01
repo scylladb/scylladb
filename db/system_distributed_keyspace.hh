@@ -9,6 +9,7 @@
 #pragma once
 
 #include "snapshot_types.hh"
+#include "db_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "db/consistency_level_type.hh"
@@ -16,6 +17,7 @@
 #include "dht/token.hh"
 #include "sstables/types.hh"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <chrono>
 #include <seastar/core/sstring.hh>
@@ -36,6 +38,7 @@ namespace cdc {
 namespace service {
     class storage_proxy;
     class migration_manager;
+    class query_state;
 }
 
 namespace replica {
@@ -163,6 +166,77 @@ private:
 // Restore uses a TTL to expire rows, cluster snapshots/backups don't anymore, they rely on specific
 // cleanup mechanisms and/or the operator issued cluster clearsnapshot operation, they pass a TTL of 0.
 inline constexpr int32_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
+
+/* A row of alternator_export_to_s3_exports. The optional members are the columns which the
+ * export writes while it runs. For the format of `node_id`, see live_node_identifier in
+ * alternator/export.cc.
+ * This row is not a member of alternator_export_table_helper below, because alternator/export.hh
+ * cannot forward declare a nested type. */
+struct alternator_export_row {
+    sstring export_arn;
+    sstring client_token;
+    sstring request;
+    ::table_id table_id;
+    std::optional<sstring> export_manifest;
+    sstring export_status;
+    std::optional<sstring> failure_code;
+    std::optional<sstring> failure_message;
+    std::optional<int64_t> item_count;
+    std::optional<int64_t> billed_size_bytes;
+    sstring export_id_token;
+    db_clock::time_point export_time;
+    db_clock::time_point accepted_at;
+    std::optional<db_clock::time_point> completed_at;
+    sstring node_id;
+};
+
+/* Reads and writes the two Alternator export to S3 tables with CQL statements. Their schemas, with
+ * a comment on each column, are in system_distributed_keyspace.cc. This class follows the same
+ * pattern as snapshot_table_helper below, and lives here rather than in alternator/ because
+ * Alternator has no query_processor of its own. */
+class alternator_export_table_helper {
+    cql3::query_processor& _qp;
+public:
+    using export_row = alternator_export_row;
+
+    /* A row of alternator_export_to_s3_client_tokens. */
+    struct client_token_row {
+        sstring client_token;
+        sstring export_arn;
+        sstring request;
+        sstring node_id;
+    };
+
+    /* The columns of an export row that ListExports and the garbage collector use. An optional
+     * member is unset if the row does not have the column. */
+    struct export_summary_row {
+        sstring export_arn;
+        /* The status of the export. */
+        std::optional<sstring> status;
+        /* The original ExportTableToPointInTime request, as JSON. */
+        std::optional<sstring> request;
+        /* The node that runs the export (see export_row::node_id). */
+        std::optional<sstring> node_id;
+    };
+
+    explicit alternator_export_table_helper(cql3::query_processor&);
+
+    /* Returns all client token rows, in no specified order. If set, `as` aborts the scan. */
+    future<utils::chunked_vector<client_token_row>> get_all_client_tokens(const seastar::abort_source* as = nullptr) const;
+
+    /* Returns the export row of `export_arn`, or nullopt if there is no row. If set, `qs` is the
+     * query state of the client request, for tracing and admission. The statement is internal,
+     * so there is no authorization check. */
+    future<std::optional<export_row>> get_export(const sstring& export_arn, service::query_state* qs = nullptr) const;
+
+    /* Returns the client token row of `client_token`, or nullopt if there is no row. `qs` is
+     * as above. */
+    future<std::optional<client_token_row>> get_client_token(const sstring& client_token, service::query_state* qs = nullptr) const;
+
+    /* Returns a summary of all export rows, in no specified order. `as` and `qs` are as above. */
+    future<utils::chunked_vector<export_summary_row>> get_all_exports(const seastar::abort_source* as = nullptr,
+            service::query_state* qs = nullptr) const;
+};
 
 class snapshot_table_helper {
     cql3::query_processor& _qp;
