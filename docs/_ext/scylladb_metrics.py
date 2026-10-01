@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import json
 from sphinx import addnodes
@@ -27,12 +28,11 @@ class MetricsProcessor:
         os.makedirs(output_directory, exist_ok=True)
         return output_directory
 
-    def _process_single_file(self, file_path, destination_path, metrics_config_path, strict=False):
+    def _process_single_file(self, file_path, destination_path, metrics_info, strict=False):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         if self.MARKER in content and not os.path.exists(destination_path):
             try:
-                metrics_info = metrics.get_metrics_information(metrics_config_path)
                 # Get relative path to the repo root
                 relative_path = os.path.relpath(file_path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
                 repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -54,14 +54,34 @@ class MetricsProcessor:
             except Exception as error:
                 LOGGER.info(f'Error processing {file_path}: {str(error)}')
 
+    def _list_source_files(self, repo_dir):
+        # Only tracked files: os.walk also visits build dirs, worktrees and
+        # submodules, which multiplies the work by two orders of magnitude.
+        # An inherited GIT_DIR/GIT_INDEX_FILE would list another repo or index.
+        env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE")}
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "-z", "--", "*.cc"],
+                cwd=repo_dir, check=True, capture_output=True, text=True, env=env,
+            ).stdout
+            paths = (os.path.join(repo_dir, f) for f in out.split("\0") if f)
+            # ls-files still lists tracked files deleted but not yet staged.
+            return [p for p in paths if os.path.isfile(p)]
+        except (OSError, subprocess.CalledProcessError):
+            return [
+                os.path.join(root, f)
+                for root, _, files in os.walk(repo_dir)
+                for f in files
+                if f.endswith(".cc")
+            ]
+
     def _process_metrics_files(self, repo_dir, output_directory, metrics_config_path, strict=False):
-        for root, _, files in os.walk(repo_dir):
-            for file in files:
-                if file.endswith(".cc"):
-                    file_path = os.path.join(root, file)
-                    file_name = os.path.splitext(file)[0] + ".json"
-                    destination_path = os.path.join(output_directory, file_name)
-                    self._process_single_file(file_path, destination_path, metrics_config_path, strict)
+        # The config is identical for every file; parsing it per file was ~50s.
+        metrics_info = metrics.get_metrics_information(metrics_config_path)
+        for file_path in self._list_source_files(repo_dir):
+            file_name = os.path.splitext(os.path.basename(file_path))[0] + ".json"
+            destination_path = os.path.join(output_directory, file_name)
+            self._process_single_file(file_path, destination_path, metrics_info, strict)
 
     def run(self, app, exception=None):
         repo_dir = os.path.abspath(os.path.join(app.srcdir, ".."))
