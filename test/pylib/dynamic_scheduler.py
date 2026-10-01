@@ -2377,6 +2377,11 @@ def pytest_xdist_make_scheduler(config: pytest.Config, log: Any) -> Any:
     global _scheduler
     if not config.getoption("--dynamic-scheduler"):
         return None
+    # WIP testing: start CI runs from a profile learned by an earlier CI run.
+    seed = Path(__file__).parent / "dynamic_profile_seed.json"
+    if seed.exists() and not _profile_path(config).exists():
+        import shutil
+        shutil.copyfile(seed, _profile_path(config))
     _scheduler = DynamicScheduling(config, log)
     return _scheduler
 
