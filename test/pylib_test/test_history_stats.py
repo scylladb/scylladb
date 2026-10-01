@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pytest
 
+from test.cluster.strong_consistency import workload as workload_module
 from test.cluster.strong_consistency.outcomes import Outcome
 from test.cluster.strong_consistency.workload import (
     HistoryRecorder,
@@ -103,3 +104,34 @@ def test_stats_narrow_to_one_client():
     assert h.stats(reset_client_id=RESET, client_id=READER) == Stats(read_ok=1)
     assert str(h.stats(reset_client_id=RESET, client_id=WRITER)) == (
         "writes ok=1 fail=0 indeterminate=0")
+
+
+def test_stats_narrow_to_a_window(monkeypatch):
+    """An operation is inside a window if it was called and returned there.
+
+    The clock is pinned, so the window edges are exact: an operation
+    straddling an edge is outside, one on the edge is inside, and one that
+    never returned is judged by its call alone.
+    """
+    workload = RegisterWorkload(ks="unused")
+
+    def op(op: str, t_call: int, t_return: int | None, status: str = Outcome.OK) -> None:
+        client_id = WRITER if op == "write" else READER
+        monkeypatch.setattr(workload_module.time, "monotonic_ns", lambda: t_call)
+        op_id, _ = workload.history.record_call(client_id, op, 1, 5)
+        if t_return is not None:
+            workload.history.record_return(op_id, client_id, op, 1, 5, status, t_return)
+
+    op("write", 5, 15)                      # starts before the window
+    op("write", 10, 20)                     # exactly on both edges
+    op("write", 12, 18, Outcome.FAIL)
+    op("write", 15, 25)                     # ends after the window
+    op("write", 19, None)                   # never returned, called inside
+    op("write", 21, None)                   # never returned, called after
+    op("read", 11, 12)
+
+    inside = Stats(write_ok=1, write_fail=1, write_indeterminate=1, read_ok=1)
+    assert workload.stats(within_ns=(10, 20)) == inside
+    assert workload.stats() == Stats(
+        write_ok=3, write_fail=1, write_indeterminate=2, read_ok=1)
+
