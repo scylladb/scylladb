@@ -79,6 +79,34 @@ def test_count_in_partition(cql, table1):
     cql.execute(stmt, [p, 3, 3])
     assert [(3,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
 
+# count(1) counts rows like count(*), and its result column is named "count"
+# like count(*)'s: Cassandra parses count(1) as count(*). Scylla once named it
+# "system.count(1)", which broke clients reading the column by name
+# (lwt_banking_load_test in dtest). The same holds for any non-null constant.
+def test_count_1_column_name(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"insert into {table1} (p, c, v) values (?, ?, ?)")
+    cql.execute(stmt, [p, 1, 1])
+    cql.execute(stmt, [p, 2, None])
+    for q in ['count(*)', 'count(1)', 'count(0)', "count('abc')", 'count(true)']:
+        row = cql.execute(f"select {q} from {table1} where p = {p}").one()
+        assert row._fields == ('count',)
+        assert row.count == 2
+
+# SELECT JSON names the key like the result column, so count(1)'s key is "count".
+def test_count_1_json_key(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, v) values ({p}, 1, 1)")
+    assert cql.execute(f"select json count(1) from {table1} where p = {p}").one()[0] == '{"count": 1}'
+
+# A count over the whole table takes a different (parallelized) path in Scylla
+# than a count in one partition. Its result column is named "count" too.
+def test_count_1_column_name_whole_table(cql, table1):
+    cql.execute(f"insert into {table1} (p, c, v) values ({unique_key_int()}, 1, 1)")
+    row = cql.execute(f"select count(1) from {table1}").one()
+    assert row._fields == ('count',)
+    assert row.count >= 1
+
 # Using count(v) instead of count(*) allows counting only rows with a non-NULL
 # value in v
 def test_count_specific_column(cql, test_keyspace, table1):

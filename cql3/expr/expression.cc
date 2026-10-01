@@ -749,7 +749,11 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                                 out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
-                                if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
+                                if (is_count_rows_call(fc)) {
+                                    // count(<constant>) counts every row, like countRows(), and is named
+                                    // like it: Cassandra parses count(1) as countRows().
+                                    out = fmt::format_to(out, "count");
+                                } else if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
                                     auto cast_type = fn_name.substr(6);
                                     out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | std::views::transform(to_printer), ", "),
                                          cast_type);
