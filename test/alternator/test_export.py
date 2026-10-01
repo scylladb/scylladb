@@ -1038,31 +1038,33 @@ def test_export_nonexistent_bucket(dynamodb, test_table_s):
     assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
 
 
-# Test that failed export that didn't start doesn't reserve ClientToken
-# and thus the same ClientToken can be used again for a new export.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_export_failed_does_not_reserve_client_token(dynamodb, test_table_s):
+# Test that a request that fails validation does not reserve its ClientToken. After it, ListExports
+# shows no new export, and the corrected request with the same token starts an export.
+@pytest.mark.parametrize('invalid', ['S3Bucket', 'ExportFormat', 'ExportTime'])
+def test_export_failed_does_not_reserve_client_token(test_table_s, invalid, s3):
     table = test_table_s
     client = enable_pitr(table)
     table_arn = get_table_arn(table)
-    s3 = make_s3_client(dynamodb)
     token = str(uuid.uuid4())
+    invalid_value = {
+        'S3Bucket': '',
+        'ExportFormat': 'QWERTY',
+        'ExportTime': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10),
+    }[invalid]
 
-    with pytest.raises(ClientError, match='ValidationException.*s3Bucket.*failed'):
-        client.export_table_to_point_in_time(
-            TableArn=table_arn,
-            S3Bucket='',
-            ClientToken=token,
-        )
-
-    # We don't care about export result here, we just want to verify that ClientToken can be passed again to start a new export
-    # (the call did not raise an exception).
     with new_s3_bucket(s3) as bucket:
-        client.export_table_to_point_in_time(
-            TableArn=table_arn,
-            S3Bucket=bucket,
-            ClientToken=token,
-        )
+        request = {'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token}
+        listed_before = {ex['ExportArn'] for ex in iterate_over_exports(client, table_arn)}
+
+        with pytest.raises(ClientError, match='ValidationException|InvalidExportTimeException'):
+            client.export_table_to_point_in_time(**{**request, invalid: invalid_value})
+
+        # The rejected request did not write an export...
+        assert {ex['ExportArn'] for ex in iterate_over_exports(client, table_arn)} == listed_before
+        # ...and did not reserve its ClientToken, so the corrected request starts an export.
+        desc = client.export_table_to_point_in_time(**request)['ExportDescription']
+        assert desc['ClientToken'] == token
+        assert desc['ExportArn'] not in listed_before
 
 # ---------------------------------------------------------------------------
 # DescribeExport tests
