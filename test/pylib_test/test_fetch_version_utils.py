@@ -306,6 +306,29 @@ def test_download_scylla_version_retries_after_url_error(monkeypatch, tmp_path):
     assert path.read_bytes() == b"data"
     assert calls == [url, url]
 
+
+def test_download_scylla_version_stops_retrying_after_deadline(monkeypatch, tmp_path):
+    # When the server is unreachable, each attempt can take minutes. Even with
+    # many retries allowed, we should give up after about 10 minutes, so the
+    # caller can still fall back to a cached version before the test times out.
+    url = "https://example.com/scylla.tar.gz"
+    now = 0
+    calls = []
+
+    def fake_urlopen(request_url, timeout):
+        nonlocal now
+        calls.append(request_url)
+        now += 120
+        raise vfu.urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(vfu.time, "monotonic", lambda: now)
+    monkeypatch.setattr(vfu.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(vfu.urllib.request, "urlopen", fake_urlopen)
+
+    assert vfu.download_scylla_version(url=url, output_dir=tmp_path, retry=40) is None
+    assert len(calls) == 6
+
+
 def test_with_file_lock_creates_parent_and_runs_body(tmp_path):
     lock_path = tmp_path / "locks" / "scylla.lock"
     with vfu.with_file_lock(lock_path):
