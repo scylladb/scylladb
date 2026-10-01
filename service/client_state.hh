@@ -75,6 +75,7 @@ private:
             , _user_connection(cs->_user_connection)
             , _is_internal(cs->_is_internal)
             , _bypass_auth_checks(cs->_bypass_auth_checks)
+            , _forwarded(cs->_forwarded)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
@@ -135,6 +136,10 @@ private:
     // This is used by the maintenance socket to allow privileged access without
     // going through normal auth, while still treating queries as external.
     bool _bypass_auth_checks;
+
+    // Set for a statement forwarded by another node; such a statement is
+    // executed here and never forwarded again.
+    bool _forwarded = false;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     static thread_local api::timestamp_type _last_timestamp_micros;
@@ -290,6 +295,7 @@ public:
             , _auth_state(auth_state::READY)
             , _is_internal(false)
             , _bypass_auth_checks(false)
+            , _forwarded(true)
             , _remote_address(socket_address(forwarded_state.remote_address, forwarded_state.remote_port))
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
@@ -312,6 +318,14 @@ public:
 
     bool is_internal() const {
         return _is_internal;
+    }
+
+    bool is_forwarded() const {
+        return _forwarded;
+    }
+
+    bool bypass_auth_checks() const {
+        return _bypass_auth_checks;
     }
 
     /**
