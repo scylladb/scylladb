@@ -70,10 +70,17 @@ using namespace service::strong_consistency;
 static raft::group_id gid{utils::UUID_gen::min_time_UUID()};
 static constexpr shard_id test_shard = 0;
 
+// A starting index for sys-table storage, which keeps no floor and accepts any start.
+// Commitlog-backed storage starts just above its floor, because each batch links to the
+// entry below its first index.
+static uint64_t random_first_idx() {
+    return tests::random::get_int<uint64_t>(1, 1000);
+}
+
 // Create a randomized test log to harden Raft storage tests.
-// Randomizes: length (min_entries..max_entries, default 0..20), first index,
-// entry types (command/configuration/dummy), command payloads, configuration
-// member counts, and terms (monotonically non-decreasing).
+// Randomizes: length (min_entries..max_entries, default 0..20), entry types
+// (command/configuration/dummy), command payloads, configuration member counts,
+// and terms (monotonically non-decreasing). The log starts at first_idx.
 //
 // Empty logs and logs missing some entry types are intentional — they
 // exercise corner cases that are also valid real-world states.
@@ -81,10 +88,9 @@ static constexpr shard_id test_shard = 0;
 // To reproduce a failure, pass --random-seed=<N> printed by the test runner.
 // server_id values inside configuration entries are derived from tests::random
 // so the same seed always produces the identical log.
-static std::vector<raft::log_entry_ptr> create_test_log(size_t min_entries = 0, size_t max_entries = 20) {
+static std::vector<raft::log_entry_ptr> create_test_log(size_t min_entries = 0, size_t max_entries = 20,
+        uint64_t first_idx = 1) {
     SCYLLA_ASSERT(min_entries <= max_entries);
-
-    uint64_t first_idx = tests::random::get_int<uint64_t>(1, 1000);
 
     // Helper: build one configuration entry (data only, no idx/term yet).
     auto make_config_data = []() -> raft::configuration {
@@ -317,7 +323,7 @@ future<> test_store_load_log_entries_impl(StorageFactory&& make_storage) {
         raft::log_entries loaded_empty = co_await storage.load_log();
         BOOST_CHECK_EQUAL(0u, loaded_empty.size());
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        std::vector<raft::log_entry_ptr> entries = create_test_log(0, 20, random_first_idx());
         co_await storage.store_log_entries(entries);
         raft::log_entries loaded_entries = co_await storage.load_log();
 
@@ -333,7 +339,7 @@ future<> test_truncate_log_impl(StorageFactory&& make_storage) {
     return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         auto storage = make_storage(env, gid);
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20, random_first_idx());
         co_await storage.store_log_entries(entries);
         // truncate the last entry from the log
         co_await storage.truncate_log(entries.back()->idx);
@@ -351,7 +357,7 @@ future<> test_store_snapshot_truncate_log_tail_impl(StorageFactory&& make_storag
     return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         auto storage = make_storage(env, gid);
 
-        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20);
+        std::vector<raft::log_entry_ptr> entries = create_test_log(3, 20, random_first_idx());
         co_await storage.store_log_entries(entries);
 
         raft::term_t snp_term = entries.back()->term;
@@ -894,7 +900,9 @@ SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
                 cl, dummy_table, {});
 
         std::vector<raft::log_entry_ptr> entries;
-        const uint64_t base = 100;
+        // No seeded floor, so the floor sits at 0 and the log starts at 1:
+        // prev_term_for() answers for the floor or the newest record, nothing else.
+        const uint64_t base = 1;
         for (uint64_t i = 0; i < 6; ++i) {
             const auto idx = raft::index_t(base + i);
             if (i % 2 == 0) {

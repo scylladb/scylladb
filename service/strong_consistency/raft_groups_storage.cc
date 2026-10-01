@@ -212,11 +212,12 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     }
 
     // Called twice before the group starts: groups_manager reads the descriptor
-    // to decide whether to bootstrap, raft::server reads it again as it starts.
-    // The seeding below must stay idempotent.
+    // to decide whether to bootstrap, and raft::server reads the descriptor again
+    // at start. The seeding below must stay idempotent.
     _snapshot_config = snap.config;
+    _raft_commitlog.seed_floor(snap.idx, snap.term);
     if (row.has("truncations")) {
-        // The row already holds this, so the first release need not rewrite it.
+        // Already in the row, so the first release need not rewrite the truncations.
         _persisted_truncations = deserialize_truncations(row.get_view("truncations"));
         _raft_commitlog.seed_truncations(_persisted_truncations);
     }
@@ -472,16 +473,20 @@ future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation
     // The one descriptor written by CQL: there is no record to release yet, and
     // no group running whose memtable mutation could carry it.
     const auto init_index = nontrivial_snapshot ? raft::index_t{1} : raft::index_t{0};
+    // The seeded floor and the system.raft_groups row carry the same term:
+    // replay compares a batch's prev_term against the term the row holds.
+    const raft::term_t init_term{0};
     _snapshot_config = std::move(initial_configuation);
     _commit_index = std::max(_commit_index, init_index);
     _apply_index = std::max(_apply_index, init_index);
+    _raft_commitlog.seed_floor(init_index, init_term);
     static const auto store_cql = format(
             "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
-    // snapshot_idx being present is what marks the group as bootstrapped.
+    // A present snapshot_idx marks the group as bootstrapped.
     co_await _qp.execute_internal(store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(init_index.value()), int64_t(0),
+            {int16_t(_shard), _group_id.id, int64_t(init_index.value()), int64_t(init_term.value()),
              data_value(serialize_config(_snapshot_config)),
              serialize_truncations({})},
             cql3::query_processor::cache_internal::yes);

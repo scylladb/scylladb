@@ -19,6 +19,7 @@ class mutation_entry [[writable]] {
 struct raft_commitlog_batch [[writable]] {
     raft::group_id group_id;
     raft::index_t commit_idx;
+    raft::term_t prev_term;
     std::vector<raft::log_entry_ptr> entries;
 };
 

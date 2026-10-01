@@ -72,7 +72,8 @@ size_t max_single_entry_batch_size(size_t command_size) {
                         raft::lease_clock::time_point(std::chrono::nanoseconds(1)),
                         raft::lease_clock::time_point(std::chrono::nanoseconds(2))}});
         const std::vector<raft::log_entry_ptr> entries{std::move(entry)};
-        return commitlog_raft_batch_writer(raft::group_id{}, raft::index_t{0}, entries).size();
+        return commitlog_raft_batch_writer(
+                raft::group_id{}, raft::index_t{0}, raft::term_t{1}, entries).size();
     }();
     return envelope + command_size;
 }
@@ -108,38 +109,42 @@ static future<db::rp_handle> add_measured_raft_batch(db::commitlog& cl, table_id
         return writer.write(out);
     };
     auto handle = co_await cl.add(table, batch_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
-    logger.debug("wrote raft batch: group_id={}, entries=[{}, {}], size={}, rp={}",
-            group_id, entries.front()->idx, entries.back()->idx, batch_size, handle.rp());
+    logger.debug("wrote raft batch: group_id={}, entries=[{}, {}], prev_term={}, size={}, rp={}",
+            group_id, entries.front()->idx, entries.back()->idx, writer.prev_term(),
+            batch_size, handle.rp());
     co_return handle;
 }
 
 future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
-        raft::group_id group_id, raft::index_t commit_idx, const raft::log_entry_ptr_list& entries) {
+        raft::group_id group_id, raft::index_t commit_idx, raft::term_t prev_term,
+        const raft::log_entry_ptr_list& entries) {
     SCYLLA_ASSERT(!entries.empty());
     // Awaited, not returned: the writer is a local and add_measured_raft_batch()
     // holds a reference to it across its suspension.
-    const commitlog_raft_batch_writer writer(group_id, commit_idx, entries);
+    const commitlog_raft_batch_writer writer(group_id, commit_idx, prev_term, entries);
     co_return co_await add_measured_raft_batch(cl, table, group_id, entries, writer);
 }
 
 std::vector<size_t> split_raft_batch(const db::commitlog& cl, raft::group_id group_id,
-        raft::index_t commit_idx, const raft::log_entry_ptr_list& entries) {
+        raft::index_t commit_idx, raft::term_t prev_term, const raft::log_entry_ptr_list& entries) {
     const auto max_batch_size = cl.max_record_size();
-    if (commitlog_raft_batch_writer(group_id, commit_idx, entries).size() <= max_batch_size) {
+    if (commitlog_raft_batch_writer(group_id, commit_idx, prev_term, entries).size() <= max_batch_size) {
         return {entries.size()};
     }
     // Every size prefix in the encoding is fixed width, so a batch measures as its
     // header plus the sum of its entries. That makes one measurement per entry
     // enough, where measuring each candidate batch would be quadratic.
     const raft::log_entry_ptr_list no_entries;
-    const auto header_size = commitlog_raft_batch_writer(group_id, commit_idx, no_entries).size();
+    const auto header_size =
+            commitlog_raft_batch_writer(group_id, commit_idx, prev_term, no_entries).size();
 
     std::vector<size_t> batch_ends;
     auto current_batch_size = header_size;
     for (size_t i = 0; i < entries.size(); ++i) {
         const raft::log_entry_ptr_list one_entry{entries[i]};
         const auto entry_size =
-                commitlog_raft_batch_writer(group_id, commit_idx, one_entry).size() - header_size;
+                commitlog_raft_batch_writer(group_id, commit_idx, prev_term, one_entry).size()
+                        - header_size;
         // An entry too large on its own still goes in a batch of its own, for
         // write_raft_batch() to reject: that is the bound the boot check covers.
         if (current_batch_size > header_size && current_batch_size + entry_size > max_batch_size) {
@@ -214,6 +219,26 @@ raft_commitlog::~raft_commitlog() {
             _commitlog_segment_queue.size(), _group_id);
 }
 
+raft::term_t raft_commitlog::prev_term_for(const raft::index_t first_idx) const {
+    const raft::index_t previous = first_idx - raft::index_t{1};
+    // Raft appends only at the end, so the entry below `first_idx` is the newest record's
+    // last entry, or the floor once the queue is empty. Records cover ascending adjacent
+    // ranges, so the floor sits just below the oldest record.
+    // state_machine::transfer_snapshot() throws, so no received snapshot moves the log
+    // start above the floor.
+    if (!_commitlog_segment_queue.empty()) {
+        const auto& newest = _commitlog_segment_queue.back();
+        if (newest.max_index == previous) {
+            return newest.max_term();
+        }
+    } else if (_floor.idx == previous) {
+        return _floor.term;
+    }
+    on_internal_error(logger, fmt::format(
+            "group {}: a batch starting at {} follows neither the newest record nor the "
+            "floor at {}; the log is not contiguous", _group_id, first_idx, _floor.idx));
+}
+
 future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr>& entries,
         raft::index_t commit_idx) {
     if (entries.empty()) {
@@ -222,7 +247,8 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
     // One commitlog entry per batch. Measured here rather than inside the write, so
     // the common batch - one that fits - is serialized once to measure and once to
     // write, and never a third time to decide whether it needs splitting.
-    const commitlog_raft_batch_writer writer(_group_id, commit_idx, entries);
+    const commitlog_raft_batch_writer writer(
+            _group_id, commit_idx, prev_term_for(entries.front()->idx), entries);
     if (writer.size() <= _commit_log.max_record_size()) {
         auto handle = co_await add_measured_raft_batch(
                 _commit_log, _table_id, _group_id, entries, writer);
@@ -236,12 +262,16 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
     // Too large for one commitlog entry: as many whole batches as it takes, which is
     // also what replay's rewrite does. Splitting is what keeps a segment size too
     // small for a whole batch a supported configuration.
-    const auto batch_ends = split_raft_batch(_commit_log, _group_id, commit_idx, entries);
+    const auto batch_ends = split_raft_batch(
+            _commit_log, _group_id, commit_idx, prev_term_for(entries.front()->idx), entries);
     size_t batch_begin = 0;
     for (const auto batch_end : batch_ends) {
         const raft::log_entry_ptr_list batch(
                 entries.begin() + batch_begin, entries.begin() + batch_end);
-        auto handle = co_await write_raft_batch(_commit_log, _table_id, _group_id, commit_idx, batch);
+        // Read per batch: account_batch() moves the log end to the batch just written,
+        // so the following batch links to that batch's last entry.
+        auto handle = co_await write_raft_batch(_commit_log, _table_id, _group_id, commit_idx,
+                prev_term_for(batch.front()->idx), batch);
         account_batch(_commitlog_segment_queue, _raft_groups_table_id, std::move(handle), batch);
         batch_begin = batch_end;
     }
@@ -318,6 +348,10 @@ segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft:
 }
 
 void raft_commitlog::pop_released() {
+    // The release wrote this record as the descriptor, so the in-memory floor and
+    // the persisted floor move together.
+    const auto& record = _commitlog_segment_queue.front();
+    _floor = raft_term_and_index{.idx = record.max_index, .term = record.max_term()};
     _commitlog_segment_queue.pop_front();
 }
 

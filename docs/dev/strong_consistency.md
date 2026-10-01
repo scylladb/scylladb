@@ -133,9 +133,9 @@ raft_groups_storage::store_log_entries()
 write_raft_batch()
     │
     │  measure the batch once; if it fits, serialize
-    │  {group_id, commit_idx, entries} as one raft_commitlog_batch
-    │  and add() it (force_sync = yes). If it does not fit,
-    │  split_raft_batch() cuts it into runs that each do.
+    │  {group_id, commit_idx, prev_term, entries} as one
+    │  raft_commitlog_batch and add() it (force_sync = yes). If it
+    │  does not fit, split_raft_batch() cuts it into runs that each do.
     │
     ▼
 one commitlog entry, one replay position, one rp_handle
@@ -158,6 +158,12 @@ Key points:
   rewrites a recovered tail, and the node refuses to start if it would not fit.
 - The batch header carries the group's `commit_idx` at write time. Replay uses it as a
   floor to decide which of the entries it reads are already committed.
+- The header also carries `prev_term`, the term of the entry just below the batch's
+  first index, which is raft's AppendEntries `prevLogTerm` applied to the on-disk log.
+  `raft_commitlog::prev_term_for()` reads `prev_term` from the newest `segment_record`,
+  or from the floor the last release wrote once the queue is empty. A split run reads
+  `prev_term` per batch, after `account_batch()` has moved the log end, so each run links
+  to the last entry of the run before it.
 - The group does not keep a handle per index. It keeps a queue of `segment_record`s,
   one per commitlog segment its entries landed in. A later batch in the same
   segment only advances that record's `max_index`, because retention is accounted

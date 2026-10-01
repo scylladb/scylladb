@@ -104,13 +104,14 @@ inline constexpr size_t raft_max_command_size = 100 * 1024;
 // it into whole batches; fragmenting one entry instead needs the commitlog to
 // release an oversized entry's tail segments per position (SCYLLADB-3986).
 future<db::rp_handle> write_raft_batch(db::commitlog& cl, table_id table,
-        raft::group_id group_id, raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+        raft::group_id group_id, raft::index_t commit_idx, raft::term_t prev_term,
+        const raft::log_entry_ptr_list& entries);
 
 // Split `entries` into consecutive batches, each of which write_raft_batch() can
 // write as one commitlog entry, and return each batch's end offset. A batch that
 // already fits returns a single offset without measuring its entries one by one.
 std::vector<size_t> split_raft_batch(const db::commitlog& cl, raft::group_id group_id,
-        raft::index_t commit_idx, const raft::log_entry_ptr_list& entries);
+        raft::index_t commit_idx, raft::term_t prev_term, const raft::log_entry_ptr_list& entries);
 
 // Check the configured commitlog can hold one raft entry carrying a
 // `command_size`-byte command. Throws if it cannot, so the node refuses to
@@ -206,6 +207,10 @@ class raft_commitlog {
     // db::commitlog::flush_position). Only half of closed_up_to().
     db::replay_position _reported_up_to;
     raft::log_entries _replayed_entries;
+    // What the log ends with below the oldest record: the descriptor the group
+    // last persisted. Seeded from the row and advanced by pop_released(), which
+    // runs after the release wrote that same record as the descriptor.
+    raft_term_and_index _floor;
 
 public:
     raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
@@ -238,6 +243,19 @@ public:
     void seed_truncations(std::vector<truncation_record> truncations) {
         _truncations = std::move(truncations);
     }
+
+    // Seed the floor from the group's persisted descriptor, before the group starts.
+    // load_snapshot_descriptor() runs twice per start, so only an advance counts.
+    void seed_floor(raft::index_t idx, raft::term_t term) {
+        if (idx >= _floor.idx) {
+            _floor = raft_term_and_index{.idx = idx, .term = term};
+        }
+    }
+
+    // Term of the entry at `first_idx` - 1, for the link a batch starting at `first_idx`
+    // carries. Read after any truncation, so a batch written right after
+    // truncate_log() links to the new tail.
+    raft::term_t prev_term_for(raft::index_t first_idx) const;
 
     // Drop the truncation records whose segment the commitlog no longer lists. The
     // segment file is removed a moment later, in the background, so a crash in

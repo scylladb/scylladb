@@ -460,15 +460,19 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
             // entry. raft_max_log_size bounds it, which one entry need not hold,
             // and an oversized rewrite would abort every replay from here on.
             const auto batch_ends = service::strong_consistency::split_raft_batch(
-                    *new_commitlog_ptr, group_id, group.commit_idx, uncommitted);
+                    *new_commitlog_ptr, group_id, group.commit_idx, group.commit_term, uncommitted);
             size_t batch_begin = 0;
+            // The tail starts just above commit_idx, so the first batch links to the
+            // descriptor's term and every later batch to its predecessor's last entry.
+            raft::term_t prev_term = group.commit_term;
             for (const auto batch_end : batch_ends) {
                 const raft::log_entry_ptr_list batch(
                         uncommitted.begin() + batch_begin, uncommitted.begin() + batch_end);
                 auto handle = co_await service::strong_consistency::write_raft_batch(
-                        *new_commitlog_ptr, group.table, group_id, group.commit_idx, batch);
+                        *new_commitlog_ptr, group.table, group_id, group.commit_idx, prev_term, batch);
                 service::strong_consistency::account_batch(group_data.records,
                         db::system_keyspace::raft_groups()->id(), std::move(handle), batch);
+                prev_term = batch.back()->term;
                 batch_begin = batch_end;
             }
             for (auto& entry : uncommitted) {

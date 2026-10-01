@@ -107,6 +107,43 @@ table_id make_table_id() {
     return table_id(utils::UUID_gen::get_time_UUID());
 }
 
+// Every raft batch a group left on disk, ordered by first index.
+future<std::vector<raft_commitlog_batch>> read_raft_batches(commitlog& log, raft::group_id gid) {
+    co_await log.sync_all_segments();
+    std::vector<raft_commitlog_batch> batches;
+    for (const auto& name : log.get_active_segment_names()) {
+        co_await commitlog::read_log_file(name, commitlog::descriptor::FILENAME_PREFIX,
+                [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            commitlog_entry_reader reader(buf_rp.buffer,
+                    detail::commitlog_entry_serialization_format::variant);
+            auto& item = reader.entry().item;
+            if (std::holds_alternative<raft_commitlog_batch>(item)) {
+                const auto& read = std::get<raft_commitlog_batch>(item);
+                if (read.group_id == gid) {
+                    batches.push_back(read);
+                }
+            }
+            co_return;
+        });
+    }
+    std::ranges::sort(batches, [](const raft_commitlog_batch& left, const raft_commitlog_batch& right) {
+        return left.entries.front()->idx < right.entries.front()->idx;
+    });
+    co_return batches;
+}
+
+// Each batch links to the entry below its first index: the first to `floor_term`, every
+// later one to the last entry of the batch before it.
+void require_batches_chain(const std::vector<raft_commitlog_batch>& batches, raft::term_t floor_term) {
+    BOOST_REQUIRE_GT(batches.size(), 1u);
+    BOOST_REQUIRE_EQUAL(batches.front().prev_term, floor_term);
+    for (size_t i = 1; i < batches.size(); ++i) {
+        BOOST_REQUIRE_EQUAL(batches[i].entries.front()->idx,
+                batches[i - 1].entries.back()->idx + raft::index_t{1});
+        BOOST_REQUIRE_EQUAL(batches[i].prev_term, batches[i - 1].entries.back()->term);
+    }
+}
+
 future<> cl_test(commitlog::config cfg, noncopyable_function<future<>(commitlog&)> f) {
     cfg.metrics_category_name = "commitlog";
     cfg.descriptor_tag = "variant";
@@ -132,10 +169,10 @@ future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
 // Write a raft log entry to the commitlog and return the rp_handle.
 future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raft::group_id gid, raft::log_entry_ptr entry) {
     const std::vector<raft::log_entry_ptr> entries{entry};
-    commitlog_raft_batch_writer writer(gid, raft::index_t{0}, entries);
+    commitlog_raft_batch_writer writer(gid, raft::index_t{0}, raft::term_t{0}, entries);
     const auto target_size = writer.size();
     co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entries, gid](auto& out) {
-        commitlog_raft_batch_writer w(gid, raft::index_t{0}, entries);
+        commitlog_raft_batch_writer w(gid, raft::index_t{0}, raft::term_t{0}, entries);
         w.write(out);
     });
 }
@@ -170,7 +207,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_batch_writer) {
         std::vector<replay_position> rps;
         for (const auto& entry : entries) {
             const std::vector<raft::log_entry_ptr> batch{entry};
-            commitlog_raft_batch_writer writer(gid, raft::index_t{0}, batch);
+            commitlog_raft_batch_writer writer(gid, raft::index_t{0}, raft::term_t{0}, batch);
             // size() must exceed the bare raft::log_entry serialization because
             // the writer wraps it in a commitlog_entry + raft_commitlog_batch envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
@@ -239,6 +276,9 @@ SEASTAR_TEST_CASE(test_commitlog_raft_batch_writer_multiple_entries) {
         auto gid = make_group_id();
         auto tid = make_table_id();
         const raft::index_t commit_idx{7};
+        // Distinct from commit_idx and from every index and term in the batch, so a
+        // field written or read in the wrong place shows up as a mismatch.
+        const raft::term_t prev_term{6};
 
         const std::vector<raft::log_entry_ptr> batch = {
                 make_command_entry_sized(raft::term_t(1), raft::index_t(11), 128),
@@ -248,7 +288,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_batch_writer_multiple_entries) {
                 make_command_entry_sized(raft::term_t(5), raft::index_t(15), 256),
         };
 
-        commitlog_raft_batch_writer writer(gid, commit_idx, batch);
+        commitlog_raft_batch_writer writer(gid, commit_idx, prev_term, batch);
         const auto handle = co_await log.add(tid, writer.size(), db::no_timeout,
                 db::commitlog_force_sync::yes, [&writer](auto& out) { writer.write(out); });
         const auto written_at = handle.rp();
@@ -270,6 +310,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_batch_writer_multiple_entries) {
 
                 BOOST_REQUIRE_EQUAL(read.group_id, gid);
                 BOOST_REQUIRE_EQUAL(read.commit_idx, commit_idx);
+                BOOST_REQUIRE_EQUAL(read.prev_term, prev_term);
                 BOOST_REQUIRE_EQUAL(read.entries.size(), batch.size());
                 for (size_t i = 0; i < batch.size(); ++i) {
                     BOOST_REQUIRE_EQUAL(read.entries[i]->idx, batch[i]->idx);
@@ -557,7 +598,7 @@ SEASTAR_TEST_CASE(test_raft_batch_record_and_truncation) {
         std::deque<service::strong_consistency::segment_record> segment_queue;
         // The whole batch is one commitlog entry, so one record.
         auto handle = co_await service::strong_consistency::write_raft_batch(
-                log, tid, gid, raft::index_t(0), all_entries);
+                log, tid, gid, raft::index_t(0), raft::term_t(0), all_entries);
         service::strong_consistency::account_batch(segment_queue, rg_tid, std::move(handle), all_entries);
         BOOST_REQUIRE_EQUAL(segment_queue.size(), 1);
         BOOST_REQUIRE_EQUAL(segment_queue.front().first_index, raft::index_t(1));
@@ -603,7 +644,7 @@ SEASTAR_TEST_CASE(test_trim_from_drops_terms_configs_and_noncmd_indexes) {
         std::deque<service::strong_consistency::segment_record> segment_queue;
         service::strong_consistency::account_batch(segment_queue, rg_tid,
                 co_await service::strong_consistency::write_raft_batch(
-                        log, tid, gid, raft::index_t(0), entries), entries);
+                        log, tid, gid, raft::index_t(0), raft::term_t(0), entries), entries);
         BOOST_REQUIRE_EQUAL(segment_queue.size(), 1);
         auto& record = segment_queue.front();
         BOOST_REQUIRE_EQUAL(record.max_index, raft::index_t(8));
@@ -643,8 +684,84 @@ SEASTAR_TEST_CASE(test_trim_from_drops_terms_configs_and_noncmd_indexes) {
     });
 }
 
+// Test: prev_term_for() names the term of the entry below `first` as the log
+// now ends, across a truncation that clamps a record and a truncation that drops it.
+// SCYLLADB-4893 covers a batch linking to the term a truncation discarded: replay
+// would accept a superseded copy in place of the missing entry.
+SEASTAR_TEST_CASE(test_prev_term_follows_the_log_through_a_truncation) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+        auto rg_tid = make_table_id();
+
+        service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+        // The group starts above a persisted descriptor, as it does after a restart.
+        rc.seed_floor(raft::index_t(3), raft::term_t(1));
+        BOOST_REQUIRE_EQUAL(rc.prev_term_for(raft::index_t(4)), raft::term_t(1));
+
+        // One record over two terms: 4..5 in term 2, 6 in term 4.
+        co_await rc.store_log_entries({
+                make_command_entry(raft::term_t(2), raft::index_t(4)),
+                make_command_entry(raft::term_t(2), raft::index_t(5)),
+                make_command_entry(raft::term_t(4), raft::index_t(6)),
+        }, raft::index_t(0));
+        BOOST_REQUIRE_EQUAL(rc.prev_term_for(raft::index_t(7)), raft::term_t(4));
+
+        // A new leader discards index 6. The record keeps 4..5, so the replacement
+        // at 6 links to term 2.
+        rc.truncate_log(raft::index_t(6));
+        BOOST_REQUIRE_EQUAL(rc.prev_term_for(raft::index_t(6)), raft::term_t(2));
+
+        co_await rc.store_log_entries({
+                make_command_entry(raft::term_t(5), raft::index_t(6)),
+        }, raft::index_t(0));
+        BOOST_REQUIRE_EQUAL(rc.prev_term_for(raft::index_t(7)), raft::term_t(5));
+
+        // Read the link back from disk, as the write path stored it.
+        co_await log.sync_all_segments();
+        bool seen = false;
+        for (const auto& name : log.get_active_segment_names()) {
+            co_await commitlog::read_log_file(name, commitlog::descriptor::FILENAME_PREFIX,
+                    [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                commitlog_entry_reader reader(buf_rp.buffer,
+                        detail::commitlog_entry_serialization_format::variant);
+                auto& item = reader.entry().item;
+                if (!std::holds_alternative<raft_commitlog_batch>(item)) {
+                    co_return;
+                }
+                auto& read = std::get<raft_commitlog_batch>(item);
+                if (read.group_id != gid || read.entries.front()->idx != raft::index_t(6)
+                        || read.entries.front()->term != raft::term_t(5)) {
+                    co_return;
+                }
+                BOOST_REQUIRE_EQUAL(read.prev_term, raft::term_t(2));
+                seen = true;
+                co_return;
+            });
+        }
+        BOOST_REQUIRE(seen);
+
+        // Truncating the whole log back to the floor empties the record queue, and
+        // the floor answers again.
+        rc.truncate_log(raft::index_t(4));
+        BOOST_REQUIRE_EQUAL(rc.prev_term_for(raft::index_t(4)), raft::term_t(1));
+
+        // A batch that follows neither the newest record nor the floor is a hole in
+        // the log, which raft cannot produce and the writer refuses to guess a link for.
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            try {
+                rc.prev_term_for(raft::index_t(9));
+                BOOST_FAIL("expected a batch over a hole to be rejected");
+            } catch (const std::runtime_error& e) {
+                BOOST_REQUIRE(sstring(e.what()).find("the log is not contiguous") != sstring::npos);
+            }
+        }
+    });
+}
+
 // Test: the release gate is the record's last *command*. Dummy and configuration
-// entries never reach apply(), so gating on them would hold the record forever.
+// entries never reach apply(), so a gate on them holds the record forever.
 SEASTAR_TEST_CASE(test_raft_batch_record_release_gate) {
     return cl_test([](commitlog& log) -> future<> {
         auto gid = make_group_id();
@@ -660,7 +777,7 @@ SEASTAR_TEST_CASE(test_raft_batch_record_release_gate) {
         std::deque<service::strong_consistency::segment_record> segment_queue;
         service::strong_consistency::account_batch(segment_queue, rg_tid,
                 co_await service::strong_consistency::write_raft_batch(
-                        log, tid, gid, raft::index_t(0), mixed), mixed);
+                        log, tid, gid, raft::index_t(0), raft::term_t(0), mixed), mixed);
         BOOST_REQUIRE_EQUAL(segment_queue.size(), 1);
         auto& record = segment_queue.front();
         BOOST_REQUIRE_EQUAL(record.max_index, raft::index_t(4));
@@ -679,7 +796,7 @@ SEASTAR_TEST_CASE(test_raft_batch_record_release_gate) {
         std::deque<service::strong_consistency::segment_record> queue2;
         service::strong_consistency::account_batch(queue2, rg_tid,
                 co_await service::strong_consistency::write_raft_batch(
-                        log, tid, gid, raft::index_t(4), only_noncmd), only_noncmd);
+                        log, tid, gid, raft::index_t(4), raft::term_t(0), only_noncmd), only_noncmd);
         BOOST_REQUIRE_EQUAL(queue2.size(), 1);
         BOOST_REQUIRE(!queue2.front().last_cmd().has_value());
         BOOST_REQUIRE_EQUAL(queue2.front().max_term(), raft::term_t(2));
@@ -831,7 +948,7 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
             }
             service::strong_consistency::account_batch(segment_queue, rg_tid,
                 co_await service::strong_consistency::write_raft_batch(
-                        log, tid, gid, raft::index_t(0), batch), batch);
+                        log, tid, gid, raft::index_t(0), raft::term_t(0), batch), batch);
         }
 
         for (size_t i = 0; i + 1 < segment_queue.size(); ++i) {
@@ -913,7 +1030,7 @@ SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
             const auto bound = service::strong_consistency::max_single_entry_batch_size(command_size);
 
             const std::vector<raft::log_entry_ptr> plain_batch{plain};
-            commitlog_raft_batch_writer plain_writer(gid, raft::index_t{0}, plain_batch);
+            commitlog_raft_batch_writer plain_writer(gid, raft::index_t{0}, raft::term_t{0}, plain_batch);
             BOOST_REQUIRE_LE(plain_writer.size(), bound);
 
             // The bound is derived from the lease-stamped form, so here it must
@@ -925,7 +1042,7 @@ SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
                             raft::lease_clock::time_point(std::chrono::nanoseconds(lease_earliest_ns)),
                             raft::lease_clock::time_point(std::chrono::nanoseconds(lease_latest_ns))}});
             const std::vector<raft::log_entry_ptr> stamped_batch{stamped};
-            commitlog_raft_batch_writer stamped_writer(gid, raft::index_t{0}, stamped_batch);
+            commitlog_raft_batch_writer stamped_writer(gid, raft::index_t{0}, raft::term_t{0}, stamped_batch);
             BOOST_REQUIRE_EQUAL(stamped_writer.size(), bound);
         }
         co_return;
@@ -934,9 +1051,40 @@ SEASTAR_TEST_CASE(test_max_single_entry_batch_size_bounds_the_writer) {
 
 // Test: a tail larger than one commitlog entry is split into runs that each fit, so a
 // recovered log that no single entry can hold is still rewritten. The tail is
-// bounded by raft_max_log_size, not by max_record_size(), so batches that each
-// fitted when they were written can add up to one that does not - and an
-// oversized rewrite would abort this replay and every one after it.
+// bounded by raft_max_log_size, so batches that each fitted when they were
+// written can add up to a tail that does not, and an oversized rewrite aborts
+// this replay and every later replay.
+// Test: a batch too large for one commitlog entry is split, and every batch written
+// links to the one below it.
+//
+// store_log_entries() re-reads prev_term_for() per batch, so a split run chains the same
+// way an unsplit one does. A wrong link on any batch but the first refuses the next
+// replay, and only a tail spanning two terms shows it.
+SEASTAR_TEST_CASE(test_split_store_log_entries_chains_every_batch) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(std::move(cfg), [](commitlog& log) -> future<> {
+        const auto gid = make_group_id();
+        const auto tid = make_table_id();
+        const auto rg_tid = make_table_id();
+        service::strong_consistency::raft_commitlog rc(gid, log, tid, rg_tid, {});
+        // The group starts above a persisted descriptor, as it does after a restart.
+        rc.seed_floor(raft::index_t(0), raft::term_t(1));
+
+        // 16 x 64KB over two terms, more than one commitlog entry holds.
+        raft::log_entry_ptr_list tail;
+        for (int i = 1; i <= 16; ++i) {
+            tail.push_back(make_command_entry_sized(
+                    raft::term_t(i <= 8 ? 1 : 2), raft::index_t(i), 64 * 1024));
+        }
+        co_await rc.store_log_entries(tail, raft::index_t(0));
+
+        const auto batches = co_await read_raft_batches(log, gid);
+        require_batches_chain(batches, raft::term_t(1));
+        BOOST_REQUIRE_EQUAL(batches.back().entries.back()->idx, raft::index_t(16));
+    });
+}
+
 SEASTAR_TEST_CASE(test_split_raft_batch_keeps_every_batch_writable) {
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
@@ -952,7 +1100,7 @@ SEASTAR_TEST_CASE(test_split_raft_batch_keeps_every_batch_writable) {
         BOOST_REQUIRE_GT(tail.size() * 64 * 1024, log.max_record_size());
 
         const auto batch_ends = service::strong_consistency::split_raft_batch(
-                log, gid, raft::index_t(0), tail);
+                log, gid, raft::index_t(0), raft::term_t(0), tail);
         BOOST_REQUIRE_GT(batch_ends.size(), 1u);
         BOOST_REQUIRE_EQUAL(batch_ends.back(), tail.size());
 
@@ -962,7 +1110,7 @@ SEASTAR_TEST_CASE(test_split_raft_batch_keeps_every_batch_writable) {
             BOOST_REQUIRE_LT(batch_begin, batch_end);
             const raft::log_entry_ptr_list batch(tail.begin() + batch_begin, tail.begin() + batch_end);
             auto handle = co_await service::strong_consistency::write_raft_batch(
-                    log, tid, gid, raft::index_t(0), batch);
+                    log, tid, gid, raft::index_t(0), raft::term_t(0), batch);
             BOOST_REQUIRE(bool(handle));
             batch_begin = batch_end;
         }
@@ -994,7 +1142,7 @@ SEASTAR_TEST_CASE(test_raft_batch_too_large_is_an_internal_error) {
         seastar::testing::scoped_no_abort_on_internal_error no_abort;
         try {
             co_await service::strong_consistency::write_raft_batch(
-                    log, tid, gid, raft::index_t(0), big);
+                    log, tid, gid, raft::index_t(0), raft::term_t(0), big);
             BOOST_FAIL("expected an oversized batch to be rejected");
         } catch (const std::runtime_error& e) {
             // on_internal_error's exception, not the commitlog's invalid_argument.
@@ -1026,7 +1174,7 @@ SEASTAR_TEST_CASE(test_replay_buffer_stop_detaches_unclaimed_records) {
                 next = next + raft::index_t{1};
             }
             auto handle = co_await service::strong_consistency::write_raft_batch(
-                    log, tid, gid, raft::index_t(0), batch);
+                    log, tid, gid, raft::index_t(0), raft::term_t(0), batch);
             service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
         }
         const auto dirty = log.get_num_dirty_segments();
@@ -1064,7 +1212,7 @@ SEASTAR_TEST_CASE(test_replay_buffer_destructor_detaches_unclaimed_records) {
                 next = next + raft::index_t{1};
             }
             auto handle = co_await service::strong_consistency::write_raft_batch(
-                    log, tid, gid, raft::index_t(0), batch);
+                    log, tid, gid, raft::index_t(0), raft::term_t(0), batch);
             service::strong_consistency::account_batch(data.records, rg_tid, std::move(handle), batch);
         }
         const auto dirty = log.get_num_dirty_segments();

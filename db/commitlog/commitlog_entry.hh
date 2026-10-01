@@ -94,12 +94,18 @@ public:
 };
 
 // One raft batch as stored in the commitlog: the group id, the group's commit
-// index at write time, and the entries the batch appended. One commitlog entry,
-// so one position. An oversized batch is rejected; the commitlog would otherwise
-// fragment it across segments.
+// index at write time, the term of the entry the batch follows, and the entries
+// the batch appended. One commitlog entry, so one position. An oversized batch is
+// rejected; the commitlog would otherwise fragment it across segments.
+//
+// prev_term links the batch to the entry below its first index, raft's AppendEntries
+// consistency check applied to the on-disk log: replay refuses a log whose chain is
+// broken by a batch it never read. The term is stored alone. The index is always
+// entries.front()->idx - 1, because a raft log has no holes and a batch is never empty.
 struct raft_commitlog_batch {
     raft::group_id group_id;
     raft::index_t commit_idx;
+    raft::term_t prev_term;
     std::vector<raft::log_entry_ptr> entries;
 };
 
@@ -185,6 +191,7 @@ class commitlog_raft_batch_writer {
 protected:
     raft::group_id _group_id;
     raft::index_t _commit_idx;
+    raft::term_t _prev_term;
     const std::vector<raft::log_entry_ptr>& _entries;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
@@ -194,8 +201,9 @@ protected:
 
 public:
     commitlog_raft_batch_writer(raft::group_id group_id, raft::index_t commit_idx,
-            const std::vector<raft::log_entry_ptr>& entries)
-        : _group_id(group_id), _commit_idx(commit_idx), _entries(entries) { compute_size(); }
+            raft::term_t prev_term, const std::vector<raft::log_entry_ptr>& entries)
+        : _group_id(group_id), _commit_idx(commit_idx), _prev_term(prev_term)
+        , _entries(entries) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -207,6 +215,7 @@ public:
 
     raft::group_id group_id() const { return _group_id; }
     raft::index_t commit_idx() const { return _commit_idx; }
+    raft::term_t prev_term() const { return _prev_term; }
     const std::vector<raft::log_entry_ptr>& entries() const { return _entries; }
 };
 

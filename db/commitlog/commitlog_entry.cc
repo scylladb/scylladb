@@ -48,6 +48,7 @@ inline void commitlog_raft_batch_writer::serialize(Output& out) const {
             .start_item_raft_commitlog_batch()
             .write_group_id(_group_id)
             .write_commit_idx(_commit_idx)
+            .write_prev_term(_prev_term)
             .start_entries();
     for (const auto& entry : _entries) {
         entries.add_entries(entry);
