@@ -24,3 +24,5 @@ extra_scylla_config_options:
     alternator_streams_time_window_s: 0,
     tablets_mode_for_new_keyspaces: enabled
   }
+# test_export.py needs the S3 server that test.py starts.
+object_storage_endpoint_from_env: true

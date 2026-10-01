@@ -12,22 +12,32 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include "alternator/executor.hh"
 #include "schema/schema_fwd.hh"
 #include "service_permit.hh"
 #include "utils/rjson.hh"
 
 namespace s3 { class client; }
 namespace service { class storage_proxy; }
+namespace db { struct alternator_export_row; }
 
 namespace alternator {
+
+// A row of the exports table, as stored (see db/system_distributed_keyspace.hh).
+using export_row = db::alternator_export_row;
 
 // Compression type selection for export/import pipelines.
 // Pass one of these structs to create_sink_pipeline / create_source_pipeline to select compression mode.
@@ -129,7 +139,7 @@ struct in_memory_target_config {
 };
 
 // Configuration for the S3 target of either pipeline. The sink writes the object with
-// `s3::client::make_upload_jumbo_sink`, the source reads it with
+// `s3::client::make_upload_jumbo_sink_and_get_etag`, the source reads it with
 // `s3::client::make_chunked_download_source`; see utils/s3/client.hh for the object size limits.
 // `as`, if set, is handed to the S3 client by both pipelines:
 //  - source: an abort makes `read_all()` fail with an exception; `close()` is still required,
@@ -192,5 +202,82 @@ seastar::future<> export_scan_table(
     seastar::abort_source& as,
     service_permit permit,
     seastar::noncopyable_function<seastar::future<>(rjson::value)> cb);
+
+// Owns the background fibers of S3 export (the export workers and the
+// garbage collector) and their state. The member functions are in export.cc.
+class executor::s3_exports {
+    executor& _e;
+    // Holds the background fibers. stop() closes it, so that all fibers
+    // finish before the executor is destroyed.
+    seastar::gate _gate;
+    // stop() aborts it before it closes _gate, to stop the exports early.
+    seastar::abort_source _as;
+    // The number of export fibers running on this shard, see try_reserve_export_slot().
+    // A fiber of finish_export_in_background() also counts. It holds the slot
+    // of its export until it writes the terminal state. Until then
+    // DescribeExport still reports that export as IN_PROGRESS.
+    size_t _running_exports = 0;
+    // The time of the next garbage collection round. The first value is in the
+    // past, so that the first round does not wait. request_gc_round() moves the
+    // time earlier, run_garbage_collector() sets it after each round.
+    seastar::lowres_clock::time_point _gc_round_at = seastar::lowres_clock::time_point::min();
+    // Waits for `_gc_round_at`, see run_garbage_collector().
+    future<bool> wait_for_next_gc_round();
+    // Asks for a garbage collection round in `delay`, if no earlier round is
+    // due. Only gc_node_down_subscriber calls it.
+    void request_gc_round(seastar::lowres_clock::duration delay);
+    // The gossip subscriber which asks for a round after a node-down event.
+    // Defined in export.cc.
+    class gc_node_down_subscriber;
+public:
+    explicit s3_exports(executor& e) : _e(e) {}
+    // True after stop() aborted the exports, i.e. during a clean shutdown.
+    bool abort_requested() const noexcept { return _as.abort_requested(); }
+    // A reserved slot of the counter above. The fiber holds it while it
+    // runs. The destructor releases the slot.
+    class slot {
+        size_t* _counter;
+        friend class s3_exports;
+        explicit slot(size_t& counter) noexcept : _counter(&counter) { ++*_counter; }
+    public:
+        slot(slot&& other) noexcept : _counter(std::exchange(other._counter, nullptr)) {}
+        ~slot() { if (_counter) { --*_counter; } }
+    };
+    // Reserves an export slot on this shard. Returns nullopt if
+    // alternator_max_concurrent_exports_per_shard exports already run.
+    std::optional<slot> try_reserve_export_slot();
+    // Marks as FAILED the S3 exports that no node runs. It does not resume
+    // exports and does not delete data from S3. An export is collected if its
+    // node:
+    //  - is not a member of the cluster any more (it was removed or
+    //    replaced), or
+    //  - has a gossip generation newer than the export (this includes
+    //    previous incarnations of this node), or
+    //  - is unreachable for a long time (DOWN alone is not sufficient).
+    // A member the gossiper does not know yet counts as running, so its
+    // exports are not collected.
+    // Runs one round at startup, then periodically, until stop(). A node-down
+    // event from the gossiper also starts a round.
+    // executor::start() starts it on shard 0 of each node.
+    future<> run_garbage_collector();
+    // Starts a background fiber that does the export of `row`. The fiber
+    // writes the result to the export row and holds `export_slot` until it
+    // finishes. If that write fails, the fiber passes the row and the slot
+    // to finish_export_in_background().
+    void start_export(slot export_slot, schema_ptr schema, export_row row, std::string table_arn, std::string s3_bucket,
+            std::string s3_prefix);
+    // Starts a background fiber that writes the terminal state of `row`.
+    // It retries until the write succeeds or the node stops. Use it when
+    // that write fails and the caller cannot wait. The garbage collector
+    // does not collect IN_PROGRESS rows of the current incarnation, so
+    // this node must finish them.
+    // The fiber never gives up the write. It keeps `export_slot`, which the
+    // caller must hold for the export of `row`. Thus the number of these
+    // fibers, and of the rows they hold, has the same bound as the number
+    // of exports. A write which keeps failing stops new exports.
+    void finish_export_in_background(slot export_slot, export_row row);
+    // Aborts the fibers above and waits for them to finish.
+    future<> stop();
+};
 
 } // namespace alternator

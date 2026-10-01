@@ -12,18 +12,24 @@
 #include "alternator/executor_util.hh"
 
 #include "bytes.hh"
+#include "cql3/query_options.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
 #include "db_clock.hh"
 #include "db/config.hh"
 #include "db/consistency_level.hh"
+#include "db/consistency_level_type.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/timeout_clock.hh"
+#include "dht/i_partitioner.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
-#include "partition_slice_builder.hh"
+#include "gms/gossiper.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
+#include "locator/host_id.hh"
+#include "locator/token_metadata.hh"
 #include "query/query-request.hh"
-#include "query/query-result-set.hh"
 #include "replica/database.hh"
 #include "schema/schema.hh"
 #include "service_permit.hh"
@@ -31,18 +37,26 @@
 #include "service/pager/paging_state.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
+#include "sstables/object_storage_client.hh"
+#include "sstables/sstables_manager.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/hashers.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/rjson.hh"
 #include "utils/s3/client.hh"
+#include "utils/UUID.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/defer.hh>
@@ -50,7 +64,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <exception>
 #include <limits>
@@ -59,13 +76,192 @@
 #include <stdexcept>
 #include <string_view>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <zlib.h>
+#include <fmt/format.h>
+
+namespace alternator {
+
+// Helper functions for the export to S3 metadata in the system_distributed keyspace.
+// There are two tables:
+// 1) `alternator_export_to_s3_exports` - the key is the export ARN. Has the export metadata
+//    (table id, client token, status, timestamps, etc.).
+// 2) `alternator_export_to_s3_client_tokens` - maps client tokens to export ARNs, with the
+//    original request, for idempotent retries.
+// For the schemas, see db/system_distributed_keyspace.cc.
+// All writes to these tables must use the helper functions, which apply the correct
+// conditions. db::alternator_export_table_helper does the CQL. The functions below only
+// convert the rows.
+
+// Identifies one incarnation of a node: host_id and gossip generation. The value changes
+// after a restart (the gossip generation increases). The export and the garbage collector
+// use this.
+// The `node_id` columns store it as "{host_id}:{gossip_generation}".
+// A default value (a null host_id) means "no node".
+struct live_node_identifier {
+    locator::host_id host_id;
+    std::uint32_t gossip_generation = 0;
+
+    sstring to_string() const {
+        if (!host_id) {
+            return sstring();
+        }
+        return fmt::format("{}:{}", host_id, gossip_generation);
+    }
+
+    // Parses the value of to_string(). Returns a default value for empty or incorrect input.
+    static live_node_identifier from_string(std::string_view str);
+
+    auto operator<=>(const live_node_identifier&) const = default;
+};
+
+// The rows are used as stored (export_row is in alternator/export.hh): the `node_id` member
+// stays the text of a live_node_identifier, which we parse only to compare it.
+using client_row = db::alternator_export_table_helper::client_token_row;
+
+} // namespace alternator
+
+template <> struct fmt::formatter<alternator::live_node_identifier> : fmt::formatter<string_view> {
+    auto format(const alternator::live_node_identifier& id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.to_string());
+    }
+};
 
 namespace alternator {
 
 static logging::logger xlogger("alternator-export");
+
+// TTL of export rows. Each write of a row sets it (see insert_export() below).
+// DynamoDB keeps the export history (DescribeExport / ListExports) for 90 days.
+static constexpr std::chrono::seconds export_row_ttl = std::chrono::days(90);
+
+live_node_identifier live_node_identifier::from_string(std::string_view str) {
+    if (str.empty()) {
+        return live_node_identifier{};
+    }
+    auto pos = str.rfind(':');
+    if (pos == std::string_view::npos || pos == 0) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    std::uint32_t generation = 0;
+    auto gen_str = str.substr(pos + 1);
+    auto [ptr, ec] = std::from_chars(gen_str.data(), gen_str.data() + gen_str.size(), generation);
+    if (ec != std::errc() || ptr != gen_str.data() + gen_str.size()) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    locator::host_id host_id;
+    try {
+        host_id = locator::host_id(utils::UUID(str.substr(0, pos)));
+    } catch (...) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    return live_node_identifier{ .host_id = host_id, .gossip_generation = generation };
+}
+
+
+// Returns nullopt if it inserted the row, and the existing row if a row with the same ARN is
+// already there.
+static future<std::optional<export_row>> insert_export(db::system_distributed_keyspace& sdks, const export_row& row) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    // Set the TTL on insert. update_export() cannot change the row marker, so a row inserted
+    // without a TTL does not expire.
+    co_return co_await helper.insert_export(row, export_row_ttl);
+}
+
+static future<bool> update_export(db::system_distributed_keyspace& sdks, const export_row& row, const sstring& old_export_status,
+        const sstring& old_node_id, std::chrono::seconds ttl) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await helper.update_export(row, old_export_status, old_node_id, ttl);
+}
+
+// One attempt of write_final_export_row(). The conditional update fails if there is no row
+// (the export can fail before the row is written). Then we insert the row. If the insert
+// fails, a row exists that we must not overwrite.
+static future<bool> try_write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row) {
+    // Tests fail this write, to reach finish_export_in_background().
+    utils::get_local_injector().inject("alternator_export_to_s3_final_write",
+            [] { throw std::runtime_error("injected failure alternator_export_to_s3_final_write"); });
+    if (co_await update_export(sdks, row, "IN_PROGRESS", row.node_id, export_row_ttl)) {
+        co_return true;
+    }
+    co_return !co_await insert_export(sdks, row);
+}
+
+// Writes the terminal state (COMPLETED / FAILED) of an `IN_PROGRESS` export row of this node.
+// Retries while the write throws. Each attempt is conditional (a write that timed out can still
+// apply).
+// We must not stop retrying: the garbage collector does not collect rows of a node that can
+// still run them (see `running_node_ids`). Without this write, the row stays `IN_PROGRESS`
+// until the node restarts or the TTL expires.
+// Returns false if the row is not IN_PROGRESS under this node: the garbage collector took it, or
+// an earlier attempt that timed out applied.
+// Throws if `as` is aborted (the node stops). Then the garbage collector of the next
+// incarnation collects the row.
+// The retries can take long, so only the fiber of finish_export_in_background() uses this. A
+// caller that cannot wait writes with try_write_final_export_row() and hands the retries to
+// that fiber.
+static future<bool> write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row, abort_source& as) {
+    constexpr std::chrono::seconds first_retry_delay{1};
+    constexpr std::chrono::seconds max_retry_delay{60};
+    for (auto delay = first_retry_delay; ; delay = std::min(delay * 2, max_retry_delay)) {
+        try {
+            co_return co_await try_write_final_export_row(sdks, row);
+        } catch (...) {
+            xlogger.warn("Export {}: failed to write the final state {}, retrying in {}s: {}",
+                    row.export_arn, row.export_status, delay.count(), std::current_exception());
+        }
+        co_await seastar::sleep_abortable(delay, as);
+    }
+}
+
+// `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
+// RequestLimitExceeded, so that the client retries (the same as
+// create_api_error_from_coordinators_exception() does for data tables).
+// The reads below convert errors for all callers. Only the garbage collector reads the client
+// tokens, and it calls the helper directly, thus that read does not convert the errors. For
+// writes, the request path converts the errors. Background fibers retry all errors.
+template <typename T>
+static future<T> translate_coordinator_errors(future<T> f) {
+    try {
+        co_return co_await std::move(f);
+    } catch (const exceptions::rate_limit_exception& e) {
+        throw api_error::request_limit_exceeded(e.what());
+    } catch (const exceptions::overloaded_exception& e) {
+        throw api_error::request_limit_exceeded(e.what());
+    }
+}
+
+// `qs` is the query state of the client request. Background fibers give null, and the read
+// uses the internal query state.
+static future<std::optional<client_row>> get_client_row(db::system_distributed_keyspace& sdks, const sstring& client_token,
+        service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_client_token(client_token, qs));
+}
+
+static future<std::optional<export_row>> get_export(db::system_distributed_keyspace& sdks, const sstring& export_arn,
+        service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_export(export_arn, qs));
+}
+
+// The export columns that ListExports and the garbage collector use. ExportType comes from
+// `request`.
+using export_summary_row = db::alternator_export_table_helper::export_summary_row;
+
+// Returns all exports, in no specified order. If set, `as` aborts the scan.
+static future<utils::chunked_vector<export_summary_row>> get_all_exports(db::system_distributed_keyspace& sdks,
+        const abort_source* as = nullptr, service::query_state* qs = nullptr) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    co_return co_await translate_coordinator_errors(helper.get_all_exports(as, qs));
+}
 
 // Interfaces for `sink` / `source` pipelines.
 // The `sink` pipeline consists of 3 stages:
@@ -912,6 +1108,620 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
     }
 }
 
+// --- Export orchestration helpers ---
+
+// The configured S3 endpoints. The configuration does not map buckets to endpoints. Thus an
+// export to S3 needs exactly one S3 endpoint in object_storage_endpoints, and uses it for all
+// buckets.
+static std::vector<sstring> s3_endpoints(service::storage_proxy& proxy) {
+    return proxy.local_db().get_user_sstables_manager().endpoints(db::object_storage_endpoint_param::s3_type);
+}
+
+// Gets an S3 client for the bucket.
+static seastar::shared_ptr<s3::client> get_s3_client(service::storage_proxy& proxy, std::string_view bucket_name) {
+    auto& sstm = proxy.local_db().get_user_sstables_manager();
+    auto endpoints = s3_endpoints(proxy);
+    if (endpoints.size() != 1) {
+        throw std::runtime_error(fmt::format("S3 client not configured for bucket '{}': expected exactly one S3 endpoint in object_storage_endpoints, found {}",
+                bucket_name, endpoints.size()));
+    }
+    auto client = sstables::get_s3_client(sstm.get_endpoint_client(endpoints.front()));
+    if (!client) {
+        on_internal_error(xlogger, fmt::format("object storage endpoint {} is not an S3 endpoint", endpoints.front()));
+    }
+    return client;
+}
+
+// Returns the identifier of this node incarnation (host_id + gossip_generation).
+// Returns nullopt if the gossiper has no state for this node (before gossip starts or after
+// this node announced its shutdown).
+static std::optional<live_node_identifier> get_self_node_id(gms::gossiper& gossiper) {
+    auto host_id = gossiper.my_host_id();
+    auto ep_state = gossiper.get_this_endpoint_state_ptr();
+    if (!ep_state) {
+        return std::nullopt;
+    }
+    auto generation = ep_state->get_heart_beat_state().get_generation();
+    return live_node_identifier{ .host_id = host_id, .gossip_generation = std::uint32_t(generation.value()) };
+}
+
+// The time a node must be unreachable before the garbage collector can take its exports.
+// DOWN is not sufficient: after a reactor stall or a network partition, the node can continue
+// the export and write to S3 after we marked it FAILED. A dead node does not come back with
+// the same incarnation, so a long timeout only delays the cleanup.
+static std::chrono::seconds node_unreachable_timeout() {
+    // A test makes the timeout short, to collect the exports of a node which stays down.
+    if (auto s = utils::get_local_injector().inject_parameter<std::uint32_t>("alternator_export_to_s3_node_unreachable_timeout_s")) {
+        return std::chrono::seconds(*s);
+    }
+    return std::chrono::hours(1);
+}
+
+// The nodes that can still run an export.
+struct running_node_ids {
+    // The gossip generation of each node that can still run an export: the nodes the gossiper
+    // knows, except those unreachable for longer than `node_unreachable_timeout()`, and the
+    // cluster members the gossiper does not know (see get_running_nodes()). A node that is not
+    // here cannot run an export.
+    // The generation is 0 if we do not know the incarnation: at restart, a node loads its peers
+    // from system.peers with generation 0 (see gms::gossiper::add_saved_endpoint()), and a
+    // member which the gossiper does not know has no incarnation at all. 0 is not higher than
+    // the generation of any row, so such a node always counts as running. A node from
+    // system.peers is also unreachable from the start, so the timeout applies to it too.
+    std::unordered_map<locator::host_id, std::uint32_t> generations;
+
+    // Returns true if `node_id` can still run an export. Also returns true for "no node" (a
+    // missing or incorrect `node_id`), because we cannot know if that row is orphaned. Thus the
+    // garbage collector does not change such a row, and the row stays until its TTL removes it.
+    // This is also true for a client token row: if the row has no export row, a retry with its
+    // ClientToken gets IN_PROGRESS for the 8 hours of the client token TTL. Only a corrupt write
+    // makes such a row, because this node always writes a correct `node_id`.
+    bool may_be_running(const live_node_identifier& node_id) const {
+        if (!node_id.host_id) {
+            return true;
+        }
+        auto it = generations.find(node_id.host_id);
+        if (it == generations.end()) {
+            // The node is unreachable for longer than `node_unreachable_timeout()`, or it is not
+            // a member of the cluster any more (it was removed or replaced).
+            return false;
+        }
+        // Only a higher generation shows that the node restarted. A lower generation can be
+        // old gossip state or the placeholder 0, so the writer can still run.
+        return it->second <= node_id.gossip_generation;
+    }
+};
+
+// Returns the nodes that can still run an export, see running_node_ids.
+static running_node_ids get_running_nodes(gms::gossiper& gossiper, const locator::token_metadata& tm) {
+    running_node_ids result;
+    auto timeout = std::chrono::duration_cast<std::chrono::microseconds>(node_unreachable_timeout()).count();
+    // The callback must not yield.
+    gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& ep_state) {
+        auto host_id = ep_state.get_host_id();
+        // get_endpoint_downtime() reports microseconds, and 0 for a node which is up.
+        if (gossiper.get_endpoint_downtime(host_id) > timeout) {
+            return;
+        }
+        auto generation = ep_state.get_heart_beat_state().get_generation();
+        result.generations.emplace(host_id, std::uint32_t(std::max<std::int32_t>(generation.value(), 0)));
+    });
+    // A node for which the gossiper has no state at all is not necessarily dead: the gossip view
+    // of this node can still be incomplete, for example in the first round after this node
+    // joined. Such a node has no downtime either, so `node_unreachable_timeout()` would never hold
+    // the round back. Thus, add every cluster member which the gossiper does not know, with the
+    // generation 0 of an unknown incarnation. A node which is not a member any more (it was
+    // removed or replaced) stays out, so the round still takes its exports.
+    for (const auto& host_id : tm.get_host_ids()) {
+        if (!gossiper.get_endpoint_state_ptr(host_id)) {
+            result.generations.emplace(host_id, 0);
+        }
+    }
+    return result;
+}
+
+// Generates a unique export id in the DynamoDB format, see is_valid_export_id().
+static sstring generate_export_id(db_clock::time_point accepted_at) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(accepted_at.time_since_epoch()).count();
+    return fmt::format("{:014d}-{:08x}", epoch_millis, std::uint32_t(rng()));
+}
+
+// An export ARN is a table ARN, `/export/` and the export id. Expected format:
+// arn:scylla:alternator:<keyspace>:scylla:table/<name>/export/<id>, or AWS format:
+// arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>.
+static constexpr std::string_view export_arn_infix = "/export/";
+
+// Returns the table ARN and the export id of an export ARN, or nullopt if there is no `/export/`.
+static std::optional<std::pair<std::string_view, std::string_view>> split_export_arn(std::string_view export_arn) {
+    auto pos = export_arn.find(export_arn_infix);
+    if (pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    return std::pair{export_arn.substr(0, pos), export_arn.substr(pos + export_arn_infix.size())};
+}
+
+// A DynamoDB export id is the start time in milliseconds since the epoch (14 digits), a dash,
+// and 8 hex digits (e.g. `01695353076000-06e2188f`). DynamoDB returns ValidationException for
+// an id with a different format. generate_export_id() uses the same format.
+static bool is_valid_export_id(std::string_view export_id) {
+    static constexpr size_t digit_count = 14;
+    static constexpr size_t hex_digit_count = 8;
+    if (export_id.size() != digit_count + 1 + hex_digit_count || export_id[digit_count] != '-') {
+        return false;
+    }
+    auto is_digit = [] (char c) { return c >= '0' && c <= '9'; };
+    auto is_hex_digit = [&] (char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+    return std::ranges::all_of(export_id.substr(0, digit_count), is_digit)
+            && std::ranges::all_of(export_id.substr(digit_count + 1), is_hex_digit);
+}
+
+// Returns the accept time of an export from the export id in its ARN (see
+// generate_export_id()). If the export row is missing, the ARN is the only record of this
+// time. Returns nullopt if the ARN has no valid export id.
+static std::optional<db_clock::time_point> accept_time_from_export_arn(std::string_view export_arn) {
+    auto split = split_export_arn(export_arn);
+    if (!split) {
+        return std::nullopt;
+    }
+    auto export_id = split->second;
+    if (!is_valid_export_id(export_id)) {
+        return std::nullopt;
+    }
+    // is_valid_export_id() checked the 14 digits, so this cannot fail.
+    std::int64_t epoch_millis = 0;
+    std::from_chars(export_id.data(), export_id.data() + export_id.find('-'), epoch_millis);
+    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(
+            std::chrono::milliseconds(epoch_millis)));
+}
+
+// Returns the time of the export data: the ExportTime of the request, or the accept time if
+// the request has no ExportTime. We validated the request when we accepted it. If ExportTime
+// is not a number (a corrupt row), we use the accept time.
+static db_clock::time_point export_time_of_request(const rjson::value& request, db_clock::time_point accepted_at) {
+    const rjson::value* export_time = rjson::find(request, "ExportTime");
+    if (!export_time || !export_time->IsNumber()) {
+        return accepted_at;
+    }
+    // DynamoDB rounds ExportTime to the nearest millisecond, which is the db_clock precision.
+    return db_clock::time_point(std::chrono::round<db_clock::duration>(
+            std::chrono::duration<double>(export_time->GetDouble())));
+}
+
+// Returns true if the status is final.
+static bool is_terminal_status(std::string_view export_status) {
+    return export_status == "COMPLETED" || export_status == "FAILED";
+}
+
+// DynamoDB has only IN_PROGRESS, COMPLETED and FAILED. We report any other stored status
+// as IN_PROGRESS.
+static rjson::value reported_status(std::string_view export_status) {
+    return rjson::from_string(is_terminal_status(export_status) ? export_status : "IN_PROGRESS");
+}
+
+// Builds the ExportDescription of an export row for DescribeExport and ExportTableToPointInTime.
+static rjson::value build_export_description_response(const export_row& exp) {
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(exp.export_arn));
+    rjson::add(export_desc, "ExportStatus", reported_status(exp.export_status));
+    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp.accepted_at)));
+
+    // Copy these fields from the original request (ExportFormat has a default). We validated the
+    // request when we accepted it, so a parse error is a corrupt row, not a caller error.
+    try {
+        auto exported_request = rjson::parse(exp.request);
+        rjson::add(export_desc, "TableArn", rjson::copy(rjson::get(exported_request, "TableArn")));
+        rjson::add(export_desc, "S3Bucket", rjson::copy(rjson::get(exported_request, "S3Bucket")));
+        if (const rjson::value* s3_prefix = rjson::find(exported_request, "S3Prefix")) {
+            rjson::add(export_desc, "S3Prefix", rjson::copy(*s3_prefix));
+        }
+        const rjson::value* export_format = rjson::find(exported_request, "ExportFormat");
+        rjson::add(export_desc, "ExportFormat", export_format ? rjson::copy(*export_format) : rjson::from_string("DYNAMODB_JSON"));
+        if (const rjson::value* export_type = rjson::find(exported_request, "ExportType")) {
+            rjson::add(export_desc, "ExportType", rjson::copy(*export_type));
+        }
+    } catch (const rjson::error& e) {
+        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", exp.export_arn, e.what()));
+    }
+
+    // TableId is the id of the exported table (a name can be reused, an id cannot). The garbage
+    // collector writes a nil id if it cannot find the table. Then we do not report TableId.
+    if (exp.table_id) {
+        rjson::add(export_desc, "TableId", rjson::from_string(exp.table_id.to_sstring()));
+    }
+    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp.export_time)));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp.client_token));
+
+    // These fields are set only when the export finishes.
+    if (exp.export_manifest) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp.export_manifest));
+    }
+    if (exp.failure_code) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp.failure_code));
+    }
+    if (exp.failure_message) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp.failure_message));
+    }
+    if (exp.item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp.item_count));
+    }
+    if (exp.billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp.billed_size_bytes));
+    }
+    if (exp.completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp.completed_at)));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    return response;
+}
+
+// Returns the FAILED export row for a client token row whose node stopped between its two
+// writes. Uses the times of the original request (the accept time from the ARN and the
+// ExportTime of the request), not the time of this round.
+static export_row failed_row_for_orphaned_client_token(service::storage_proxy& proxy, const client_row& ct,
+        const live_node_identifier& self_node_id) {
+    // Parse the user request of the client token row.
+    rjson::value request;
+    sstring stored_request = ct.request;
+    try {
+        request = rjson::parse(ct.request);
+    } catch (...) {
+        xlogger.debug("Failed to parse request from client token row {}: {}", ct.client_token, ct.request);
+        // This does not occur in normal operation. Make a replacement request and store
+        // it, so that DescribeExport can describe the FAILED export.
+        request = rjson::empty_object();
+        // Do not use a default view: rjson::from_string() throws if data() is null.
+        auto split = split_export_arn(ct.export_arn);
+        std::string_view table_arn = split ? split->first : "";
+        // The export description requires TableArn and S3Bucket, so always set them.
+        rjson::add(request, "TableArn", rjson::from_string(table_arn));
+        rjson::add(request, "S3Bucket", rjson::from_string(""));
+        stored_request = sstring(rjson::print(request));
+    }
+
+    // The client token row has no table id, so find the table. If the table was dropped,
+    // the id stays nil.
+    ::table_id table_id;
+    try {
+        const rjson::value* table_arn = rjson::find(request, "TableArn");
+        if (table_arn && table_arn->IsString()) {
+            auto parts = parse_arn(rjson::to_string_view(*table_arn), "TableArn", "table", "");
+            if (auto table = proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+                table_id = table->schema()->id();
+            }
+        }
+    } catch (...) {
+        xlogger.debug("Failed to find the table of client token row {}: {}", ct.client_token, std::current_exception());
+    }
+
+    auto now = db_clock::now();
+    auto accepted_at = accept_time_from_export_arn(ct.export_arn).value_or(now);
+    return export_row{
+        .export_arn = ct.export_arn,
+        .client_token = ct.client_token,
+        .request = std::move(stored_request),
+        .table_id = table_id,
+        .export_status = "FAILED",
+        .failure_code = "NodeFailure",
+        .failure_message = "The node that initiated the export has failed before the export could start.",
+        .export_id_token = "",
+        .export_time = export_time_of_request(request, accepted_at),
+        .accepted_at = accepted_at,
+        .completed_at = now,
+        .node_id = self_node_id.to_string(),
+    };
+}
+
+// Marks as FAILED the export row `exp` of a node which cannot run it. `exp` must be the full
+// row, because the conditional write sets all non-key columns.
+// Does nothing if the row changed since the caller read it: a different node took the export, or
+// the export finished.
+static future<> collect_export_row(db::system_distributed_keyspace& sdks, const running_node_ids& running_nodes,
+        const live_node_identifier& self_node_id, const export_row& exp) {
+    auto exp_node_id = live_node_identifier::from_string(exp.node_id);
+    if (running_nodes.may_be_running(exp_node_id) || is_terminal_status(exp.export_status)) {
+        xlogger.debug("Export row {} is of node {} in status {}, skipping", exp.export_arn, exp_node_id, exp.export_status);
+        co_return;
+    }
+
+    // One conditional write takes the row and finishes it. The condition on the pair
+    // (export_status, node_id) lets only one collector apply the write. We do not delete
+    // the data that the dead node wrote to S3. A failed export never deletes its data.
+    // The user must clean it up.
+    // The write must set the TTL too: it writes all non-key columns.
+    xlogger.debug("Marking export row {} as FAILED", exp.export_arn);
+    auto failed_export_row = exp;
+    failed_export_row.export_status = "FAILED";
+    failed_export_row.node_id = self_node_id.to_string();
+    failed_export_row.failure_code = "NodeFailure";
+    failed_export_row.failure_message = "The node that was performing the export has failed before the export could finish.";
+    failed_export_row.completed_at = db_clock::now();
+    if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id, export_row_ttl)) {
+        // A different node took the row first. Skip it.
+        xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", exp.export_arn);
+    }
+}
+
+// Does one garbage collection round for S3 exports.
+// A round can take a long time, thus it checks `as` between rows, so that stop() does not wait
+// for the full round. A later round (of this node or of a different node) collects the
+// remaining rows.
+static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::system_distributed_keyspace& sdks,
+        gms::gossiper& gossiper, abort_source& as) {
+    // This is maintenance work, the same as the export. Use the same scheduling group.
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+
+    // To take a row, we write the identifier of this node, so we need gossip state. If there is
+    // no gossip state, fail the round (do not return). Then the retry is after
+    // `s3_exports_gc_retry_period`, not after `s3_exports_gc_period`. Gossip usually starts
+    // soon, and a single-node cluster has no other collector. Check this before the scans.
+    auto self_node_id_opt = get_self_node_id(gossiper);
+    if (!self_node_id_opt) {
+        throw std::runtime_error("this node has no gossip state, so it can't take over the exports of dead nodes");
+    }
+    auto self_node_id = std::move(*self_node_id_opt);
+
+    db::alternator_export_table_helper helper(sdks.qp());
+    auto client_tokens = co_await helper.get_all_client_tokens(&as);
+    auto exports = co_await get_all_exports(sdks, &as);
+    // We can take a row if its node is not in `running_nodes` (see `node_unreachable_timeout()`).
+    // Rows of previous incarnations of this node are always taken, because the current
+    // generation of this node is higher.
+    auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr());
+
+    xlogger.debug("Garbage collection: {} client tokens, {} exports, {} nodes which may be running an export, self node_id={}",
+        client_tokens.size(), exports.size(), running_nodes.generations.size(), self_node_id);
+
+    // The ARNs of the export rows of all owners. A collector does not rewrite the `node_id` of a
+    // client token row, so the export row of a dead node's token can belong to a live node now.
+    auto existing_export_arns = exports | std::views::transform(&export_summary_row::export_arn)
+            | std::ranges::to<std::unordered_set<std::string_view>>();
+
+    // We catch errors for each row and continue with the next row. If one bad row stopped the
+    // round, each round would stop at the same row, and the loop over the export rows below
+    // would never run.
+    size_t uncollected_rows = 0;
+
+    for (auto& ct : client_tokens) {
+        as.check();
+        // Most rows do not await, so yield here.
+        co_await coroutine::maybe_yield();
+        // Skip a client token row of a node that can still run.
+        if (running_nodes.may_be_running(live_node_identifier::from_string(ct.node_id))) {
+            continue;
+        }
+
+        if (!existing_export_arns.contains(ct.export_arn)) {
+            // The node stopped between its two writes. Write a FAILED export row for the token ARN.
+            xlogger.debug("Client token row {} of dead node {} has no export row {}, creating a FAILED export row",
+                    ct.client_token, ct.node_id, ct.export_arn);
+            try {
+                auto existing = co_await insert_export(sdks, failed_row_for_orphaned_client_token(proxy, ct, self_node_id));
+                if (existing) {
+                    // The scan did not see the row, but the insert did. A Paxos round of the dead
+                    // node had accepted the row without a commit, and our insert completed that
+                    // round. The loop below uses the scan, thus it does not collect the row.
+                    // Collect it here.
+                    xlogger.info("Export row {} of client token {} appeared after the scan, collecting it",
+                            ct.export_arn, ct.client_token);
+                    co_await collect_export_row(sdks, running_nodes, self_node_id, *existing);
+                }
+            } catch (...) {
+                xlogger.warn("Failed to create the FAILED export row {} of client token {}: {}",
+                        ct.export_arn, ct.client_token, std::current_exception());
+                ++uncollected_rows;
+            }
+        }
+    }
+
+    for (auto& summary : exports) {
+        as.check();
+        co_await coroutine::maybe_yield();
+        // Collect only rows of nodes that cannot run.
+        auto node_id = live_node_identifier::from_string(summary.node_id.value_or(sstring()));
+        if (running_nodes.may_be_running(node_id)) {
+            continue;
+        }
+        auto status = summary.status.value_or(sstring());
+        if (is_terminal_status(status)) {
+            // The export is finished. Nothing to collect.
+            xlogger.debug("Export row {} is already in terminal state {}, skipping", summary.export_arn, status);
+            continue;
+        }
+        xlogger.debug("Collecting export row {} of node {} in state {}", summary.export_arn, node_id, status);
+
+        try {
+            // The scan read only some columns. update_export() writes the full row, so read it.
+            auto row = co_await get_export(sdks, summary.export_arn);
+            if (!row) {
+                // The row expired in the meantime.
+                continue;
+            }
+            // collect_export_row() checks the owner and the status again. A different node can
+            // have taken the export after the scan.
+            co_await collect_export_row(sdks, running_nodes, self_node_id, *row);
+        } catch (...) {
+            // Same as the loop above: a later round collects this row.
+            xlogger.warn("Failed to collect export row {} of node {}: {}",
+                    summary.export_arn, node_id, std::current_exception());
+            ++uncollected_rows;
+        }
+    }
+
+    // If some rows were not collected, fail the round, so that the retry is sooner than
+    // `s3_exports_gc_period` (with backoff, see `s3_exports_gc_max_retry_period`). On abort,
+    // throw the abort exception, so that the collector stops.
+    as.check();
+    if (uncollected_rows) {
+        throw std::runtime_error(fmt::format("could not collect {} row(s)", uncollected_rows));
+    }
+    xlogger.debug("Garbage collection: finished");
+}
+
+static constexpr std::chrono::hours s3_exports_gc_period{4};
+
+// The delay before the first retry of a failed garbage collection round. A round can fail at
+// start-up (no gossip, or system_distributed is not available), and the exports of the previous
+// incarnation stay IN_PROGRESS until a round succeeds.
+static constexpr std::chrono::minutes s3_exports_gc_retry_period{1};
+
+// The maximum retry delay of a failed garbage collection round. The delay doubles after each
+// failure, up to this value, so that a lasting problem (for example, a partition that stays
+// unavailable) does not keep the collector retrying every minute. A successful round resets
+// the delay to `s3_exports_gc_retry_period`.
+static constexpr std::chrono::minutes s3_exports_gc_max_retry_period = s3_exports_gc_period;
+
+// Error injection that lets tests start the next garbage collection round. When enabled, the
+// garbage collector waits for a message, not for `s3_exports_gc_period`.
+static constexpr std::string_view s3_exports_gc_wakeup_injection = "alternator_export_to_s3_gc_wakeup";
+// Error injection entered after each round that `s3_exports_gc_wakeup_injection` started. Tests
+// use its enter count (`/v2/error_injection/injection/{injection}/enters`) to wait for the
+// round. Enable both injections: without the wakeup injection, the count does not increase.
+static constexpr std::string_view s3_exports_gc_finished_injection = "alternator_export_to_s3_gc_finished";
+
+// The collector sleeps in steps of this length, and looks at `_gc_round_at` after each step.
+// A gossip event can move the next round earlier, see request_gc_round().
+static constexpr std::chrono::minutes s3_exports_gc_poll_period{1};
+
+void executor::s3_exports::request_gc_round(lowres_clock::duration delay) {
+    _gc_round_at = std::min(_gc_round_at, lowres_clock::now() + delay);
+}
+
+// Waits for the time of the next garbage collection round of S3 exports (`_gc_round_at`). If the
+// wakeup error injection is enabled, waits for its message instead.
+// Returns true if error injection started the round (a test), false otherwise.
+future<bool> executor::s3_exports::wait_for_next_gc_round() {
+    auto& injector = utils::get_local_injector();
+    for (;;) {
+        if (injector.is_enabled(s3_exports_gc_wakeup_injection)) {
+            // Messages are not shared, so each message starts one round. A message sent
+            // before the wait is not lost.
+            co_await injector.inject(s3_exports_gc_wakeup_injection,
+                    utils::wait_for_message(s3_exports_gc_period, &_as), false);
+            co_return true;
+        }
+        auto now = lowres_clock::now();
+        if (now >= _gc_round_at) {
+            co_return false;
+        }
+        lowres_clock::duration step = std::min<lowres_clock::duration>(_gc_round_at - now, s3_exports_gc_poll_period);
+        // A sleeping collector must also see when a test enables `s3_exports_gc_wakeup_injection`.
+        // Thus, with error injection, sleep in 1 second steps.
+        if constexpr (std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+            step = std::min<lowres_clock::duration>(step, std::chrono::seconds(1));
+        }
+        co_await seastar::sleep_abortable(step, _as);
+    }
+}
+
+// Asks for a garbage collection round after a node died or left the cluster. The design of the
+// export asks for a round on each node-down event. The round does not start immediately: the
+// collector takes an export only after its node was unreachable for `node_unreachable_timeout()`.
+// Thus a round before that time takes nothing. The round starts one second later, because the
+// collector compares the downtime with the timeout. A round can take the exports of a removed
+// node immediately, but the delay is the same. The delay also gives the token metadata of this
+// node sufficient time to show the removal.
+// Without these rounds, the exports of a node which stays down stay IN_PROGRESS until the next
+// periodic round, a maximum of `s3_exports_gc_period` later. The rounds of all nodes can start
+// at the same time. This is safe: a round reads only the IN_PROGRESS rows, and the conditional
+// write prevents a second collection.
+class executor::s3_exports::gc_node_down_subscriber : public gms::i_endpoint_state_change_subscriber {
+    executor::s3_exports& _s3_exports;
+    void request_round() {
+        _s3_exports.request_gc_round(node_unreachable_timeout() + std::chrono::seconds(1));
+    }
+public:
+    explicit gc_node_down_subscriber(executor::s3_exports& owner) noexcept : _s3_exports(owner) {}
+    future<> on_dead(gms::inet_address, locator::host_id, gms::endpoint_state_ptr, gms::permit_id) override {
+        request_round();
+        return make_ready_future<>();
+    }
+    future<> on_remove(gms::inet_address, locator::host_id, gms::permit_id) override {
+        request_round();
+        return make_ready_future<>();
+    }
+};
+
+future<> executor::s3_exports::stop() {
+    _as.request_abort();
+    co_await _gate.close();
+}
+
+future<> executor::s3_exports::run_garbage_collector() {
+    auto holder = _gate.try_hold();
+    if (!holder) {
+        // The executor is stopping.
+        co_return;
+    }
+    // A node-down event asks for a round, see gc_node_down_subscriber.
+    auto subscriber = seastar::make_shared<gc_node_down_subscriber>(*this);
+    _e._gossiper.register_(subscriber);
+    // The delay of the next retry, see `s3_exports_gc_max_retry_period`.
+    std::chrono::minutes retry_period = s3_exports_gc_retry_period;
+    // `_gc_round_at` is in the past, thus the first round does not wait.
+    while (!_as.abort_requested()) {
+        try {
+            auto triggered_by_injection = co_await wait_for_next_gc_round();
+            auto notify = defer([triggered_by_injection] () noexcept {
+                if (triggered_by_injection) {
+                    utils::get_local_injector().enter(s3_exports_gc_finished_injection);
+                }
+            });
+            // An event during the round must ask for the round after this one.
+            _gc_round_at = lowres_clock::time_point::max();
+            co_await garbage_collect_s3_exports(_e._proxy, _e._sdks, _e._gossiper, _as);
+            request_gc_round(s3_exports_gc_period);
+            retry_period = s3_exports_gc_retry_period;
+        } catch (const abort_requested_exception&) {
+            break;
+        } catch (...) {
+            xlogger.warn("Garbage collection of S3 exports failed: {}", std::current_exception());
+            // The round can also fail before it set `_gc_round_at`, thus set it here too.
+            _gc_round_at = lowres_clock::time_point::max();
+            request_gc_round(retry_period);
+            retry_period = std::min(retry_period * 2, s3_exports_gc_max_retry_period);
+        }
+    }
+    co_await _e._gossiper.unregister_(subscriber);
+}
+
+static bool is_ascii_alnum(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The bucket and the prefix of a request become part of the path of the S3 requests of the export
+// (see `s3_object_name()`), and the HTTP client sends that path as it is, without any encoding.
+// Thus a character with a meaning in a request line - a space, a CR or a LF - would let a request
+// change the requests which the export sends to S3, so we accept only characters which cannot.
+// For the bucket, these are the characters and the length which DynamoDB accepts. DynamoDB also
+// requires a letter or a digit as the first and the last character, so we require it too.
+static bool is_valid_s3_bucket_name(std::string_view bucket) {
+    return bucket.size() >= 3 && bucket.size() <= 255
+            && is_ascii_alnum(bucket.front()) && is_ascii_alnum(bucket.back())
+            && std::ranges::all_of(bucket, [] (char c) {
+        return is_ascii_alnum(c) || c == '.' || c == '-' || c == '_';
+    });
+}
+
+// DynamoDB accepts any S3 key as a prefix, but for the reason above we accept only the characters
+// which S3 documents as safe in a key name (see docs/alternator/compatibility.md).
+// The length limit is the one of DynamoDB, which is also the longest key S3 accepts (the export
+// appends to the prefix, so a prefix close to the limit cannot work, but that is for S3 to say).
+static bool is_valid_s3_prefix(std::string_view prefix) {
+    static constexpr std::string_view other_safe_characters = "/!-_.*'()";
+    return prefix.size() <= 1024 && std::ranges::all_of(prefix, [] (char c) {
+        return is_ascii_alnum(c) || other_safe_characters.find(c) != std::string_view::npos;
+    });
+}
+
+// The failure code and the failure message of an export which a clean shutdown of its node
+// stopped. Only s3_exports::stop() aborts the export fibers, thus an abort is a shutdown.
+static constexpr std::string_view node_shutdown_failure_code = "NodeShutdown";
+static constexpr std::string_view node_shutdown_failure_message =
+        "The node that was performing the export was shut down before the export could finish.";
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -933,14 +1743,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
     }
 
+    // A retry with a known ClientToken does not need the source table. We refuse a missing table
+    // below, only if we start a new export.
     schema_ptr schema;
     try {
         schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
     } catch (const data_dictionary::no_such_column_family&) {
-        co_return api_error::table_not_found(
-                fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
+        // `schema` stays null. We refuse the request below, if it is not a retry.
     }
-    get_stats_from_schema(_proxy, *schema)->api_operations.export_table_to_point_in_time++;
+    if (schema) {
+        get_stats_from_schema(_proxy, *schema)->api_operations.export_table_to_point_in_time++;
+    }
 
     // Required parameter
     auto s3_bucket = get_non_empty_string_attribute(request, "S3Bucket");
@@ -949,18 +1762,43 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
 
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    auto export_type = get_non_empty_string_attribute(request, "ExportType", "");
+
+    auto now = to_epoch_seconds(db_clock::now());
+    // If there is no ExportTime, use the current time (see the validation below).
+    auto export_time = now;
+    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
+    auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+
+    // Validate the parameters before the ClientToken lookup, the same as DynamoDB: an invalid
+    // request with a used token gets the validation error, not ExportConflictException. Then the
+    // corrected request can use the same token. Also, an invalid request must not insert a client
+    // token row or a FAILED export row.
+    // Conditions that can change after we accept a request (ExportTime too old, table dropped,
+    // no single S3 endpoint) are checked after the ClientToken lookup, so that a retry can find
+    // its export.
     if (export_format != "DYNAMODB_JSON") {
         co_return api_error::validation(
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
     }
 
-    auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
-    if (export_type != "FULL_EXPORT") {
+    if (!export_type.empty() && export_type != "FULL_EXPORT") {
         co_return api_error::validation(
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
 
+    // The pattern of ClientToken in DynamoDB is ^[^\$]+$. The token is also the partition key of
+    // the client token table, so a long token makes the insert of the row throw. We keep the
+    // length well below the limit of a key.
+    constexpr size_t max_client_token_length = 1024;
+    if (user_client_token.find('$') != std::string::npos || user_client_token.size() > max_client_token_length) {
+        co_return api_error::validation(fmt::format(
+                "ClientToken attribute: must not contain '$', and must have at most {} characters",
+                max_client_token_length));
+    }
+
     constexpr std::array unsupported_parameters{
+            "FilterSpecification",
             "IncrementalExportSpecification",
             "S3BucketOwner",
             "S3SseAlgorithm",
@@ -972,156 +1810,321 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
     }
 
-    // ExportTime - only "now" (or close to now) is supported
-    // If not specified, use current time. If specified, must be within 5 minutes of now.
-    auto now = to_epoch_seconds(db_clock::now());
-    auto export_time = now;
-    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
+    if (!is_valid_s3_bucket_name(s3_bucket)) {
+        co_return api_error::validation(fmt::format("S3Bucket attribute: `{}` is not a valid bucket name - "
+                "it must have 3 to 255 characters, each of them a letter, a digit, '.', '-' or '_'", s3_bucket));
+    }
+
+    if (!is_valid_s3_prefix(s3_prefix)) {
+        co_return api_error::validation(fmt::format("S3Prefix attribute: `{}` is not a valid key prefix - "
+                "it must have at most 1024 characters, each of them a letter, a digit or one of \"/!-_.*'()\"", s3_prefix));
+    }
+
     if (export_time_v) {
         if (!export_time_v->IsNumber()) {
             co_return api_error::validation("Expected a number attribute ExportTime");
         }
         export_time = export_time_v->GetDouble();
-        if (std::isnan(export_time) || std::isinf(export_time) || export_time < 0) {
+        // ExportTime becomes int64 milliseconds (db_clock). The cap, 9999-12-31T23:59:59Z, is far
+        // below the limit of that type, so the conversions below cannot overflow.
+        constexpr double max_export_time = 253402300799; // 9999-12-31T23:59:59Z
+        if (std::isnan(export_time) || export_time < 0 || export_time > max_export_time) {
             co_return api_error::invalid_export_time("ExportTime number is out of range of valid values for this field");
-        }
-        auto diff = export_time > now ? export_time - now : now - export_time;
-        if (diff > 300) {
-            co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
-                                "ExportTime: {} s , current time: {} s", export_time, now));
         }
         // DynamoDB rounds a requested ExportTime to the nearest millisecond.
         export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
                 std::chrono::duration<double>(export_time))).count();
     }
 
-    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
-
-    // Build the ExportDescription response
-    // The actual export functionality is not implemented yet - this just returns
-    // a FAILED status to indicate the export has been accepted, but immediately failed.
-    rjson::value export_desc = rjson::empty_object();
-
-    // FIXME: Currently, when export is called without a client token, we use
-    // the fixed name "<empty>". This is wrong - we should return a uniquely
-    // generated client token, like AWS does, not a fixed one.
-    if (client_token.empty()) {
-        client_token = "<empty>";
+    auto node_id_opt = get_self_node_id(_gossiper);
+    if (!node_id_opt) {
+        // Without a node identifier, we cannot own the export.
+        co_return api_error::internal("This node is not gossiping, so it can't start an export. Please retry the operation.");
     }
-    rjson::add(export_desc, "ClientToken", rjson::from_string(client_token));
+    auto node_id = std::move(*node_id_opt);
 
-    // FIXME: We create fake arn here, the content up to `/export/` will be likely the same in future,
-    // the last part (after `/export/`) will change - we need to encode a unique identifier of some sort there to
-    // recognise the export in future (we don't have it yet so we don't do it now).
-    rjson::add(export_desc, "ExportArn",
-            rjson::from_string(fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}@{}/export/export-placeholder",
-                    parts.keyspace_name, parts.table_name)));
-    rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
-    rjson::add(export_desc, "ExportStatus", "FAILED");
-    rjson::add(export_desc, "FailureCode", "NotImplemented");
-    rjson::add(export_desc, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the export API.");
-    rjson::add(export_desc, "ExportTime", rjson::value(export_time));
-    // DynamoDB echoes ExportType only when the request carried one; a request that relied on the
-    // FULL_EXPORT default gets none back.
-    if (rjson::find(request, "ExportType")) {
-        rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
-    }
-    rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
-    if (!s3_prefix.empty()) {
-        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
-    }
-    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+    // The request that we store and compare on a retry. We remove ClientToken: a retry with the
+    // generated token must be equal to the original request without a token.
+    auto request_to_compare = rjson::copy(request);
+    rjson::remove_member(request_to_compare, "ClientToken");
+    sstring stored_request(rjson::print(request_to_compare));
 
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    // If there is no ClientToken, generate a random one. We store and return it the same as a
+    // supplied token, so the caller can use it to retry.
+    sstring client_token = user_client_token.empty()
+        ? sstring(fmt::to_string(utils::make_random_uuid()))
+        : sstring(user_client_token);
+
+    auto accepted_at = db_clock::now();
+
+    // As in DynamoDB, the export id is also the name of the S3 directory of the export. The ARN is
+    // the table ARN (see generate_arn_for_table() in executor.cc) and `/export/<export id>`.
+    auto export_id_token = generate_export_id(accepted_at);
+    auto export_arn = fmt::format("arn:scylla:alternator:{}:scylla:table/{}/export/{}",
+            parts.keyspace_name, parts.table_name, export_id_token);
+
+    // `row_accepted_at` is the accept time of the export: now for a new export, or the accept time
+    // of the original request for a retry that did not find the export row.
+    auto build_export_row = [&](const sstring& arn, db_clock::time_point row_accepted_at) {
+        return export_row{
+            .export_arn = arn,
+            .client_token = client_token,
+            .request = stored_request,
+            // For a retry without an export row, the table can be dropped. Then the id is nil.
+            // For a new export, the `schema` check below makes sure that the table exists.
+            .table_id = schema ? schema->id() : ::table_id{},
+            .export_status = "IN_PROGRESS",
+            .export_id_token = export_id_token,
+            .export_time = export_time_of_request(request_to_compare, row_accepted_at),
+            .accepted_at = row_accepted_at,
+            .node_id = node_id.to_string(),
+        };
+    };
+    // The row of the new export. A failure below writes it as FAILED, so we create it first.
+    auto erow = build_export_row(export_arn, accepted_at);
+
+    // The reads below use the query state of this request.
+    service::query_state qs(client_state, {}, permit);
+
+    // DynamoDB makes a parameter with its default value equal to the absent parameter. We add the
+    // default values before the comparison, but we do not store them: DescribeExport shows
+    // ExportType only if the request had it.
+    auto with_defaults = [] (rjson::value r) {
+        for (auto [name, value] : {std::pair{"ExportFormat", "DYNAMODB_JSON"}, std::pair{"ExportType", "FULL_EXPORT"}}) {
+            if (!rjson::find(r, name)) {
+                rjson::add_with_string_name(r, name, rjson::from_string(value));
+            }
+        }
+        return r;
+    };
+
+    // Answers a retry of a used ClientToken: describes the export of the token row, the same as
+    // DescribeExport. If the parameters are different, returns the conflict error (as DynamoDB).
+    auto describe_token_export = [&] (const client_row& crow) -> future<sstring> {
+        // rjson comparison ignores the order of object members. A stored request that does not
+        // parse does not occur in normal operation. We treat it as different.
+        auto stored = rjson::try_parse(crow.request);
+        if (!stored || with_defaults(std::move(*stored)) != with_defaults(rjson::copy(request_to_compare))) {
+            // Different request: return the export conflict error, as DynamoDB does.
+            xlogger.debug("Export conflict: different parameters");
+            throw api_error::export_conflict("Duplicate request detected - an export with this ClientToken already exists with different parameters");
+        }
+
+        // Read the export row of this client token (in progress, completed or failed).
+        auto token_export_row = co_await get_export(_sdks, crow.export_arn, &qs);
+        xlogger.debug("Export row for ClientToken {}: {}", client_token, token_export_row ? "found" : "not found");
+        if (!token_export_row) {
+            // The owner did not write the export row yet, or it died and the garbage collector
+            // will write it. Report IN_PROGRESS with the times of the original request (the accept
+            // time from the ARN), not with the time of this retry.
+            xlogger.debug("Returning IN_PROGRESS status for ClientToken {}", client_token);
+            token_export_row = build_export_row(crow.export_arn,
+                    accept_time_from_export_arn(crow.export_arn).value_or(accepted_at));
+        }
+        else {
+            // The export row exists. Return the same response as DescribeExport.
+            xlogger.debug("Returning existing export description for ClientToken {}", client_token);
+        }
+        co_return rjson::print(build_export_description_response(*token_export_row));
+    };
+
+    // A retry does not start an export, so answer it before the slot check below. Only a supplied
+    // token can be a retry. If a different request inserts the token row after this read, the
+    // insert below finds it.
+    if (!user_client_token.empty()) {
+        if (auto existing_client_row = co_await get_client_row(_sdks, client_token, &qs)) {
+            xlogger.debug("ClientToken {} already exists", client_token);
+            co_return co_await describe_token_export(*existing_client_row);
+        }
+    }
+
+    // From here, the request starts a new export. Check the three conditions that can change after
+    // we accept a request. A retry skips them, so that it always finds its export.
+    if (!schema) {
+        co_return api_error::table_not_found(
+                fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
+    }
+
+    // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
+    if (export_time_v) {
+        if (export_time > now || now - export_time > 300) {
+            co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
+                                "ExportTime: {} s , current time: {} s", export_time, now));
+        }
+    }
+
+    // The S3 endpoint comes from the configuration, and get_s3_client() requires exactly one.
+    // Without it, the export fails, so refuse the request now.
+    if (auto n = s3_endpoints(_proxy).size(); n != 1) {
+        co_return api_error::validation(fmt::format(
+                "Export to S3 needs exactly one S3 endpoint in object_storage_endpoints, found {}", n));
+    }
+
+    // Reserve the export slot before the first write, so that a rejected request does not write
+    // rows. If the slot is not given to start_export(), it is released when this function
+    // returns.
+    auto export_slot = _s3_exports->try_reserve_export_slot();
+    if (!export_slot) {
+        co_return api_error::limit_exceeded(fmt::format(
+                "Too many exports are already running - at most {} of them may run at once on one shard "
+                "(configuration variable alternator_max_concurrent_exports_per_shard). Please retry the operation later.",
+                _proxy.local_db().get_config().alternator_max_concurrent_exports_per_shard()));
+    }
+
+    // Only the request that inserts the client token row runs the export. After that insert (it
+    // can apply even if it throws), a failure must write the FAILED export row, because the
+    // garbage collector does that only for dead nodes.
+    // `own_export_arn` is true if the ARN of `erow` belongs to this request.
+    // Both writes convert overload errors to RequestLimitExceeded (see
+    // translate_coordinator_errors()). We still write the FAILED export row, because a refused
+    // CAS can still apply. The client then gets that FAILED export, not RequestLimitExceeded,
+    // because a retry with the same ClientToken must get the same answer.
+    bool own_export_arn = true;
+    std::exception_ptr failure;
+
+    try {
+        db::alternator_export_table_helper helper(_sdks.qp());
+        // The insert returns the existing token row if it did not apply.
+        auto existing_client_row = co_await translate_coordinator_errors(helper.insert_client_token(client_row{
+            .client_token = client_token,
+            .export_arn = export_arn,
+            .request = stored_request,
+            .node_id = node_id.to_string(),
+        }));
+
+        utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_insertion",
+                [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_insertion"); });
+
+        // A CAS that applied can return "not applied" with our own row (see below). Tests use
+        // this injection to cause it.
+        if (utils::get_local_injector().enter("alternator_export_to_s3_client_token_insert_not_applied")) {
+            existing_client_row = client_row{
+                .client_token = client_token,
+                .export_arn = export_arn,
+                .request = stored_request,
+                .node_id = node_id.to_string(),
+            };
+        }
+
+        if (existing_client_row) {
+            // A different request reserved this ClientToken. Answer as a retry of that request.
+            xlogger.debug("ClientToken {} already exists", client_token);
+
+            // Until the test below, the token row can have our ARN, so `own_export_arn` stays
+            // true. If this injection throws, the FAILED path below writes our export row. Without
+            // that row, retries get IN_PROGRESS until the token row expires, and the garbage
+            // collector does not help, because this node is alive.
+            utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_conflict",
+                    [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_conflict"); });
+
+            // If the row has our ARN, it is our row, reported as "not applied": a concurrent CAS
+            // can commit the value of our CAS. Only this request knows this ARN. Continue and run
+            // the export.
+            if (existing_client_row->export_arn != export_arn) {
+                // The token row belongs to a different request. No row points to our ARN, so we
+                // have no export to mark FAILED.
+                own_export_arn = false;
+                co_return co_await describe_token_export(*existing_client_row);
+            }
+        }
+
+        // The export row below is ours, so from here a failure writes FAILED. This includes a
+        // failed insert, because a write that timed out can still apply.
+        // The insert returns the existing export row if it did not apply. Tests use the injection
+        // to fail the insert as an overloaded coordinator does.
+        auto existing_export_row = co_await translate_coordinator_errors(seastar::futurize_invoke([&] {
+            utils::get_local_injector().inject("alternator_export_to_s3_export_row_insert_overloaded",
+                    [] { throw exceptions::overloaded_exception(sstring(
+                            "injected failure alternator_export_to_s3_export_row_insert_overloaded")); });
+            return insert_export(_sdks, erow);
+        }));
+
+        utils::get_local_injector().inject("alternator_export_to_s3_after_export_row_insertion",
+                [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_export_row_insertion"); });
+
+        // Same as for the client token row: tests use this injection to return "not applied".
+        if (utils::get_local_injector().enter("alternator_export_to_s3_export_row_insert_not_applied")) {
+            existing_export_row = erow;
+        }
+
+        if (existing_export_row) {
+            // Only the garbage collector can also write a row for this ARN (if this node is
+            // unreachable for more than one hour). Or the row is ours, if a concurrent CAS
+            // committed our value.
+            xlogger.debug("Export row for ClientToken {} and ExportArn {} already exists",
+                    client_token, export_arn);
+            // An IN_PROGRESS row with our export id is our row (the garbage collector writes an
+            // empty id or FAILED). Run the export, or the row stays IN_PROGRESS.
+            if (existing_export_row->export_id_token != export_id_token
+                    || existing_export_row->export_status != "IN_PROGRESS") {
+                // Not our row. Report it as DescribeExport does.
+                xlogger.debug("Export row for ExportArn {} is not this request's own, not starting the export",
+                        export_arn);
+                co_return rjson::print(build_export_description_response(*existing_export_row));
+            }
+            xlogger.debug("Export row for ExportArn {} is this request's own, starting the export", export_arn);
+        }
+
+        // Build the response before we start the fiber. After the fiber starts, a failure here
+        // (e.g. no memory) must not write FAILED while the fiber continues the export.
+        xlogger.debug("Returning IN_PROGRESS response for ClientToken {}", client_token);
+        auto response = rjson::print(build_export_description_response(erow));
+
+        xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
+        _s3_exports->start_export(std::move(*export_slot), schema, erow, table_arn, s3_bucket, s3_prefix);
+        co_return std::move(response);
+    }
+    catch (...) {
+        if (!own_export_arn) {
+            // The token row has a different ARN. We have no export to mark FAILED.
+            throw;
+        }
+        // Keep the failure for the failure message of the export row below.
+        failure = std::current_exception();
+    }
+    auto* e = try_catch<std::exception>(failure);
+    if (_s3_exports->abort_requested()) {
+        erow.failure_code = sstring(node_shutdown_failure_code);
+        erow.failure_message = sstring(node_shutdown_failure_message);
+    } else {
+        erow.failure_code = "Exception";
+        erow.failure_message = e ? e->what() : "Unknown error";
+    }
+    erow.export_status = "FAILED";
+    erow.completed_at = db_clock::now();
+    try {
+        if (co_await try_write_final_export_row(_sdks, erow)) {
+            xlogger.debug("Export {} failed during starting up phase", erow.export_arn);
+        }
+        else {
+            // The write did not apply. The garbage collector took the export and marked it FAILED.
+            xlogger.debug("Export {} failed during starting up phase, but the row is no longer ours",
+                    erow.export_arn);
+        }
+    } catch (...) {
+        // This write must not be given up (see write_final_export_row()). The request cannot
+        // wait, so a background fiber retries it, with the export slot of this request. Only
+        // start_export() can throw after it takes that slot, and it throws only when the gate is
+        // closed, and then the fiber below does not start either.
+        xlogger.warn("Export {}: failed to write the FAILED state, retrying in the background: {}",
+                erow.export_arn, std::current_exception());
+        _s3_exports->finish_export_in_background(std::move(*export_slot), erow);
+    }
+    // Answer with the FAILED export, also for an api_error such as RequestLimitExceeded. An SDK
+    // retries such an error with the same ClientToken, and the retry finds this FAILED export.
+    co_return rjson::print(build_export_description_response(erow));
 }
 
 // An export ARN is a table ARN followed by `/export/<id>`.
 static arn_parts parse_export_arn(std::string_view export_arn, std::string_view arn_field_name) {
-    static constexpr std::string_view export_infix = "/export/";
-    auto parts = parse_arn_reporting_validation(export_arn, arn_field_name, "Export", export_infix);
-    // parse_arn accepts an empty export id.
-    if (parts.postfix.size() == export_infix.size()) {
-        throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - no export id after `{}`",
-                arn_field_name, export_arn, export_infix));
+    auto parts = parse_arn_reporting_validation(export_arn, arn_field_name, "Export", export_arn_infix);
+    // parse_arn accepts all export ids, also an empty id.
+    auto export_id = parts.postfix.substr(export_arn_infix.size());
+    if (!is_valid_export_id(export_id)) {
+        throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - `{}` after `{}` is not an export id",
+                arn_field_name, export_arn, export_id, export_arn_infix));
     }
-    // FIXME: DynamoDB also answers an id of any shape but its own with ValidationException. Check
-    // that once SCYLLADB-1893 mints ids of that shape.
     return parts;
-}
-
-// The persisted state of a single Alternator "export to S3", as needed to answer DescribeExport.
-// The columns above the optional ones must all be written by the statement that creates the export
-// row, so that a row is either complete or not there at all. Everything that describes a finished
-// export is optional, because it is only filled in as the export runs.
-struct export_row {
-    sstring client_token;
-    // The original ExportTableToPointInTime request, as JSON. It is the source of truth for the
-    // request-derived fields of ExportDescription (S3Bucket, ExportFormat, TableArn, ...).
-    sstring request;
-    sstring export_status;
-    ::table_id table_id;  // The exported table, as resolved when the export was accepted
-    db_clock::time_point export_time;  // The point in time the data was exported from
-    db_clock::time_point accepted_at;
-    std::optional<sstring> export_manifest;
-    std::optional<sstring> failure_code;
-    std::optional<sstring> failure_message;
-    std::optional<int64_t> item_count;
-    std::optional<int64_t> billed_size_bytes;
-    std::optional<db_clock::time_point> completed_at;
-};
-
-// Reads at most `row_limit` rows of the given partitions of the exports table, whose schema is `schema`.
-static future<foreign_ptr<lw_shared_ptr<query::result>>> read_exports(service::storage_proxy& proxy, schema_ptr schema, dht::partition_range_vector partition_ranges,
-        const query::partition_slice& partition_slice, query::row_limit row_limit, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
-            proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()), row_limit);
-    // system_distributed has RF=3, and QUORUM of that cannot be reached with a single token owner.
-    auto cl = proxy.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, std::move(trace_state)));
-    if (!rqr) {
-        co_await coroutine::return_exception(create_api_error_from_coordinators_exception(std::move(rqr).assume_error()));
-    }
-    co_return std::move(rqr.assume_value().query_result);
-}
-
-// Returns the export with the given ARN, or nullopt if there is no such export.
-static future<std::optional<export_row>> get_export(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, sstring export_arn) {
-    using sdks = db::system_distributed_keyspace;
-    schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
-    partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(export_arn));
-    dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
-    const query::partition_slice& partition_slice = schema->full_slice();
-    auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit::max, client_state, std::move(trace_state), std::move(permit));
-    query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
-    if (rs.empty()) {
-        co_return std::nullopt;
-    }
-    const query::result_set_row& row = rs.row(0);
-    // The statement creating the export row must fill all of these in, so a row missing any of them
-    // is corrupt.
-    for (auto column : {"client_token", "request", "export_status", "table_id", "export_time", "accepted_at"}) {
-        if (!row.get_data_value(column)) {
-            throw std::runtime_error(fmt::format("Export '{}' has no {} in {}.{}", export_arn, column, sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
-        }
-    }
-    co_return export_row {
-        .client_token = row.get_nonnull<sstring>("client_token"),
-        .request = row.get_nonnull<sstring>("request"),
-        .export_status = row.get_nonnull<sstring>("export_status"),
-        .table_id = ::table_id(row.get_nonnull<utils::UUID>("table_id")),
-        .export_time = row.get_nonnull<db_clock::time_point>("export_time"),
-        .accepted_at = row.get_nonnull<db_clock::time_point>("accepted_at"),
-        .export_manifest = row.get<sstring>("export_manifest"),
-        .failure_code = row.get<sstring>("failure_code"),
-        .failure_message = row.get<sstring>("failure_message"),
-        .item_count = row.get<int64_t>("item_count"),
-        .billed_size_bytes = row.get<int64_t>("billed_size_bytes"),
-        .completed_at = row.get<db_clock::time_point>("completed_at"),
-    };
 }
 
 future<executor::request_return_type> executor::describe_export(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -1142,7 +2145,8 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         }
     }
 
-    auto exp = co_await get_export(_proxy, client_state, std::move(trace_state), std::move(permit), sstring(export_arn));
+    service::query_state qs(client_state, std::move(trace_state), std::move(permit));
+    auto exp = co_await get_export(_sdks, sstring(export_arn), &qs);
     // DynamoDB answers ExportNotFoundException also when the ARN names a table it does not have,
     // but ValidationException when no table can have the name the ARN gives.
     if (!exp) {
@@ -1152,63 +2156,21 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         validate_table_name(parts.table_name, "ExportArn: Invalid Export ARN - table name");
         co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
     }
-
-    rjson::value export_desc = rjson::empty_object();
-    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
-    // DynamoDB reports no ExportStatus but these three, so any other stored status is reported as
-    // IN_PROGRESS.
-    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->export_status == "COMPLETED" || exp->export_status == "FAILED" ? exp->export_status : "IN_PROGRESS"));
-    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp->accepted_at)));
-
-    // The fields describing the request are echoed back from the request that started the export,
-    // with the ExportFormat ExportTableToPointInTime defaults to. That request was validated when it
-    // was accepted, so one that cannot be read back is a corrupt row, like a row missing a column,
-    // and not the caller's error.
-    try {
-        auto exported_request = rjson::parse(exp->request);
-        rjson::add(export_desc, "TableArn", rjson::copy(rjson::get(exported_request, "TableArn")));
-        rjson::add(export_desc, "S3Bucket", rjson::copy(rjson::get(exported_request, "S3Bucket")));
-        if (const rjson::value* s3_prefix = rjson::find(exported_request, "S3Prefix")) {
-            rjson::add(export_desc, "S3Prefix", rjson::copy(*s3_prefix));
+    // The insert of the export row writes these columns, so a row without one of them is corrupt.
+    // table_id is not checked: the garbage collector can write a FAILED row with a nil table_id.
+    for (auto [column, missing] : {
+            std::pair{"client_token", exp->client_token.empty()},
+            std::pair{"request", exp->request.empty()},
+            std::pair{"export_status", exp->export_status.empty()},
+            std::pair{"export_time", exp->export_time == db_clock::time_point{}},
+            std::pair{"accepted_at", exp->accepted_at == db_clock::time_point{}}}) {
+        if (missing) {
+            throw std::runtime_error(fmt::format("Export '{}' has no {} in {}.{}", export_arn, column,
+                    db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
         }
-        const rjson::value* export_format = rjson::find(exported_request, "ExportFormat");
-        rjson::add(export_desc, "ExportFormat", export_format ? rjson::copy(*export_format) : rjson::from_string("DYNAMODB_JSON"));
-        if (const rjson::value* export_type = rjson::find(exported_request, "ExportType")) {
-            rjson::add(export_desc, "ExportType", rjson::copy(*export_type));
-        }
-    } catch (const rjson::error& e) {
-        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", export_arn, e.what()));
     }
 
-    // TableId identifies the table the export was taken from, not whatever table now answers to
-    // the export's name - names can be reused, ids cannot.
-    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
-    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp->export_time)));
-    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
-
-    // Everything below describes a finished export, so it is only there once one has run.
-    if (exp->export_manifest) {
-        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->export_manifest));
-    }
-    if (exp->failure_code) {
-        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
-    }
-    if (exp->failure_message) {
-        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
-    }
-    if (exp->item_count) {
-        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
-    }
-    if (exp->billed_size_bytes) {
-        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
-    }
-    if (exp->completed_at) {
-        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp->completed_at)));
-    }
-
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print(build_export_description_response(*exp));
 }
 
 // Consistency level of the scan: LOCAL_QUORUM for NetworkTopologyStrategy, QUORUM otherwise
@@ -1471,50 +2433,6 @@ seastar::future<> export_scan_table(
     }
 }
 
-// An export reduced to what ListExports reports about it. The optional members are unset in a row
-// which lacks the column.
-struct export_summary_row {
-    sstring export_arn;
-    // The export's status, as stored. ListExports reports it as ExportStatus.
-    std::optional<sstring> status;
-    // The original ExportTableToPointInTime request, as JSON. ExportType is read back from it.
-    std::optional<sstring> request;
-};
-
-// Returns every export there is, in no particular order. The table is read a page at a time, as an
-// unpaged read fails once its result outgrows max_memory_for_unlimited_query_hard_limit.
-static future<std::vector<export_summary_row>> get_all_exports(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    using sdks = db::system_distributed_keyspace;
-    static constexpr uint64_t page_size = 1000;
-    schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
-    auto partition_slice = partition_slice_builder(*schema)
-            .with_regular_column(to_bytes("export_status"))
-            .with_regular_column(to_bytes("request"))
-            .with_option<query::partition_slice::option::allow_short_read>()
-            .build();
-    dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
-    std::vector<export_summary_row> exports;
-    while (true) {
-        auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit(page_size), client_state, trace_state, permit);
-        query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
-        for (const query::result_set_row& row : rs.rows()) {
-            exports.push_back(export_summary_row {
-                .export_arn = row.get_nonnull<sstring>("export_arn"),
-                .status = row.get<sstring>("export_status"),
-                .request = row.get<sstring>("request"),
-            });
-        }
-        // As in query_pager, a short read can end a page early, even before any row.
-        if (rs.rows().size() < page_size && !result->is_short_read()) {
-            co_return exports;
-        }
-        // Each partition holds a single row, so the next page starts after the last partition read.
-        auto last_key = dht::decorate_key(*schema, result->get_or_calculate_last_position().partition);
-        partition_ranges = {dht::partition_range::make_starting_with(dht::partition_range::bound(std::move(last_key), false))};
-        co_await coroutine::maybe_yield();
-    }
-}
-
 // Throws std::runtime_error for an incomplete row, or for a row whose request is not valid JSON.
 static rjson::value make_export_summary(const export_summary_row& exp) {
     if (!exp.status || !exp.request) {
@@ -1522,8 +2440,7 @@ static rjson::value make_export_summary(const export_summary_row& exp) {
     }
     rjson::value summary = rjson::empty_object();
     rjson::add(summary, "ExportArn", rjson::from_string(exp.export_arn));
-    // DynamoDB's ExportStatus is IN_PROGRESS, COMPLETED or FAILED; report any other value as IN_PROGRESS.
-    rjson::add(summary, "ExportStatus", rjson::from_string(*exp.status == "COMPLETED" || *exp.status == "FAILED" ? *exp.status : "IN_PROGRESS"));
+    rjson::add(summary, "ExportStatus", reported_status(*exp.status));
     // ListExports always reports ExportType, also when the ExportTableToPointInTime request did not
     // specify ExportType. Then report the default value, FULL_EXPORT.
     try {
@@ -1602,7 +2519,8 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         co_return rjson::print(rjson::empty_object());
     }
 
-    auto exports = co_await get_all_exports(_proxy, client_state, std::move(trace_state), std::move(permit));
+    service::query_state qs(client_state, std::move(trace_state), std::move(permit));
+    auto exports = co_await get_all_exports(_sdks, nullptr, &qs);
 
     // The exports table is partitioned by export ARN, so the TableArn filter is applied here, to the
     // table part of each export ARN. A row with a malformed ARN is skipped with a warning.
@@ -1621,7 +2539,6 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
 
     // DynamoDB documents this order, ExportArn descending. Within one table it is also newest first,
     // because an export id starts with its zero-padded start time.
-    // FIXME: not until SCYLLADB-1893 mints export ids - ExportTableToPointInTime's is a placeholder.
     std::ranges::sort(listed, [] (const export_summary_row* lhs, const export_summary_row* rhs) {
         return lhs->export_arn > rhs->export_arn;
     });
@@ -1661,4 +2578,281 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
 
     co_return rjson::print(std::move(response));
 }
+
+// Manifest files report times as ISO 8601 UTC with millisecond precision,
+// e.g. "2020-11-04T07:28:34.028Z".
+static sstring format_manifest_time(db_clock::time_point tp) {
+    auto millis = tp.time_since_epoch().count() % 1000;
+    return fmt::format("{:%FT%T}.{:03}Z", fmt::gmtime(db_clock::to_time_t(tp)), millis);
+}
+
+// The fiber of one export. The state is the pair (export_status, node_id) of the export row.
+// The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
+// changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
+// conditional on the pair, so a late worker cannot overwrite a takeover.
+// Returns the row whose terminal state still has to be written, if that write failed. The
+// caller retries it in a background fiber (see finish_export_in_background()).
+static future<std::optional<export_row>> run_export(
+        service::storage_proxy& proxy,
+        db::system_distributed_keyspace& sdks,
+        abort_source& as,
+        schema_ptr schema,
+        export_row row,
+        std::string table_arn,
+        std::string s3_bucket,
+        std::string s3_prefix) {
+    // The full export is maintenance work, not only the scan. The fiber starts in the scheduling
+    // group of the request, so change it.
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+
+    // As in DynamoDB, all objects of the export are in a directory with the export id as name.
+    // Do not add a second '/' if the prefix ends with '/'.
+    auto s3_key_prefix = s3_prefix.empty() || s3_prefix.ends_with('/')
+        ? fmt::format("{}AWSDynamoDB/{}/", s3_prefix, row.export_id_token)
+        : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, row.export_id_token);
+
+    int64_t item_count = 0;
+
+    // The block below throws to report a failure. The message comes from the exception. A step
+    // that has a different failure code sets it before it throws.
+    std::string failure_code = "Exception";
+    std::string failure_message;
+    try {
+        auto client = get_s3_client(proxy, s3_bucket);
+        // s3::client addresses objects as "/bucket/key".
+        auto s3_object_name = [&s3_bucket](std::string_view key) {
+            return fmt::format("/{}/{}", s3_bucket, key);
+        };
+        // Writes the manifest file "<name>.json" and the object "<name>.md5" with the base64 md5
+        // of its content. Returns the key of the .json object.
+        auto put_manifest = [&client, &s3_object_name, &s3_key_prefix, &as](std::string_view name, std::string content) -> future<sstring> {
+            sstring json_key = fmt::format("{}{}.json", s3_key_prefix, name);
+            auto md5_key = fmt::format("{}{}.md5", s3_key_prefix, name);
+            md5_hasher hasher;
+            hasher.update(content.data(), content.size());
+            auto md5_content = base64_encode(hasher.finalize());
+            co_await client->put_object(s3_object_name(json_key), temporary_buffer<char>(content.data(), content.size()), s3::object_metadata{}, &as);
+            co_await client->put_object(s3_object_name(md5_key), temporary_buffer<char>(md5_content.data(), md5_content.size()), s3::object_metadata{}, &as);
+            co_return json_key;
+        };
+
+        // Create the data file object key
+        auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, row.export_id_token);
+
+        try {
+            // Create empty _started object
+            co_await client->put_object(s3_object_name(fmt::format("{}_started", s3_key_prefix)), temporary_buffer<char>(), s3::object_metadata{}, &as);
+        }
+        catch (const storage_io_error& e) {
+            // s3::client maps all "not found" errors (NoSuchBucket, HTTP 404) to ENOENT, so we
+            // cannot be sure that the bucket is missing. Usually it is, so use the DynamoDB code,
+            // but put the server error in the message.
+            if (e.code().value() == ENOENT) {
+                failure_code = "S3NoSuchBucket";
+                throw std::runtime_error(fmt::format("The specified bucket does not exist or could not be reached: {}", e.what()));
+            }
+            // s3::client maps 401, 403 and AccessDenied to EACCES.
+            if (e.code().value() == EACCES) {
+                failure_code = "S3AccessDenied";
+                throw std::runtime_error(fmt::format("Access to the bucket was denied: {}", e.what()));
+            }
+            throw;
+        }
+
+        // Create the S3 sink pipeline.
+        // Always call `flush_and_close()`. It is asynchronous, so RAII is not possible. Thus we
+        // keep the result of the scan in a future and rethrow it after the close.
+        // After a failed scan, the close completes the upload, so the partial data file stays in
+        // the bucket. Only an abort aborts the multipart upload.
+        auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &as }, gzip_compression{});
+
+        // Scan the table and feed items through the pipeline
+        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &as](rjson::value item) -> future<> {
+            utils::get_local_injector().inject("alternator_export_to_s3_in_item_handler",
+                    [] { throw std::runtime_error("injected failure alternator_export_to_s3_in_item_handler"); });
+            // Stops the export fiber during the scan, so that a test can interrupt a running
+            // export (e.g. kill the node) while the row is IN_PROGRESS. The wait ends on a
+            // message, when the injection is disabled, or when the node stops.
+            // With the parameter "pause_after_items", the fiber exports that many items
+            // first. A test uses it to stop an export which already has an open multipart
+            // upload of the data file.
+            co_await utils::get_local_injector().inject("alternator_export_to_s3_pause_in_item_handler",
+                    [&item_count, &as] (auto& handler) -> future<> {
+                        auto pause_after_items = handler.template get<int64_t>("pause_after_items");
+                        if (pause_after_items && item_count < *pause_after_items) {
+                            co_return;
+                        }
+                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5}, &as);
+                    });
+
+            rjson::value wrapper = rjson::empty_object();
+            rjson::add(wrapper, "Item", std::move(item));
+            co_await pipeline->process(wrapper);
+            ++item_count;
+        }));
+
+        auto flushed = co_await coroutine::as_future(pipeline->flush_and_close());
+        pipeline.reset();
+        if (scan.failed()) {
+            // The scan failed first, so report its exception.
+            flushed.ignore_ready_future();
+            std::rethrow_exception(scan.get_exception());
+        }
+        auto export_result = flushed.get();
+
+        row.completed_at = db_clock::now();
+        row.item_count = item_count;
+        // ScyllaDB does not bill exports.
+        row.billed_size_bytes = 0;
+
+        // Make and upload the manifest files.
+        // manifest-files.json - JSON lines, one object for each data file.
+        rjson::value data_file_entry = rjson::empty_object();
+        rjson::add(data_file_entry, "itemCount", rjson::value(item_count));
+        rjson::add(data_file_entry, "md5Checksum", rjson::from_string(export_result.md5));
+        rjson::add(data_file_entry, "etag", rjson::from_string(export_result.etag));
+        rjson::add(data_file_entry, "dataFileS3Key", rjson::from_string(data_object_key));
+        auto manifest_files_content = rjson::print(data_file_entry) + "\n";
+        auto manifest_files_key = co_await put_manifest("manifest-files", std::move(manifest_files_content));
+
+        // manifest-summary.json
+        rjson::value summary = rjson::empty_object();
+        rjson::add(summary, "version", "2020-06-30");
+        rjson::add(summary, "exportArn", rjson::from_string(row.export_arn));
+        rjson::add(summary, "startTime", rjson::from_string(format_manifest_time(row.accepted_at)));
+        rjson::add(summary, "endTime", rjson::from_string(format_manifest_time(*row.completed_at)));
+        rjson::add(summary, "tableArn", rjson::from_string(table_arn));
+        rjson::add(summary, "tableId", rjson::from_string(fmt::to_string(schema->id())));
+        // We do not support point-in-time exports, and the scan is not a snapshot: each page has
+        // a new timestamp, between `startTime` and `endTime`. We report `exportTime` for
+        // compatibility. It is the requested time, in the 5 minutes before the accept time.
+        rjson::add(summary, "exportTime", rjson::from_string(format_manifest_time(row.export_time)));
+        rjson::add(summary, "s3Bucket", rjson::from_string(s3_bucket));
+        rjson::add(summary, "s3Prefix", rjson::from_string(s3_prefix));
+        // Alternator does not know the encryption of the bucket.
+        rjson::add(summary, "s3SseAlgorithm", rjson::null_value());
+        rjson::add(summary, "s3SseKmsKeyId", rjson::null_value());
+        rjson::add(summary, "manifestFilesS3Key", rjson::from_string(manifest_files_key));
+        rjson::add(summary, "billedSizeBytes", rjson::value(int64_t(0)));
+        rjson::add(summary, "itemCount", rjson::value(item_count));
+        rjson::add(summary, "outputFormat", "DYNAMODB_JSON");
+        auto manifest_summary_content = rjson::print(summary);
+        auto manifest_summary_key = co_await put_manifest("manifest-summary", std::move(manifest_summary_content));
+
+        row.export_status = "COMPLETED";
+        row.export_manifest = manifest_summary_key;
+        // The data and the manifests are in S3, so a failure of this write should not make a
+        // completed export FAILED. The write must not be given up either, and this fiber must not
+        // wait for the retries: hand them to the caller, which retries them in another fiber.
+        bool updated;
+        try {
+            updated = co_await try_write_final_export_row(sdks, row);
+        } catch (...) {
+            xlogger.warn("Export {}: failed to write the COMPLETED state, retrying in the background: {}",
+                    row.export_arn, std::current_exception());
+            co_return std::move(row);
+        }
+        if (!updated) {
+            // The garbage collector took the row. A write of FAILED does not apply either.
+            xlogger.warn("Export {} completed, but the garbage collector took its row before", row.export_arn);
+            co_return std::nullopt;
+        }
+        xlogger.debug("Export {} completed successfully with {} items", row.export_arn, item_count);
+        co_return std::nullopt;
+    } catch (const std::exception& e) {
+        if (as.abort_requested()) {
+            failure_code = node_shutdown_failure_code;
+            failure_message = node_shutdown_failure_message;
+        } else {
+            failure_message = e.what();
+        }
+    } catch (...) {
+        failure_message = "Unknown error";
+    }
+
+    // The export failed. Report it.
+    row.completed_at = db_clock::now();
+    xlogger.debug("Export {} failed with exception: {}", row.export_arn, failure_message);
+    row.export_status = "FAILED";
+    row.failure_code = std::move(failure_code);
+    row.failure_message = std::move(failure_message);
+    // The failure can occur after the success path set these fields (e.g. if the COMPLETED
+    // write failed). update_export() writes all columns, so clear them.
+    row.export_manifest = std::nullopt;
+    row.item_count = std::nullopt;
+    row.billed_size_bytes = std::nullopt;
+    bool updated;
+    try {
+        updated = co_await try_write_final_export_row(sdks, row);
+    }
+    catch (...) {
+        // This write must not be given up, and this fiber must not wait for the retries (see the
+        // COMPLETED write above). Hand them to the caller.
+        xlogger.warn("Export {}: failed to write the FAILED state, retrying in the background: {}",
+                row.export_arn, std::current_exception());
+        co_return std::move(row);
+    }
+    xlogger.debug("Export {} failed with {} items{}", row.export_arn, item_count,
+            updated ? "" : ", but the row is not ours any more");
+    co_return std::nullopt;
+}
+
+// Reads the live configuration on each call. If the limit decreases below the number of
+// running exports, the running exports continue.
+auto executor::s3_exports::try_reserve_export_slot() -> std::optional<slot> {
+    if (_running_exports >= _e._proxy.local_db().get_config().alternator_max_concurrent_exports_per_shard()) {
+        return std::nullopt;
+    }
+    return slot(_running_exports);
+}
+
+void executor::s3_exports::start_export(slot export_slot, schema_ptr schema, export_row row, std::string table_arn, std::string s3_bucket,
+        std::string s3_prefix) {
+    // Fire-and-forget, in the gate. `run_export()` writes failures to the export row, so an
+    // exception from it is unexpected (e.g. bad_alloc). Log it.
+    // The `then` continuation holds the export slot until the fiber finishes, or gives it to
+    // finish_export_in_background(). run_export() cannot hold it, because it cannot name the
+    // `slot` type.
+    auto export_arn = row.export_arn;
+    (void)with_gate(_gate, [&] {
+        return run_export(_e._proxy, _e._sdks, _as, std::move(schema), std::move(row), std::move(table_arn),
+                std::move(s3_bucket), std::move(s3_prefix))
+                .then([this, export_slot = std::move(export_slot)] (std::optional<export_row> unwritten) mutable {
+            // The write of the terminal state failed. Retry it in a fiber that takes the export
+            // slot, so that the row is never given up. The slot goes back when that fiber ends,
+            // or when this continuation returns.
+            if (unwritten) {
+                finish_export_in_background(std::move(export_slot), std::move(*unwritten));
+            }
+        }).handle_exception([export_arn = std::move(export_arn)] (std::exception_ptr ep) {
+            xlogger.error("Background export fiber for {} failed unexpectedly: {}", export_arn, ep);
+        });
+    });
+}
+
+// The fiber of finish_export_in_background() below. It owns `row`.
+static future<> finish_export_fiber(db::system_distributed_keyspace& sdks, export_row row, abort_source& as) {
+    if (!co_await write_final_export_row(sdks, row, as)) {
+        xlogger.debug("Export {}: the background write of {} did not apply",
+                row.export_arn, row.export_status);
+    }
+}
+
+void executor::s3_exports::finish_export_in_background(slot export_slot, export_row row) {
+    if (_gate.is_closed()) {
+        // The executor stops. The garbage collector of the next incarnation collects the row.
+        return;
+    }
+    // See the declaration in export.hh for why this write is never given up and why the fiber
+    // keeps the slot. `write_final_export_row()` throws only on abort. Log other exceptions. The
+    // last continuation holds the slot until the fiber finishes.
+    auto export_arn = row.export_arn;
+    (void)with_gate(_gate, [&] {
+        return finish_export_fiber(_e._sdks, std::move(row), _as)
+                .handle_exception([export_arn = std::move(export_arn)] (std::exception_ptr ep) {
+            xlogger.warn("Background fiber finishing export {} gave up: {}", export_arn, ep);
+        }).finally([export_slot = std::move(export_slot)] {});
+    });
+}
+
 } // namespace alternator
