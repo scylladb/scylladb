@@ -25,10 +25,20 @@ Tests take the default, compose the built-ins, or write their own::
     RegisterWorkload(ks=ks, exception_policy=first_match(    # also kills nodes
         tolerate_resets, tolerate_unavailability))
     RegisterWorkload(ks=ks, exception_policy=strict)         # nothing may fail
+    RegisterWorkload(ks=ks, exception_policy=first_match(    # also restarts nodes
+        tolerate_resets, only_during("restart", tolerate_reboot)))
+
+What an error says about the operation does not depend on when it happened, and
+:func:`tolerate_reboot` does not ask.  Whether the cluster may raise it at that
+moment does: the same NoHostAvailable is expected while a node is down and a
+finding while the cluster is whole.  :func:`only_during` makes that second
+claim, for the windows the test opened with
+:meth:`~test.cluster.strong_consistency.register_workload.RegisterWorkload.disruption_window`.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Callable, Optional
@@ -42,7 +52,8 @@ from cassandra import (
     WriteTimeout,
 )
 from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest
+from cassandra.connection import ConnectionException
+from cassandra.protocol import InvalidRequest, ServerError
 
 if TYPE_CHECKING:
     from test.cluster.strong_consistency.register_workload import RegisterWorkload
@@ -92,7 +103,10 @@ ExceptionPolicy = Callable[[BaseException, FailureContext], Optional[Outcome]]
 # the server can produce for an absent table.  They are what the stress runs
 # have actually seen; widen them when a run fails on one that is missing.
 def is_table_absence_invalid_request(exc: InvalidRequest) -> bool:
-    msg = str(exc).lower()
+    return _is_table_absence_message(str(exc).lower())
+
+
+def _is_table_absence_message(msg: str) -> bool:
     return (
         "unconfigured table" in msg
         or "does not exist" in msg
@@ -102,32 +116,33 @@ def is_table_absence_invalid_request(exc: InvalidRequest) -> bool:
     )
 
 
-# TODO(SCYLLADB-4655): drop this special case once the server reports an
-# unknown table id as a regular InvalidRequest.  Sending a prepared statement
-# tagged with the dropped table's UUID is a legitimate thing for a client to do
-# after a DROP+RECREATE, but instead of a "table does not exist" error the
-# server produces one that the driver surfaces as NoHostAvailable, so a policy
-# cannot tell it apart from a real loss of connectivity by exception type
-# alone.  Until that is fixed, recognize it by message and tolerate it inside a
-# reset window.
-def is_stale_table_uuid(exc: NoHostAvailable) -> bool:
-    """Detect NoHostAvailable caused by a prepared statement referencing a
-    dropped table's UUID.  After DROP+RECREATE the new table gets a new UUID,
-    but the driver may still send requests tagged with the old one."""
-    for inner in exc.errors.values():
-        msg = str(inner).lower()
-        if "can't find a column family" in msg:
-            return True
-    return False
-
-
 def is_table_absence_error(exc: BaseException) -> bool:
-    """Return True if the exception indicates the table is absent (dropped/recreated)."""
+    """Return True if the exception indicates the table is absent (dropped/recreated).
+
+    Two kinds of them are a SERVER_ERROR.  "Can't find a column family" is
+    one: a prepared statement still tagged with the dropped table's UUID,
+    which is a legitimate thing for a client to send after a DROP+RECREATE
+    (TODO(SCYLLADB-4655): drop it once the server reports an unknown table id
+    as a regular InvalidRequest).  The other is a forwarded request whose
+    statement the target has to prepare again: the target's "unconfigured
+    table" or "keyspace does not exist" comes back through the prepare RPC as
+    a remote error, and the forwarding node returns it as a SERVER_ERROR whose
+    message is the exception's type and its message.
+    """
     if isinstance(exc, InvalidRequest):
         return is_table_absence_invalid_request(exc)
-    if isinstance(exc, NoHostAvailable):
-        return is_stale_table_uuid(exc)
+    if isinstance(exc, ServerError):
+        msg = str(exc).lower()
+        return "can't find a column family" in msg or (
+            _FORWARDED_INVALID_REQUEST.search(msg) is not None
+            and _is_table_absence_message(msg))
     return False
+
+
+# The type of a remote invalid_request_exception, or of one of its subclasses
+# (keyspace_not_defined_exception), as the forwarding node prints it.
+_FORWARDED_INVALID_REQUEST = re.compile(
+    r"exceptions::(invalid_request|keyspace_not_defined)_exception \(")
 
 
 # The node that executes the request found too few live replicas and refused it
@@ -165,8 +180,8 @@ def tolerate_resets(
     """Accept "the table is not there" while a reset is in flight.
 
     A DROP+CREATE makes the table briefly absent, and readers/writers racing
-    with it get InvalidRequest (or NoHostAvailable for a prepared statement
-    holding the old table UUID).  The operation definitely did not happen —
+    with it get one of the errors :func:`is_table_absence_error` recognises.
+    The operation definitely did not happen —
     there was no table to apply it to — so it is a clean ``fail``.
 
     The same error *outside* a reset window is not tolerated: that is the bug
@@ -227,3 +242,68 @@ def first_match(*policies: ExceptionPolicy) -> ExceptionPolicy:
         return None
 
     return policy
+
+
+def only_during(name: str, policy: ExceptionPolicy) -> ExceptionPolicy:
+    """Ask ``policy`` only about operations that overlapped a window ``name``.
+
+    Anything else is not recognised, and the workload fails the test: the error
+    the disruption excuses is a finding outside it.  So the window must stay
+    open until the cluster looks whole to the *driver*, not just until the
+    node is up: the driver reconnects its pool to a restarted node on its own
+    schedule, so wait for it (``wait_for_cql_and_get_hosts``) inside the window.
+    """
+
+    def guarded(exc: BaseException, ctx: FailureContext) -> Optional[Outcome]:
+        if not ctx.workload.overlaps_window(name, ctx.t_call_ns, ctx.t_return_ns):
+            return None
+        return policy(exc, ctx)
+
+    return guarded
+
+
+# What the coordinator says when raft lost track of an entry it had appended
+# (coordinator.cc, raft::commit_status_unknown).  A SERVER_ERROR for now.
+OUTCOME_UNKNOWN = "outcome of this statement is unknown"
+
+
+def tolerate_reboot(
+    exc: BaseException, ctx: FailureContext,
+) -> Optional[Outcome]:
+    """Accept the failures a stopped, killed or restarting node causes.
+
+    Whenever they happen: what each of them says about the operation holds
+    while the node is down and after it is back alike.  Whether the cluster
+    may raise them at that moment is a claim of the test, not of the outcome:
+    wrap it in :func:`only_during` to make it.
+
+    Relies on the driver's retries being off, which the workload guarantees
+    (see :meth:`RegisterWorkload.prepare`): each recorded operation is one
+    attempt at one node, and its error says what became of it.
+
+    ==============================  =========  ============================
+    exception                       status     why
+    ==============================  =========  ============================
+    NoHostAvailable                 fail       no live host to send it to:
+                                               it never left the client
+    ServerError "unknown verb"      fail       forwarded to a node whose CQL
+                                               server, which registers the
+                                               forwarding verbs, is not up
+                                               yet (SCYLLADB-4722); refused
+                                               before anything ran
+    ConnectionException (write)     unknown    the connection died with the
+                                               request in flight
+    ServerError "outcome unknown"   unknown    raft appended the entry and
+      (write)                                  lost its term before it knew
+                                               whether it was committed
+    either of these (read)          fail       a read changes no state
+    anything else                   as tolerate_unavailability
+    ==============================  =========  ============================
+    """
+    if isinstance(exc, NoHostAvailable) or (
+            isinstance(exc, ServerError) and "unknown verb" in str(exc)):
+        return Outcome.FAIL
+    if isinstance(exc, ConnectionException) or (
+            isinstance(exc, ServerError) and OUTCOME_UNKNOWN in str(exc)):
+        return Outcome.UNKNOWN if ctx.is_write else Outcome.FAIL
+    return tolerate_unavailability(exc, ctx)
