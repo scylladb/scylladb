@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <ranges>
 
 #include <seastar/core/coroutine.hh>
@@ -19,6 +20,7 @@
 #include "service/read_page_resolution.hh"
 #include "mutation/async_utils.hh"
 #include "mutation/mutation_partition.hh"
+#include "query/query_result_merger.hh"
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/log.hh"
@@ -494,6 +496,78 @@ public:
     }
 };
 
+// The cursor of a page which ends at the frontier stop `stop`. The pager
+// moves past the partition of a cursor outside the clustering rows, so a stop
+// before the static row becomes a cursor before the clustering rows. The
+// next page then continues the partition from its start.
+full_position cursor_of(full_position stop) {
+    if (stop.position.region() == partition_region::static_row) {
+        stop.position = position_in_partition::before_all_clustered_rows();
+    }
+    return stop;
+}
+
+// `m` without what lies at or after `pos`, in the order of `m`'s schema. The
+// partition tombstone precedes every position of the partition, and the
+// static row precedes every clustering position.
+mutation cut_before(const mutation& m, position_in_partition_view pos) {
+    const auto& s = *m.schema();
+    switch (pos.region()) {
+    case partition_region::partition_start:
+        return mutation(m.schema(), m.decorated_key());
+    case partition_region::static_row: {
+        mutation header(m.schema(), m.decorated_key());
+        header.partition().apply(m.partition().partition_tombstone());
+        return header;
+    }
+    case partition_region::clustered: {
+        if (position_in_partition(pos).is_before_all_clustered_rows(s)) {
+            return m.sliced({});
+        }
+        auto range = position_range_to_clustering_range(position_range(position_in_partition::before_all_clustered_rows(), position_in_partition(pos)), s);
+        return m.sliced(range ? query::clustering_row_ranges{*range} : query::clustering_row_ranges{});
+    }
+    case partition_region::partition_end:
+        return m;
+    }
+    std::abort();
+}
+
+// Removes the data of `m` which is dead at every query time: the cells
+// which tombstones cover, the rows without live data, and the range
+// tombstones, which then cover nothing. Nothing expires at the minimal time,
+// like in to_data_query_result(). Keeps the partition tombstone and the
+// tombstones of live rows.
+void drop_dead_data(mutation& m) {
+    static const std::vector<query::clustering_range> all_rows = {query::clustering_range::make_open_ended_both_sides()};
+    const auto& s = *m.schema();
+    auto& mp = m.partition();
+    mp.compact_for_query(s, m.decorated_key(), gc_clock::time_point::min(), all_rows, true, query::partition_max_rows);
+    auto& rows = mp.mutable_clustered_rows();
+    for (auto it = rows.begin(); it != rows.end();) {
+        if (!it->dummy() && !it->row().is_live(s, column_kind::regular_column, tombstone(), gc_clock::time_point::min())) {
+            it = rows.erase_and_dispose(it, current_deleter<rows_entry>());
+        } else {
+            ++it;
+        }
+    }
+    mp.mutable_row_tombstones().clear();
+}
+
+// The number of live clustering rows of `m` at `query_time`. Unlike
+// mutation_partition::live_row_count(), a live static row does not count.
+uint64_t live_clustering_row_count(const mutation& m, gc_clock::time_point query_time) {
+    const auto& s = *m.schema();
+    const auto& mp = m.partition();
+    uint64_t count = 0;
+    for (const rows_entry& e : mp.non_dummy_rows()) {
+        if (e.row().is_live(s, column_kind::regular_column, mp.range_tombstone_for_row(s, e.key()), query_time)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 } // anonymous namespace
 
 void prepare_mutation_read(query::read_command& cmd, bool empty_replica_mutation_pages) {
@@ -602,20 +676,363 @@ const std::optional<full_position>& foreground_reply_collector::min_position() c
     })->last_pos;
 }
 
-digest_page_decision decide_digest_page(const schema& s, digest_read_result cl_result, const foreground_reply_collector& replies,
-        bool empty_replica_pages) {
-    if (!cl_result.digests_match) {
-        return digest_page_mismatch{};
+namespace detail {
+
+digest_page_decision decide_digest_page_at_stop(const schema& s, const query::read_command& cmd,
+        foreign_ptr<lw_shared_ptr<query::result>> result, const full_position& stop) {
+    result->ensure_counts();
+    if (*result->row_count() >= cmd.get_row_limit() || *result->partition_count() >= cmd.partition_limit) {
+        result->set_last_position(cursor_of(stop));
+        return accepted_digest_page{std::move(result)};
     }
-    auto& result = cl_result.result;
-    if (empty_replica_pages && replies.response_count() > 1) {
-        auto& mp = replies.min_position();
-        auto& lp = result->last_position();
-        if (!mp || bool(lp) < bool(mp) || full_position::cmp(s, *mp, *lp) < 0) {
-            result->set_last_position(mp);
+    if (cmd.slice.options.contains<query::partition_slice::option::allow_short_read>()) {
+        result->set_short_read(query::short_read::yes);
+        result->set_last_position(cursor_of(stop));
+        return accepted_digest_page{std::move(result)};
+    }
+    // The page must go on after E, but the replies do not cover it.
+    return digest_page_mismatch{};
+}
+
+void lower_to_min_position(const schema& s, query::result& result, const foreground_reply_collector& replies) {
+    auto& mp = replies.min_position();
+    auto& lp = result.last_position();
+    if (!mp || bool(lp) < bool(mp) || full_position::cmp(s, *mp, *lp) < 0) {
+        result.set_last_position(mp);
+    }
+}
+
+} // namespace detail
+
+frontier_reconciliation::frontier_reconciliation(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd, dht::partition_range range)
+    : _schema(std::move(schema))
+    , _cmd(std::move(cmd))
+    , _range(std::move(range))
+    , _round_cmd(make_lw_shared<query::read_command>(*_cmd))
+    , _round_range(_range)
+    , _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema))
+{
+    if (!_cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
+        on_internal_error(rplogger, "frontier_reconciliation: the command does not ask for frontiers");
+    }
+    // The feature read_frontiers implies empty_replica_mutation_pages.
+    prepare_mutation_read(*_round_cmd, true);
+}
+
+future<query::result> frontier_reconciliation::convert(size_t count) {
+    utils::chunked_vector<partition> partitions;
+    partitions.reserve(count);
+    uint64_t row_count = 0;
+    for (const auto& m : _reconciled | std::views::take(count)) {
+        const auto live_rows = m.live_row_count(_cmd->timestamp);
+        row_count += live_rows;
+        partitions.emplace_back(live_rows, freeze(m));
+        co_await coroutine::maybe_yield();
+    }
+    const reconcilable_result reconciled(row_count, std::move(partitions), query::short_read::no);
+    rplogger.trace("reconciled: {}", reconciled.pretty_printer(_schema));
+    // A per-partition limit applies within one partition, so a conversion
+    // which starts at a partition boundary needs only the row and partition
+    // limits which remain.
+    co_return co_await to_data_query_result(reconciled, _schema, _cmd->slice, _cmd->get_row_limit() - _converted_rows,
+            _cmd->partition_limit - _converted_partitions);
+}
+
+void frontier_reconciliation::keep(query::result result) {
+    result.set_frontier(std::nullopt);
+    result.ensure_counts();
+    _converted_rows += *result.row_count();
+    _converted_partitions += *result.partition_count();
+    _converted.push_back(make_foreign(make_lw_shared<query::result>(std::move(result))));
+}
+
+query::result frontier_reconciliation::converted_page() {
+    query::result_merger merger(_cmd->get_row_limit(), _cmd->partition_limit);
+    merger.reserve(_converted.size());
+    for (auto& r : _converted) {
+        merger(std::move(r));
+    }
+    _converted.clear();
+    return std::move(*merger.get());
+}
+
+future<std::optional<accepted_mutation_page>> frontier_reconciliation::add_round(std::vector<mutation_page_reply> replies) {
+    const schema& s = *_schema;
+    const position_in_partition::tri_compare pos_cmp(s);
+
+    // The common frontier E, before E moves back to an incomplete skip: the
+    // earliest stop, and the earliest skip of each partition.
+    std::optional<full_position> stop;
+    std::map<dht::decorated_key, position_in_partition, dht::decorated_key::less_comparator> skips{dht::decorated_key::less_comparator(_schema)};
+    for (const auto& r : replies) {
+        const auto& frontier = r.result->frontier();
+        if (!frontier) {
+            on_internal_error(rplogger, fmt::format("The mutation reply of {} for {}.{} has no frontier", r.from, s.ks_name(), s.cf_name()));
+        }
+        if (frontier->stop && (!stop || full_position::cmp(s, *frontier->stop, *stop) < 0)) {
+            stop = frontier->stop;
+        }
+        for (const auto& skip : r.result->skips()) {
+            // The wire names a skip's partition by its index in the reply.
+            if (skip.partition >= r.result->partitions().size()) {
+                on_internal_error(rplogger, fmt::format("The mutation reply of {} for {}.{} has a skip of partition {}, but only {} partitions",
+                        r.from, s.ks_name(), s.cf_name(), skip.partition, r.result->partitions().size()));
+            }
+            auto [it, added] = skips.emplace(r.result->partitions()[skip.partition].mut().decorated_key(s), skip.position);
+            if (!added && pos_cmp(skip.position, it->second) < 0) {
+                it->second = skip.position;
+            }
         }
     }
-    return accepted_digest_page{std::move(result)};
+    const std::optional<dht::decorated_key> stop_key = stop ? std::optional(dht::decorate_key(s, stop->partition)) : std::nullopt;
+
+    // Where the merged data of a partition ends: at its skip, or at the stop
+    // in the stop's partition. nullopt for a partition after the stop.
+    auto cut_of = [&] (const dht::decorated_key& dk) -> std::optional<position_in_partition> {
+        auto cut = position_in_partition::for_partition_end();
+        if (stop_key) {
+            const auto c = dk.tri_compare(s, *stop_key);
+            if (c > 0) {
+                return std::nullopt;
+            }
+            if (c == 0) {
+                cut = stop->position;
+            }
+        }
+        if (auto it = skips.find(dk); it != skips.end() && pos_cmp(it->second, cut) < 0) {
+            cut = it->second;
+        }
+        return cut;
+    };
+
+    // The versions of each partition, cut, in ring order.
+    struct version {
+        locator::host_id from;
+        mutation mut;
+    };
+    std::map<dht::decorated_key, std::vector<version>, dht::decorated_key::less_comparator> versions{dht::decorated_key::less_comparator(_schema)};
+    const auto hosts = replies | std::views::transform(&mutation_page_reply::from) | std::ranges::to<std::vector>();
+    for (const auto& r : replies) {
+        for (const partition& p : r.result->partitions()) {
+            auto dk = p.mut().decorated_key(s);
+            auto cut = cut_of(dk);
+            if (!cut) {
+                break;
+            }
+            auto m = cut_before(co_await unfreeze_gently(p.mut(), _schema), *cut);
+            versions[std::move(dk)].push_back(version{r.from, std::move(m)});
+        }
+    }
+    replies.clear();
+
+    // Merge.
+    std::vector<mutation> merged;
+    merged.reserve(versions.size());
+    for (const auto& [dk, vs] : versions) {
+        mutation m = vs.front().mut;
+        for (const auto& v : vs | std::views::drop(1)) {
+            co_await apply_gently(m, v.mut);
+        }
+        merged.push_back(std::move(m));
+    }
+
+    // A skip is incomplete if the merged partition, with the part of it which
+    // earlier rounds reconciled, holds fewer live rows than the limit before
+    // the skip. The first incomplete skip moves E back to it. A complete skip
+    // in the stop's partition decides that partition, and moves E to its
+    // end.
+    std::optional<full_position> end = stop;
+    const uint64_t partition_row_limit = query::effective_partition_row_limit(_cmd->slice);
+    for (const auto& [dk, skip] : skips) {
+        auto cut = cut_of(dk);
+        if (!cut || pos_cmp(*cut, skip) != 0) {
+            // The skip lies after the stop.
+            break;
+        }
+        auto m = std::ranges::find_if(merged, [&] (const mutation& m) { return m.decorated_key().equal(s, dk); });
+        uint64_t live_rows = 0;
+        if (m != merged.end()) {
+            if (!_reconciled.empty() && _reconciled.back().decorated_key().equal(s, dk)) {
+                auto whole = _reconciled.back();
+                whole.apply(*m);
+                live_rows = live_clustering_row_count(whole, _cmd->timestamp);
+            } else {
+                live_rows = live_clustering_row_count(*m, _cmd->timestamp);
+            }
+        }
+        if (live_rows < partition_row_limit) {
+            end = full_position(dk.key(), skip);
+            break;
+        }
+        if (stop_key && dk.equal(s, *stop_key)) {
+            end = full_position(dk.key(), position_in_partition::for_partition_end());
+            break;
+        }
+    }
+    const std::optional<dht::decorated_key> end_key = end ? std::optional(dht::decorate_key(s, end->partition)) : std::nullopt;
+    const auto after_end = [&] (const dht::decorated_key& dk) {
+        return end_key && dk.tri_compare(s, *end_key) > 0;
+    };
+
+    // Repair diffs, from the data before E. Every target gets an entry for
+    // every partition, so that the repair writes count the replies of all
+    // targets (for their CL).
+    size_t i = 0;
+    for (auto& [dk, vs] : versions) {
+        const mutation& m = merged[i++];
+        if (after_end(dk)) {
+            break;
+        }
+        auto& diffs = _diffs[dk.key()];
+        for (const auto& host : hosts) {
+            auto v = std::ranges::find(vs, host, &version::from);
+            auto diff = v != vs.end() ? m.partition().difference(s, v->mut.partition()) : mutation_partition(s, m.partition());
+            auto& d = diffs[host];
+            if (!diff.empty()) {
+                auto mdiff = mutation(_schema, dk, std::move(diff));
+                if (d) {
+                    co_await apply_gently(*d, std::move(mdiff));
+                } else {
+                    d = std::move(mdiff);
+                }
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    // Append the data before E to the data of the earlier rounds. The first
+    // partition may continue the last one of the previous round.
+    for (auto& m : merged) {
+        if (after_end(m.decorated_key())) {
+            break;
+        }
+        if (m.partition().empty()) {
+            continue;
+        }
+        if (!_reconciled.empty() && _reconciled.back().decorated_key().equal(s, m.decorated_key())) {
+            co_await apply_gently(_reconciled.back(), std::move(m));
+        } else {
+            _reconciled.push_back(std::move(m));
+        }
+    }
+    merged.clear();
+    versions.clear();
+
+    // All partitions but the last one are final. Convert them once, and keep
+    // only their conversion. Then convert the last partition, unless the
+    // final partitions reached the limits. Its conversion counts only if the
+    // page ends, because the next round converts it again.
+    std::optional<full_position> conversion_stop;
+    if (_reconciled.size() > 1) {
+        auto conversion = co_await convert(_reconciled.size() - 1);
+        conversion_stop = conversion.frontier().value().stop;
+        keep(std::move(conversion));
+        auto last = std::move(_reconciled.back());
+        _reconciled.clear();
+        _reconciled.push_back(std::move(last));
+    }
+    std::optional<query::result> last_conversion;
+    if (!conversion_stop && !_reconciled.empty()) {
+        last_conversion = co_await convert(1);
+        conversion_stop = last_conversion->frontier().value().stop;
+    }
+
+    // _reconciled ends at E. If E lies inside a partition, _reconciled holds
+    // only the part of that partition before E. to_data_query_result() cannot
+    // tell that part from a whole partition, so it ends the partition after
+    // that part. If the partition limit runs out there, it reports a stop at
+    // the end of the partition. That stop is false, because the partition's
+    // rows after E may still belong on the page. Ignore it, so that the page
+    // ends at E instead.
+    if (conversion_stop && end && conversion_stop->position.region() == partition_region::partition_end
+            && end->position.region() != partition_region::partition_end && conversion_stop->partition.equal(s, end->partition)) {
+        conversion_stop.reset();
+    }
+
+    bool short_page = false;
+    std::optional<full_position> page_cursor;
+    if (conversion_stop) {
+        page_cursor = cursor_of(std::move(*conversion_stop));
+    } else if (end) {
+        // The next round starts at E. With a cursor inside a partition, it
+        // reads the rest of the partition's clustering ranges.
+        const auto& ek = *end_key;
+        std::optional<query::clustering_row_ranges> ranges;
+        if (end->position.region() != partition_region::partition_end) {
+            auto rest = _cmd->slice.row_ranges(s, end->partition);
+            query::trim_clustering_row_ranges_to(s, rest, cursor_of(*end).position);
+            if (!rest.empty()) {
+                ranges = std::move(rest);
+            }
+        }
+        std::optional<dht::partition_range> rest_of_range;
+        if (ranges) {
+            rest_of_range = _range.is_singular() ? dht::partition_range::make_singular(ek)
+                    : dht::partition_range(dht::partition_range::bound(dht::ring_position(ek), true), _range.end());
+        } else if (!_range.is_singular() && (!_range.end() || ek.tri_compare(s, _range.end()->value()) < 0)) {
+            rest_of_range = dht::partition_range(dht::partition_range::bound(dht::ring_position(ek), false), _range.end());
+        }
+        if (!rest_of_range) {
+            // Nothing of the range remains after E, so the page reached the
+            // end of the range.
+        } else if (_cmd->slice.options.contains<query::partition_slice::option::allow_short_read>()) {
+            short_page = true;
+            page_cursor = cursor_of(*end);
+        } else {
+            if (_round_start && full_position::cmp(s, *end, *_round_start) <= 0) {
+                on_internal_error(rplogger, fmt::format("A reconciliation round of {}.{} did not move past its start {}",
+                        s.ks_name(), s.cf_name(), _round_start->position));
+            }
+            _round_start = end;
+            _round_range = std::move(*rest_of_range);
+            _round_cmd = make_lw_shared<query::read_command>(*_cmd);
+            _round_cmd->slice.clear_ranges();
+            if (ranges) {
+                _round_cmd->slice.set_range(s, end->partition, std::move(*ranges));
+            }
+            prepare_mutation_read(*_round_cmd, true);
+            // The next round converts the last partition again. Keep only its
+            // live data, so that it does not grow with the rounds.
+            if (!_reconciled.empty()) {
+                drop_dead_data(_reconciled.back());
+            }
+            co_return std::nullopt;
+        }
+    }
+
+    if (last_conversion) {
+        keep(std::move(*last_conversion));
+    }
+    auto result = converted_page();
+    if (short_page) {
+        result.set_short_read(query::short_read::yes);
+    }
+    if (page_cursor) {
+        result.set_last_position(std::move(*page_cursor));
+    }
+
+    // Drop the partitions without diffs. Un-reverse the diffs of reversed
+    // queries, like resolve_mutation_page().
+    // (There are no "reverse writes", so the repair diffs have to be
+    // converted to non-reverse diffs).
+    for (auto it = _diffs.begin(); it != _diffs.end();) {
+        if (std::ranges::none_of(it->second | std::views::values, std::mem_fn(&std::optional<mutation>::operator bool))) {
+            it = _diffs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (_cmd->slice.is_reversed()) {
+        for (auto&& [key, diff] : _diffs) {
+            for (auto&& [host, opt_mut] : diff) {
+                if (opt_mut) {
+                    opt_mut = reverse(std::move(opt_mut.value()));
+                    co_await coroutine::maybe_yield();
+                }
+            }
+        }
+    }
+    co_return accepted_mutation_page{std::move(result), std::move(_diffs)};
 }
 
 } // namespace service
