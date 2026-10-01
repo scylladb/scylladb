@@ -19,6 +19,7 @@ import hashlib
 import datetime
 import gzip
 import decimal
+import os
 import re
 
 from botocore.exceptions import ClientError
@@ -26,7 +27,9 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read
+from test.pylib.s3mock_server import S3MockServer
+from test.pylib.skip_types import skip_env
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -56,14 +59,28 @@ def unique_bucket_name():
 
 # An S3 client in the "dynamodb" fixture's region. DynamoDB allows a bucket
 # in another region, but keeping it in the table's region saves cost and
-# latency. Local testing does not run an S3 server (such as MinIO) yet.
+# latency. Local testing uses the S3 server of the test framework
+# (test/pylib/s3mock_server.py). The address and the credentials are in the
+# environment. If there is no S3 server, or Scylla does not know it, the test
+# is skipped. test/alternator/run starts a server only with "--s3".
 def make_s3_client(dynamodb):
     if is_aws(dynamodb):
         return boto3.client('s3', region_name=dynamodb.meta.client.meta.region_name)
-    raise NotImplementedError(
-        'local testing does not run an S3 server (such as MinIO) yet')
+    if S3MockServer.ENV_ADDRESS not in os.environ:
+        skip_env('No S3 server was started for this run (test/alternator/run needs the "--s3" option to start one)')
+    # Scylla does the export, so it must have the server in
+    # object_storage_endpoints.
+    if not json.loads(scylla_config_read(dynamodb, 'object_storage_endpoints') or '{}'):
+        skip_env('Scylla was not configured with any object_storage_endpoints')
+    return boto3.client('s3',
+        endpoint_url=f"http://{os.environ[S3MockServer.ENV_ADDRESS]}:{os.environ[S3MockServer.ENV_PORT]}",
+        aws_access_key_id=os.environ[S3MockServer.ENV_ACCESS_KEY],
+        aws_secret_access_key=os.environ[S3MockServer.ENV_SECRET_KEY],
+        region_name=S3MockServer.DEFAULT_REGION,
+        config=boto3.session.Config(signature_version='s3v4'))
 
-# An S3 client for the bucket of a test. See make_s3_client().
+# An S3 client for the bucket of a test. The test is skipped if there is no S3 server, or if
+# Scylla does not know it. See make_s3_client().
 @pytest.fixture
 def s3(dynamodb):
     return make_s3_client(dynamodb)
@@ -89,41 +106,44 @@ def new_s3_bucket(s3_client, bucket_name=None):
         # and leak the bucket. Denying Put makes the export's next write
         # fail, so DynamoDB ends the export as FAILED and stops writing.
         # Delete/List stay allowed for our cleanup.
-        policy = {
-            'Version': '2012-10-17',
-            'Statement': [{
-                'Sid': 'BlockWrites',
-                'Effect': 'Deny',
-                'Principal': '*',
-                'Action': ['s3:PutObject', 's3:PutObjectAcl'],
-                'Resource': f'arn:aws:s3:::{bucket_name}/*',
-            }],
-        }
-        try:
-            s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-        except ClientError as ce:
-            logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
-            # Not yet fatal - fall through to the retry loop below.
-
-        # Delete all objects, then the bucket.
-        deadline = time.time() + 60 # 60-second timeout for bucket deletion
-        while time.time() < deadline:
-            paginator = s3_client.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=bucket_name):
-                if 'Contents' in page:
-                    s3_client.delete_objects(
-                        Bucket=bucket_name,
-                        Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
-                    )
+        # We do not clean up on S3Mock: the cleanup below sometimes takes more than 1 minute.
+        # The S3Mock shutdown removes the data.
+        if is_aws(s3_client):
+            policy = {
+                'Version': '2012-10-17',
+                'Statement': [{
+                    'Sid': 'BlockWrites',
+                    'Effect': 'Deny',
+                    'Principal': '*',
+                    'Action': ['s3:PutObject', 's3:PutObjectAcl'],
+                    'Resource': f'arn:aws:s3:::{bucket_name}/*',
+                }],
+            }
             try:
-                s3_client.delete_bucket(Bucket=bucket_name)
-                break
+                s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
             except ClientError as ce:
-                if ce.response['Error']['Code'] != 'BucketNotEmpty':
-                    raise
-                time.sleep(2)
-        else:
-            assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
+                logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
+                # Not yet fatal - fall through to the retry loop below.
+
+            # Delete all objects, then the bucket.
+            deadline = time.time() + 60 # 60-second timeout for bucket deletion
+            while time.time() < deadline:
+                paginator = s3_client.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=bucket_name):
+                    if 'Contents' in page:
+                        s3_client.delete_objects(
+                            Bucket=bucket_name,
+                            Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
+                        )
+                try:
+                    s3_client.delete_bucket(Bucket=bucket_name)
+                    break
+                except ClientError as ce:
+                    if ce.response['Error']['Code'] != 'BucketNotEmpty':
+                        raise
+                    time.sleep(2)
+            else:
+                assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
 
 
 # A new table with a string partition key `p` and no sort key.
@@ -933,8 +953,7 @@ def test_export_client_token_changed_incremental_export_spec_fields(dynamodb, te
             )
 
 
-# Test that starts two exports on the same table (no ClientToken)
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
+# Test that starts two exports on the same table (boto generates a different ClientToken for each)
 def test_export_two_exports_without_client_token(test_table_s, s3):
     table = test_table_s
     client = enable_pitr(table)
