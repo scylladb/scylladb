@@ -489,3 +489,72 @@ async def test_replace_sc_replica_after_log_truncation(manager: ScyllaClusterMan
             await read_back(cql, hosts[live_servers.index(query)], table, key_count, ConsistencyLevel.QUORUM)
             await read_back(cql, hosts[live_servers.index(new_replica)], table, key_count, ConsistencyLevel.ONE)
             await reconnect_driver(manager)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.parametrize("leader_leaves", [
+    pytest.param(False, id="follower_leaves"),
+    pytest.param(True, id="leader_leaves", marks=pytest.mark.skip_bug(
+        link="https://scylladb.atlassian.net/browse/SCYLLADB-4933",
+        reason="a write waiting on the leaving ex-leader fails when its raft group is torn down at use_new"))])
+async def test_lower_rf_of_sc_keyspace_under_writes(manager: ScyllaClusterManager, leader_leaves: bool):
+    """
+    Lowering RF from 3 to 2 drops one replica of each tablet and must not fail
+    the clients' writes. The rack to drop is picked once the product has elected
+    a leader: in leader_leaves it is the leader's rack.
+    """
+    logger.info("Bootstrapping cluster, follower-only rack rack1")
+    servers = await boot_sc_cluster(manager, ['rack1', 'rack2', 'rack3'], {'rack1'})
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    rack_of = {h: s.rack for h, s in zip(host_ids, servers)}
+
+    def replication(racks: list[str]) -> str:
+        return f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {racks}}}"
+
+    racks = ['rack1', 'rack2', 'rack3']
+    async with new_test_keyspace(manager, SC_CONFIG.get_keyspace_opts(f"{replication(racks)} AND tablets = {{'initial': 1}}")) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            # rack1 cannot campaign, so the leader is on rack2 or rack3.
+            leader = await wait_for_leader(manager, servers[0], group_id)
+            assert rack_of[leader] != 'rack1', f"The follower-only rack1 replica {leader} leads"
+            dropped = rack_of[leader] if leader_leaves else 'rack1'
+            staying = [r for r in racks if r != dropped]
+            # When the leader leaves, the other eligible replica is the only one that can lead.
+            expected_leader = next(h for h, r in rack_of.items() if r in staying and r != 'rack1') if leader_leaves else leader
+            logger.info(f"group_id={group_id} leader={leader} ({rack_of[leader]}), dropping {dropped}, "
+                        f"expected leader after {expected_leader}")
+
+            logger.info("Starting strict writes")
+            finish = await start_writes(cql, ks, table_name, concurrency=1)
+            try:
+                logger.info(f"Lowering RF to {staying}")
+                await cql.run_async(f"ALTER KEYSPACE {ks} {replication(staying)}")
+                await manager.api.quiesce_topology(servers[0].ip_addr)
+                logger.info("RF lowered")
+            finally:
+                # finish() re-raises the first failed write or read-back.
+                key_count = await asyncio.wait_for(finish(), 300)
+            logger.info(f"key_count={key_count}")
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1, f"Expected 1 tablet, got {tablets}"
+            replicas = [h for h, _ in tablets[0].replicas]
+            assert sorted(rack_of[h] for h in replicas) == staying, f"Expected replicas on {staying}, got {tablets[0].replicas}"
+
+            # Ask a staying replica: the dropped one no longer hears from the group.
+            staying_server = servers[host_ids.index(replicas[0])]
+
+            async def expected_leader_leads():
+                return await manager.api.get_raft_leader(staying_server.ip_addr, group_id) == expected_leader or None
+            await wait_for(expected_leader_leads, time.time() + 60, label=f"{expected_leader} to lead")
+
+            for h in replicas:
+                server = servers[host_ids.index(h)]
+                # After the barrier the CL=ONE read-back proves the replica holds every acked write.
+                await read_barrier(manager.api, server.ip_addr, group_id, timeout=60)
+                await read_back(cql, hosts[servers.index(server)], table, key_count, ConsistencyLevel.ONE)
+            await read_back(cql, hosts[0], table, key_count, ConsistencyLevel.QUORUM)
