@@ -24,7 +24,9 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "service/strong_consistency/coordinator.hh"
+#include "gms/feature_service.hh"
 #include "cql3/CqlParser.hpp"
+#include "cql3/statements/authentication_statement.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/util.hh"
@@ -602,6 +604,25 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
     }
 
     auto [remote_, holder] = remote();
+
+    // Run on the group 0 leader, where the operation mutex serializes the
+    // statement with the other group 0 writers; a follower's guard loses every
+    // conflict against them. Stay local for:
+    // - internal callers (they cannot handle a bounce)
+    // - the maintenance socket (its auth bypass is not forwarded)
+    // - role statements (plaintext passwords)
+    // - statements already forwarded here (at most one bounce).
+    const auto& client_state = query_state.get_client_state();
+    if (!client_state.is_internal() && !client_state.bypass_auth_checks() && !client_state.is_forwarded()
+            && !dynamic_cast<const statements::authentication_statement*>(statement.get())
+            && _proxy.features().ddl_forwarding) {
+        auto leader = remote_.get().group0_client.group0_leader();
+        if (leader && *leader != _proxy.get_token_metadata_ptr()->get_topology().my_host_id()) {
+            log.debug("Forwarding guarded statement to group0 leader {}", *leader);
+            // Barrier on reply: apply the change locally before the client gets the answer.
+            co_return bounce_to_node({*leader, 0}, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), db::no_timeout, true, {}, true);
+        }
+    }
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
     while (true)  {
         try {
