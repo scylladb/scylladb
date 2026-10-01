@@ -2209,6 +2209,12 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
                 stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
 
+            if ((*bounce_msg)->group0_barrier()) {
+                // Catch up with the leader so the change is applied here when the
+                // client gets the reply, as with local execution.
+                co_await _query_processor.invoke_on(0, [] (cql3::query_processor& qp) { return qp.group0_read_barrier(); });
+            }
+
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
     }

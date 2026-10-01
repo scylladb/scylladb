@@ -165,6 +165,10 @@ public:
     // Call only on shard 0.
     std::optional<locator::host_id> group0_leader();
 
+    // Waits until this node has applied every group 0 entry committed so far.
+    // Call only on shard 0.
+    future<> read_barrier();
+
     gc_clock::duration get_history_gc_duration() const;
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
