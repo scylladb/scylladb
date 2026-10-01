@@ -201,7 +201,8 @@ def download_scylla_version(major: Optional[int] = None, minor: Optional[int] = 
     resolved from the requested `major`, `minor`, `patch`, and `rc` components,
     using the latest available value for any missing component. If `rc` is provided,
     `patch` is treated as 0. Returns the path to the downloaded file on success, or
-    `None` if no matching version is found or the download fails after all retries.
+    `None` if no matching version is found or the download fails after all `retry`
+    attempts, or when it gives up because downloading took over 10 minutes.
     Args:
         major: ScyllaDB major version to fetch.
         minor: ScyllaDB minor version to fetch.
@@ -230,21 +231,33 @@ def download_scylla_version(major: Optional[int] = None, minor: Optional[int] = 
 
     output_path = Path(output_dir) / url.rsplit("/", 1)[-1]
 
+    # The timeout applies separately to each read, and to connecting to each
+    # of the server's addresses in turn (downloads.scylladb.com has 12), so
+    # when the server is unreachable a single attempt can take many minutes,
+    # and a server which keeps sending data slowly never trips it. Therefore,
+    # give up after 10 minutes - don't start another attempt, and stop one
+    # still receiving data - letting the caller fall back to a cached version
+    # well before the test times out.
+    deadline = time.monotonic() + 10 * 60
     for i in range(retry):
         try:
             with urllib.request.urlopen(url, timeout=60) as response:
                 if response.status == 200:
                     with output_path.open("wb") as f:
-                        while chunk := response.read(KB):
+                        # read1(), not read(): read() keeps reading until it has
+                        # the whole chunk, so with a slow server a single call
+                        # could outlast the deadline. read1() reads the socket
+                        # at most once, so it returns within the 60s timeout.
+                        while chunk := response.read1(KB):
                             f.write(chunk)
+                            if time.monotonic() > deadline:
+                                return None
                     return output_path
-                if i == retry - 1:
-                    return None
-                time.sleep(1)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
-            if i == retry - 1:
-                return None
-            time.sleep(1)
+            pass
+        if i == retry - 1 or time.monotonic() > deadline:
+            return None
+        time.sleep(1)
     return None
 
 
