@@ -57,7 +57,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
         token,
         [&](api::timestamp_type ts) {
             return get_mutation(stmt, options, ts, spec);
-        }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options, stmt.may_use_token_aware_routing()));
+        }, qs.get_trace_state(), timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options, stmt.may_use_token_aware_routing()));
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {

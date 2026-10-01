@@ -109,7 +109,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
                 on_internal_error(logger, "batch produced no mutations");
             }
             return std::move(*merged);
-        }, timeout, qs.get_client_state().get_abort_source(),
+        }, qs.get_trace_state(), timeout, qs.get_client_state().get_abort_source(),
         // Only EXECUTE requests carry a tablet version block; a BATCH doesn't, so there
         // is no routing information to hand back.
         std::nullopt);
