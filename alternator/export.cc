@@ -18,6 +18,7 @@
 #include "db_clock.hh"
 #include "db/config.hh"
 #include "db/consistency_level.hh"
+#include "db/consistency_level_type.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/timeout_clock.hh"
@@ -1563,21 +1564,43 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // Only the request that inserts the client token row runs the export. After that insert (it
     // can apply even if it throws), a failure must write the FAILED export row, because the
-    // garbage collector does that only for dead nodes.
+    // garbage collector does that only for dead nodes. If the insert throws and the token row has
+    // a different ARN, the token is of another request, and we write no row. If the insert throws
+    // an unavailable error, it did not apply, and we write no row either.
     // `own_export_arn` is true if the ARN of `erow` belongs to this request.
+    // Both writes convert overload errors to RequestLimitExceeded (see
+    // translate_coordinator_errors()). We still write the FAILED export row, because a refused
+    // CAS can still apply. If the token row has our ARN, the client then gets that FAILED export,
+    // not RequestLimitExceeded, because a retry with the same ClientToken must get the same
+    // answer. Otherwise the retry can start a different export, so the client gets the error.
+    // `client_token_is_ours` is false if the token insert threw and we did not find our token row.
     bool own_export_arn = true;
+    bool client_token_insert_returned = false;
+    bool client_token_is_ours = true;
     std::exception_ptr failure;
 
     try {
         db::alternator_export_table_helper helper(_sdks.qp());
-        // The insert returns the existing token row if it did not apply.
+        // The insert returns the existing token row if it did not apply. Tests use the injection
+        // to fail the insert as a coordinator without enough live replicas does.
         const client_row new_client_row{
             .client_token = client_token,
             .export_arn = export_arn,
             .request = stored_request,
             .node_id = node_id.to_string(),
         };
-        auto existing_client_row = co_await translate_coordinator_errors(helper.insert_client_token(new_client_row));
+        auto existing_client_row = co_await translate_coordinator_errors(seastar::futurize_invoke([&] {
+            utils::get_local_injector().inject("alternator_export_to_s3_client_token_insert_unavailable",
+                    [] { throw exceptions::unavailable_exception(
+                            "injected failure alternator_export_to_s3_client_token_insert_unavailable",
+                            db::consistency_level::SERIAL, 2, 1); });
+            utils::get_local_injector().inject("alternator_export_to_s3_client_token_insert_timeout",
+                    [] { throw exceptions::mutation_write_timeout_exception(
+                            sstring("injected failure alternator_export_to_s3_client_token_insert_timeout"),
+                            db::consistency_level::SERIAL, 0, 2, db::write_type::CAS); });
+            return helper.insert_client_token(new_client_row);
+        }));
+        client_token_insert_returned = true;
 
         utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_insertion",
                 [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_insertion"); });
@@ -1672,6 +1695,33 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         // Keep the failure for the failure message of the export row below.
         failure = std::current_exception();
     }
+    if (!client_token_insert_returned) {
+        // The coordinator throws an unavailable error before the CAS starts (see
+        // storage_proxy::cas()), so the token stays free. A FAILED row would answer this request,
+        // but a retry with the token would start a different export. Thus report the error, and
+        // the retry starts the export.
+        if (try_catch<exceptions::unavailable_exception>(failure)) {
+            std::rethrow_exception(failure);
+        }
+        // Our insert threw, so we do not know if it applied. A token row with a different ARN is
+        // final (our insert is IF NOT EXISTS): we have no export, and a FAILED row of our ARN would
+        // be an export without a client token. Any other result (no row, our row, a failed read)
+        // does not exclude that our insert applies, so we write the FAILED row below. Only our
+        // row tells that a retry gets this export. Without it (e.g. the insert timed out before
+        // a quorum accepted it), a retry can reserve the token for a new export, so we report
+        // the error, as for the unavailable error above.
+        std::optional<client_row> token_row;
+        try {
+            token_row = co_await get_client_row(_sdks, client_token, &qs);
+        } catch (...) {
+            xlogger.debug("Export {}: failed to read the client token row after a failed insert: {}",
+                    export_arn, std::current_exception());
+        }
+        if (token_row && token_row->export_arn != export_arn) {
+            std::rethrow_exception(failure);
+        }
+        client_token_is_ours = token_row.has_value();
+    }
     auto* e = try_catch<std::exception>(failure);
     if (_s3_exports->abort_requested()) {
         erow.failure_code = sstring(node_shutdown_failure_code);
@@ -1694,6 +1744,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     } catch (...) {
         xlogger.warn("Export {}: failed to write the FAILED state: {}", erow.export_arn, std::current_exception());
         throw;
+    }
+    if (!client_token_is_ours) {
+        std::rethrow_exception(failure);
     }
     // The token row has our ARN. Answer with the FAILED export, also for an api_error such as
     // RequestLimitExceeded. An SDK retries such an error with the same ClientToken, and the retry

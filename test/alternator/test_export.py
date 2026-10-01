@@ -2237,6 +2237,71 @@ def test_export_error_injection_export_row_insert_overloaded(cql, scylla_only, r
         assert_listed_with_status(client, table_arn, desc['ExportArn'], 'FAILED')
 
 
+# Test that a ClientToken insert which fails with an unavailable error writes nothing.
+def test_export_error_injection_client_token_insert_unavailable(cql, scylla_only, rest_api, test_table_s, s3):
+    injection = 'alternator_export_to_s3_client_token_insert_unavailable'
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        request = {'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token}
+        with scylla_inject_error(rest_api, injection, one_shot=True):
+            with pytest.raises(ClientError, match=f'InternalServerError.*{injection}'):
+                client.export_table_to_point_in_time(**request)
+        assert not list(cql.execute(SimpleStatement(
+            "SELECT export_arn FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+            consistency_level=ConsistencyLevel.ONE), [token]))
+        assert not list(cql.execute(SimpleStatement(
+            "SELECT export_arn FROM system_distributed.alternator_export_to_s3_exports WHERE client_token = %s ALLOW FILTERING",
+            consistency_level=ConsistencyLevel.ONE), [token]))
+
+        # The token is free, so the retry starts the export.
+        desc = client.export_table_to_point_in_time(**request)['ExportDescription']
+        assert desc['ExportStatus'] == 'IN_PROGRESS'
+        assert wait_for_export(client, desc['ExportArn'])['ExportStatus'] == 'COMPLETED'
+
+
+# Test that a ClientToken insert which times out without applying fails the request with the error,
+# not with a FAILED export: the token does not identify that export, so a retry starts a new one.
+# The FAILED export row is still written, for the case that the insert applies later.
+def test_export_error_injection_client_token_insert_timeout(cql, scylla_only, rest_api, test_table_s, s3):
+    injection = 'alternator_export_to_s3_client_token_insert_timeout'
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        request = {'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token}
+        failed_export_arns = []
+        try:
+            with scylla_inject_error(rest_api, injection, one_shot=True):
+                with pytest.raises(ClientError, match=f'InternalServerError.*{injection}'):
+                    client.export_table_to_point_in_time(**request)
+            assert not list(cql.execute(SimpleStatement(
+                "SELECT export_arn FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+                consistency_level=ConsistencyLevel.ONE), [token]))
+            failed_export_arns = [row.export_arn for row in cql.execute(SimpleStatement(
+                "SELECT export_arn FROM system_distributed.alternator_export_to_s3_exports WHERE client_token = %s ALLOW FILTERING",
+                consistency_level=ConsistencyLevel.ONE), [token])]
+            assert len(failed_export_arns) == 1
+            failed = client.describe_export(ExportArn=failed_export_arns[0])['ExportDescription']
+            assert failed['ExportStatus'] == 'FAILED'
+            assert failed['FailureCode'] == 'Exception'
+            assert f'injected failure {injection}' in failed['FailureMessage']
+
+            # The token is free, so the retry starts a new export.
+            desc = client.export_table_to_point_in_time(**request)['ExportDescription']
+            assert desc['ExportStatus'] == 'IN_PROGRESS'
+            assert desc['ExportArn'] != failed_export_arns[0]
+            assert wait_for_export(client, desc['ExportArn'])['ExportStatus'] == 'COMPLETED'
+        finally:
+            for export_arn in failed_export_arns:
+                cql.execute(SimpleStatement(
+                    "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+                    consistency_level=ConsistencyLevel.ONE), [export_arn])
+
+
 # Test that the export starts if the export row insert returns "not applied" but applied (this
 # can occur with a contended CAS). The row is ours. If we do not start the export, the row stays
 # IN_PROGRESS.
