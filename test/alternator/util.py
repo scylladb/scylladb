@@ -276,6 +276,23 @@ def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
         print("Disabling error injection", err)
         requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
 
+# Returns how many times Scylla entered the error injection `name` since it was enabled.
+def scylla_injection_enter_count(rest_api, name):
+    response = requests.get(f'{rest_api}/v2/error_injection/injection/{name}/enters', timeout=30)
+    response.raise_for_status()
+    return int(response.json())
+
+# Waits until Scylla entered the error injection `name` at least `count` times.
+def scylla_wait_for_injection_enters(rest_api, name, count, timeout=60):
+    deadline = time.time() + timeout
+    while scylla_injection_enter_count(rest_api, name) < count:
+        assert time.time() < deadline, f'error injection {name} was not entered {count} times within {timeout}s'
+        time.sleep(0.01)
+
+# Sends a message to the error injection `name`.
+def scylla_injection_message(rest_api, name):
+    requests.post(f'{rest_api}/v2/error_injection/injection/{name}/message', timeout=30).raise_for_status()
+
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which
 # test caused which errors in the log.
