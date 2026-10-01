@@ -24,6 +24,17 @@ Tests take the default, compose the built-ins, or write their own::
     RegisterWorkload(ks=ks, exception_policy=first_match(    # also kills nodes
         tolerate_reset_windows, tolerate_timeouts))
     RegisterWorkload(ks=ks, exception_policy=strict)         # nothing may fail
+    RegisterWorkload(ks=ks, retry_policy=FallthroughRetryPolicy(),
+                     exception_policy=first_match(               # also restarts nodes
+                         tolerate_reset_windows,
+                         only_during("restart", tolerate_reboot, grace_s=5)))
+
+What an error says about the operation does not depend on when it happened, and
+:func:`tolerate_reboot` does not ask.  Whether the cluster may raise it at that
+moment does: the same NoHostAvailable is expected while a node is down and a
+finding while the cluster is whole.  :func:`only_during` makes that second
+claim, for the windows the test opened with
+:meth:`~test.cluster.strong_consistency.workload.RegisterWorkload.disruption_window`.
 """
 
 from __future__ import annotations
@@ -41,7 +52,9 @@ from cassandra import (
     WriteTimeout,
 )
 from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest
+from cassandra.connection import ConnectionException
+from cassandra.policies import FallthroughRetryPolicy
+from cassandra.protocol import InvalidRequest, ServerError
 
 if TYPE_CHECKING:
     from test.cluster.strong_consistency.workload import RegisterWorkload
@@ -124,11 +137,18 @@ def is_stale_table_uuid(exc: NoHostAvailable) -> bool:
 
 
 def is_table_absence_error(exc: BaseException) -> bool:
-    """Return True if the exception indicates the table is absent (dropped/recreated)."""
+    """Return True if the exception indicates the table is absent (dropped/recreated).
+
+    The "can't find a column family" error is a SERVER_ERROR.  The driver's
+    default retry policy re-sends it to every host and raises NoHostAvailable
+    holding one per host; with FallthroughRetryPolicy it arrives as it is.
+    """
     if isinstance(exc, InvalidRequest):
         return is_table_absence_invalid_request(exc)
     if isinstance(exc, NoHostAvailable):
         return is_stale_table_uuid(exc)
+    if isinstance(exc, ServerError):
+        return "can't find a column family" in str(exc).lower()
     return False
 
 
@@ -226,3 +246,80 @@ def first_match(*policies: ExceptionPolicy) -> ExceptionPolicy:
         return None
 
     return policy
+
+
+def only_during(name: str, policy: ExceptionPolicy, *,
+                grace_s: float = 0) -> ExceptionPolicy:
+    """Ask ``policy`` only about operations that overlapped a window ``name``.
+
+    Anything else is not recognised, and the workload fails the test: the error
+    the disruption excuses is a finding outside it.
+
+    ``grace_s`` pushes the end of every window that much later.  A window
+    closes when the test's own step returns, and the cluster can take longer to
+    look whole to a client than that: the driver reconnects its pool to the
+    restarted node on its own schedule, and until then requests routed to it
+    find no connection.  Keep it as short as a run allows -- every second of it
+    is a second in which those errors stop being findings.
+    """
+    grace_ns = int(grace_s * 1e9)
+
+    def guarded(exc: BaseException, ctx: FailureContext) -> Optional[Outcome]:
+        if not ctx.workload.overlaps_window(
+                name, ctx.t_call_ns, ctx.t_return_ns, grace_ns):
+            return None
+        return policy(exc, ctx)
+
+    return guarded
+
+
+# What the coordinator says when raft lost track of an entry it had appended
+# (coordinator.cc, raft::commit_status_unknown).  A SERVER_ERROR for now.
+OUTCOME_UNKNOWN = "outcome of this statement is unknown"
+
+
+def tolerate_reboot(
+    exc: BaseException, ctx: FailureContext,
+) -> Optional[Outcome]:
+    """Accept the failures a stopped, killed or restarting node causes.
+
+    Whenever they happen: what each of them says about the operation holds
+    while the node is down and after it is back alike.  Whether the cluster
+    may raise them at that moment is a claim of the test, not of the outcome:
+    wrap it in :func:`only_during` to make it.
+
+    Only correct with the driver's retries off
+    (``RegisterWorkload(retry_policy=FallthroughRetryPolicy())``), and asserted:
+    each recorded operation is then one attempt at one node, and its error says
+    what became of it.  With retries on, NoHostAvailable can follow an attempt
+    that was applied, and calling it ``fail`` fabricates a violation.
+
+    ==============================  =========  ============================
+    exception                       status     why
+    ==============================  =========  ============================
+    NoHostAvailable                 fail       no live host to send it to:
+                                               it never left the client
+    ServerError "unknown verb"      fail       forwarded to a node whose CQL
+                                               server, which registers the
+                                               forwarding verbs, is not up
+                                               yet (SCYLLADB-4722); refused
+                                               before anything ran
+    ConnectionException (write)     unknown    the connection died with the
+                                               request in flight
+    ServerError "outcome unknown"   unknown    raft appended the entry and
+      (write)                                  lost its term before it knew
+                                               whether it was committed
+    either of these (read)          fail       a read changes no state
+    anything else                   as tolerate_timeouts
+    ==============================  =========  ============================
+    """
+    assert isinstance(ctx.workload.retry_policy, FallthroughRetryPolicy), (
+        f"tolerate_reboot needs one attempt per operation, the workload has "
+        f"retry_policy={ctx.workload.retry_policy!r}")
+    if isinstance(exc, NoHostAvailable) or (
+            isinstance(exc, ServerError) and "unknown verb" in str(exc)):
+        return Outcome.FAIL
+    if isinstance(exc, ConnectionException) or (
+            isinstance(exc, ServerError) and OUTCOME_UNKNOWN in str(exc)):
+        return Outcome.UNKNOWN if ctx.is_write else Outcome.FAIL
+    return tolerate_timeouts(exc, ctx)

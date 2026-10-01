@@ -33,6 +33,27 @@ synthetic ``write(0)`` per key spanning the whole window, so Porcupine accepts
 the reset happening at any instant inside it, and it marks the window so the
 policy can tell a legitimate table-absence error from a real bug.
 
+Every other disruption leaves the model alone: a node that restarts must come
+back with every register it had, so the harness has nothing to put into the
+history for it.  It still has to know *when* the cluster was broken, because
+that is what decides which errors are excused.  The test says so with
+:meth:`RegisterWorkload.disruption_window`, the same kind of window a reset
+opens, minus the synthetic writes::
+
+    async with workload.disruption_window("restart") as restart:
+        await manager.server_stop_gracefully(victim.server_id)
+        await manager.server_start(victim.server_id)
+
+    exception_policy=first_match(
+        tolerate_reset_windows,
+        only_during("restart", tolerate_reboot, grace_s=5))
+
+    workload.stats(within_ns=restart.span_ns)
+
+:func:`~test.cluster.strong_consistency.outcomes.only_during` hands an error to
+the policy it wraps only if the operation overlapped a window of that name, so
+the same error on a whole cluster still fails the test.
+
 Typical usage::
 
     workload = RegisterWorkload(ks=ks, num_keys=100)
@@ -67,6 +88,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
 
+from cassandra.policies import RetryPolicy
 from cassandra.query import PreparedStatement
 
 from test.cluster.tools.porcupine import run_porcupine_checker
@@ -246,7 +268,8 @@ class HistoryRecorder:
         return self._next_id
 
     def stats(self, *, reset_client_id: int,
-              client_id: Optional[int] = None) -> "Stats":
+              client_id: Optional[int] = None,
+              within_ns: Optional[tuple[int, int]] = None) -> "Stats":
         """Count what the clients did, from the events recorded so far.
 
         Derived rather than accumulated: see :class:`Stats` for why, and for
@@ -261,36 +284,45 @@ class HistoryRecorder:
         ``assert_progress(min_writes=100)`` while no write ever succeeded.
 
         ``client_id`` narrows the count to one client, for its own log line.
+
+        ``within_ns=(start, end)`` narrows it to the operations that happened
+        inside that stretch of ``time.monotonic_ns()``: called at or after
+        ``start`` and returned at or before ``end``.  One that never returned
+        is counted if it was called inside -- it has no end to compare.  An
+        operation straddling an edge is left out on purpose: a write sent
+        before an outage and acknowledged just after it began was committed
+        before it, and must not count as "acknowledged during the outage".
         """
         counts = {f.name: 0 for f in fields(Stats)}
 
-        def is_counted(event: dict) -> bool:
-            if event["client_id"] == reset_client_id:
+        def is_counted(call: dict, ret: Optional[dict]) -> bool:
+            if call["client_id"] == reset_client_id:
                 return False
-            return client_id is None or event["client_id"] == client_id
+            if client_id is not None and call["client_id"] != client_id:
+                return False
+            if within_ns is None:
+                return True
+            start, end = within_ns
+            t_end = call["time_ns"] if ret is None else ret["time_ns"]
+            return call["time_ns"] >= start and t_end <= end
 
-        returned: set[int] = set()
-        for event in self._events:
-            if event["kind"] != "return":
+        returns = {e["id"]: e for e in self._events if e["kind"] == "return"}
+        for call in self._events:
+            if call["kind"] != "call":
                 continue
-            returned.add(event["id"])
-            if not is_counted(event):
+            ret = returns.get(call["id"])
+            if not is_counted(call, ret):
                 continue
-            if event["op"] == "write":
-                counts["write_ok" if event["status"] == Outcome.OK
+            if ret is None:
+                counts["write_indeterminate" if call["op"] == "write"
+                       else "read_indeterminate"] += 1
+            elif call["op"] == "write":
+                counts["write_ok" if ret["status"] == Outcome.OK
                        else "write_fail"] += 1
-            elif event["status"] != Outcome.OK:
+            elif ret["status"] != Outcome.OK:
                 counts["read_fail"] += 1
             else:
-                counts["read_empty" if event["value"] == 0 else "read_ok"] += 1
-
-        for event in self._events:
-            if event["kind"] != "call" or event["id"] in returned:
-                continue
-            if not is_counted(event):
-                continue
-            counts["write_indeterminate" if event["op"] == "write"
-                   else "read_indeterminate"] += 1
+                counts["read_empty" if ret["value"] == 0 else "read_ok"] += 1
 
         return Stats(**counts)
 
@@ -316,6 +348,39 @@ class ResetWindow:
         return f"#{self.first_op_id}-#{self.last_op_id}"
 
 
+#: Name of the window :meth:`RegisterWorkload.reset_window` opens.  A test's
+#: own windows may take any other name.
+RESET = "reset"
+
+
+@dataclass
+class DisruptionWindow:
+    """One stretch of ``time.monotonic_ns()`` during which the cluster was broken.
+
+    Yielded by :meth:`RegisterWorkload.disruption_window`.  ``end_ns`` is None
+    while the window is open, and an open window reaches to +inf: an operation
+    that returned after it opened overlaps it, whenever it ends.
+    """
+
+    name: str
+    start_ns: int
+    end_ns: Optional[int] = None
+
+    @property
+    def span_ns(self) -> tuple[int, int]:
+        """``(start, end)``, as :meth:`RegisterWorkload.stats` takes it."""
+        assert self.end_ns is not None, f"window {self.name!r} is still open"
+        return self.start_ns, self.end_ns
+
+    def overlaps(self, t_call_ns: int, t_return_ns: int, grace_ns: int = 0) -> bool:
+        """True if [t_call_ns, t_return_ns] intersects the window, its end
+        pushed ``grace_ns`` later."""
+        if self.end_ns is None:
+            return t_return_ns >= self.start_ns
+        return intervals_overlap(
+            t_call_ns, t_return_ns, self.start_ns, self.end_ns + grace_ns)
+
+
 @dataclass
 class RegisterWorkload:
     """State shared by the writer/reader tasks of one linearizability test."""
@@ -338,6 +403,15 @@ class RegisterWorkload:
     # Decides how a failed operation is recorded; see the outcomes module.
     # The default tolerates only the harness's own disruption primitive.
     exception_policy: ExceptionPolicy = tolerate_reset_windows
+    # Set on the statements by every prepare(); None leaves the driver's own.
+    # A policy that reads what became of an operation from its error -- a
+    # dropped connection means "may have applied", NoHostAvailable means "never
+    # sent" -- is only right if each recorded operation is one attempt, which
+    # takes FallthroughRetryPolicy: the default one re-sends a request whose
+    # connection died to the next host.  Set here rather than by the test after
+    # prepare(), because prepare() runs again inside every reset and makes new
+    # statements.
+    retry_policy: Optional[RetryPolicy] = field(default=None, repr=False)
 
     # Master seed for every RNG in the run: each task derives its own stream
     # from it via rng_for(), so adding or removing a task leaves the others
@@ -360,10 +434,8 @@ class RegisterWorkload:
     reset_count: int = 0
 
     _next_value: int = field(default=1, init=False)
-    # Closed windows for completed resets (DROP+CREATE sequences).
-    _reset_intervals: list[tuple[int, int]] = field(default_factory=list, init=False)
-    # Non-zero while a reset is in progress; interpreted as [start, +inf).
-    _reset_start_ns: int = field(default=0, init=False)
+    # Every window opened so far, resets included, open ones too.
+    _windows: list[DisruptionWindow] = field(default_factory=list, init=False)
 
     @property
     def fqtn(self) -> str:
@@ -393,16 +465,40 @@ class RegisterWorkload:
         self._next_value += 1
         return v
 
+    def windows(self, name: str) -> list[DisruptionWindow]:
+        """The windows of that name opened so far, in the order they opened."""
+        return [w for w in self._windows if w.name == name]
+
+    def overlaps_window(self, name: str, t_call_ns: int, t_return_ns: int,
+                        grace_ns: int = 0) -> bool:
+        """True if [t_call_ns, t_return_ns] intersects any window of that name."""
+        return any(w.overlaps(t_call_ns, t_return_ns, grace_ns)
+                   for w in self.windows(name))
+
     def overlaps_reset(self, t_call_ns: int, t_return_ns: int) -> bool:
         """True if [t_call_ns, t_return_ns] intersects any reset window."""
-        for iv_start, iv_end in self._reset_intervals:
-            if intervals_overlap(t_call_ns, t_return_ns, iv_start, iv_end):
-                return True
+        return self.overlaps_window(RESET, t_call_ns, t_return_ns)
 
-        if self._reset_start_ns:
-            return t_return_ns >= self._reset_start_ns
+    @contextlib.asynccontextmanager
+    async def disruption_window(self, name: str) -> AsyncIterator[DisruptionWindow]:
+        """Mark the cluster broken for as long as the body runs.
 
-        return False
+        Put the whole disruption inside, recovery included: the window is what
+        :func:`~test.cluster.strong_consistency.outcomes.only_during` excuses
+        errors by, and an error raised after it closed is not excused.  Open it
+        before the first step that can break anything, for the same reason.
+
+        Records nothing into the history -- the model is untouched -- and
+        closes the window whether or not the body raised.  Windows may nest and
+        overlap, of the same name or of different ones: two nodes restarted at
+        once are two windows.
+        """
+        window = DisruptionWindow(name, time.monotonic_ns())
+        self._windows.append(window)
+        try:
+            yield window
+        finally:
+            window.end_ns = time.monotonic_ns()
 
     def prepare(self, cql) -> None:
         """(Re-)prepare the read/write statements.
@@ -412,6 +508,9 @@ class RegisterWorkload:
         """
         self.write_stmt = cql.prepare(f"UPDATE {self.fqtn} SET c = ? WHERE pk = ?")
         self.read_stmt = cql.prepare(f"SELECT c FROM {self.fqtn} WHERE pk = ?")
+        if self.retry_policy is not None:
+            for stmt in (self.write_stmt, self.read_stmt):
+                stmt.retry_policy = self.retry_policy
         logger.debug("Prepared read/write statements for %s", self.fqtn)
 
     @contextlib.asynccontextmanager
@@ -436,19 +535,11 @@ class RegisterWorkload:
         Not re-entrant: one reset at a time per workload.
         """
         window = ResetWindow()
-        window_start_ns = time.monotonic_ns()
-        self._reset_start_ns = window_start_ns
-
-        try:
+        async with self.disruption_window(RESET) as span:
             yield window
-        finally:
-            window_end_ns = time.monotonic_ns()
-            self._reset_intervals.append((window_start_ns, window_end_ns))
-            self._reset_start_ns = 0
 
         window.first_op_id, window.last_op_id = self.history.record_reset(
-            self.reset_client_id, range(self.num_keys),
-            window_start_ns, window_end_ns)
+            self.reset_client_id, range(self.num_keys), *span.span_ns)
 
         self.reset_count += 1
 
@@ -520,10 +611,12 @@ class RegisterWorkload:
             self.history.record_return(
                 op_id, client_id, op, key, value, outcome, ctx.t_return_ns)
 
-    def stats(self, client_id: Optional[int] = None) -> Stats:
+    def stats(self, client_id: Optional[int] = None,
+              within_ns: Optional[tuple[int, int]] = None) -> Stats:
         """Like :meth:`HistoryRecorder.stats`, supplying the reset client id."""
         return self.history.stats(
-            reset_client_id=self.reset_client_id, client_id=client_id)
+            reset_client_id=self.reset_client_id, client_id=client_id,
+            within_ns=within_ns)
 
     def stats_line(self) -> str:
         stats = self.stats()
