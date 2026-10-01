@@ -2034,7 +2034,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     bool own_export_arn = true;
     bool client_token_insert_returned = false;
     bool client_token_is_ours = true;
+    bool gossip_restarted = false;
     std::exception_ptr failure;
+
+    // A gossip restart (e.g. `nodetool disablegossip` and `enablegossip`) during the ClientToken
+    // lookup above raised the generation of this node. The rows below would carry the old
+    // generation, so the garbage collector would take the export as one of an earlier
+    // incarnation. Nothing is written yet, so refuse the request, and a retry uses the new
+    // generation.
+    if (get_self_node_id(_gossiper) != node_id) {
+        co_return api_error::internal("The gossip of this node restarted, so it can't start the export. Please retry the operation.");
+    }
 
     try {
         db::alternator_export_table_helper helper(_sdks.qp());
@@ -2140,6 +2150,14 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         xlogger.debug("Returning IN_PROGRESS response for ClientToken {}", client_token);
         auto response = rjson::print(build_export_description_response(erow));
 
+        // The same for a gossip restart during the inserts. The rows are written, so do not start
+        // an export that the garbage collector would mark FAILED: fail it now, with the failure
+        // code which the garbage collector gives it, NodeFailure (see may_be_running()).
+        if (get_self_node_id(_gossiper) != node_id) {
+            gossip_restarted = true;
+            throw std::runtime_error("The gossip of the node restarted before the export could start.");
+        }
+
         xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
         _s3_exports->start_export(std::move(*export_slot), std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
         co_return std::move(response);
@@ -2183,6 +2201,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     if (_s3_exports->abort_requested()) {
         erow.failure_code = sstring(node_shutdown_failure_code);
         erow.failure_message = sstring(node_shutdown_failure_message);
+    } else if (gossip_restarted) {
+        erow.failure_code = "NodeFailure";
+        erow.failure_message = e ? e->what() : "Unknown error";
     } else {
         erow.failure_code = "Exception";
         erow.failure_message = e ? e->what() : "Unknown error";
