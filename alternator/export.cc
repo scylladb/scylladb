@@ -1579,9 +1579,31 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         };
         auto existing_client_row = co_await translate_coordinator_errors(helper.insert_client_token(new_client_row));
 
+        utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_insertion",
+                [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_insertion"); });
+
+        // A CAS that applied can return "not applied" with our own row (see below). Tests use
+        // this injection to cause it.
+        if (utils::get_local_injector().enter("alternator_export_to_s3_client_token_insert_not_applied")) {
+            existing_client_row = client_row{
+                .client_token = client_token,
+                .export_arn = export_arn,
+                .request = stored_request,
+                .node_id = node_id.to_string(),
+            };
+        }
+
         if (existing_client_row) {
             // A different request reserved this ClientToken. Answer as a retry of that request.
             xlogger.debug("ClientToken {} already exists", client_token);
+
+            // Until the test below, the token row can have our ARN, so `own_export_arn` stays
+            // true. If this injection throws, the FAILED path below writes our export row. Without
+            // that row, retries get IN_PROGRESS until the token row expires, and the garbage
+            // collector does not help, because this node is alive.
+            utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_conflict",
+                    [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_conflict"); });
+
             // If the row has our ARN, it is our row, reported as "not applied": a concurrent CAS
             // can commit the value of our CAS. Only this request knows this ARN. Continue and run
             // the export.

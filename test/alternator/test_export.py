@@ -2280,3 +2280,75 @@ def assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc):
     )['ExportDescription']
     assert again['ExportArn'] == desc['ExportArn']
     assert again['ExportStatus'] == 'FAILED'
+
+
+# Test that a failure after the ClientToken row insert (before the export row
+# insert) fails the export. The request writes the FAILED export row for the
+# reserved ARN, so that DescribeExport knows the ARN, and retries do not get
+# IN_PROGRESS.
+def test_export_error_injection_after_client_token_insertion(cql, scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_after_client_token_insertion', one_shot=True):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+                ClientToken=token,
+            )['ExportDescription']
+        assert desc['ExportStatus'] == 'FAILED'
+        assert desc['ClientToken'] == token
+        assert desc['FailureCode'] == 'Exception'
+        assert 'injected failure alternator_export_to_s3_after_client_token_insertion' in desc['FailureMessage']
+        assert 'EndTime' in desc
+
+        # The failed export has the ARN of the ClientToken row. Each retry must report the same
+        # failed export.
+        assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc)
+
+        # The ClientToken is reserved, so different parameters cause a conflict.
+        with pytest.raises(ClientError, match='ExportConflictException.*Duplicate request detected'):
+            client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+                S3Prefix='prefix',
+                ClientToken=token,
+            )
+
+
+# Test that the export fails if the request fails after the ClientToken row insert returned "not
+# applied". The row can have our ARN (a contended CAS can commit our value). Without our FAILED
+# export row, retries get IN_PROGRESS until the token row expires.
+def test_export_error_injection_client_token_conflict_failure(cql, scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        # The first injection makes the insert return "not applied" although it applied, so the
+        # ClientToken row has our ARN. The second injection fails the conflict path.
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_client_token_insert_not_applied', one_shot=True), \
+             scylla_inject_error(rest_api, 'alternator_export_to_s3_after_client_token_conflict', one_shot=True):
+            desc = client.export_table_to_point_in_time(
+                TableArn=table_arn,
+                S3Bucket=bucket,
+                ClientToken=token,
+            )['ExportDescription']
+        assert desc['ExportStatus'] == 'FAILED'
+        assert desc['ClientToken'] == token
+        assert desc['FailureCode'] == 'Exception'
+        assert 'injected failure alternator_export_to_s3_after_client_token_conflict' in desc['FailureMessage']
+        assert 'EndTime' in desc
+
+        # The failed export has the ARN of the ClientToken row, so a retry reports it.
+        assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc)
+
+        assert_listed_with_status(client, table_arn, desc['ExportArn'], 'FAILED')
+
+        # Nothing was exported: only the fiber writes to the bucket, and it did not run.
+        keys = [obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket).get('Contents', [])]
+        assert not keys, keys
+        uploads = s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
+        assert not uploads, uploads
