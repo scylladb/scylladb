@@ -370,6 +370,13 @@ std::optional<locator::host_id> raft_group0_client::group0_leader() {
     return locator::host_id{leader.uuid()};
 }
 
+future<> raft_group0_client::read_barrier() {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "read_barrier: must run on shard 0");
+    }
+    co_await _raft_gr.group0_with_timeouts().read_barrier(nullptr, raft_timeout{});
+}
+
 template void raft_group0_client::validate_change(const topology_change& change);
 template void raft_group0_client::validate_change(const mixed_change& change);
 

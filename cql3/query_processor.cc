@@ -1350,9 +1350,15 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_n
         cql3::computed_function_values cached_fn_calls,
         seastar::lowres_clock::time_point timeout,
         bool is_write,
-        locator::host_id_or_exception_callback on_forwarding_finished) {
+        locator::host_id_or_exception_callback on_forwarding_finished,
+        bool group0_barrier) {
     get_cql_stats().forwarded_requests++;
-    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished));
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished), group0_barrier);
+}
+
+future<> query_processor::group0_read_barrier() {
+    auto [remote_, holder] = remote();
+    co_await remote_.get().group0_client.read_barrier();
 }
 
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
