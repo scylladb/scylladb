@@ -943,9 +943,9 @@ private:
 
 public:
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
-            query::result_memory_accounter&& accounter, uint64_t tombstone_limit)
+            query::result_memory_accounter&& accounter, uint64_t tombstone_limit, const partition_key* start_partition)
         : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
-        , _builder(s, *_res_builder)
+        , _builder(s, *_res_builder, start_partition)
         , _opts(opts)
     { }
 
@@ -1023,8 +1023,9 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
     return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout, true,
-            [query_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
-        return data_query_result_builder(*query_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit);
+            [query_schema, &cmd, &ranges, opts] (query::result_memory_accounter&& accounter) {
+        return data_query_result_builder(*query_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit,
+                ranges.empty() ? nullptr : query_result_builder::start_partition_of(ranges.front()));
     });
 }
 

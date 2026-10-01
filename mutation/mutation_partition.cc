@@ -2009,9 +2009,17 @@ uint64_t mutation_querier::consume_end_of_stream() {
     }
 }
 
-query_result_builder::query_result_builder(const schema& s, query::result::builder& rb) noexcept
-    : _schema(s), _rb(rb)
+query_result_builder::query_result_builder(const schema& s, query::result::builder& rb, const partition_key* start_partition) noexcept
+    : _schema(s), _rb(rb), _start_partition(start_partition)
 { }
+
+const partition_key* query_result_builder::start_partition_of(const dht::partition_range& range) {
+    const auto& start = range.start();
+    if (!start || !start->is_inclusive() || !start->value().has_key()) {
+        return nullptr;
+    }
+    return &*start->value().key();
+}
 
 void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
     _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
