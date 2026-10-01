@@ -1195,7 +1195,8 @@ async def test_scylla_sstable_layout_of_object_storage_table(manager: ScyllaClus
 
         scylla_path = await manager.server_get_exe(server.server_id)
         workdir = await manager.server_get_workdir(server.server_id)
-        args = [scylla_path, "sstable", "layout",
+        # the node is running, it can delete sstables while they are loaded
+        args = [scylla_path, "sstable", "layout", "--ignore-incomplete-sstables",
                 "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml"),
                 "--output-format", "json", "--keyspace", ks, "--table", "test"]
         returncode, out, err = await run_scylla_sstable(args)
