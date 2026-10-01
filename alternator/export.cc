@@ -594,6 +594,14 @@ class s3_storage_sink : public storage_sink_interface {
     sink_result_builder _result;
     bool _closed = false;
 
+    // The maximum number of parts in one piece of the jumbo sink. The sink copies each piece into
+    // the object with one UploadPartCopy, and S3 refuses to copy a source larger than
+    // `s3::maximum_part_size` (5 GiB) that way. A part is a little larger than
+    // `s3::minimum_part_size` (5 MiB), so the default of 10'000 parts allows pieces of ~50 GiB,
+    // and the export of a table with a larger data file would fail. Half of the limit leaves
+    // space for the part sizes, and still allows objects of ~24 TiB (10'000 pieces of ~2.5 GiB).
+    static constexpr unsigned max_parts_per_piece = s3::maximum_part_size / s3::minimum_part_size / 2;
+
     // The target of the delegating constructor below - the sink and the etag future have to be
     // created before the member initialization starts, as a future has no default constructor.
     // If the allocation of the stream throws, sink_and_etag is destroyed while unwinding. A pair
@@ -617,7 +625,7 @@ public:
     // for as long as the upload needs it.
     s3_storage_sink(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
         : s3_storage_sink(std::move(object_name),
-                          client->make_upload_jumbo_sink_and_get_etag(object_name, s3::object_metadata{}, std::nullopt, as))
+                          client->make_upload_jumbo_sink_and_get_etag(object_name, s3::object_metadata{}, max_parts_per_piece, as))
     {
     }
     ~s3_storage_sink() {
