@@ -116,6 +116,7 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::dat
 }
 
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
+    rgslog.debug("Raft group {} on shard {} stores term {} and vote {}.", _group_id, _shard, term, vote);
     return execute_with_linearization_point([this, term, vote] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
@@ -129,11 +130,13 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     static const auto load_cql = format("SELECT vote_term, vote FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
+        rgslog.debug("Raft group {} on shard {} has no persisted term and vote.", _group_id, _shard);
         co_return std::pair(raft::term_t(), raft::server_id());
     }
     const auto& static_row = rs->one();
     raft::term_t vote_term = raft::term_t(static_row.get_or<int64_t>("vote_term", raft::term_t{}.value()));
     raft::server_id vote{static_row.get_or<utils::UUID>("vote", raft::server_id{}.id)};
+    rgslog.debug("Raft group {} on shard {} loaded term {} and vote {}.", _group_id, _shard, vote_term, vote);
     co_return std::pair(vote_term, vote);
 }
 
@@ -199,6 +202,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
             {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (result->empty() || !result->one().has("snapshot_idx")) {
         // No descriptor yet; groups_manager will bootstrap() the group.
+        rgslog.debug("Raft group {} on shard {} has no snapshot.", _group_id, _shard);
         co_return raft::snapshot_descriptor();
     }
     const auto& row = result->one();
