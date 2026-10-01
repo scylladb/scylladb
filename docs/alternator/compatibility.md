@@ -414,6 +414,47 @@ Alternator Streams differ in some respects from DynamoDB Streams:
   24 hours through the old StreamArn even after re-enabling.
   <https://scylladb.atlassian.net/browse/SCYLLADB-1873>
 
+## Export to S3
+
+Alternator supports ExportTableToPointInTime, DescribeExport and ListExports,
+but one shard of one node runs the whole export, so a large table exports
+slowly, and an export which that node stops running is never resumed.
+Exports differ from DynamoDB as follows:
+
+* DynamoDB exports a table from its point-in-time recovery data, which
+  Alternator does not have. Alternator exports any table, without the
+  PointInTimeRecoveryUnavailableException of DynamoDB, but only as it is
+  now: ExportTime has to be in the last 5 minutes. The export reads the
+  live table page by page, so an item written during the export may or may
+  not be in it. The reported ExportTime is the requested time, not a time
+  at which the exported data is consistent.
+* If the node of an export stops, the export ends as FAILED, with the
+  failure code NodeShutdown after a clean shutdown, or NodeFailure after a
+  crash, a restart or a restart of gossip (`nodetool disablegossip` and
+  `enablegossip`). If the node stays down, another node marks its exports
+  FAILED about an hour later. Until then they are reported as IN_PROGRESS.
+* A failed export does not delete what it uploaded. After a crash, the
+  data file is an incomplete multipart upload, which a listing of the bucket
+  does not show: abort it with AbortMultipartUpload, or let a lifecycle rule
+  expire incomplete multipart uploads. After a gossip restart, the export
+  continues to the end, so the bucket can hold the complete output of an
+  export reported as FAILED.
+* Only a full export in the DYNAMODB_JSON format is supported.
+  IncrementalExportSpecification, FilterSpecification, S3BucketOwner,
+  S3SseAlgorithm and S3SseKmsKeyId are rejected.
+* The bucket is reached through the one S3 endpoint of the
+  `object_storage_endpoints` configuration, with the credentials of the
+  node, not of the caller. Thus a role with MODIFY on ALL OBJECT STORAGE
+  can export a table to any bucket which these credentials can write to.
+  Without exactly one S3 endpoint, an export request gets a
+  ValidationException.
+* S3Prefix may contain only letters, digits and `/-_.`.
+  <https://github.com/scylladb/scylladb/pull/32703>
+* The number of running exports is limited per shard (configuration
+  parameter `alternator_max_concurrent_exports_per_shard`, 10 by default),
+  not per account. Above the limit, a request gets LimitExceededException.
+* BilledSizeBytes is always 0, because ScyllaDB does not bill for exports.
+
 ## Unimplemented API features
 
 In general, every DynamoDB API feature available in Amazon DynamoDB should
@@ -504,11 +545,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   Insights" are not yet supported. ScyllaDB has different ways to retrieve the
   same information, such as which items were accessed most often.
   <https://github.com/scylladb/scylla/issues/8788>
-
-* Alternator does not support the DynamoDB feature "export to S3",
-  and its operations DescribeExport, ExportTableToPointInTime, ListExports.
-  This feature was added to DynamoDB in November 2020.
-  <https://github.com/scylladb/scylla/issues/8789>
 
 * Alternator does not support the DynamoDB feature "import from S3",
   and its operations ImportTable, DescribeImport, ListImports.
