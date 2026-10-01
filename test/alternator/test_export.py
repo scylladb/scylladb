@@ -660,6 +660,23 @@ def test_export_client_token_idempotent(test_table_s, s3):
         assert resp1['ExportDescription']['ClientToken'] == resp2['ExportDescription']['ClientToken'] == token
 
 
+# Test that a retry gets TableNotFoundException after the source table was deleted. As DynamoDB
+# does, Alternator checks the table before the ClientToken, so the retry does not find its export.
+def test_export_client_token_after_table_deleted(dynamodb, s3):
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        with new_table_s(dynamodb) as table:
+            client = enable_pitr(table)
+            request = {'TableArn': get_table_arn(table), 'S3Bucket': bucket, 'ClientToken': token}
+            desc1 = client.export_table_to_point_in_time(**request)['ExportDescription']
+
+        wait_for_table_deleted(client, table.name)
+
+        with pytest.raises(ClientError, match='TableNotFoundException.*not found'):
+            client.export_table_to_point_in_time(**request)
+
+
 # Test that a request without a ClientToken is refused with a ValidationException, as in DynamoDB.
 # We send the request manually, because boto adds a ClientToken if there is none. The API reference
 # lists ClientToken as optional, but DynamoDB answers such a request with 400 ValidationException
@@ -677,6 +694,53 @@ def test_export_table_arn_too_long(test_table_s):
     table_arn = arn_with_part(get_table_arn(test_table_s), 4, 'a' * 1100)
     with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
         client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=unique_bucket_name())
+
+
+# Send two requests with the same client token and the same payload, but a different order of fields.
+def test_export_client_token_idempotent_different_order_of_members(dynamodb, test_table_s, s3):
+    table = test_table_s
+    client = enable_pitr(table)
+    table_arn = get_table_arn(table)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        # We do not use json.dumps, so that the order of the fields is known.
+        payload = f"""{{
+            "TableArn": "{table_arn}",
+            "S3Bucket": "{bucket}",
+            "ClientToken": "{token}"
+        }}"""
+        resp1 = manual_request(dynamodb, 'ExportTableToPointInTime', payload)
+
+        # Same request, different order
+        payload = f"""{{
+            "ClientToken": "{token}",
+            "S3Bucket": "{bucket}",
+            "TableArn": "{table_arn}"
+        }}"""
+        resp2 = manual_request(dynamodb, 'ExportTableToPointInTime', payload)
+        assert resp1['ExportDescription']['ExportArn'] == resp2['ExportDescription']['ExportArn']
+        assert resp1['ExportDescription']['ClientToken'] == resp2['ExportDescription']['ClientToken'] == token
+
+
+# Test that a retry which writes the default ExportFormat or ExportType gets the same export.
+# DynamoDB makes a parameter with its default value equal to the absent parameter.
+def test_export_client_token_idempotent_explicit_defaults(test_table_s, s3):
+    table = test_table_s
+    client = enable_pitr(table)
+    table_arn = get_table_arn(table)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        arn = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket,
+                ClientToken=token)['ExportDescription']['ExportArn']
+        for defaults in [{'ExportFormat': 'DYNAMODB_JSON'},
+                         {'ExportType': 'FULL_EXPORT'},
+                         {'ExportFormat': 'DYNAMODB_JSON', 'ExportType': 'FULL_EXPORT'}]:
+            desc = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket,
+                    ClientToken=token, **defaults)['ExportDescription']
+            assert desc['ExportArn'] == arn
+            assert desc['ClientToken'] == token
 
 
 # Following tests check idempotency of export with respect to ClientToken - they verify that
