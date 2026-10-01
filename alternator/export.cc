@@ -1562,6 +1562,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     auto s3_client = get_s3_client(_proxy, endpoints.front());
 
+    // Reserve the export slot before the first write, so that a rejected request does not write
+    // rows. If the slot is not given to start_export(), it is released when this function
+    // returns.
+    auto export_slot = _s3_exports->try_reserve_export_slot();
+    if (!export_slot) {
+        co_return api_error::limit_exceeded(fmt::format(
+                "Too many exports are already running - at most {} of them may run at once on one shard "
+                "(configuration variable alternator_max_concurrent_exports_per_shard). Please retry the operation later.",
+                _proxy.local_db().get_config().alternator_max_concurrent_exports_per_shard()));
+    }
+
     // Only the request that inserts the client token row runs the export. After that insert (it
     // can apply even if it throws), a failure must write the FAILED export row, because the
     // garbage collector does that only for dead nodes. If the insert throws and the token row has
@@ -1684,7 +1695,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         auto response = rjson::print(build_export_description_response(erow));
 
         xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
-        _s3_exports->start_export(std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
+        _s3_exports->start_export(std::move(*export_slot), std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
         co_return std::move(response);
     }
     catch (...) {
@@ -2401,19 +2412,29 @@ static future<> run_export(
             updated ? "" : ", but the row is not ours any more");
 }
 
-void executor::s3_exports::start_export(export_s3_client s3_client, schema_ptr schema, export_row row,
+// Reads the live configuration on each call. If the limit decreases below the number of
+// running exports, the running exports continue.
+auto executor::s3_exports::try_reserve_export_slot() -> std::optional<slot> {
+    if (_running_exports >= _e._proxy.local_db().get_config().alternator_max_concurrent_exports_per_shard()) {
+        return std::nullopt;
+    }
+    return slot(_running_exports);
+}
+
+void executor::s3_exports::start_export(slot export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
         std::string table_arn, std::string s3_bucket, std::string s3_prefix) {
     // Fire-and-forget, in the gate. `run_export()` writes failures to the export row, so an
     // exception from it is unexpected (e.g. bad_alloc), and it is only logged. If with_gate()
     // throws because the gate is closed (it throws at once, it does not return a failed future),
     // the fiber does not start.
+    // The last continuation holds the export slot until the fiber finishes.
     auto export_arn = row.export_arn;
     (void)with_gate(_gate, [&] {
         return futurize_invoke(run_export, _e._proxy, _e._sdks, _as, std::move(schema), std::move(row), std::move(s3_client),
                 std::move(table_arn), std::move(s3_bucket), std::move(s3_prefix))
                 .handle_exception([export_arn = std::move(export_arn)] (std::exception_ptr ep) {
             xlogger.error("Background export fiber for {} failed unexpectedly: {}", export_arn, ep);
-        });
+        }).finally([export_slot = std::move(export_slot)] {});
     });
 }
 

@@ -12,8 +12,10 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
@@ -214,15 +216,30 @@ class executor::s3_exports {
     seastar::gate _gate;
     // stop() aborts it before it closes _gate, to stop the exports early.
     seastar::abort_source _as;
+    // The number of export fibers running on this shard, see try_reserve_export_slot().
+    size_t _running_exports = 0;
 public:
     explicit s3_exports(executor& e) : _e(e) {}
     // True after stop() aborted the exports, i.e. during a clean shutdown.
     bool abort_requested() const noexcept { return _as.abort_requested(); }
+    // A reserved slot of the counter above. The fiber holds it while it
+    // runs. The destructor releases the slot.
+    class slot {
+        size_t* _counter;
+        friend class s3_exports;
+        explicit slot(size_t& counter) noexcept : _counter(&counter) { ++*_counter; }
+    public:
+        slot(slot&& other) noexcept : _counter(std::exchange(other._counter, nullptr)) {}
+        ~slot() { if (_counter) { --*_counter; } }
+    };
+    // Reserves an export slot on this shard. Returns nullopt if
+    // alternator_max_concurrent_exports_per_shard exports already run.
+    std::optional<slot> try_reserve_export_slot();
     // Starts a background fiber that does the export of `row`, with
     // `s3_client`, the client of the S3 endpoint which the request checked.
-    // The fiber writes the result to the export row. Throws only before the
-    // fiber starts.
-    void start_export(export_s3_client s3_client, schema_ptr schema, export_row row,
+    // The fiber writes the result to the export row and holds `export_slot`
+    // until it finishes. Throws only before the fiber starts.
+    void start_export(slot export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
             std::string table_arn, std::string s3_bucket, std::string s3_prefix);
     // Aborts the fibers above and waits for them to finish.
     future<> stop();
