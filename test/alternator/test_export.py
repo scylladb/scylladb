@@ -26,7 +26,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string, manual_request
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -208,7 +208,7 @@ def test_export_basic(dynamodb, test_table_s):
         assert desc['TableArn'] == table_arn
         assert desc['S3Bucket'] == bucket
 
-        # Amazon returns an unique ClientToken in response, even if user did not supply one.
+        # boto3 adds a ClientToken if the request has none, so the response always has a token.
         assert desc['ClientToken']
 
         assert desc['ExportFormat'] == 'DYNAMODB_JSON'  # default format is DYNAMODB_JSON
@@ -637,6 +637,25 @@ def test_export_client_token_idempotent(dynamodb, test_table_s):
         assert resp1['ExportDescription']['ClientToken'] == resp2['ExportDescription']['ClientToken'] == token
 
 
+# Test that a request without a ClientToken is refused with a ValidationException, as in DynamoDB.
+# We send the request manually, because boto adds a ClientToken if there is none. The API reference
+# lists ClientToken as optional, but DynamoDB answers such a request with 400 ValidationException
+# "Value null at 'clientToken' failed to satisfy constraint: Member must not be null".
+def test_export_without_client_token(dynamodb, test_table_s_for_export_only):
+    payload = json.dumps({'TableArn': get_table_arn(test_table_s_for_export_only), 'S3Bucket': unique_bucket_name()})
+    with pytest.raises(ManualRequestError, match='(?i)ValidationException.*clientToken'):
+        manual_request(dynamodb, 'ExportTableToPointInTime', payload)
+
+
+# Test that a TableArn longer than 1024 characters is refused, also if the table lookup ignores the
+# long part of it (here, the account).
+def test_export_table_arn_too_long(test_table_s):
+    client = test_table_s.meta.client
+    table_arn = arn_with_part(get_table_arn(test_table_s), 4, 'a' * 1100)
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=unique_bucket_name())
+
+
 # Following tests check idempotency of export with respect to ClientToken - they verify that
 # if we change some parameter of the export but keep the same ClientToken,
 # the second call will fail with ExportConflictException.
@@ -718,6 +737,7 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
     ('ValidationException', 'ExportType', '[eE]xportType', 'QWERTY'),
     ('ValidationException', 'ExportType', '[eE]xportType', ''),
     ('ValidationException', 'ClientToken', '[cC]lientToken', ''),
+    ('ValidationException', 'ClientToken', '[cC]lientToken', 'a$b'),
     ('ValidationException', 'ExportFormat', '[eE]xportFormat', ''),
     ('ValidationException', 'ExportFormat', '[eE]xportFormat', 'QWERTY'),
     ('InvalidExportTimeException', 'ExportTime', 'Export ?Time', -1),
@@ -1585,6 +1605,17 @@ def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scyll
             S3Bucket='my-bucket',
             **{unsupported_parameter: value},
         )
+
+
+# Test that FilterSpecification is rejected. DynamoDB applies it to the exported items, Alternator
+# exports all the items. The botocore version of the tests does not know this new parameter, so the
+# request is written out.
+def test_export_table_filter_specification(dynamodb, test_table_s_for_export_only, scylla_only):
+    payload = json.dumps({'TableArn': get_table_arn(test_table_s_for_export_only),
+                          'S3Bucket': 'my-bucket',
+                          'FilterSpecification': {'FilterExpression': 'attribute_exists(p)'}})
+    with pytest.raises(ManualRequestError, match='ValidationException.*FilterSpecification'):
+        manual_request(dynamodb, 'ExportTableToPointInTime', payload)
 
 
 # Test that ExportTime close to now is accepted, and reported rounded to the nearest millisecond, as

@@ -1081,6 +1081,11 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // Required parameter
     auto table_arn = get_non_empty_string_attribute(request, "TableArn");
+    // DynamoDB's limit. The table lookup ignores some parts of the ARN (e.g. the account), and
+    // the metadata rows store the TableArn of the request, so it must be bounded.
+    if (table_arn.size() > 1024) {
+        co_return api_error::validation("TableArn attribute: must have at most 1024 characters");
+    }
 
     // Validate that the table exists
     arn_parts parts;
@@ -1117,6 +1122,8 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
 
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+
     if (export_format != "DYNAMODB_JSON") {
         co_return api_error::validation(
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
@@ -1128,7 +1135,18 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
 
+    // The pattern of ClientToken in DynamoDB is ^[^\$]+$. The token is also the partition key of
+    // the client token table, so a long token makes the insert of the row throw. We keep the
+    // length well below the limit of a key.
+    constexpr size_t max_client_token_length = 1024;
+    if (user_client_token.find('$') != std::string::npos || user_client_token.size() > max_client_token_length) {
+        co_return api_error::validation(fmt::format(
+                "ClientToken attribute: must not contain '$', and must have at most {} characters",
+                max_client_token_length));
+    }
+
     constexpr std::array unsupported_parameters{
+            "FilterSpecification",
             "IncrementalExportSpecification",
             "S3BucketOwner",
             "S3SseAlgorithm",
@@ -1174,20 +1192,16 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 std::chrono::duration<double>(export_time))).count();
     }
 
-    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+    if (user_client_token.empty()) {
+        co_return api_error::validation("ClientToken attribute is required");
+    }
 
     // Build the ExportDescription response
     // The actual export functionality is not implemented yet - this just returns
     // a FAILED status to indicate the export has been accepted, but immediately failed.
     rjson::value export_desc = rjson::empty_object();
 
-    // FIXME: Currently, when export is called without a client token, we use
-    // the fixed name "<empty>". This is wrong - we should return a uniquely
-    // generated client token, like AWS does, not a fixed one.
-    if (client_token.empty()) {
-        client_token = "<empty>";
-    }
-    rjson::add(export_desc, "ClientToken", rjson::from_string(client_token));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(user_client_token));
 
     // FIXME: We create fake arn here, the content up to `/export/` will be likely the same in future,
     // the last part (after `/export/`) will change - we need to encode a unique identifier of some sort there to
