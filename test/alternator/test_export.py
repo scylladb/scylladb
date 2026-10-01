@@ -1146,6 +1146,39 @@ def test_export_failed_does_not_reserve_client_token(test_table_s, invalid, s3):
         assert desc['ClientToken'] == token
         assert desc['ExportArn'] not in listed_before
 
+
+# Test that a retry gets IN_PROGRESS with the reserved ARN, if the ClientToken row exists but the
+# export row does not (a different node inserted the ClientToken row but not yet the export row).
+# To make this state, we delete the export row of a finished export.
+def test_export_client_token_without_export_row(cql, test_table_s, s3):
+    table = test_table_s
+    client = enable_pitr(table)
+    table_arn = get_table_arn(table)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        request = {'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token}
+        started = client.export_table_to_point_in_time(**request)['ExportDescription']
+        export_arn = started['ExportArn']
+        wait_for_export(client, export_arn)
+        # The finished row must keep its TTL.
+        ttl = cql.execute(SimpleStatement(
+            "SELECT TTL(export_status), TTL(client_token) FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+            consistency_level=ConsistencyLevel.ONE), [export_arn]).one()
+        assert 89 * 86400 < ttl[0] <= 90 * 86400 and 89 * 86400 < ttl[1] <= 90 * 86400, ttl
+        cql.execute(SimpleStatement(
+            "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+            consistency_level=ConsistencyLevel.ONE), [export_arn])
+
+        desc = client.export_table_to_point_in_time(**request)['ExportDescription']
+        assert desc['ExportArn'] == export_arn
+        assert desc['ExportStatus'] == 'IN_PROGRESS'
+        assert desc['ClientToken'] == token
+        # The times are those of the original export, not of this retry.
+        assert desc['StartTime'] == started['StartTime']
+        assert desc['ExportTime'] == started['ExportTime']
+        assert 'TableId' not in desc
+
 # ---------------------------------------------------------------------------
 # DescribeExport tests
 # ---------------------------------------------------------------------------
@@ -1838,6 +1871,22 @@ def export_metadata(cql, export_arn, columns):
             consistency_level=ConsistencyLevel.ONE), [export_arn])
 
 
+# Writes the ClientToken row of an export, as the request of that export writes it, and removes the
+# row on exit. The row makes a later request with this ClientToken a retry of that export.
+@contextmanager
+def client_token_metadata(cql, client_token, export_arn, request):
+    cql.execute(SimpleStatement(
+        "INSERT INTO system_distributed.alternator_export_to_s3_client_tokens (client_token, export_arn, request) "
+        "VALUES (%s, %s, %s)",
+        consistency_level=ConsistencyLevel.ONE), [client_token, export_arn, request])
+    try:
+        yield client_token
+    finally:
+        cql.execute(SimpleStatement(
+            "DELETE FROM system_distributed.alternator_export_to_s3_client_tokens WHERE client_token = %s",
+            consistency_level=ConsistencyLevel.ONE), [client_token])
+
+
 # A private table for the ListExports tests below. Other tests start real exports of
 # test_table_s_for_export_only, so ListExports of that table can show more rows.
 @pytest.fixture
@@ -2053,3 +2102,32 @@ def test_list_exports_corrupt_row(table_for_listing, cql, make_arn, columns):
          export_metadata(cql, corrupt_arn, accepted_export_row(table_arn) | columns):
         summaries = client.list_exports(TableArn=table_arn)['ExportSummaries']
     assert [summary['ExportArn'] for summary in summaries] == [export_arn]
+
+
+# ---------------------------------------------------------------------------
+# ExportTableToPointInTime tests driven from the export metadata table
+# ---------------------------------------------------------------------------
+
+# Test that the 5-minute window of ExportTime applies only to a new export. A retry repeats the
+# ExportTime of the original request, which gets older with time, so the server checks the window
+# after the ClientToken lookup. A test cannot wait 10 minutes for such a retry. Thus it writes the
+# rows of an export with an ExportTime of 10 minutes ago with CQL.
+def test_export_table_old_export_time_of_retry(cql, scylla_only, test_table_s_for_export_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    # boto3 sends an ExportTime in whole seconds, so the stored request must also have whole
+    # seconds. A retry with a different request gets ExportConflictException.
+    export_time = int(time.time()) - 600
+    request = {'TableArn': table_arn, 'S3Bucket': 'my-bucket', 'ExportTime': export_time}
+    row = accepted_export_row(table_arn, ExportTime=export_time) | {
+        'export_time': datetime.datetime.fromtimestamp(export_time, datetime.timezone.utc)}
+    export_arn = unstarted_export_arn(table_arn)
+    with export_metadata(cql, export_arn, row), \
+         client_token_metadata(cql, row['client_token'], export_arn, row['request']):
+        # The retry gets its export, because the server does not check its ExportTime again.
+        desc = client.export_table_to_point_in_time(ClientToken=row['client_token'], **request)['ExportDescription']
+        assert desc['ExportArn'] == export_arn
+        assert desc['ExportTime'] == row['export_time']
+        # A new ClientToken with the same ExportTime gets InvalidExportTimeException.
+        with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
+            client.export_table_to_point_in_time(ClientToken=str(uuid.uuid4()), **request)
