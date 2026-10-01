@@ -749,7 +749,6 @@ class download_progress {
         finalized,
     } _progress_state = progress_state::uninitialized;
     sharded<progress_holder> _progress_per_shard;
-    tasks::task_manager::task::progress _final_progress;
 
 public:
     future<> start() {
@@ -762,10 +761,8 @@ public:
         return _progress_per_shard.local().progress;
     }
 
+    // The final progress is read before stop(), so get() has nothing to report afterwards.
     future<> stop() noexcept {
-        // preserve the final progress, so we can access it after the task is
-        // finished
-        _final_progress = co_await get();
         co_await with_lock(_progress_mutex, [this] -> future<> {
             if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
                 co_await _progress_per_shard.stop();
@@ -777,9 +774,8 @@ public:
         co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
             switch (_progress_state) {
             case progress_state::uninitialized:
-                co_return tasks::task_manager::task::progress{};
             case progress_state::finalized:
-                co_return _final_progress;
+                co_return tasks::task_manager::task::progress{};
             case progress_state::initialized:
                 break;
             }
