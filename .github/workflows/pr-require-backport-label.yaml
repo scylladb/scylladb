@@ -27,7 +27,12 @@ jobs:
               repo: context.repo.repo,
               pull_number: context.issue.number,
             });
-            const required = /^(backport\/none|backport\/\d{4}\.\d+|backport\/\d+\.\d+)$/;
+            // Matches backport/none and backport/<release>, including the
+            // backport/<release>-pending / -done labels the automation swaps in
+            // after a merge (which re-trigger this workflow on labeled/unlabeled).
+            // Case-insensitive and suffix-tolerant, like the mheap action this
+            // replaced (`new RegExp(label, "i")`, unanchored).
+            const required = /^backport\/(none|\d+\.\d+(-(pending|done))?)$/i;
             if (!(pr.labels || []).some(l => required.test(l.name))) {
               core.setFailed(
                 "At least one backport label is required (backport/none or backport/<release>). " +
