@@ -589,3 +589,60 @@ SEASTAR_TEST_CASE(test_in_memory_gzip_compressed_differs_from_uncompressed) {
         BOOST_CHECK_EQUAL(rjson::print(received_plain[i]), rjson::print(received_gzip[i]));
     }
 }
+
+// Tests of canonicalize_request(). Each test canonicalizes a request whose object members are
+// in scrambled order and compares the result with rjson::print() of the same request written
+// with members already in alphabetical order - so the expected string doesn't depend on the
+// exact formatting rjson::print() uses. Array element order is significant and must be kept.
+static void check_canonical(std::string_view scrambled, std::string_view sorted) {
+    auto expected = rjson::print(rjson::parse(sorted));
+    BOOST_CHECK_EQUAL(alternator::canonicalize_request(rjson::parse(scrambled)), expected);
+    // Canonicalizing an already canonical request must not change it.
+    BOOST_CHECK_EQUAL(alternator::canonicalize_request(rjson::parse(sorted)), expected);
+}
+
+// Non-object values are printed as they are.
+SEASTAR_TEST_CASE(test_canonicalize_request_scalars) {
+    check_canonical(R"("text")", R"("text")");
+    check_canonical("17", "17");
+    check_canonical("null", "null");
+    check_canonical("{}", "{}");
+    check_canonical("[]", "[]");
+    co_return;
+}
+
+// Flat object: members are sorted alphabetically.
+SEASTAR_TEST_CASE(test_canonicalize_request_flat_object) {
+    check_canonical(R"({"c": 3, "a": 1, "b": 2})", R"({"a": 1, "b": 2, "c": 3})");
+    co_return;
+}
+
+// Objects containing objects: members are sorted at every nesting level.
+SEASTAR_TEST_CASE(test_canonicalize_request_nested_objects) {
+    check_canonical(
+        R"({"z": {"y": {"q": 1, "p": 2}, "x": "v"}, "a": {"c": true, "b": false}})",
+        R"({"a": {"b": false, "c": true}, "z": {"x": "v", "y": {"p": 2, "q": 1}}})");
+    co_return;
+}
+
+// Objects containing lists which contain objects: objects inside the lists are sorted,
+// while the order of list elements is preserved.
+SEASTAR_TEST_CASE(test_canonicalize_request_object_with_lists_of_objects) {
+    check_canonical(
+        R"({"list": [{"b": 2, "a": 1}, {"d": 4, "c": 3}, 5], "first": [{"y": 1, "x": 2}]})",
+        R"({"first": [{"x": 2, "y": 1}], "list": [{"a": 1, "b": 2}, {"c": 3, "d": 4}, 5]})");
+    // The same objects in a different list order give a different canonical form.
+    BOOST_CHECK_NE(
+        alternator::canonicalize_request(rjson::parse(R"({"list": [{"a": 1}, {"b": 2}]})")),
+        alternator::canonicalize_request(rjson::parse(R"({"list": [{"b": 2}, {"a": 1}]})")));
+    co_return;
+}
+
+// List containing objects containing lists: objects at every level are sorted, while the
+// order of elements of both the outer and the inner lists is preserved.
+SEASTAR_TEST_CASE(test_canonicalize_request_list_of_objects_with_lists) {
+    check_canonical(
+        R"([{"n": [3, 1, 2], "m": [{"k": 1, "j": 2}]}, {"b": [], "a": ["y", "x"]}])",
+        R"([{"m": [{"j": 2, "k": 1}], "n": [3, 1, 2]}, {"a": ["y", "x"], "b": []}])");
+    co_return;
+}

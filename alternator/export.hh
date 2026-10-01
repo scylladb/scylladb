@@ -167,6 +167,11 @@ future<std::unique_ptr<export_pipeline_interface>> create_sink_pipeline(std::var
 future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item, compression_type compression = no_compression{});
 
 
+// Canonicalize a JSON request by sorting members of every object alphabetically, recursively.
+// This produces a deterministic string representation for idempotency checks - two requests
+// differing only in the order of object members produce the same string.
+sstring canonicalize_request(const rjson::value& request);
+
 /// Perform a full table scan over an Alternator table, calling `cb` for
 /// every item found. The callback receives an `rjson::value` representing
 /// one DynamoDB-style item (JSON object with typed attribute values).
@@ -201,7 +206,10 @@ future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::v
 ///    no read started by the scan is still running and `permit` has been released.
 ///
 /// The function underneath performs global scan over whole table, using single-threaded query_pager.
-/// The scan uses LOCAL_QUORUM consistency and bypasses the cache to avoid polluting it.
+/// The scan uses LOCAL_QUORUM consistency - unless the local datacenter has a single endpoint,
+/// in which case a quorum may be impossible to achieve and LOCAL_ONE is used instead (that one
+/// node holds all the local data, so it gives the same guarantees). The scan bypasses the cache
+/// to avoid polluting it.
 /// The scan takes ownership of `permit` and holds it for the duration of the scan.
 ///
 /// IMPORTANT: this is an *internal* read. It runs on `service::client_state::for_internal_calls()`,

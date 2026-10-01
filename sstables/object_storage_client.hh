@@ -38,6 +38,10 @@ namespace utils {
 class upload_progress;
 }
 
+namespace s3 {
+class client;
+}
+
 using namespace seastar;
 
 class memory_data_sink_buffers;
@@ -109,6 +113,10 @@ public:
 using shard_client_factory = std::function<shared_ptr<object_storage_client>(std::string)>;
 
 shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory, unsigned connections_per_shard = s3::endpoint_config::default_connections_per_shard);
+
+// Returns the s3::client behind an S3 endpoint client, for users that need the
+// S3-specific API (e.g. object etags). Returns null if the client is not an S3 one.
+shared_ptr<s3::client> get_s3_client(const shared_ptr<object_storage_client>&);
 
 }
 

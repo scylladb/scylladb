@@ -66,6 +66,7 @@ public:
         _cdc_md.start().get();
         _exec.start(
             std::ref(e.gossiper()),
+            std::ref(e.qp()),
             std::ref(e.get_storage_proxy()),
             std::ref(e.get_storage_service()),
             std::ref(e.migration_manager()),

@@ -60,6 +60,50 @@ if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)
 
+# Make an S3 server available to Scylla (and to the tests, e.g.,
+# test_export.py). If the S3_SERVER_*_FOR_TEST environment variables are
+# already set (e.g., by test.py or by a manually started
+# "python3 -m test.pylib.s3mock_server"), that server is used. Otherwise, an
+# S3Mock container is started here (requires podman or docker), and stopped
+# on exit - unless the "--no-mock-s3" option is given. Either way, the
+# server's address and credentials are in the environment, which both Scylla
+# and pytest inherit.
+start_mock_s3 = '--no-mock-s3' not in sys.argv
+if not start_mock_s3:
+    sys.argv.remove('--no-mock-s3')
+from test.pylib.s3mock_server import S3MockServer, create_conf
+s3_endpoint = None
+if os.environ.get(S3MockServer.ENV_ADDRESS) or start_mock_s3:
+    if not os.environ.get(S3MockServer.ENV_ADDRESS):
+        import asyncio
+        import atexit
+        import logging
+        import tempfile
+        # DockerizedServer's stop() waits on a future of the loop start()
+        # ran on, so both must run on the same loop.
+        s3_loop = asyncio.new_event_loop()
+        s3_log_dir = tempfile.mkdtemp(prefix='alternator-s3mock-')
+        s3_server = S3MockServer(s3_log_dir, logging.getLogger('s3mock'))
+        print(f'Starting S3Mock (container log in {s3_log_dir})...')
+        s3_loop.run_until_complete(s3_server.start())
+        # atexit handlers run in reverse order, so this runs before
+        # run.cleanup_all() prints the summary.
+        atexit.register(lambda: s3_loop.run_until_complete(s3_server.stop()))
+    s3_endpoint = f"http://{os.environ[S3MockServer.ENV_ADDRESS]}:{os.environ[S3MockServer.ENV_PORT]}"
+    print(f'S3 server is: {s3_endpoint}, bucket {os.environ[S3MockServer.ENV_BUCKET]}.')
+
+# Scylla can't parse object_storage_endpoints from the command line, so write
+# a copy of the options file with the endpoint added, and use it instead.
+def add_s3_endpoint_to_options_file(cmd, dir):
+    import yaml
+    i = cmd.index('--options-file') + 1
+    with open(cmd[i]) as f:
+        conf = yaml.safe_load(f) or {}
+    conf['object_storage_endpoints'] = create_conf(s3_endpoint, S3MockServer.DEFAULT_REGION)
+    cmd[i] = os.path.join(dir, 'scylla.yaml')
+    with open(cmd[i], 'w') as f:
+        yaml.safe_dump(conf, f)
+
 # run_alternator_cmd runs the same as run_scylla_cmd with *additional*
 # parameters, so in particular both CQL and Alternator will be enabled.
 # This is useful for us because we need CQL to setup authentication.
@@ -81,7 +125,10 @@ def run_alternator_cmd(pid, dir):
         # at the start and then periodically with `tablet-load-stats-refresh-interval-in-seconds`
         # interval, which by default is 60 seconds.
         '--tablet-load-stats-refresh-interval-in-seconds=1',
+
+        '--logger-log-level', 'alternator-export=debug',
     ]
+
     if '--https' in sys.argv:
         run.setup_ssl_certificate(dir)
         cmd += ['--alternator-https-port', '8043',
@@ -100,6 +147,8 @@ def run_alternator_cmd(pid, dir):
         ]
     if '--vs' in sys.argv:
         cmd += ['--vector-store-primary-uri', f'http://{ip}:6080']
+    if s3_endpoint:
+        add_s3_endpoint_to_options_file(cmd, dir)
     cmd += extra_scylla_options
 
     for i in remove_scylla_options:
@@ -200,7 +249,7 @@ run.wait_for_services(pid, [
 # should interrupt this process (e.g., control-C) to kill the server.
 if '--interactive' in sys.argv:
     if len(sys.argv) != 2:
-        print('The "--interactive" option can be combined with "--release" or "--vs", but no other options.')
+        print('The "--interactive" option can be combined with "--release", "--vs" or "--no-mock-s3", but no other options.')
         exit(1)
     print(f'Scylla with Alternator is running without authorization enforced.\nConnect at: {alternator_url}\nPress Ctrl-C to stop.')
     signal.pause()
