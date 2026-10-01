@@ -177,6 +177,16 @@ private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
 
+    // The attributes of the task that runs a compaction task executor.
+    struct task_params {
+        std::string type;
+        std::string entity;
+        // If set, whether the task is internal, regardless of its parent.
+        std::optional<tasks::is_internal> internal;
+        // Whether the task reports the progress of the compaction.
+        bool reports_progress = true;
+    };
+
     // Return nullopt if compaction cannot be started
     std::optional<gate::holder> start_compaction(compaction_group_view& t);
 
@@ -186,7 +196,7 @@ private:
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
+    future<compaction_manager::compaction_stats_opt> perform_compaction(task_params params, throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
     void stop_tasks(const std::vector<shared_ptr<compaction::compaction_task_executor>>& tasks, sstring reason) noexcept;
     future<> await_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>>, bool task_stopped) const noexcept;
@@ -250,7 +260,7 @@ private:
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
 
-    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(task_params params, sstring reason, tasks::task_info info, compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                                                                get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args);
 
     future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
@@ -672,7 +682,7 @@ public:
     requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&... args) {
         {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
     }
-    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(compaction_manager::task_params params, throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
     friend void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept;
