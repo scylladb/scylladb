@@ -27,6 +27,7 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/file.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -3029,6 +3030,39 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     }
 
     return make_ready_future<>();
+}
+
+// Reproduces SCYLLADB-4508: on longevity runs the commitlog directory can
+// accumulate thousands of segment files (in particular on the hints sender
+// path, which re-scans its commitlog directory via get_segments_to_replay()
+// on every flush period). The directory listing used to accumulate
+// descriptors (96 bytes each, see db::commitlog::descriptor) into a plain
+// std::vector, which grows via contiguous reallocation; past 1024 entries
+// that allocation is 2048*96 = 196608 bytes, above the default 128KiB+1
+// large-allocation warning threshold. utils::chunked_vector keeps every
+// chunk at or below 128KiB (1365*96 = 131040 bytes) regardless of how many
+// segments are listed.
+SEASTAR_TEST_CASE(test_list_existing_segments_many_files_no_large_allocation) {
+    return cl_test([](commitlog& log) -> future<> {
+        static constexpr size_t num_segments = 1100; // > 1024 descriptors
+
+        auto dir = log.active_config().commit_log_location;
+
+        for (size_t i = 0; i < num_segments; ++i) {
+            db::commitlog::descriptor d(segment_id_type(i + 1), db::commitlog::descriptor::FILENAME_PREFIX);
+            co_await tests::touch_file(dir + "/" + d.filename());
+        }
+
+        const auto stats_before = seastar::memory::stats();
+        seastar::memory::scoped_large_allocation_warning_threshold guard((size_t(128) << 10) + 1); // 128 KiB + 1 byte
+
+        auto segments = co_await log.list_existing_segments();
+
+        const auto stats_after = seastar::memory::stats();
+
+        BOOST_REQUIRE_GE(segments.size(), num_segments);
+        BOOST_REQUIRE_EQUAL(stats_before.large_allocations(), stats_after.large_allocations());
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
