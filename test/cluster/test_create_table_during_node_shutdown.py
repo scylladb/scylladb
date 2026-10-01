@@ -22,17 +22,20 @@ async def test_create_table_notification_deadlock_with_shutdown(manager: Manager
         pause_in_notif_injection = "pause_in_allocate_tablets_for_new_table"
         await manager.api.enable_injection(server.ip_addr, pause_in_notif_injection, one_shot=True)
 
-        # Start creating the table asynchronously. it will wait at the injection point during the notification.
-        cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
-
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
+
+        # Start creating the table asynchronously. it will wait at the injection point during the notification.
+        cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        await log.wait_for(f"{pause_in_notif_injection}: waiting for message", timeout=60, from_mark=mark)
 
         # Start shutting down the node. it will wait while unregistering a listener because there is
         # a notification running that holds the lock of the migration listeners vector.
         stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
         await log.wait_for('Shutting down native transport server', timeout=60, from_mark=mark)
-        await asyncio.sleep(1)
+        # Give shutdown time to reach unregistering the listener.
+        await asyncio.sleep(0.1)
+        assert not stop_task.done(), "shutdown should be blocked by the paused notification"
 
         # Now continue to run the nested notification. Since there is a waiter, it may deadlock when
         # reading the migration listeners vector.
