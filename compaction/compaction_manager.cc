@@ -412,6 +412,10 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
     descriptor.gc_state = t.get_tombstone_gc_state();
+    // Decided once, for the whole compaction: the property depends on the table's tombstone_gc
+    // mode, which can change while the compaction runs. Taken with no preemption point before
+    // the sstable set for tombstone gc is selected below, which depends on the same property.
+    descriptor.skip_memtable_for_tombstone_gc = t.skip_memtable_for_tombstone_gc();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
