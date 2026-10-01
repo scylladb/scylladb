@@ -49,7 +49,7 @@ class db::commitlog_replayer::impl {
     friend class db::commitlog_replayer;
 public:
     impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
-            commitlog_replayer::table_filter filter);
+            commitlog_replayer::table_filter filter, sstring context);
 
     future<> init();
 
@@ -119,6 +119,7 @@ public:
     seastar::sharded<db::system_keyspace>& _sys_ks;
     seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
     commitlog_replayer::table_filter _table_filter;
+    sstring _context;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
@@ -126,11 +127,12 @@ public:
 
 db::commitlog_replayer::impl::impl(
         seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
-        commitlog_replayer::table_filter filter)
+        commitlog_replayer::table_filter filter, sstring context)
     : _db(db)
     , _sys_ks(sys_ks)
     , _raft_buffer(raft_buffer)
     , _table_filter(std::move(filter))
+    , _context(std::move(context))
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -361,8 +363,8 @@ future<> db::commitlog_replayer::impl::process(
 
 db::commitlog_replayer::commitlog_replayer(
         seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
-        table_filter filter)
-    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer, std::move(filter)))
+        table_filter filter, sstring context)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer, std::move(filter), std::move(context)))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -374,8 +376,8 @@ db::commitlog_replayer::~commitlog_replayer()
 
 future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
         seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
-        table_filter filter) {
-    return do_with(commitlog_replayer(db, sys_ks, raft_buffer, std::move(filter)), [](auto&& rp) {
+        table_filter filter, sstring context) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer, std::move(filter), std::move(context)), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));
@@ -386,7 +388,7 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
     using shard_file_map = std::unordered_map<unsigned, utils::chunked_vector<commitlog::descriptor>>;
 
-    rlogger.info("Replaying {}", fmt::join(files, ", "));
+    rlogger.info("Replaying {} for {}", fmt::join(files, ", "), _impl->_context);
 
     // pre-compute work per shard already.
     shard_file_map map;
@@ -422,7 +424,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                 }
                 for (auto& d : it->second) {
                     auto f = d.filename();
-                    rlogger.debug("Replaying {}", f);
+                    rlogger.debug("Replaying {} for {}", f, _impl->_context);
                     auto stats = co_await _impl->recover(d, states[replay_position(d).shard_id()]);
                     if (stats.corrupt_bytes != 0) {
                         rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
@@ -433,8 +435,9 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                     if (stats.broken_files != 0) {
                         rlogger.warn("Corrupted file header: {}. Skipped.", f);
                     }
-                    rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
+                    rlogger.debug("Log replay of {} for {} complete, {} replayed mutations ({} invalid, {} skipped)"
                                     , f
+                                    , _impl->_context
                                     , stats.applied_mutations
                                     , stats.invalid_mutations
                                     , stats.skipped_mutations
@@ -445,7 +448,8 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
             });
         }, impl::stats(), std::plus<impl::stats>());
             
-        rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
+        rlogger.info("Log replay complete for {}, {} replayed mutations ({} invalid, {} skipped)"
+                        , _impl->_context
                         , totals.applied_mutations
                         , totals.invalid_mutations
                         , totals.skipped_mutations
