@@ -1371,7 +1371,6 @@ def test_list_exports_invalid_table_name(test_table_s):
 
 # Test that after starting an export, ListExports includes it, both filtered by its table and
 # not filtered at all.
-@pytest.mark.xfail(reason="ExportTableToPointInTime does not persist an export yet, and MinIO is not started")
 def test_list_exports_contains_export(test_table_s, s3):
     table = test_table_s
     client = enable_pitr(table)
@@ -1393,10 +1392,9 @@ def test_list_exports_contains_export(test_table_s, s3):
 
 
 # Test that ListExports pagination via MaxResults and NextToken works.
-@pytest.mark.xfail(reason="ExportTableToPointInTime does not persist an export yet")
 def test_list_exports_pagination(dynamodb):
     max_tables = 5
-    exports_per_table = 2
+    exports_per_table = 2 if is_aws(dynamodb) else 5
 
     created_tables = []
     with ExitStack() as created_tables_context_manager:
@@ -1436,7 +1434,7 @@ def test_list_exports_pagination(dynamodb):
             assert x >= 0, sm
             arn_up_to_table = sm[:x]
             t = all_arns_by_table[arn_up_to_table]
-            assert not t or summary['ExportArn'] < t[-1], (sm, t)
+            assert not t or sm < t[-1], (sm, t)
             t.append(sm)
 
         # we're not filtering, so we will get more stuff in the list, but at least all our exports should be there
@@ -1446,7 +1444,7 @@ def test_list_exports_pagination(dynamodb):
 
 # Puts two exports of `table` in the export history that ListExports reads, and returns their
 # ARNs. DynamoDB gets real exports, into a bucket that does not exist, so they fail quickly but
-# stay listed. Alternator gets their rows over CQL, as nothing writes them before SCYLLADB-1893.
+# stay listed. Alternator gets their rows over CQL, so that they are in a known state.
 @contextmanager
 def two_listed_exports(request, table):
     client = table.meta.client
@@ -1706,11 +1704,10 @@ def test_export_table_huge_export_time(dynamodb, test_table_s_for_export_only, s
 # ---------------------------------------------------------------------------
 # DescribeExport and ListExports tests driven from the export metadata table
 # ---------------------------------------------------------------------------
-# FIXME: Nothing writes system_distributed.alternator_export_to_s3_exports until export
-# orchestration lands (SCYLLADB-1893), so the tests below put the rows there over CQL and let
-# DescribeExport and ListExports render them, which is how SCYLLADB-1891 and SCYLLADB-1892 ask for
-# them to be tested until then. Once it lands, replace them with tests that start real exports. They
-# only run against Scylla, since they reach into Alternator's own tables.
+# The tests below write rows to system_distributed.alternator_export_to_s3_exports over CQL, and
+# check how DescribeExport and ListExports report them. A real export cannot make these rows on
+# request: a status that DynamoDB does not have (FAILING), rows with known values in all columns,
+# and corrupt rows. They run only on Scylla, because they use Alternator internal tables.
 
 # An export ARN in the shape ExportTableToPointInTime hands out, for an export nobody started.
 def unstarted_export_arn(table_arn):
@@ -1747,6 +1744,14 @@ def export_metadata(cql, export_arn, columns):
             consistency_level=ConsistencyLevel.ONE), [export_arn])
 
 
+# A private table for the ListExports tests below. Other tests start real exports of
+# test_table_s_for_export_only, so ListExports of that table can show more rows.
+@pytest.fixture
+def table_for_listing(dynamodb):
+    with new_table_s(dynamodb) as table:
+        yield table
+
+
 # When the finished exports below finished.
 COMPLETED_AT = datetime.datetime(2026, 9, 20, 12, 5, 0, 750000, tzinfo=datetime.timezone.utc)  # 2026-09-20 12:05:00.750 UTC
 
@@ -1775,7 +1780,6 @@ OPTIONAL_EXPORT_DESCRIPTION_FIELDS = ['S3Prefix', 'ExportType', 'ExportManifest'
 # statuses, for example FAILING, as IN_PROGRESS.
 @pytest.mark.parametrize('request_fields, columns, status, optional_fields', [
     pytest.param({}, {}, 'IN_PROGRESS', {}, id='in_progress'),
-    pytest.param({}, {'export_status': 'NOT_STARTED'}, 'IN_PROGRESS', {}, id='not_started'),
     pytest.param({}, {'export_status': 'FAILING'}, 'IN_PROGRESS', {}, id='failing'),
     pytest.param({'S3Prefix': 'exports/test', 'ExportType': 'FULL_EXPORT'}, {
         'export_status': 'COMPLETED',
@@ -1864,9 +1868,9 @@ def test_describe_export_table_deleted(dynamodb, cql):
 # paging one export at a time keeps the ExportArn descending order across the two tables.
 # The request with INCREMENTAL_EXPORT, which Alternator does not accept, shows that ListExports
 # copies ExportType from the request instead of reporting the default.
-def test_list_exports_summaries(test_table_s_for_export_only, test_table_s, cql):
-    client = test_table_s_for_export_only.meta.client
-    table_arn = get_table_arn(test_table_s_for_export_only)
+def test_list_exports_summaries(table_for_listing, test_table_s, cql):
+    client = table_for_listing.meta.client
+    table_arn = get_table_arn(table_for_listing)
     other_table_arn = get_table_arn(test_table_s)
     # export ARN -> (the stored row, the fields of the expected ExportSummary)
     rows = {
@@ -1896,9 +1900,9 @@ def test_list_exports_summaries(test_table_s_for_export_only, test_table_s, cql)
 
 # Test that ListExports pages through a table's exports MaxResults at a time, handing out a
 # NextToken with every page but the last, and no NextToken when the exports fit the page exactly.
-def test_list_exports_paging(test_table_s_for_export_only, cql):
-    client = test_table_s_for_export_only.meta.client
-    table_arn = get_table_arn(test_table_s_for_export_only)
+def test_list_exports_paging(table_for_listing, cql):
+    client = table_for_listing.meta.client
+    table_arn = get_table_arn(table_for_listing)
     arns = sorted((unstarted_export_arn(table_arn) for _ in range(5)), reverse=True)
     # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
     with ExitStack() as seeded:
@@ -1946,9 +1950,9 @@ def test_list_exports_table_deleted(dynamodb, cql):
     pytest.param(lambda arn: arn, {'request': 'not json'}, id='request_not_json'),
     pytest.param(lambda arn: arn.rsplit('/', 1)[0] + '/', {}, id='arn_without_export_id'),
 ])
-def test_list_exports_corrupt_row(test_table_s_for_export_only, cql, make_arn, columns):
-    client = test_table_s_for_export_only.meta.client
-    table_arn = get_table_arn(test_table_s_for_export_only)
+def test_list_exports_corrupt_row(table_for_listing, cql, make_arn, columns):
+    client = table_for_listing.meta.client
+    table_arn = get_table_arn(table_for_listing)
     export_arn = unstarted_export_arn(table_arn)
     corrupt_arn = make_arn(unstarted_export_arn(table_arn))
     with export_metadata(cql, export_arn, accepted_export_row(table_arn)), \

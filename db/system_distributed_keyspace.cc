@@ -338,7 +338,8 @@ schema_ptr alternator_export_to_s3_exports() {
                 .with_column("accepted_at", timestamp_type)
                 // When the export reached a terminal state (COMPLETED or FAILED)
                 .with_column("completed_at", timestamp_type)
-                // Host ID of the node which drives this export
+                // The node incarnation that runs this export, as "{host_id}:{gossip_generation}"
+                // (see live_node_identifier in alternator/export.cc).
                 .with_column("node_id", utf8_type)
                 .set_comment("Alternator export to S3 export metadata")
                 .with_hash_version()

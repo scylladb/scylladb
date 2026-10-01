@@ -12,6 +12,7 @@
 #include "alternator/executor_util.hh"
 
 #include "bytes.hh"
+#include "cql3/query_options.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
 #include "db_clock.hh"
@@ -19,8 +20,11 @@
 #include "db/consistency_level.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/timeout_clock.hh"
+#include "dht/i_partitioner.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
+#include "gms/gossiper.hh"
+#include "locator/host_id.hh"
 #include "query/query-request.hh"
 #include "replica/database.hh"
 #include "schema/schema.hh"
@@ -29,6 +33,7 @@
 #include "service/pager/paging_state.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
 #include "utils/chunked_vector.hh"
@@ -50,6 +55,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <exception>
 #include <limits>
@@ -61,10 +67,65 @@
 #include <utility>
 #include <vector>
 #include <zlib.h>
+#include <fmt/format.h>
+
+namespace alternator {
+
+// Helper functions for the export to S3 metadata in the system_distributed keyspace.
+// There are two tables:
+// 1) `alternator_export_to_s3_exports` - the key is the export ARN. Has the export metadata
+//    (table id, client token, status, timestamps, etc.).
+// 2) `alternator_export_to_s3_client_tokens` - maps client tokens to export ARNs, with the
+//    original request, for idempotent retries.
+// For the schemas, see db/system_distributed_keyspace.cc.
+// All writes to these tables must use the helper functions, which apply the correct
+// conditions. db::alternator_export_table_helper does the CQL. The functions below only
+// convert the rows.
+
+// Identifies one incarnation of a node: host_id and gossip generation. The value changes
+// after a restart, and after a restart of gossip (`nodetool disablegossip` and `enablegossip`):
+// both increase the gossip generation. The export and the garbage collector
+// use this.
+// The `node_id` columns store it as "{host_id}:{gossip_generation}".
+// A default value (a null host_id) means "no node".
+struct live_node_identifier {
+    locator::host_id host_id;
+    std::uint32_t gossip_generation = 0;
+
+    sstring to_string() const {
+        if (!host_id) {
+            return sstring();
+        }
+        return fmt::format("{}:{}", host_id, gossip_generation);
+    }
+
+    auto operator<=>(const live_node_identifier&) const = default;
+};
+
+} // namespace alternator
+
+template <> struct fmt::formatter<alternator::live_node_identifier> : fmt::formatter<string_view> {
+    auto format(const alternator::live_node_identifier& id, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.to_string());
+    }
+};
 
 namespace alternator {
 
 static logging::logger xlogger("alternator-export");
+
+// TTL of export rows. Each write of a row sets it (see insert_export() below).
+// DynamoDB keeps the export history (DescribeExport / ListExports) for 90 days.
+static constexpr std::chrono::seconds export_row_ttl = std::chrono::days(90);
+
+// Returns nullopt if it inserted the row, and the existing row if a row with the same ARN is
+// already there.
+static future<std::optional<export_row>> insert_export(db::system_distributed_keyspace& sdks, const export_row& row) {
+    db::alternator_export_table_helper helper(sdks.qp());
+    // Set the TTL on insert. update_export() cannot change the row marker, so a row inserted
+    // without a TTL does not expire.
+    co_return co_await helper.insert_export(row, export_row_ttl);
+}
 
 // `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
 // RequestLimitExceeded, so that the client retries (the same as
@@ -970,6 +1031,18 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
     }
 }
 
+// Returns the identifier of this node incarnation (host_id + gossip_generation).
+// Returns nullopt if the gossiper has no state for this node, that is before gossip starts.
+static std::optional<live_node_identifier> get_self_node_id(gms::gossiper& gossiper) {
+    auto host_id = gossiper.my_host_id();
+    auto ep_state = gossiper.get_this_endpoint_state_ptr();
+    if (!ep_state) {
+        return std::nullopt;
+    }
+    auto generation = ep_state->get_heart_beat_state().get_generation();
+    return live_node_identifier{ .host_id = host_id, .gossip_generation = std::uint32_t(generation.value()) };
+}
+
 // Generates a unique export id in the DynamoDB format, see is_valid_export_id().
 static sstring generate_export_id(db_clock::time_point accepted_at) {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -995,6 +1068,19 @@ static bool is_valid_export_id(std::string_view export_id) {
     auto is_hex_digit = [&] (char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
     return std::ranges::all_of(export_id.substr(0, digit_count), is_digit)
             && std::ranges::all_of(export_id.substr(digit_count + 1), is_hex_digit);
+}
+
+// Returns the time of the export data: the ExportTime of the request, or the accept time if
+// the request has no ExportTime. We validated the request when we accepted it. If ExportTime
+// is not a number (a corrupt row), we use the accept time.
+static db_clock::time_point export_time_of_request(const rjson::value& request, db_clock::time_point accepted_at) {
+    const rjson::value* export_time = rjson::find(request, "ExportTime");
+    if (!export_time || !export_time->IsNumber()) {
+        return accepted_at;
+    }
+    // DynamoDB rounds ExportTime to the nearest millisecond, which is the db_clock precision.
+    return db_clock::time_point(std::chrono::round<db_clock::duration>(
+            std::chrono::duration<double>(export_time->GetDouble())));
 }
 
 // Returns true if the status is final.
@@ -1149,6 +1235,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
 
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    auto export_type = get_non_empty_string_attribute(request, "ExportType", "");
 
     auto now = to_epoch_seconds(db_clock::now());
     // If there is no ExportTime, use the current time (see the validation below).
@@ -1161,8 +1248,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
     }
 
-    auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
-    if (export_type != "FULL_EXPORT") {
+    if (!export_type.empty() && export_type != "FULL_EXPORT") {
         co_return api_error::validation(
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
@@ -1229,6 +1315,26 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         co_return api_error::validation("ClientToken attribute is required");
     }
 
+    auto node_id_opt = get_self_node_id(_gossiper);
+    if (!node_id_opt) {
+        // Without a node identifier, we cannot own the export.
+        co_return api_error::internal("This node is not gossiping, so it can't start an export. Please retry the operation.");
+    }
+    auto node_id = std::move(*node_id_opt);
+
+    // The request that we store and compare on a retry: only the members which we support (add a
+    // member here when it becomes supported). We validated each of them above, so the stored
+    // request is small, and a request cannot fill the metadata rows with members which we ignore.
+    rjson::value request_to_compare = rjson::empty_object();
+    for (std::string_view name : {"TableArn", "S3Bucket", "S3Prefix", "ExportFormat", "ExportType", "ExportTime"}) {
+        if (const rjson::value* v = rjson::find(request, name)) {
+            rjson::add_with_string_name(request_to_compare, name, rjson::copy(*v));
+        }
+    }
+    sstring stored_request(rjson::print(request_to_compare));
+
+    sstring client_token(user_client_token);
+
     auto accepted_at = db_clock::now();
 
     // As in DynamoDB, the export id is also the name of the S3 directory of the export. The ARN is
@@ -1237,32 +1343,27 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto export_arn = fmt::format("{}/export/{}",
             rjson::to_string_view(generate_arn_for_table(parts.keyspace_name, parts.table_name)), export_id_token);
 
-    // Build the ExportDescription response
-    // The actual export functionality is not implemented yet - this just returns
-    // a FAILED status to indicate the export has been accepted, but immediately failed.
-    rjson::value export_desc = rjson::empty_object();
-
-    rjson::add(export_desc, "ClientToken", rjson::from_string(user_client_token));
-    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
-    rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
-    rjson::add(export_desc, "ExportStatus", "FAILED");
-    rjson::add(export_desc, "FailureCode", "NotImplemented");
-    rjson::add(export_desc, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the export API.");
-    rjson::add(export_desc, "ExportTime", rjson::value(export_time));
-    // DynamoDB echoes ExportType only when the request carried one; a request that relied on the
-    // FULL_EXPORT default gets none back.
-    if (rjson::find(request, "ExportType")) {
-        rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
+    // FIXME: the export itself is not implemented yet, so the export row is written as FAILED.
+    export_row erow{
+        .export_arn = export_arn,
+        .client_token = client_token,
+        .request = stored_request,
+        .table_id = schema->id(),
+        .export_status = "FAILED",
+        .failure_code = "NotImplemented",
+        .failure_message = "Not yet implemented - this is a placeholder response for testing the export API.",
+        .export_id_token = export_id_token,
+        .export_time = export_time_of_request(request_to_compare, accepted_at),
+        .accepted_at = accepted_at,
+        .completed_at = accepted_at,
+        .node_id = node_id.to_string(),
+    };
+    // The insert returns the existing export row if it did not apply: another export of this table
+    // can have the same id (the same millisecond and random number). Then report that export.
+    if (auto existing_export_row = co_await translate_coordinator_errors(insert_export(_sdks, erow))) {
+        co_return rjson::print(build_export_description_response(*existing_export_row));
     }
-    rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
-    if (!s3_prefix.empty()) {
-        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
-    }
-    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
-
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print(build_export_description_response(erow));
 }
 
 // An export ARN is a table ARN followed by `/export/<id>`.
