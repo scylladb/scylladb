@@ -48,9 +48,14 @@ def _list_scylla_release_entries(bucket: str, prefix: str, pack: str = "") -> li
 
     pattern = _release_entry_pattern(pack)
 
+    # Connecting to S3 normally takes well under a second. Note that each
+    # attempt tries all of the endpoint's addresses (usually 8) in turn, each
+    # with connect_timeout. Keeping the worst case well below the test's
+    # timeout lets fetch_and_install_scylla_version() fall back to a cached
+    # version when S3 is unreachable, instead of the test timing out.
     s3 = boto3.client("s3", region_name="us-east-1", config=Config(
         signature_version=UNSIGNED,
-        connect_timeout=60,
+        connect_timeout=10,
         read_timeout=60,
         retries={"max_attempts": 10, "mode": "adaptive"},
     ))
