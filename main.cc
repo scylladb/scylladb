@@ -1599,7 +1599,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, {}, "schema").get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -2236,7 +2236,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         }
                     });
                     auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
-                            [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); }).get();
+                            [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); },
+                            "system tables").get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                 }
             }
