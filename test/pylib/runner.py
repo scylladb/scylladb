@@ -37,7 +37,7 @@ from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
-from test.pylib.s3mock_server import S3MockServer
+from test.pylib.s3mock_server import S3MockServer, create_conf
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, summarize_resource_utilization
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
@@ -373,13 +373,20 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
 
     @asynccontextmanager
     async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
+        config_options = dict(suite_config.cfg.get("extra_scylla_config_options", {}))
+        # If the suite asks for it, add the S3 server of test.py (see start_3rd_party_services()).
+        # This option has no string parser, so only scylla.yaml can set it.
+        if suite_config.cfg.get("object_storage_endpoint_from_env") and S3MockServer.ENV_ADDRESS in os.environ:
+            config_options["object_storage_endpoints"] = create_conf(
+                f"http://{os.environ[S3MockServer.ENV_ADDRESS]}:{os.environ[S3MockServer.ENV_PORT]}",
+                S3MockServer.DEFAULT_REGION)
         node.stash[CLUSTER_KEY] = cluster = ScyllaCluster(
             logger=testpy_logger,
             vardir=suite_log_dir,
             mode=build_mode,
             cmdline_options=suite_config.cfg.get("extra_scylla_cmdline_options", []),
             cmdline_options_override=options.extra_scylla_cmdline_options.split(),
-            config_options=suite_config.cfg.get("extra_scylla_config_options", {}),
+            config_options=config_options,
             append_env=base_env,
             scylla_exe=scylla_binary,
             save_log_on_success=options.save_log_on_success,
