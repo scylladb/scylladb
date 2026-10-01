@@ -78,7 +78,7 @@
 
 #include "service/topology_coordinator.hh"
 
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <seastar/core/metrics_registration.hh>
 #include "utils/labels.hh"
 
@@ -500,7 +500,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
-        auto nodes = boost::range::join(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
+        auto nodes = std::views::concat(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
             | std::views::filter([&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                 return !exclude_nodes.contains(n.first);
             })

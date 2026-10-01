@@ -77,7 +77,6 @@
 #include "service/paxos/paxos_state.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>
-#include <boost/range/join.hpp>
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
@@ -464,7 +463,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 }
 
 static std::unordered_set<locator::host_id> get_released_nodes(const service::topology& topology, const locator::token_metadata& tm) {
-    return boost::join(topology.left_nodes, topology.ignored_nodes)
+    return std::views::concat(topology.left_nodes, topology.ignored_nodes)
             | std::views::transform([] (const auto& raft_id) { return locator::host_id(raft_id.uuid()); })
             | std::views::filter([&] (const auto& h) { return !tm.get_topology().has_node(h); })
             | std::ranges::to<std::unordered_set<locator::host_id>>();
@@ -790,7 +789,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     }
 
     // Ban all left and ignored nodes. We do not allow them to go back online.
-    co_await _messaging.local().ban_hosts(boost::join(topology.left_nodes, topology.ignored_nodes)
+    co_await _messaging.local().ban_hosts(std::views::concat(topology.left_nodes, topology.ignored_nodes)
         | std::views::transform([] (auto id) { return locator::host_id{id.uuid()}; })
         | std::ranges::to<utils::chunked_vector<locator::host_id>>());
 
@@ -7041,7 +7040,7 @@ void storage_service::init_messaging_service() {
                 }
             }
 
-            for (const auto& table : boost::join(params.tables, additional_tables)) {
+            for (const auto& table : std::views::concat(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
