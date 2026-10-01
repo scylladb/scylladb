@@ -21,6 +21,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -221,6 +222,12 @@ class executor::s3_exports {
     // of its export until it writes the terminal state. Until then
     // DescribeExport still reports that export as IN_PROGRESS.
     size_t _running_exports = 0;
+    // The time of the next periodic garbage collection round. The first value
+    // is in the past, so that the first round does not wait.
+    // run_garbage_collector() sets it after each round.
+    seastar::lowres_clock::time_point _gc_round_at = seastar::lowres_clock::time_point::min();
+    // Waits for `_gc_round_at`, see run_garbage_collector().
+    future<> wait_for_next_gc_round();
 public:
     explicit s3_exports(executor& e) : _e(e) {}
     // True after stop() aborted the exports, i.e. during a clean shutdown.
@@ -238,6 +245,20 @@ public:
     // Reserves an export slot on this shard. Returns nullopt if
     // alternator_max_concurrent_exports_per_shard exports already run.
     std::optional<slot> try_reserve_export_slot();
+    // Marks as FAILED the S3 exports that no node runs. It does not resume
+    // exports and does not delete data from S3. An export is collected if its
+    // node:
+    //  - is not a member of the cluster any more (it was removed or
+    //    replaced), or
+    //  - has a gossip generation newer than the export (this includes
+    //    previous incarnations of this node, and a node which restarted
+    //    gossip while the export still runs), or
+    //  - is unreachable for a long time (DOWN alone is not sufficient).
+    // A member the gossiper does not know yet counts as running, so its
+    // exports are not collected.
+    // Runs one round at startup, then periodically, until stop().
+    // executor::start() starts it on shard 0 of each node.
+    future<> run_garbage_collector();
     // Starts a background fiber that does the export of `row`, with
     // `s3_client`, the client of the S3 endpoint which the request checked.
     // The fiber writes the result to the export row and holds `export_slot`

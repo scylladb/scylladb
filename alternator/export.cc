@@ -27,6 +27,7 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "locator/host_id.hh"
+#include "locator/token_metadata.hh"
 #include "query/query-request.hh"
 #include "replica/database.hh"
 #include "schema/schema.hh"
@@ -47,6 +48,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/rjson.hh"
 #include "utils/s3/client.hh"
+#include "utils/UUID.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
@@ -73,6 +75,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <zlib.h>
@@ -108,6 +111,9 @@ struct live_node_identifier {
         return fmt::format("{}:{}", host_id, gossip_generation);
     }
 
+    // Parses the value of to_string(). Returns a default value for empty or incorrect input.
+    static live_node_identifier from_string(std::string_view str);
+
     auto operator<=>(const live_node_identifier&) const = default;
 };
 
@@ -130,6 +136,33 @@ static logging::logger xlogger("alternator-export");
 // TTL of export rows. Each write of a row sets it (see insert_export() below).
 // DynamoDB keeps the export history (DescribeExport / ListExports) for 90 days.
 static constexpr std::chrono::seconds export_row_ttl = std::chrono::days(90);
+
+live_node_identifier live_node_identifier::from_string(std::string_view str) {
+    if (str.empty()) {
+        return live_node_identifier{};
+    }
+    auto pos = str.rfind(':');
+    if (pos == std::string_view::npos || pos == 0) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    std::uint32_t generation = 0;
+    auto gen_str = str.substr(pos + 1);
+    auto [ptr, ec] = std::from_chars(gen_str.data(), gen_str.data() + gen_str.size(), generation);
+    if (ec != std::errc() || ptr != gen_str.data() + gen_str.size()) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    locator::host_id host_id;
+    try {
+        host_id = locator::host_id(utils::UUID(str.substr(0, pos)));
+    } catch (...) {
+        xlogger.warn("Invalid node_id format: {}", str);
+        return live_node_identifier{};
+    }
+    return live_node_identifier{ .host_id = host_id, .gossip_generation = generation };
+}
+
 
 // Returns nullopt if it inserted the row, and the existing row if a row with the same ARN is
 // already there.
@@ -1149,6 +1182,79 @@ static std::optional<live_node_identifier> get_self_node_id(gms::gossiper& gossi
     return live_node_identifier{ .host_id = host_id, .gossip_generation = std::uint32_t(generation.value()) };
 }
 
+// The time a node must be unreachable before the garbage collector can take its exports.
+// DOWN is not sufficient: after a reactor stall or a network partition, the node can continue
+// the export and write to S3 after we marked it FAILED. A dead node does not come back with
+// the same incarnation, so a long timeout only delays the cleanup.
+static std::chrono::seconds node_unreachable_timeout() {
+    return std::chrono::hours(1);
+}
+
+// The nodes that can still run an export.
+struct running_node_ids {
+    // The gossip generation of each node that can still run an export: the nodes the gossiper
+    // knows, except those unreachable for longer than `node_unreachable_timeout()`, and the
+    // cluster members the gossiper does not know (see get_running_nodes()). A node that is not
+    // here cannot run an export.
+    // The generation is 0 if we do not know the incarnation: at restart, a node loads its peers
+    // from system.peers with generation 0 (see gms::gossiper::add_saved_endpoint()), and a
+    // member which the gossiper does not know has no incarnation at all. 0 is not higher than
+    // the generation of any row, so such a node always counts as running. A node from
+    // system.peers is also unreachable from the start, so the timeout applies to it too.
+    std::unordered_map<locator::host_id, std::uint32_t> generations;
+
+    // Returns true if `node_id` can still run an export. Also returns true for "no node" (a
+    // missing or incorrect `node_id`), because we cannot know if that row is orphaned. Thus the
+    // garbage collector does not change such a row, and the row stays until its TTL removes it.
+    // This is also true for a client token row: if the row has no export row, a retry with its
+    // ClientToken gets IN_PROGRESS for the 8 hours of the client token TTL. Only a corrupt write
+    // makes such a row, because this node always writes a correct `node_id`.
+    bool may_be_running(const live_node_identifier& node_id) const {
+        if (!node_id.host_id) {
+            return true;
+        }
+        auto it = generations.find(node_id.host_id);
+        if (it == generations.end()) {
+            // The node is unreachable for longer than `node_unreachable_timeout()`, or it is not
+            // a member of the cluster any more (it was removed or replaced).
+            return false;
+        }
+        // Only a higher generation shows that the node restarted, or restarted gossip. After a
+        // gossip restart the export still runs, but we take it: the node cannot tell its exports
+        // from those of an earlier incarnation. Its final write then does not apply. A lower
+        // generation can be old gossip state or the placeholder 0, so the writer can still run.
+        return it->second <= node_id.gossip_generation;
+    }
+};
+
+// Returns the nodes that can still run an export, see running_node_ids.
+static running_node_ids get_running_nodes(gms::gossiper& gossiper, const locator::token_metadata& tm) {
+    running_node_ids result;
+    auto timeout = std::chrono::duration_cast<std::chrono::microseconds>(node_unreachable_timeout()).count();
+    // The callback must not yield.
+    gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& ep_state) {
+        auto host_id = ep_state.get_host_id();
+        // get_endpoint_downtime() reports microseconds, and 0 for a node which is up.
+        if (gossiper.get_endpoint_downtime(host_id) > timeout) {
+            return;
+        }
+        auto generation = ep_state.get_heart_beat_state().get_generation();
+        result.generations.emplace(host_id, std::uint32_t(std::max<std::int32_t>(generation.value(), 0)));
+    });
+    // A node for which the gossiper has no state at all is not necessarily dead: the gossip view
+    // of this node can still be incomplete, for example in the first round after this node
+    // joined. Such a node has no downtime either, so `node_unreachable_timeout()` would never hold
+    // the round back. Thus, add every cluster member which the gossiper does not know, with the
+    // generation 0 of an unknown incarnation. A node which is not a member any more (it was
+    // removed or replaced) stays out, so the round still takes its exports.
+    for (const auto& host_id : tm.get_host_ids()) {
+        if (!gossiper.get_endpoint_state_ptr(host_id)) {
+            result.generations.emplace(host_id, 0);
+        }
+    }
+    return result;
+}
+
 // Generates a unique export id in the DynamoDB format, see is_valid_export_id().
 static sstring generate_export_id(db_clock::time_point accepted_at) {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -1288,9 +1394,168 @@ static rjson::value build_export_description_response(const export_row& exp) {
     return response;
 }
 
+// Marks as FAILED the export row `exp` of a node which cannot run it. `exp` must be the full
+// row, because the conditional write sets all non-key columns.
+// Does nothing if the row changed since the caller read it: a different node took the export, or
+// the export finished.
+// Checks the owner with the current gossip state, not with the one at the start of the round: the
+// owner can be reachable again (e.g. after a partition), and then it can still finish the export.
+// The conditional write cannot check that, so this only makes the window shorter.
+static future<> collect_export_row(service::storage_proxy& proxy, db::system_distributed_keyspace& sdks,
+        gms::gossiper& gossiper, const live_node_identifier& self_node_id, const export_row& exp) {
+    auto exp_node_id = live_node_identifier::from_string(exp.node_id);
+    if (get_running_nodes(gossiper, *proxy.get_token_metadata_ptr()).may_be_running(exp_node_id)
+            || is_terminal_status(exp.export_status)) {
+        xlogger.debug("Export row {} is of node {} in status {}, skipping", exp.export_arn, exp_node_id, exp.export_status);
+        co_return;
+    }
+
+    // One conditional write takes the row and finishes it. The condition on the pair
+    // (export_status, node_id) lets only one collector apply the write. We do not delete
+    // the data that the dead node wrote to S3. A failed export never deletes its data.
+    // The user must clean it up.
+    // The write must set the TTL too: it writes all non-key columns.
+    xlogger.debug("Marking export row {} as FAILED", exp.export_arn);
+    auto failed_export_row = exp;
+    failed_export_row.export_status = "FAILED";
+    failed_export_row.node_id = self_node_id.to_string();
+    failed_export_row.failure_code = "NodeFailure";
+    failed_export_row.failure_message = "The node that was performing the export has failed before the export could finish.";
+    failed_export_row.completed_at = db_clock::now();
+    if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id, export_row_ttl)) {
+        // A different node took the row first. Skip it.
+        xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", exp.export_arn);
+    }
+}
+
+// Does one garbage collection round for S3 exports.
+// A round can take a long time, thus it checks `as` between rows, so that stop() does not wait
+// for the full round. A later round (of this node or of a different node) collects the
+// remaining rows.
+static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::system_distributed_keyspace& sdks,
+        gms::gossiper& gossiper, abort_source& as) {
+    // This is maintenance work, the same as the export. Use the same scheduling group.
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+
+    // To take a row, we write the identifier of this node, so we need gossip state. If there is
+    // no gossip state, fail the round (do not return). Then the retry is after
+    // `s3_exports_gc_retry_period`, not after `s3_exports_gc_period`. Gossip usually starts
+    // soon, and a single-node cluster has no other collector. Check this before the scans.
+    auto self_node_id_opt = get_self_node_id(gossiper);
+    if (!self_node_id_opt) {
+        throw std::runtime_error("this node has no gossip state, so it can't take over the exports of dead nodes");
+    }
+    auto self_node_id = std::move(*self_node_id_opt);
+
+    auto exports = co_await get_all_exports(sdks, &as);
+    // We can take a row if its node is not in `running_nodes` (see `node_unreachable_timeout()`).
+    // Rows of previous incarnations of this node are always taken, because the current
+    // generation of this node is higher. This includes the rows of exports which still run
+    // after a restart of gossip (see may_be_running()).
+    // This state only selects the rows to look at. Each write which takes a row checks the
+    // owner again with the current state (see collect_export_row()).
+    auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr());
+
+    xlogger.debug("Garbage collection: {} exports, {} nodes which may be running an export, self node_id={}",
+        exports.size(), running_nodes.generations.size(), self_node_id);
+
+    // We catch errors for each row and continue with the next row. If one bad row stopped the
+    // round, each round would stop at the same row.
+    size_t uncollected_rows = 0;
+
+    for (auto& summary : exports) {
+        as.check();
+        co_await coroutine::maybe_yield();
+        // Collect only rows of nodes that cannot run.
+        auto node_id = live_node_identifier::from_string(summary.node_id.value_or(sstring()));
+        if (running_nodes.may_be_running(node_id)) {
+            continue;
+        }
+        auto status = summary.status.value_or(sstring());
+        if (is_terminal_status(status)) {
+            // The export is finished. Nothing to collect.
+            xlogger.debug("Export row {} is already in terminal state {}, skipping", summary.export_arn, status);
+            continue;
+        }
+        xlogger.debug("Collecting export row {} of node {} in state {}", summary.export_arn, node_id, status);
+
+        try {
+            // The scan read only some columns. update_export() writes the full row, so read it.
+            auto row = co_await get_export(sdks, summary.export_arn);
+            if (!row) {
+                // The row expired in the meantime.
+                continue;
+            }
+            // collect_export_row() checks the owner and the status again. A different node can
+            // have taken the export after the scan.
+            co_await collect_export_row(proxy, sdks, gossiper, self_node_id, *row);
+        } catch (...) {
+            // A later round collects this row.
+            xlogger.warn("Failed to collect export row {} of node {}: {}",
+                    summary.export_arn, node_id, std::current_exception());
+            ++uncollected_rows;
+        }
+    }
+
+    // If some rows were not collected, fail the round, so that the retry is sooner than
+    // `s3_exports_gc_period` (with backoff, see `s3_exports_gc_max_retry_period`). On abort,
+    // throw the abort exception, so that the collector stops.
+    as.check();
+    if (uncollected_rows) {
+        throw std::runtime_error(fmt::format("could not collect {} row(s)", uncollected_rows));
+    }
+    xlogger.debug("Garbage collection: finished");
+}
+
+static constexpr std::chrono::hours s3_exports_gc_period{4};
+
+// The delay before the first retry of a failed garbage collection round. A round can fail at
+// start-up (no gossip, or system_distributed is not available), and the exports of the previous
+// incarnation stay IN_PROGRESS until a round succeeds.
+static constexpr std::chrono::minutes s3_exports_gc_retry_period{1};
+
+// The maximum retry delay of a failed garbage collection round. The delay doubles after each
+// failure, up to this value, so that a lasting problem (for example, a partition that stays
+// unavailable) does not keep the collector retrying every minute. A successful round resets
+// the delay to `s3_exports_gc_retry_period`.
+static constexpr std::chrono::minutes s3_exports_gc_max_retry_period = s3_exports_gc_period;
+
+// Waits for the time of the next garbage collection round of S3 exports, `_gc_round_at`.
+future<> executor::s3_exports::wait_for_next_gc_round() {
+    auto now = lowres_clock::now();
+    if (now < _gc_round_at) {
+        co_await seastar::sleep_abortable(_gc_round_at - now, _as);
+    }
+}
+
 future<> executor::s3_exports::stop() {
     _as.request_abort();
     co_await _gate.close();
+}
+
+future<> executor::s3_exports::run_garbage_collector() {
+    auto holder = _gate.try_hold();
+    if (!holder) {
+        // The executor is stopping.
+        co_return;
+    }
+    // The delay of the next retry, see `s3_exports_gc_max_retry_period`.
+    std::chrono::minutes retry_period = s3_exports_gc_retry_period;
+    // `_gc_round_at` is in the past, thus the first round does not wait.
+    while (!_as.abort_requested()) {
+        try {
+            co_await wait_for_next_gc_round();
+            co_await garbage_collect_s3_exports(_e._proxy, _e._sdks, _e._gossiper, _as);
+            _gc_round_at = lowres_clock::now() + s3_exports_gc_period;
+            retry_period = s3_exports_gc_retry_period;
+        } catch (const abort_requested_exception&) {
+            break;
+        } catch (...) {
+            xlogger.warn("Garbage collection of S3 exports failed: {}", std::current_exception());
+            _gc_round_at = lowres_clock::now() + retry_period;
+            retry_period = std::min(retry_period * 2, s3_exports_gc_max_retry_period);
+        }
+    }
 }
 
 static bool is_ascii_alnum(char c) {
