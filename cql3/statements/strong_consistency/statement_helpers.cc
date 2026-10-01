@@ -16,6 +16,7 @@
 #include "service/query_state.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "service/strong_consistency/coordinator.hh"
+#include "tracing/trace_state.hh"
 
 namespace cql3::statements::strong_consistency {
 future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement(query_processor& qp,
@@ -24,6 +25,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
         db::timeout_clock::time_point timeout,
         bool is_write,
         service::strong_consistency::stats& stats,
+        const tracing::trace_state_ptr& trace_state,
         locator::host_id_or_exception_callback on_forwarding_finished)
 {
     auto&& func_values_cache = const_cast<cql3::query_options&>(options).take_cached_pk_function_calls();
@@ -32,6 +34,8 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
         ++(is_write ? stats.write_node_bounces : stats.read_node_bounces);
         co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, std::move(on_forwarding_finished));
     }
+    tracing::trace(trace_state, "The strongly consistent {} has to run on shard {}, bouncing it to that shard.",
+            is_write ? "write" : "read", target.shard);
     ++(is_write ? stats.write_shard_bounces : stats.read_shard_bounces);
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
 }
