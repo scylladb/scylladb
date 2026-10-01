@@ -216,6 +216,8 @@ class executor::s3_exports {
     seastar::abort_source _as;
 public:
     explicit s3_exports(executor& e) : _e(e) {}
+    // True after stop() aborted the exports, i.e. during a clean shutdown.
+    bool abort_requested() const noexcept { return _as.abort_requested(); }
     // Starts a background fiber that does the export of `row`, with
     // `s3_client`, the client of the S3 endpoint which the request checked.
     // The fiber writes the result to the export row. Throws only before the

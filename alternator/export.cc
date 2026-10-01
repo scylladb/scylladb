@@ -18,6 +18,7 @@
 #include "db_clock.hh"
 #include "db/config.hh"
 #include "db/consistency_level.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner.hh"
@@ -34,6 +35,7 @@
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include "sstables/object_storage_client.hh"
+#include "sstables/sstables_manager.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
@@ -1067,6 +1069,13 @@ static arn_parts parse_arn_reporting_validation(std::string_view arn, std::strin
 
 // --- Export orchestration helpers ---
 
+// The configured S3 endpoints. The configuration does not map buckets to endpoints. Thus an
+// export to S3 needs exactly one S3 endpoint in object_storage_endpoints, and uses it for all
+// buckets.
+static std::vector<sstring> s3_endpoints(service::storage_proxy& proxy) {
+    return proxy.local_db().get_user_sstables_manager().endpoints(db::object_storage_endpoint_param::s3_type);
+}
+
 // The S3 client of an export. `client` calls back into `endpoint_client` (for the clients of
 // other shards), so the export keeps `endpoint_client` alive while it uses `client`, also if the
 // endpoint is removed from the configuration meanwhile.
@@ -1074,6 +1083,16 @@ struct export_s3_client {
     seastar::shared_ptr<sstables::object_storage_client> endpoint_client;
     seastar::shared_ptr<s3::client> client;
 };
+
+// Gets the S3 client of the S3 endpoint `endpoint` of object_storage_endpoints.
+static export_s3_client get_s3_client(service::storage_proxy& proxy, const sstring& endpoint) {
+    auto endpoint_client = proxy.local_db().get_user_sstables_manager().get_endpoint_client(endpoint);
+    auto client = sstables::get_s3_client(endpoint_client);
+    if (!client) {
+        on_internal_error(xlogger, fmt::format("object storage endpoint {} is not an S3 endpoint", endpoint));
+    }
+    return export_s3_client{ .endpoint_client = std::move(endpoint_client), .client = std::move(client) };
+}
 
 // Returns the identifier of this node incarnation (host_id + gossip_generation).
 // Returns nullopt if the gossiper has no state for this node, that is before gossip starts.
@@ -1398,26 +1417,96 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto export_arn = fmt::format("{}/export/{}",
             rjson::to_string_view(generate_arn_for_table(parts.keyspace_name, parts.table_name)), export_id_token);
 
-    // FIXME: the export itself is not implemented yet, so the export row is written as FAILED.
+    // The row of the new export. A failure below writes it as FAILED, so we create it first.
     export_row erow{
         .export_arn = export_arn,
         .client_token = client_token,
         .request = stored_request,
         .table_id = schema->id(),
-        .export_status = "FAILED",
-        .failure_code = "NotImplemented",
-        .failure_message = "Not yet implemented - this is a placeholder response for testing the export API.",
+        .export_status = "IN_PROGRESS",
         .export_id_token = export_id_token,
         .export_time = export_time_of_request(request_to_compare, accepted_at),
         .accepted_at = accepted_at,
-        .completed_at = accepted_at,
         .node_id = node_id.to_string(),
     };
-    // The insert returns the existing export row if it did not apply: another export of this table
-    // can have the same id (the same millisecond and random number). Then report that export.
-    if (auto existing_export_row = co_await translate_coordinator_errors(insert_export(_sdks, erow))) {
-        co_return rjson::print(build_export_description_response(*existing_export_row));
+
+    // The S3 endpoint comes from the configuration, which must have exactly one. The export
+    // uses the client of the endpoint which we check here: a live update of the configuration
+    // after this check does not change the destination of the export. Do not wait between the
+    // check and getting the client, or an update can come between them.
+    auto endpoints = s3_endpoints(_proxy);
+    if (endpoints.size() != 1) {
+        co_return api_error::validation(fmt::format(
+                "Export to S3 needs exactly one S3 endpoint in object_storage_endpoints, found {}", endpoints.size()));
     }
+    auto s3_client = get_s3_client(_proxy, endpoints.front());
+
+    std::exception_ptr failure;
+
+    try {
+        // The export row below is ours, so from here a failure writes FAILED. This includes a
+        // failed insert, because a write that timed out can still apply.
+        // The insert returns the existing export row if it did not apply.
+        auto existing_export_row = co_await translate_coordinator_errors(insert_export(_sdks, erow));
+
+        if (existing_export_row) {
+            // Only the garbage collector can also write a row for this ARN (if this node is
+            // unreachable for more than one hour). Or the row is ours, if a concurrent CAS
+            // committed our value.
+            xlogger.debug("Export row for ClientToken {} and ExportArn {} already exists",
+                    client_token, export_arn);
+            // An IN_PROGRESS row with our export id and our ClientToken is our row (the garbage
+            // collector writes an empty id or FAILED). Run the export, or the row stays
+            // IN_PROGRESS. Another export of this table can have the same id (the same millisecond
+            // and random number). Then we must not run a second export into its S3 directory.
+            if (existing_export_row->export_id_token != export_id_token
+                    || existing_export_row->client_token != client_token
+                    || existing_export_row->export_status != "IN_PROGRESS") {
+                // Not our row. Report it as DescribeExport does.
+                xlogger.debug("Export row for ExportArn {} is not this request's own, not starting the export",
+                        export_arn);
+                co_return rjson::print(build_export_description_response(*existing_export_row));
+            }
+            xlogger.debug("Export row for ExportArn {} is this request's own, starting the export", export_arn);
+        }
+
+        // Build the response before we start the fiber. After the fiber starts, a failure here
+        // (e.g. no memory) must not write FAILED while the fiber continues the export.
+        xlogger.debug("Returning IN_PROGRESS response for ClientToken {}", client_token);
+        auto response = rjson::print(build_export_description_response(erow));
+
+        xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
+        _s3_exports->start_export(std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
+        co_return std::move(response);
+    }
+    catch (...) {
+        // Keep the failure for the failure message of the export row below.
+        failure = std::current_exception();
+    }
+    auto* e = try_catch<std::exception>(failure);
+    if (_s3_exports->abort_requested()) {
+        erow.failure_code = sstring(node_shutdown_failure_code);
+        erow.failure_message = sstring(node_shutdown_failure_message);
+    } else {
+        erow.failure_code = "Exception";
+        erow.failure_message = e ? e->what() : "Unknown error";
+    }
+    erow.export_status = "FAILED";
+    erow.completed_at = db_clock::now();
+    try {
+        if (co_await try_write_final_export_row(_sdks, erow)) {
+            xlogger.debug("Export {} failed during starting up phase", erow.export_arn);
+        }
+        else {
+            // The write did not apply. The garbage collector took the export and marked it FAILED.
+            xlogger.debug("Export {} failed during starting up phase, but the row is no longer ours",
+                    erow.export_arn);
+        }
+    } catch (...) {
+        xlogger.warn("Export {}: failed to write the FAILED state: {}", erow.export_arn, std::current_exception());
+        throw;
+    }
+    // The export row is FAILED. Answer with it.
     co_return rjson::print(build_export_description_response(erow));
 }
 

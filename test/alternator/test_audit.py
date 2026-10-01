@@ -14,8 +14,9 @@ import pytest
 from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.query import SimpleStatement
 
-from test.alternator.util import new_test_table, unique_table_name
+from test.alternator.util import new_test_table, scylla_config_read, unique_table_name
 from test.alternator.test_import import delete_table_afterwards
+from test.alternator.test_export import unique_bucket_name
 from test.alternator.test_vector import need_vector_search_in_botocore
 
 
@@ -622,15 +623,37 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         # DescribeContinuousBackups
         client.describe_continuous_backups(TableName=table.name)
         expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeContinuousBackups", table.name]))
-        # ExportTableToPointInTime
-        response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
-        export_arn = response['ExportDescription']['ExportArn']
-        expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
-        # DescribeExport. ExportTableToPointInTime above wrote the export row, so the lookup succeeds.
-        desc_export = client.describe_export(ExportArn=export_arn)
-        assert desc_export['ExportDescription']['ExportArn'] == export_arn
-        expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeExport", export_arn]))
-        # ListExports (the table it is filtered by)
+        # ExportTableToPointInTime. Starting an export needs exactly one S3 endpoint in
+        # object_storage_endpoints, and without it the request is refused with
+        # ValidationException (test/alternator/run configures one only with the "--s3"
+        # option). Both outcomes are audited - the audit happens before the check. The
+        # configuration of the node tells which outcome to expect.
+        endpoints = json.loads(scylla_config_read(dynamodb, 'object_storage_endpoints') or '{}')
+        s3_endpoint_count = sum(1 for endpoint in endpoints.values()
+                                if json.loads(endpoint).get('type', 's3') == 's3')
+        export_started = s3_endpoint_count == 1
+        # A bucket which does not exist, so an accepted export fails without writing anything.
+        bucket = unique_bucket_name()
+        if export_started:
+            response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket)
+            export_arn = response['ExportDescription']['ExportArn']
+        else:
+            with pytest.raises(ClientError, match=f'ValidationException.*exactly one S3 endpoint.*found {s3_endpoint_count}'):
+                client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket)
+            # An export ARN in the DynamoDB format (a 14-digit start time in milliseconds, a
+            # dash and 8 hex digits) which no export has.
+            export_arn = f"{table_arn}/export/{int(time.time() * 1000):014d}-0123abcd"
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["ExportTableToPointInTime", table_arn, bucket]))
+        # DescribeExport. If the export started, ExportTableToPointInTime above wrote the export
+        # row, so the lookup succeeds (the state of the background export is not important here).
+        # Otherwise there is no such export, and the failed lookup is audited just as well.
+        if export_started:
+            desc_export = client.describe_export(ExportArn=export_arn)
+            assert desc_export['ExportDescription']['ExportArn'] == export_arn
+        else:
+            with pytest.raises(ClientError, match='ExportNotFoundException'):
+                client.describe_export(ExportArn=export_arn)
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["DescribeExport", export_arn]))
         client.list_exports(TableArn=table_arn)
         expected.append(("QUERY", "", False, ks_name, table.name, ["ListExports", table_arn]))
         # ListTables (empty keyspace)

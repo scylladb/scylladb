@@ -186,7 +186,7 @@ rjson::value make_import_table_description(const import_table_request& parsed) {
     rjson::value description = rjson::empty_object();
     rjson::add(description, "ImportArn", std::move(import_arn));
     // FIXME: the import itself is not implemented yet, so every accepted
-    // import fails immediately, like ExportTableToPointInTime's placeholder.
+    // import fails immediately.
     rjson::add(description, "ImportStatus", "FAILED");
     rjson::add(description, "FailureCode", "NotImplemented");
     rjson::add(description, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the import API.");
