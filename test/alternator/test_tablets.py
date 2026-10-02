@@ -20,7 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from .util import new_test_table, unique_table_name, scylla_config_read, scylla_config_temporary
-from .test_encoding import precreated_keyspace, tablets_option, skip_if_tablets_enforced
+from .test_encoding import precreated_keyspace, tablets_option
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)
@@ -203,14 +203,11 @@ def tombstone_gc_mode(cql, table, index_name=None, index_delim=None):
     pytest.param(True, True, id='precreated_tablets'),
     pytest.param(False, True, id='precreated_vnodes')])
 def test_tombstone_gc_default(dynamodb, cql, tablets, precreated):
-    if precreated and not tablets:
-        skip_if_tablets_enforced(dynamodb)
     colocated_mode = 'timeout' if tablets else 'repair'
-    # A keyspace pre-created with CQL decides over the tag, so there the tag
-    # asks for the opposite, to show that it is ignored.
+    # A keyspace pre-created with CQL decides over the configuration, so there
+    # the configuration asks for the opposite, to show that it is ignored.
     asks_tablets = not tablets if precreated else tablets
     schema = {
-        'Tags': [{'Key': initial_tablets_tag, 'Value': '0' if asks_tablets else 'none'}],
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -231,7 +228,8 @@ def test_tombstone_gc_default(dynamodb, cql, tablets, precreated):
                              { 'AttributeName': 'y', 'KeyType': 'RANGE' } ],
               'Projection': { 'ProjectionType': 'ALL' } } ]}
     name = unique_table_name()
-    with precreated_keyspace(cql, name, tablets_option(tablets)) if precreated else nullcontext():
+    with (scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled' if asks_tablets else 'disabled'),
+          precreated_keyspace(cql, name, tablets_option(tablets)) if precreated else nullcontext()):
         with new_test_table(dynamodb, name=name, **schema) as table:
             assert uses_tablets(dynamodb, table) == tablets
             assert tombstone_gc_mode(cql, table) == 'repair'
