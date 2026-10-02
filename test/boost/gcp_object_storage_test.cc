@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <ranges>
 #include <map>
+#include <set>
 #include <sstream>
 #include <unordered_set>
 #include <filesystem>
@@ -815,6 +816,44 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_retried_after_partial
         }
         co_return content;
     });
+#endif
+}
+
+// A listing whose request fails with a retryable error after its reply handler has
+// processed the page is retried with the same handler, and must report each object of
+// the page once, not once per attempt.
+//
+// https://scylladb.atlassian.net/browse/SCYLLADB-4873
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects_retried_after_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    BOOST_TEST_MESSAGE("Skipping: error injections are not enabled in this build");
+    co_return;
+#else
+    auto prefix = make_name() + "/";
+    std::set<std::string> names;
+    for (int i = 0; i < 3; ++i) {
+        auto name = fmt::format("{}{}", prefix, i);
+        objects_to_delete.emplace_back(name);
+        co_await create_object_of_size(client(), bucket, name, 128);
+        names.emplace(name);
+    }
+
+    constexpr auto injection = "gcp_storage_reset_after_list_reply";
+    utils::get_local_injector().enable(injection, true);
+    auto disable = defer([&] () noexcept {
+        utils::get_local_injector().disable(injection);
+    });
+
+    auto infos = co_await client().list_objects(bucket, prefix);
+
+    // a one-shot injection disables itself once entered: one still enabled never faulted
+    // the listing, and the checks below would prove nothing
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled(injection));
+    auto listed = infos | std::views::transform([] (const auto& info) { return info.name; }) | std::ranges::to<std::vector>();
+    std::ranges::sort(listed);
+    if (!std::ranges::equal(listed, names)) {
+        BOOST_FAIL(fmt::format("listed [{}], expected [{}]", fmt::join(listed, ", "), fmt::join(names, ", ")));
+    }
 #endif
 }
 
