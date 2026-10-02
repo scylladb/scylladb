@@ -351,6 +351,28 @@ public:
     future<> close();
 };
 
+// Error injection for object reads: keep only the first half of the reply body, and
+// tell the caller to fail the request with a retryable error once it has kept that
+// part. That is what a reply handler sees when the connection fails after the handler
+// has run, and the client then retries the request with the same handler.
+static bool inject_reset_after_partial_read(std::vector<temporary_buffer<char>>& bufs) {
+    if (!utils::get_local_injector().enter("gcp_storage_reset_after_partial_read")) {
+        return false;
+    }
+    auto keep = std::accumulate(bufs.begin(), bufs.end(), size_t(0), [] (size_t s, const auto& b) { return s + b.size(); }) / 2;
+    for (auto& b : bufs) {
+        auto n = std::min(b.size(), keep);
+        b.trim(n);
+        keep -= n;
+    }
+    std::erase_if(bufs, [] (const auto& b) { return b.empty(); });
+    return true;
+}
+
+[[noreturn]] static void throw_injected_reset() {
+    throw std::system_error(ECONNRESET, std::system_category(), "injected connection reset after the reply");
+}
+
 // A file implementation that does stateless HTTP range requests per read_dma
 // call, safe for concurrent reads (unlike seekable_data_source_file_impl which
 // has non-atomic seek+get).
@@ -427,12 +449,16 @@ public:
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
                     auto bufs = co_await util::read_entire_stream(in);
+                    const bool inject_reset = inject_reset_after_partial_read(bufs);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
                         auto n = std::min(buf.size(), len - result);
                         std::copy_n(buf.get(), n, dst + result);
                         result += n;
                         _impl->count_read_bytes(n);
+                    }
+                    if (inject_reset) {
+                        throw_injected_reset();
                     }
                 },
                 httpclient::method_type::GET,
@@ -1087,12 +1113,16 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     auto old = s.position;
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
+                    const bool inject_reset = inject_reset_after_partial_read(bufs);
                     for (auto&& buf : bufs) {
                         s.position += buf.size();
                         _impl->count_read_bytes(buf.size());
                         s.buffers.emplace_back(std::move(buf));
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
+                    if (inject_reset) {
+                        throw_injected_reset();
+                    }
                 }
                 , httpclient::method_type::GET
                 , rest::key_values({ { RANGE, range } })
@@ -1403,6 +1433,11 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
                 result.emplace_back(std::move(info));
             }
 
+            // Fail the request with a retryable error once the handler has processed the
+            // whole page, as when the connection fails after the handler has run.
+            if (utils::get_local_injector().enter("gcp_storage_reset_after_list_reply")) {
+                throw_injected_reset();
+            }
         }
         , httpclient::method_type::GET
         , {}
