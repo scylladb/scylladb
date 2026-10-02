@@ -2298,6 +2298,8 @@ future<executor::request_return_type> executor::commit_table_creation(
     service::client_state&& client_state,
     const db::tablets_mode_t::mode tablets_mode)
 {
+    throwing_assert(this_shard_id() == 0);
+
     auto builder = std::move(validated.builder);
     auto view_builders = std::move(validated.view_builders);
     auto keyspace_name = std::move(validated.keyspace_name);
@@ -2473,8 +2475,6 @@ future<executor::request_return_type> executor::commit_table_creation(
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-    throwing_assert(this_shard_id() == 0);
-
     // Audit before the permission check and the rest of validation, so that
     // requests failing them are audited too.
     std::string table_name = get_table_name(request);
