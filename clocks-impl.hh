@@ -22,6 +22,14 @@ inline void forward_jump_clocks(Duration delta)
     clocks_offset.fetch_add(d, std::memory_order_relaxed);
 }
 
+// Unlike forward_jump_clocks(), which moves the clocks by a relative amount,
+// this sets the offset to an absolute value - so the caller can also undo a
+// previous jump, by setting the offset back to 0.
+inline void set_clocks_offset(std::chrono::seconds off)
+{
+    clocks_offset.store(off.count(), std::memory_order_relaxed);
+}
+
 inline std::chrono::seconds get_clocks_offset()
 {
     auto off = clocks_offset.load(std::memory_order_relaxed);

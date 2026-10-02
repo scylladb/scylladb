@@ -1452,9 +1452,8 @@ def test_drop_keyspace_with_view(cql, this_dc):
 # Test that in many cases, the existance of a materialized view prevents
 # dropping columns from a base table. Scylla does allow dropping *some*
 # columns, the next test will be devoted to those cases.
-# See also C++ test view_schema_test.cc::test_mv_allow_some_column_drops()
-# which checks the same scenarios, but as a C++ test cannot be compared to
-# Cassandra.
+# See also test_mv_allow_some_column_drops() in
+# test_materialized_view_old.py, which checks the same scenarios.
 def test_alter_table_drop_forbidden(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
         with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:

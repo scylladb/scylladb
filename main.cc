@@ -20,6 +20,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sstring.hh>
+#include "clocks-impl.hh"
 #include "db/view/view_building_worker.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
@@ -1112,6 +1113,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 set_abort_on_internal_error(val);
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            // A test-only knob, which lets a test move this node's clocks
+            // forward instead of really waiting - e.g., to expire a TTL. It is
+            // live-updatable, so a test can set it through the system.config
+            // virtual table and reset it back to 0 when it is done.
+            auto test_clocks_offset_observer = cfg->test_clocks_offset_seconds.observe([] (int64_t val) {
+                set_clocks_offset(std::chrono::seconds(val));
+            });
+            set_clocks_offset(std::chrono::seconds(cfg->test_clocks_offset_seconds()));
+#endif
 
             auto abort_on_malformed_sstable_error_observer = cfg->abort_on_malformed_sstable_error.observe([] (bool val) {
                 sstables::set_abort_on_malformed_sstable_error(val);
