@@ -9,6 +9,7 @@
 #include "utils/gcp/object_storage.hh"
 #include "utils/gcp/gcp_credentials.hh"
 
+#include <algorithm>
 #include <ranges>
 #include <map>
 #include <sstream>
@@ -724,6 +725,97 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_in_parallel, local_gcs_wrapper, 
         BOOST_REQUIRE_EQUAL(t2, total);
         co_await compare_stream_data(is2, is_ref, total);
     }
+}
+
+// A read of an object whose request fails with a retryable error after its reply
+// handler has consumed part of the reply is retried with the same handler. Nothing the
+// failed attempt consumed may end up in what the read returns: a compressed sstable
+// reader reports such bytes as a chunk failing its checksum.
+//
+// Write an object of `size` bytes and read it back with read_object() while the
+// gcp_storage_reset_after_partial_read injection fails the read's first request after
+// half of its reply, then require that the read returned exactly the object, and that
+// the client counted the bytes it returned once rather than once per attempt.
+//
+// https://scylladb.atlassian.net/browse/SCYLLADB-4873
+static future<> test_read_retried_after_partial_reply(const local_gcs_wrapper& env, size_t size,
+        std::function<future<sstring>(std::string_view name, size_t size)> read_object) {
+    auto name = make_name();
+    env.objects_to_delete.emplace_back(name);
+
+    std::vector<temporary_buffer<char>> written;
+    co_await create_object_of_size(env.client(), env.bucket, name, size, &written);
+    sstring expected;
+    for (auto& buf : written) {
+        expected.append(buf.get(), buf.size());
+    }
+
+    constexpr auto injection = "gcp_storage_reset_after_partial_read";
+    utils::get_local_injector().enable(injection, true);
+    auto disable = defer([&] () noexcept {
+        utils::get_local_injector().disable(injection);
+    });
+
+    // the client is shared by the whole suite, so only the change counts
+    auto read_before = env.client().bytes().read;
+    auto read = co_await read_object(name, size);
+    auto read_counted = env.client().bytes().read - read_before;
+
+    // a one-shot injection disables itself once entered: one still enabled never faulted
+    // the read, and the comparison below would prove nothing
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled(injection));
+    auto [differs, _] = std::ranges::mismatch(read, expected);
+    if (differs != read.end() || read.size() != expected.size()) {
+        BOOST_FAIL(fmt::format("read {} bytes of a {} byte object, which differ from it from offset {}",
+                read.size(), expected.size(), differs - read.begin()));
+    }
+    BOOST_REQUIRE_EQUAL(read_counted, size);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_retried_after_partial_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    BOOST_TEST_MESSAGE("Skipping: error injections are not enabled in this build");
+    co_return;
+#else
+    co_await test_read_retried_after_partial_reply(*this, 64*1024, [this] (std::string_view name, size_t size) -> future<sstring> {
+        auto f = client().make_readable_file(bucket, name);
+        std::exception_ptr ex;
+        temporary_buffer<char> buf;
+        try {
+            buf = co_await f.dma_read_exactly<char>(0, size);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await f.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        co_return sstring(buf.get(), buf.size());
+    });
+#endif
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_retried_after_partial_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    BOOST_TEST_MESSAGE("Skipping: error injections are not enabled in this build");
+    co_return;
+#else
+    co_await test_read_retried_after_partial_reply(*this, 64*1024, [this] (std::string_view name, size_t) -> future<sstring> {
+        auto in = seastar::input_stream<char>(client().create_download_source(bucket, name));
+        std::exception_ptr ex;
+        sstring content;
+        try {
+            content = co_await util::read_entire_stream_contiguous(in);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await in.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        co_return content;
+    });
+#endif
 }
 
 static future<> chunked_read_helper(const local_gcs_wrapper& w, bool do_ranged, bool encrypt, bool do_additional_skip) {
