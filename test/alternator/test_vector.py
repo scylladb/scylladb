@@ -28,7 +28,7 @@ import botocore
 from test.pylib.skip_types import skip_env
 from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
 from .test_streams import wait_for_status_active, wait_for_active_stream, list_shards, fetch_more
-from .test_encoding import precreated_keyspace, tablets_option, skip_if_tablets_enforced
+from .test_encoding import precreated_keyspace, tablets_option
 
 
 # Support for the new DynamoDB vector search API was added in Botocore 1.43.64
@@ -7343,23 +7343,19 @@ def test_createtable_vectorindexes_vnodes_forbidden(dynamodb, scylla_only):
 
 # The same restriction has to be checked on a keyspace which the user
 # pre-created with CQL, because that is the keyspace the table lands in - the
-# "system:initial_tablets" tag, which asks for the opposite here, only
-# configures a keyspace that Alternator creates itself.
+# configuration, which asks for the opposite here, only applies to a keyspace
+# that Alternator creates itself.
 # Regression test for SCYLLADB-3976.
 # When we finally remove vnode support from the code, this test should be
 # deleted.
 @pytest.mark.parametrize('tablets', [False, True])
 def test_createtable_vectorindexes_precreated_keyspace(dynamodb, cql, scylla_only, tablets):
-    if not tablets:
-        skip_if_tablets_enforced(dynamodb)
     name = unique_table_name()
-    with precreated_keyspace(cql, name, tablets_option(tablets)):
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'disabled' if tablets else 'enabled'), precreated_keyspace(cql, name, tablets_option(tablets)):
         expected = nullcontext() if tablets else pytest.raises(
                 ClientError, match='ValidationException.*vnodes')
         with expected:
-            # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
             with new_test_table(dynamodb, name=name,
-                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
                 KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
                 AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
                 VectorIndexes=[

@@ -2100,13 +2100,13 @@ async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp
 #
 # Before SCYLLADB-3976 was fixed, CreateTable checked this rule against the
 # keyspace it would have created itself, not against the pre-created keyspace
-# the table lands in: when the "system:initial_tablets" tag asked for vnodes,
-# the check was skipped, and when it asked for tablets, the check used the RF
-# Alternator picks - 1 on two nodes, which is valid. Either way the GSI got
-# created whatever the racks looked like.
+# the table lands in: when the configuration asked for vnodes, the check was
+# skipped, and when the "system:initial_tablets" tag asked for tablets, the
+# check used the RF Alternator picks - 1 on two nodes, which is valid. Either
+# way the GSI got created whatever the racks looked like.
 #
 # What the test pins down: it pre-creates a tablets keyspace whose RF does not
-# match the rack count, and then creates a table with a GSI under either tag.
+# match the rack count, and then creates a table with a GSI both ways.
 # The error naming the keyspace's own RF is the proof that the table went into
 # the pre-created keyspace and was checked against it. Adding the GSI later with
 # UpdateTable has to report the same reason.
@@ -2114,7 +2114,7 @@ async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ScyllaCluster
     # Two nodes in one rack, and rf_rack_valid_keyspaces off so that an
     # RF-rack-invalid keyspace with RF=2 can be created at all.
     servers = await manager.servers_add(2,
-        config=alternator_config | {'rf_rack_valid_keyspaces': False},
+        config=alternator_config | {'rf_rack_valid_keyspaces': False, 'tablets_mode_for_new_keyspaces': 'disabled'},
         property_file={'dc': 'dc1', 'rack': 'rack1'})
     cql = manager.get_cql()
     alternator = get_alternator(servers[0].ip_addr)
@@ -2122,10 +2122,10 @@ async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ScyllaCluster
     cql.execute(f'CREATE KEYSPACE "alternator_{name}" WITH REPLICATION = '
         "{'class': 'NetworkTopologyStrategy', 'dc1': 2} AND TABLETS = {'enabled': true}")
     try:
-        for tag in ['none', '0']:
+        for tags in [[], [{'Key': 'system:initial_tablets', 'Value': '0'}]]:
             with pytest.raises(ClientError, match='ValidationException.*RF=2 vs. rack count=1'):
                 alternator.create_table(TableName=name,
-                    Tags=[{'Key': 'system:initial_tablets', 'Value': tag}],
+                    Tags=tags,
                     BillingMode='PAY_PER_REQUEST',
                     KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
                     AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},

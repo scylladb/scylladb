@@ -358,10 +358,11 @@ def test_precreated_keyspace(dynamodb, cql):
             assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}
 
 # Under "enforced", a tag asking for vnodes is refused for a keyspace that
-# Alternator creates, but only ignored for a pre-created one.
+# Alternator creates, but not for a pre-created one which uses vnodes.
 def test_precreated_keyspace_enforced(dynamodb, cql):
     name = unique_table_name()
-    with precreated_keyspace(cql, name, tablets_option(True)):
+    # "enabled" allows pre-creating a keyspace with vnodes, which "enforced" refuses.
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'), precreated_keyspace(cql, name, tablets_option(False)):
         with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
             with new_test_table(dynamodb, name=name,
                     Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
@@ -370,14 +371,13 @@ def test_precreated_keyspace_enforced(dynamodb, cql):
                 pass
 
 # CreateTable pre-marks the views implementing a table's GSIs as built when the
-# table uses tablets. Here the pre-created keyspace uses tablets while the tag
-# asks for vnodes - if the views are left unmarked, the GSI remains in
-# IndexStatus CREATING forever. Reproduces SCYLLADB-3976.
+# table uses tablets. Here the pre-created keyspace uses tablets while the
+# configuration asks for vnodes - if the views are left unmarked, the GSI
+# remains in IndexStatus CREATING forever. Reproduces SCYLLADB-3976.
 def test_precreated_keyspace_gsi(dynamodb, cql):
     name = unique_table_name()
-    with precreated_keyspace(cql, name, tablets_option(True)):
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'disabled'), precreated_keyspace(cql, name, tablets_option(True)):
         with new_test_table(dynamodb, name=name,
-                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
                 KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
                 AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
                                       {'AttributeName': 'x', 'AttributeType': 'S'}],
@@ -391,17 +391,13 @@ def test_precreated_keyspace_gsi(dynamodb, cql):
 
 # Alternator Streams block tablet merges, which would otherwise produce shards
 # incompatible with the Streams API - but only on a table that uses tablets, so
-# here too the pre-created keyspace, and not the tag, has to decide.
+# here too the pre-created keyspace, and not the configuration, has to decide.
 # Regression test for SCYLLADB-3976.
 @pytest.mark.parametrize('tablets', [False, True])
 def test_precreated_keyspace_streams(dynamodb, cql, tablets):
-    if not tablets:
-        skip_if_tablets_enforced(dynamodb)
     name = unique_table_name()
-    with precreated_keyspace(cql, name, tablets_option(tablets)):
-        # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'disabled' if tablets else 'enabled'), precreated_keyspace(cql, name, tablets_option(tablets)):
         with new_test_table(dynamodb, name=name,
-                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
                 KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
                 AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
                 StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}):
