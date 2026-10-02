@@ -11,6 +11,7 @@ import asyncio
 import pytest
 from test.pylib.util import wait_for_view, wait_for
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
+from test.cluster.mv.util import run_with_overload_retries
 from test.pylib.tablets import get_tablet_replica
 from test.cluster.util import new_test_keyspace
 
@@ -69,10 +70,10 @@ async def test_gossip_same_backlog(manager: ScyllaClusterManager) -> None:
         stmt = cql.prepare(f"INSERT INTO {ks}.tab (key, c, v) VALUES (?, ?, ?)")
 
         await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "never_finish_remote_view_updates", one_shot=False) for s in servers))
-        await cql.run_async(stmt, [0, 0, 240000*'a'], host=hosts[0])
+        await run_with_overload_retries(cql, stmt, [0, 0, 240000*'a'], host=hosts[0])
         await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "never_finish_remote_view_updates") for s in servers))
         # The next write should be admitted eventually, after a gossip round (1s) is performed
-        await cql.run_async(stmt, [0, 0, 'a'], host=hosts[0])
+        await run_with_overload_retries(cql, stmt, [0, 0, 'a'], host=hosts[0])
 
 # A test for the view_flow_control_delay_limit_in_ms parameter.
 #
