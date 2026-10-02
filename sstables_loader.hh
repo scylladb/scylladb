@@ -28,6 +28,7 @@ class database;
 
 struct minimal_sst_info;
 class download_progress;
+class tablet_restore_progress;
 struct restore_result {
 };
 
@@ -125,6 +126,11 @@ private:
     // on every shard, reporting through the progress. Called on the shard that owns the task.
     future<> download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
             const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, bool_class<struct primary_replica_only_tag> primary_replica, abort_source& as);
+
+    // Pins the table at tablet_count tablets, restores them from the snapshot and alters the table back
+    // to its original hints. Called on the shard that owns the task.
+    future<> do_restore_tablets(tablet_restore_progress& progress, table_id, const sstring& snap_name, size_t tablet_count,
+            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
     future<> download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard&);

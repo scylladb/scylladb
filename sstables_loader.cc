@@ -1364,35 +1364,38 @@ public:
 
 protected:
     virtual future<> run() override {
-        auto& loader = _loader.local();
+        return _loader.local().do_restore_tablets(_progress, _tid, _snap_name, _tablet_count, _original_min_tablet_count, _original_max_tablet_count);
+    }
+};
 
-        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
+future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
+        std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
+        co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
 
         std::exception_ptr eptr;
         try {
-            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+            co_await _ss.local().restore_tablets(tid, snap_name);
         } catch (...) {
-            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", _tid, std::current_exception());
+            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
             eptr = std::current_exception();
         }
 
         try {
-            llog.info("Restoring table with tid {} to the original schema", _tid);
+            llog.info("Restoring table with tid {} to the original schema", tid);
             // remove_unset: the table saved nullopt because it had no hint of its own, and
             // passing nullopt back would leave it pinned at min == max forever.
-            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _original_min_tablet_count, _original_max_tablet_count,
+            co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
                     service::wait_balancer::no, service::remove_unset::yes);
         } catch (...) {
-            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", _tid, std::current_exception());
+            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
         }
 
         if (eptr) {
             std::rethrow_exception(eptr);
         }
 
-        _progress.complete();
-    }
-};
+        progress.complete();
+}
 
 // Every datacenter the table replicates to restores from its own backup location,
 // so the locations must map one-to-one to the replicated-to datacenters.
