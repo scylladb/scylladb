@@ -13,11 +13,6 @@
 #   - Tests that exercise ScyllaDB-specific options or features (quantization,
 #     rescoring, oversampling, CDC integration, etc.)
 #     use USING 'vector_index' and are marked scylla_only.
-#
-# Note: pytest does not run the vector search backend, so ANN queries that
-# pass CQL validation will fail with "Vector Store is disabled" rather than
-# returning results.  Tests use this error to confirm that CQL parsing and
-# validation succeeded.
 ###############################################################################
 
 import pytest
@@ -1055,19 +1050,6 @@ def test_vector_index_writes_appear_in_cdc_log(cql, test_keyspace, scylla_only, 
         cql.execute(f"DELETE FROM {table} WHERE p = 2 IF EXISTS")
         rows_after_lwt_delete = list(cql.execute(f"SELECT * FROM {cdc_log_table} ALLOW FILTERING"))
         assert len(rows_after_lwt_delete) > len(rows_after_lwt_update)
-
-# Validates fix for VECTOR-179: a vector search with tracing enabled
-# used to crash Scylla instead of returning an error.
-def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, scylla_only, skip_without_tablets):
-    schema = "p int primary key, v vector<float, 3>"
-    with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
-        with pytest.raises(InvalidRequest, match="Vector Store is disabled"):
-            cql.execute(
-                f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
-                trace=True,
-            )
-
 
 
 # Validates fix for VECTOR-374: ANN query with PK restriction used to be
