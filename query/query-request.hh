@@ -302,6 +302,18 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
+// The number of live rows which a read takes from each partition. A DISTINCT
+// query takes one row from each partition, unless its slice sets a
+// per-partition row limit, which then applies instead. CQL rejects PER
+// PARTITION LIMIT with DISTINCT, so the slice of a DISTINCT statement sets
+// none. A coordinator can set one to ask for more rows of a partition.
+inline uint64_t effective_partition_row_limit(const partition_slice& slice) {
+    if (slice.options.contains<partition_slice::option::distinct>() && slice.partition_row_limit() == partition_max_rows) {
+        return 1;
+    }
+    return slice.partition_row_limit();
+}
+
 // See docs/dev/reverse-reads.md
 // In the following functions, `schema` may be reversed or not (both work).
 partition_slice legacy_reverse_slice_to_native_reverse_slice(const schema& schema, partition_slice slice);

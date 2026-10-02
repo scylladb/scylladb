@@ -288,6 +288,13 @@ protected:
     }
 
     virtual void maybe_adjust_per_partition_limit(uint32_t page_size) const override {
+        // A DISTINCT query takes one row of each partition, and CQL lets it
+        // filter only on the partition key, so that row decides the
+        // partition. A per-partition limit would replace the limit of one,
+        // see query::effective_partition_row_limit().
+        if (_cmd->slice.options.contains<query::partition_slice::option::distinct>()) {
+            return;
+        }
         _cmd->slice.set_partition_row_limit(page_size);
     }
 };
@@ -463,7 +470,7 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
             return false;
         } else if (cmd.partition_limit <= 1
                 || (ranges.size() == 1 && query::is_single_partition(ranges.front()))) {
-            auto effective_partition_row_limit = cmd.slice.options.contains<query::partition_slice::option::distinct>() ? 1 : cmd.slice.partition_row_limit();
+            auto effective_partition_row_limit = query::effective_partition_row_limit(cmd.slice);
 
             auto& cr_ranges = cmd.slice.default_row_ranges();
             if (effective_partition_row_limit <= 1 || cr_ranges.empty()
