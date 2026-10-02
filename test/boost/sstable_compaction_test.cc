@@ -5731,7 +5731,7 @@ void max_ongoing_compaction_fn(test_env& env) {
     std::vector<table_for_tests> tables;
     auto stop_tables = defer([&tables] noexcept {
         for (auto& t : tables) {
-            t->stop().get();
+            t.stop().get();
         }
     });
 
