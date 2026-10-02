@@ -65,16 +65,16 @@ commitlog_sync_period_in_ms: 10000
 # in it (potentially from each columnfamily in the system) has been
 # flushed to sstables.
 #
-# The default size is 32, which is almost always fine, but if you are
-# archiving commitlog segments (see commitlog_archiving.properties),
-# then you probably want a finer granularity of archiving; 8 or 16 MB
-# is reasonable.
+# The compiled default is 64, but this file sets 32. Either is almost always
+# fine, but if you are archiving commitlog segments (see
+# commitlog_archiving.properties), then you probably want a finer
+# granularity of archiving; 8 or 16 MB is reasonable.
 commitlog_segment_size_in_mb: 32
 
 # The size of the individual schema commitlog file segments.
 #
-# The default size is 128, which is 4 times larger than the default
-# size of the data commitlog. It's because the segment size puts
+# The default size is 128, which is larger than the data commitlog
+# segment size set above. It's because the segment size puts
 # a limit on the mutation size that can be written at once, and some
 # schema mutation writes are much larger than average.
 schema_commitlog_segment_size_in_mb: 128
