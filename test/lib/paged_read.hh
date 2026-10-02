@@ -140,6 +140,12 @@ struct read_options {
     // than its own in the legacy reversed format, and the replicas convert
     // them back, like storage_proxy::handle_read().
     bool native_reverse_queries = true;
+    // Whether the cluster feature read_frontiers is enabled. A cluster which
+    // enables it also enables native_reverse_queries. With it, the replicas
+    // compute digests which cover only the partitions of the result, like
+    // storage_proxy's digest_algorithm(). Without it, replicas which disagree
+    // about a static-only row can have matching digests.
+    bool read_frontiers = true;
     // Whether each replica keeps its queriers between pages in a querier
     // cache, like replica::database. Otherwise the replicas read every page
     // with new queriers.
