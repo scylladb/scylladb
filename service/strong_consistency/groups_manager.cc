@@ -315,11 +315,11 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     // Publish the persistence only now, past every throw above: the raft::server
     // owns it, so a throw destroys it with the server, and a published pointer to
-    // a destroyed persistence dangles in the flush handler.
+    // a destroyed persistence dangles in the commit-externally handler.
     if (auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
         it->second.storage = &persistence_ref;
-        // The commitlog calls a flush handler only for closures after it is
-        // registered (see add_flush_handler). Replay runs before groups_manager
+        // The commitlog calls a commit-externally handler only for closures after it is
+        // registered (see add_commit_externally_handler). Replay runs before groups_manager
         // exists, so a segment holding the replayed tail can already have been
         // reported closed with nobody listening, and that report never repeats.
         // Catch up once here.
@@ -1159,7 +1159,7 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    // Register the commitlog's flush handler, which tells every group how far the
+    // Register the commitlog's commit-externally handler, which tells every group how far the
     // commitlog has closed segments. Gated on the configuration flag: the cluster
     // feature can enable while the node runs, and update() then starts groups
     // without start() running again, so a handler registered behind the feature
@@ -1182,7 +1182,7 @@ void groups_manager::start() {
         // tablet's table says nothing, since a segment can hold raft entries the
         // tablet's table has nothing in.
         const db::cf_id_type raft_groups_id = db::system_keyspace::raft_groups()->id();
-        _flush_handler.emplace(commitlog->add_flush_handler(
+        _commit_externally_handler.emplace(commitlog->add_commit_externally_handler(
                 [this, raft_groups_id](db::cf_id_type id, db::replay_position pos) {
             if (id != raft_groups_id) {
                 return;
@@ -1249,7 +1249,7 @@ future<> groups_manager::stepdown_leaders() {
 void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
     auto table = _db.get_tables_metadata().get_table_if_exists(id);
     if (!table) {
-        // Dropped, so there is nothing to seal. The database's flush handler
+        // Dropped, so there is nothing to seal. The database's commit-externally handler
         // frees what the segments still count for a dropped id.
         return;
     }

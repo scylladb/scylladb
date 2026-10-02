@@ -208,10 +208,10 @@ A record is the unit of release. It can go once nothing more can be needed from 
   only for segments that stopped allocating.
 
 Two things answer whether the rounds have got past a segment, and both are needed.
-`groups_manager`'s flush handler forwards each round's position to every group, which
-is the fresher of the two while a round is being reported: `flush_segments()` runs the
+`groups_manager`'s commit-externally handler forwards each round's position to every group, which
+is the fresher of the two while a round is being reported: `commit_externally()` runs the
 handlers *before* it advances its own position, and a release happens inside that
-report. And the group reads `commitlog::flush_position()` itself, which covers a round
+report. And the group reads `commitlog::commit_externally_position()` itself, which covers a round
 nobody forwarded, one that ran before `groups_manager::start()` registered the handler,
 which is normal, because replay writes a group's recovered tail well before then. A
 round never repeats for the same segment, so without that read those segments would
@@ -235,7 +235,7 @@ that window.
 ### Asking for the flush a release missed
 
 The commitlog asks a closed segment's dirty tables to flush exactly once, tracked by
-`segment_manager::_flush_position`. That round is what normally reclaims the segment:
+`segment_manager::_commit_externally_position`. That round is what normally reclaims the segment:
 it names both the tablet table and `system.raft_groups`, and a flush request seals the
 whole memtable, so everything the segment holds goes with it.
 
