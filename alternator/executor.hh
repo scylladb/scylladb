@@ -209,6 +209,8 @@ private:
                      std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    // Creates the table which `validated` describes. Must run on shard 0, because it takes
+    // the group0 guard and announces the new table.
     future<executor::request_return_type> commit_table_creation(rjson::value&& request, create_table_params&& validated, service::client_state&& client_state, const db::tablets_mode_t::mode tablets_mode);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
