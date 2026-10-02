@@ -366,6 +366,107 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, true);
 }
 
+// A recognizable exception to abort the uploads below with. Asserting on it
+// rather than on seastar's default abort_requested_exception keeps the checks
+// from being satisfied by an unrelated failure -- in particular not by the
+// "Failed to parse ETag list. Aborting multipart upload." error, which is what
+// the sink reports today when a part upload is cancelled.
+class upload_cancelled_marker : public std::exception {
+public:
+    const char* what() const noexcept override { return "upload_cancelled_marker"; }
+};
+
+// Cancelling an upload has to stop it and reach the caller as the cancellation
+// itself.
+//
+// Part uploads are issued in the background and their failures are only logged,
+// so an aborted part leaves its ETag unset and finalize_upload() then reports
+// the resulting hole in the ETag list instead of the abort. The jumbo sink adds
+// another layer of the same: the child sink's entire flush path runs in the
+// background and its exception is consumed after the piece is closed and its
+// temporary object deleted.
+void do_test_client_multipart_upload_abort(const client_maker_function& client_maker, bool with_copy_upload) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testaborted{}object", with_copy_upload ? "jumbo" : "large"));
+
+    seastar::abort_source as;
+    auto out = output_stream<char>(
+        // One part per piece, so that every completed part makes the jumbo sink
+        // hand a piece over to the parent upload -- and thus start it.
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as)
+                         : cln->make_upload_sink(name, s3::object_metadata{}, &as)
+    );
+
+    // A part's worth of data plus 1Mb, which is more than the 128Kb the
+    // output_stream may still be holding back, so that by the time this returns
+    // the sink has certainly handed a full part over to the upload and started
+    // collecting the next one.
+    static constexpr size_t chunk_size = 1_MiB;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    auto write_part = [&] {
+        for (size_t written = 0; written <= s3::minimum_part_size; written += chunk_size) {
+            out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+        }
+    };
+
+    auto reports_the_abort = [](const std::exception& ex) {
+        testlog.info("Aborted upload reported: {}", ex.what());
+        // Either the abort exception itself, or the storage_io_error that
+        // map_s3_client_exception() turns a failed request into, which names it.
+        return std::string_view(ex.what()).find("upload_cancelled_marker") != std::string_view::npos;
+    };
+
+    // The first part starts the multipart upload while the abort source is still
+    // clean, so nothing below can simply be the sink's own upload-initiating
+    // request coming back aborted.
+    write_part();
+
+    testlog.info("Abort the upload (with copy = {})\n", with_copy_upload);
+    as.request_abort_ex(upload_cancelled_marker{});
+
+    if (with_copy_upload) {
+        // The part above filled a piece, so the jumbo sink has handed that piece
+        // over to the parent upload and opened a fresh piece sink, which has not
+        // initiated a multipart upload of its own yet. Writing another part is
+        // what makes it initiate one, and that request is the one the abort
+        // source now handed down to the piece sinks has to cancel -- so this
+        // write has to fail rather than upload more data. Without the abort
+        // source reaching the piece sink the piece uploads happily and only the
+        // finalization below ever notices that the upload was cancelled.
+        testlog.info("Write into the aborted upload\n");
+        BOOST_REQUIRE_EXCEPTION(write_part(), std::exception, reports_the_abort);
+    } else {
+        // The plain sink issues its part uploads in the background, so a write
+        // cannot report their cancellation -- only the flush below can.
+        write_part();
+    }
+
+    testlog.info("Flush the aborted upload\n");
+    BOOST_REQUIRE_EXCEPTION(out.flush().get(), std::exception, reports_the_abort);
+
+    // The failed flush has already aborted the multipart upload, so closing is
+    // cleanup only and must not fail.
+    testlog.info("Closing\n");
+    out.close().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, true);
+}
+
 // A zero-byte component is not hypothetical. BTI's Rows.db is empty for an
 // sstable holding only small partitions, and sstables/mx/writer.cc papers over
 // that by appending four bytes of padding before closing the writer. The tests
