@@ -761,7 +761,7 @@ async def test_index_requires_rf_rack_valid_keyspace(manager: ScyllaClusterManag
     expected_err_create = "GlobalSecondaryIndexes and LocalSecondaryIndexes on a table " \
         "using tablets require the number of racks in the cluster to be either 1 or 3"
     expected_err_update_add_gsi = "GlobalSecondaryIndexes on a table " \
-        "using tablets require the number of racks in the cluster to be either 1 or 3"
+        "using tablets require an RF-rack-valid keyspace"
 
     def create_table_with_index(alternator, table_name, index_type, initial_tablets):
         create_table_args = dict(
@@ -2108,7 +2108,8 @@ async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp
 # What the test pins down: it pre-creates a tablets keyspace whose RF does not
 # match the rack count, and then creates a table with a GSI under either tag.
 # The error naming the keyspace's own RF is the proof that the table went into
-# the pre-created keyspace and was checked against it.
+# the pre-created keyspace and was checked against it. Adding the GSI later with
+# UpdateTable has to report the same reason.
 async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ScyllaClusterManager):
     # Two nodes in one rack, and rf_rack_valid_keyspaces off so that an
     # RF-rack-invalid keyspace with RF=2 can be created at all.
@@ -2132,5 +2133,15 @@ async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ScyllaCluster
                     GlobalSecondaryIndexes=[{'IndexName': 'gsi',
                         'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
                         'Projection': {'ProjectionType': 'ALL'}}])
+        alternator.create_table(TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+        with pytest.raises(ClientError, match='ValidationException.*RF=2 vs. rack count=1'):
+            alternator.meta.client.update_table(TableName=name,
+                AttributeDefinitions=[{'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'}}}])
     finally:
         cql.execute(f'DROP KEYSPACE IF EXISTS "alternator_{name}"')

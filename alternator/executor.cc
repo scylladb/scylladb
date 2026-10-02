@@ -3017,7 +3017,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                                     p.local().local_db().find_keyspace(keyspace_name).get_replication_strategy());
                         } catch (const std::invalid_argument& ex) {
                             co_return api_error::validation(fmt::format("GlobalSecondaryIndexes on a table "
-                                "using tablets require the number of racks in the cluster to be either 1 or 3"));
+                                "using tablets require an RF-rack-valid keyspace: {}", ex.what()));
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
