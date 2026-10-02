@@ -1,0 +1,240 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/failure_detector",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/failure_detector/phi",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the phi convict threshold",
+               "type":"string",
+               "nickname":"get_phi_convict_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the phi convict threshold",
+               "type":"double",
+               "nickname":"set_phi_convict_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                 {
+                     "name":"phi",
+                     "description":"The new phi value",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/endpoint_phi_values",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get end point phi values",
+               "type":"array",
+               "items":{
+                  "type":"endpoint_phi_values"
+               },
+               "nickname":"get_endpoint_phi_values",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/endpoints/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all endpoint states",
+               "type":"array",
+               "items":{
+                  "type":"endpoint_state"
+               },
+               "nickname":"get_all_endpoint_states",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/endpoints/states/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get endpoint states",
+               "type":"string",
+               "nickname":"get_endpoint_state",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/count/endpoint/down",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get count down endpoint",
+               "type": "long",
+               "nickname":"get_down_endpoint_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/count/endpoint/up",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get count up endpoint",
+               "type": "long",
+               "nickname":"get_up_endpoint_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/simple_states",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get simple_states",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_simple_states",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+    "models" : {
+        "mapper": {
+           "id": "mapper",
+           "description": "Holds a key value",
+               "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value"
+                }
+            }
+        },
+        "endpoint_state": {
+           "id": "states",
+           "description": "Holds an endpoint state",
+               "properties": {
+                "addrs": {
+                    "type": "string",
+                    "description": "The endpoint address"
+                },
+                "generation": {
+                    "type": "long",
+                    "description": "The heart beat generation"
+                },
+                "version": {
+                    "type": "long",
+                    "description": "The heart beat version"
+                },
+                "update_time": {
+                    "type": "long",
+                    "description": "The update timestamp"
+                },
+                "is_alive": {
+                    "type": "boolean",
+                    "description": "Is the endpoint alive"
+                },
+                "application_state" : {
+                    "type":"array",
+                    "items":{
+                        "type":"version_value"
+                    },
+                    "description": "Is the endpoint alive"
+                }
+            }
+        },
+        "version_value": {
+           "id": "version_value",
+           "description": "Holds a version value for an application state",
+               "properties": {
+                "application_state": {
+                    "type": "long",
+                    "description": "The application state enum index"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The version value"
+                },
+                "version": {
+                    "type": "long",
+                    "description": "The application state version"
+                }
+            }
+        },
+        "endpoint_phi_value": {
+            "id" : "endpoint_phi_value",
+            "description": "Holds phi value for a single end point",
+            "properties": {
+                "phi": {
+                    "type": "double",
+                    "description": "Phi value"
+                },
+                "endpoint": {
+                    "type": "string",
+                    "description": "end point address"
+                }
+            }
+        }
+    }
+}
