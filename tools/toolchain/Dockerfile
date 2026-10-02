@@ -15,5 +15,5 @@ RUN dnf -y update \
     && cp ./tools/toolchain/system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 RUN mkdir -p /root/.m2/repository
-RUN ./tools/toolchain/optimized_clang.sh
+RUN ./tools/toolchain/optimized_clang.sh && rm -rf /root/.cache /root/.cargo
 CMD /bin/bash
