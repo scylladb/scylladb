@@ -1,0 +1,168 @@
+name: Post range-diff on PR force-push
+
+on:
+  pull_request_target:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  range-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # No checkout of the PR's code: only git objects are fetched and compared,
+      # nothing from the PR is executed, so pull_request_target is safe here.
+      - name: Fetch old and new heads
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OLD_HEAD: ${{ github.event.before }}
+          NEW_HEAD: ${{ github.event.after }}
+        run: |
+          git init -q repo && cd repo
+          git remote add origin "$REPO_URL"
+          # Blobless fetch keeps it cheap; range-diff fetches the blobs it needs lazily.
+          git fetch -q --filter=blob:none origin "$BASE_SHA" "$OLD_HEAD" "$NEW_HEAD"
+
+      - name: Detect force-push
+        id: forced
+        working-directory: repo
+        env:
+          OLD_HEAD: ${{ github.event.before }}
+          NEW_HEAD: ${{ github.event.after }}
+        run: |
+          # A push that only appends commits keeps the old head as an ancestor.
+          if git merge-base --is-ancestor "$OLD_HEAD" "$NEW_HEAD"; then
+            echo "forced=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "forced=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute range-diff
+        if: steps.forced.outputs.forced == 'true'
+        working-directory: repo
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OLD_HEAD: ${{ github.event.before }}
+          NEW_HEAD: ${{ github.event.after }}
+        run: |
+          old_base=$(git merge-base "$BASE_SHA" "$OLD_HEAD")
+          new_base=$(git merge-base "$BASE_SHA" "$NEW_HEAD")
+          # Without a checkout, git doesn't see the repository's diff settings;
+          # take them from the base, not the PR: C++ hunk headers from
+          # .gitattributes and the headers-first file order from .gitorderfile.
+          git show "$BASE_SHA:.gitattributes" > .git/info/attributes || true
+          git show "$BASE_SHA:.gitorderfile" > .git/orderfile || true
+          git -c diff.orderfile=.git/orderfile range-diff --no-color "$old_base..$OLD_HEAD" "$new_base..$NEW_HEAD" | tee ../range-diff.txt
+
+      - name: Format comment
+        if: steps.forced.outputs.forced == 'true'
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OLD_HEAD: ${{ github.event.before }}
+          NEW_HEAD: ${{ github.event.after }}
+        shell: python
+        run: |
+          import html, os, re
+
+          # Commit pair lines look like "1:  abc1234 ! 1:  def5678 title", with
+          # the numbers padded to a common width; everything else is the diff of
+          # the pair above, indented by four spaces, so a line quoted in it (say,
+          # from a commit message) can't pass for a pair line.
+          pair = re.compile(r"^ {0,3}(-|\d+):\s+(-+|[0-9a-f]+) ([<>=!])\s+(-|\d+):\s+(-+|[0-9a-f]+) (.*)$")
+          commits = []
+          for line in open("range-diff.txt").read().splitlines():
+              m = pair.match(line)
+              if m:
+                  dropped = m[3] == "<"
+                  commits.append({"pos": m[1] if dropped else m[4], "sha": m[2] if dropped else m[5],
+                                  "status": m[3], "title": m[6], "diff": []})
+              elif commits:
+                  # Dropping the indent puts the outer +/- in the first column,
+                  # where GitHub's diff highlighting looks for it.
+                  commits[-1]["diff"].append(line[4:])
+
+          # Commit titles come from the PR author: escape Markdown so they can't
+          # inject links or images, and break @ so they can't mention anyone.
+          def md(s):
+              return re.sub(r"([\\`*_\[\]()<>#!|~])", r"\\\1", s).replace("@", "@\u200b")
+
+          # A fence longer than any backtick run in the diff can't be closed by it.
+          def fence(lines):
+              return "`" * max([3] + [len(r) + 1 for l in lines for r in re.findall(r"`+", l)])
+
+          label = {"=": "unchanged", "!": "**modified**", ">": "**new**", "<": "**dropped**"}
+          total = sum(c["status"] != "<" for c in commits)
+          repo, old, new = os.environ["REPO_URL"], os.environ["OLD_HEAD"], os.environ["NEW_HEAD"]
+          out = [f"### Changes since previous version ([`{old[:10]}`]({repo}/commit/{old}) → [`{new[:10]}`]({repo}/commit/{new}))", ""]
+          # Each block is (head, body, tail); only a section has a body, which
+          # is what gets cut if the comment runs out of room.
+          blocks = []
+          for c in commits:
+              pos = f"{c['pos']}/{total}" if c["status"] != "<" else "–"
+              blocks.append(([f"- `{pos}` {label[c['status']]}: [{md(c['title'])}]({repo}/commit/{c['sha']})"], [], []))
+          blocks.append(([""], [], []))
+
+          for c in commits:
+              if c["status"] != "!":
+                  continue
+              # Code lines of the patch added or removed between the two versions,
+              # not counting the context lines that come and go with a hunk.
+              changed = sum(l[:2] in ("++", "+-", "-+", "--") for l in c["diff"])
+              title = html.escape(c["title"]).replace("@", "@\u200b").replace("#", "#\u200b")
+              f = fence(c["diff"])
+              # Collapsed, so the comment stays short however much changed;
+              # the heading says how much is inside.
+              blocks.append(([f"<details><summary><b>{c['pos']}/{total} {title}</b> ({changed} lines changed)</summary>", "", f + "diff"],
+                             c["diff"], [f, "</details>", ""]))
+
+          def size(lines):
+              return sum(len(l.encode()) + 1 for l in lines)
+
+          # Render up to limit bytes, keeping room for the notice. The block that
+          # doesn't fit is cut: a section keeps as much of its diff as fits and
+          # still closes its fence and <details>, a list entry is dropped.
+          def render(limit, notice):
+              lines, room = list(out), limit - size(out) - size([notice])
+              for head, body, tail in blocks:
+                  if size(head + body + tail) <= room:
+                      lines += head + body + tail
+                      room -= size(head + body + tail)
+                      continue
+                  room -= size(head + tail)
+                  if body and room > 0:
+                      kept = []
+                      for l in body:
+                          room -= len(l.encode()) + 1
+                          if room < 0:
+                              break
+                          kept.append(l)
+                      lines += head + kept + tail
+                  lines.append(notice)
+                  break
+              return "\n".join(lines) + "\n"
+
+          # A comment is capped at 65536 characters. If the range-diff doesn't fit
+          # in one, the comment is cut and links to the job summary, which is
+          # capped at 1 MiB and gets all of it; the workflow log has it anyway.
+          full = render(1000000, "_Truncated; the full range-diff is in the workflow log._")
+          if len(full.encode()) <= 60000:
+              comment = full
+          else:
+              run = os.environ["RUN_URL"]
+              comment = render(60000, f"_Truncated; the full range-diff is in the [job summary]({run})._")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write(full)
+          open("comment.md", "w").write(comment)
+
+      - name: Post comment
+        if: steps.forced.outputs.forced == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file comment.md
