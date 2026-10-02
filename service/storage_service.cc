@@ -70,6 +70,7 @@
 #include <algorithm>
 #include <bit>
 #include "locator/local_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/user_provided_param.hh"
 #include "version.hh"
@@ -4359,6 +4360,61 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
     co_return table_sizes;
 }
 
+// Validates that a keyspace's replication factors will be valid once it
+// migrates from vnodes to tablets.
+//
+// Tablet-based keyspaces must not have an RF larger than the number of
+// token-owning nodes in a datacenter: allocating tablets for new tables fails
+// otherwise. Vnode-based keyspaces allow it, so the migration rejects such
+// keyspaces up front.
+//
+// Additionally, tablet-based keyspaces must be RF-rack-valid if:
+// - they have materialized views, or
+// - the rf_rack_valid_keyspaces config option is enabled.
+// Nodes refuse to start otherwise, so the migration rejects such
+// keyspaces up front.
+//
+// enforce_rack_list imposes a stricter requirement (rack-list RFs only),
+// which this function doesn't check.
+static void validate_rf_for_tablets_migration(const replica::database& db,
+        const locator::token_metadata_ptr& tmptr,
+        const locator::network_topology_strategy& nts,
+        const sstring& ks_name) {
+    const auto& ks = db.find_keyspace(ks_name);
+
+    // Check that RF <= #nodes.
+    // (copied from `natural_endpoints_tracker::check_enough_endpoints()`)
+    auto dc_token_owners = tmptr->get_datacenter_token_owners();
+    for (const auto& dc : nts.get_datacenters()) {
+        auto it = dc_token_owners.find(dc);
+        auto node_count = it != dc_token_owners.end() ? it->second.size() : size_t(0);
+        auto rf = nts.get_replication_factor(dc);
+        if (rf > node_count) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: datacenter {} doesn't have enough token-owning nodes"
+                    " for replication_factor={}", ks_name, dc, rf));
+        }
+    }
+
+    // Check the keyspace as it will look after the migration: the same
+    // replication options, but with tablets.
+    locator::replication_strategy_params params(nts.get_config_options(), 0, std::nullopt);
+    auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ks.metadata()->strategy_name(), params, tmptr->get_topology());
+    try {
+        locator::assert_rf_rack_valid_keyspace(ks_name, tmptr, *tablet_rs);
+    } catch (const std::invalid_argument& e) {
+        if (db.enforce_rf_rack_validity_for_keyspace(ks)) {
+            throw std::runtime_error(fmt::format("Cannot migrate keyspace {} to tablets: {}", ks_name, e.what()));
+        }
+        // e.what() states that RF-rack-validity is required, which doesn't
+        // hold here, so don't include it.
+        slogger.warn("Keyspace '{}' will not be RF-rack-valid after the migration to tablets: the replication"
+                " factor doesn't match the rack count in at least one datacenter. A rack failure may reduce"
+                " availability.", ks_name);
+    }
+}
+
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -4394,6 +4450,15 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                         server_id, *replica_state.current_storage_mode));
             }
         }
+
+        const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+        if (!nts) {
+            throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
+                ks_name));
+        }
+
+        validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name);
 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
@@ -4461,20 +4526,12 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
-        auto& rs = ks.get_replication_strategy();
-        const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&rs);
-        if (!trs) {
-            throw std::runtime_error(fmt::format(
-                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
-                ks_name));
-        }
-
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
             auto erm = ks.get_static_effective_replication_map();
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
-            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, nts, tables_to_migrate);
+            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(nts, estimated_sizes);
         }
 
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
