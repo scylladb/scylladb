@@ -1370,31 +1370,31 @@ protected:
 
 future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
         std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
-        co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
+    co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
 
-        std::exception_ptr eptr;
-        try {
-            co_await _ss.local().restore_tablets(tid, snap_name);
-        } catch (...) {
-            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
-            eptr = std::current_exception();
-        }
+    std::exception_ptr eptr;
+    try {
+        co_await _ss.local().restore_tablets(tid, snap_name);
+    } catch (...) {
+        llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
+        eptr = std::current_exception();
+    }
 
-        try {
-            llog.info("Restoring table with tid {} to the original schema", tid);
-            // remove_unset: the table saved nullopt because it had no hint of its own, and
-            // passing nullopt back would leave it pinned at min == max forever.
-            co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
-                    service::wait_balancer::no, service::remove_unset::yes);
-        } catch (...) {
-            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
-        }
+    try {
+        llog.info("Restoring table with tid {} to the original schema", tid);
+        // remove_unset: the table saved nullopt because it had no hint of its own, and
+        // passing nullopt back would leave it pinned at min == max forever.
+        co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
+                service::wait_balancer::no, service::remove_unset::yes);
+    } catch (...) {
+        llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
+    }
 
-        if (eptr) {
-            std::rethrow_exception(eptr);
-        }
+    if (eptr) {
+        std::rethrow_exception(eptr);
+    }
 
-        progress.complete();
+    progress.complete();
 }
 
 // Every datacenter the table replicates to restores from its own backup location,
