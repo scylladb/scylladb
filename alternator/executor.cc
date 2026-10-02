@@ -1971,7 +1971,7 @@ static std::optional<std::string> build_vector_index_non_key_attributes(const st
     return rjson::print(arr);
 }
 
-create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode, const char* caller) {
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
     // (e.g., verify that this table doesn't already exist) - we can only
@@ -1986,7 +1986,7 @@ create_table_params validate_create_table_request(const rjson::value& request, c
 
     const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
     if (attribute_definitions == nullptr) {
-        throw api_error::validation("Missing AttributeDefinitions in CreateTable request");
+        throw api_error::validation(fmt::format("Missing AttributeDefinitions in {} request", caller));
     }
     // Save the list of AttributeDefinitions in unused_attribute_definitions,
     // and below remove each one as we see it in a KeySchema of the table or
@@ -2484,7 +2484,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
-    create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode);
+    create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode, "CreateTable");
 
     co_return co_await commit_table_creation(std::move(request), std::move(validated), std::move(client_state), tablets_mode);
 }
