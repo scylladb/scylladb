@@ -252,7 +252,10 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(token);
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
-    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
+    return utils::get_local_injector().inject("hinted_handoff_fail_hint_send", [] (auto& handler) -> future<> {
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + 5min);
+        throw std::runtime_error("Sending a hint failed due to: hinted_handoff_fail_hint_send");
+    }).then([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         const auto dst = end_point_key();
@@ -511,7 +514,6 @@ bool hint_sender::send_one_file(const sstring& fname) {
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
                 _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch  (const canceled_draining_exception&) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
