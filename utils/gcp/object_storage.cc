@@ -1382,10 +1382,8 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
 future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager, seastar::abort_source* as) {
-    utils::chunked_vector<utils::gcp::storage::object_info> result;
-
     if (pager.done) {
-        co_return result;
+        co_return utils::chunked_vector<utils::gcp::storage::object_info>{};
     }
 
     std::string bucket(bucket_in);
@@ -1407,11 +1405,21 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
         psep = "&";
     }
 
+    // The request may be retried with this same handler after it has run, when it fails
+    // afterwards, so the handler only keeps the page of its own attempt -- dropping a
+    // failed attempt's before reading its own -- and the page moves the pager and is
+    // returned once the request succeeded.
+    utils::chunked_vector<utils::gcp::storage::object_info> page;
+    // disengaged when the page carries no items, which leaves the pager as it is
+    std::optional<std::string> next_token;
+
     co_await _impl->send_with_retry(path
         , GCP_OBJECT_SCOPE_READ_ONLY
         , ""s
         , ""s
         , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
+            page.clear();
+            next_token.reset();
             if (rep._status != status_type::ok) {
                 throw failed_operation(fmt::format("Could not list bucket {}: {} ({})", bucket, rep._status
                     , co_await get_gcp_error_message(in)
@@ -1434,12 +1442,11 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
                 throw failed_operation("Malformed list object items");
             }
 
-            pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
-            pager.done = pager.token.empty();
+            next_token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
 
             for (auto& item : items->GetArray()) {
                 object_info info = create_info(item);
-                result.emplace_back(std::move(info));
+                page.emplace_back(std::move(info));
             }
 
             // Fail the request with a retryable error once the handler has processed the
@@ -1453,7 +1460,11 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
         , as
     );
 
-    co_return result;
+    if (next_token) {
+        pager.token = std::move(*next_token);
+        pager.done = pager.token.empty();
+    }
+    co_return page;
 }
 
 future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, seastar::abort_source* as) {
