@@ -1674,3 +1674,153 @@ async def test_corrupted_segment(manager: ScyllaClusterManager):
         # in sent_total twice.
         assert 0 < row_count <= sent_total, \
             f"Unexpected number of rows: {row_count} vs. {sent_total} ({send_errors} send errors)"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClusterManager):
+    """
+    Reproducer of SCYLLADB-4294.
+
+    If sending a hint fails before hint_sender runs into the corruption of its segment,
+    the hint must be retried. hint_sender used to remove the segment instead, dropping
+    the hint and all the hints following it that could still be read from the segment.
+    """
+    # Use one shard so that all hints land in the same segment.
+    cmdline = ["--smp=1", "--logger-log-level", "hints_manager=debug"]
+    injections = ["decrease_hints_flush_period"]
+    config = {
+        # Send one hint at a time. hint_sender can only read further than the second hint
+        # once the first one has finished, so the failure of the first one is always recorded
+        # before hint_sender runs into the corruption.
+        "max_hinted_handoff_concurrency": 1,
+        "error_injections_at_startup": injections
+    }
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    hints_dir = await get_hints_dir(manager, node1)
+    host_id = await manager.get_host_id(node2.server_id)
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = "
+                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.others_not_see_server(node2.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    # This should be enough to generate at least two sectors.
+    row_count = 4000
+    batch_size = 1000
+    for batch in itertools.batched(range(row_count), batch_size):
+        await gather_safely(*[cql.run_async(stmt, (key, key)) for key in batch])
+    await wait_until_hint_writing_settled(manager, [node1])
+    written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+    assert written > 0, "No hints have been written"
+
+    await manager.server_stop_gracefully(node1.server_id)
+    segments = list_hint_segments(hints_dir, host_id)
+    assert len(segments) > 0, "No segments present on disk"
+
+    # Pick the first segment to be replayed.
+    segments = sorted(segments, key=get_commitlog_segment_id)
+    logger.info(f"Found {len(segments)} segments: {segments}")
+    # The segment must contain enough data. Otherwise, corrupting it could be
+    # useless for the purpose of this test.
+    eligible_segments = [segment for segment in segments if commitlog_sector_has_data(segment, 1)]
+    assert len(eligible_segments) > 0, "No segment has enough data"
+
+    victim_segment = eligible_segments[0]
+    corrupt_commitlog_segment(victim_segment)
+
+    # Remove other segments. There's no point in trying to send them.
+    # Note that a hint cannot span multiple segments.
+    redundant_segments = [segment for segment in segments if segment != victim_segment]
+    if len(redundant_segments) > 0:
+        logger.info(f"Removing redundant segments: {redundant_segments}. Leaving: {victim_segment}")
+        for segment in redundant_segments:
+            os.remove(segment)
+        logger.info(f"All redundant segments removed: {redundant_segments}")
+    else:
+        logger.info(f"No redundant segments. Working with: {victim_segment}")
+
+    injections = [
+        *injections,
+        # Only the first hint fails. Note that the failure will be reported *before*
+        # the corruption. At most two hints can be processed at a time (1 being sent,
+        # the other getting scheduled), and the corruption is in the second sector.
+        {"name": "hinted_handoff_fail_hint_send", "one_shot": True}]
+    await manager.server_update_config(node1.server_id, "error_injections_at_startup", injections)
+    await manager.server_start(node1.server_id)
+
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
+    # Wait until hint sender starts processing the hints.
+    await manager.server_start(node2.server_id)
+    await log.wait_for("hinted_handoff_fail_hint_send: waiting for message", from_mark=mark)
+    mark = await log.mark()
+
+    # Prevent hint sender from trying to replay the segment again after it runs
+    # into the corruption. Note that this doesn't prevent us from reaching it
+    # in this first pass -- as soon as the first hint (which is already scheduled)
+    # fails, we'll browse the rest of the segment regardless of this injection.
+    # It will only become relevant in a new pass.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay",
+                                       one_shot=False)
+    # Unblock the failing hint.
+    await manager.api.message_injection(node1.ip_addr, "hinted_handoff_fail_hint_send")
+    # Wait for hint sender to notice the corruption and to finish the first pass.
+    # The latter message is printed only once all of the hints from the pass
+    # have finished, so the metrics we read below are final.
+    victim_filename = re.escape(os.path.basename(victim_segment))
+    await log.wait_for(f"Segment error in .*{victim_filename}",
+                       f"Error while sending hints from .*{victim_filename}",
+                       from_mark=mark)
+    mark = await log.mark()
+
+    # Despite the corruption, the segment should stay on disk. There are still
+    # hints that can be sent over.
+    all_metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+    corrupted_files = all_metrics["corrupted_files"]
+    send_errors = all_metrics["send_errors"]
+    assert corrupted_files == 1, f"Unexpected value of corrupted_files metric: {corrupted_files}"
+    assert send_errors > 0, "No hints that failed to be sent"
+    assert os.path.isfile(victim_segment), f"Victim segment {victim_segment} has been prematurely removed"
+
+    sent_total = all_metrics["sent_total"]
+
+    # Let hint sender process the segment again.
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+    await log.wait_for(f"Segment .*{victim_filename} has been sent in full and deleted", from_mark=mark)
+
+    # Make sure the segment is really gone.
+    assert not os.path.isfile(victim_segment)
+
+    sent_total_after = await get_hint_metrics(manager.metrics, node1.ip_addr, "sent_total")
+    expected_row_count = sent_total_after - sent_total
+    assert expected_row_count > 0, \
+        f"No hints sent during the second pass: {sent_total} == {sent_total_after}"
+
+    send_errors_after = await get_hint_metrics(manager.metrics, node1.ip_addr, "send_errors")
+
+    await manager.server_stop(node1.server_id, convict=True)
+
+    # Verify that node 2 received the sent hints.
+    cql = await manager.get_cql_exclusive(node2)
+    stmt = SimpleStatement("SELECT count(*) FROM ks.tbl", consistency_level=ConsistencyLevel.ONE)
+    results = await cql.run_async(stmt)
+    row_count = results[0].count
+
+    if send_errors_after == send_errors:
+        assert row_count == expected_row_count, \
+            f"Unexpected number of rows: {row_count} vs. {expected_row_count}"
+    else:
+        # If sending a hint failed after the first pass, hint sender retried the segment
+        # starting from that hint, so some of the hints following it might have been sent
+        # twice and counted in sent_total twice.
+        assert 0 < row_count <= expected_row_count, \
+            f"Unexpected number of rows: {row_count} vs. {expected_row_count} " \
+            f"({send_errors_after - send_errors} send errors after the first pass)"
