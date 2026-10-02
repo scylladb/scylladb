@@ -2383,3 +2383,15 @@ locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }
+
+bool locator::is_keyspace_undergoing_tablets_migration(const tablet_metadata& tmeta, const data_dictionary::keyspace_metadata& ksm) {
+    if (ksm.uses_tablets()) {
+        return false;
+    }
+    for (const auto& [name, s] : ksm.cf_meta_data()) {
+        if (tmeta.has_tablet_map(s->id())) {
+            return true;
+        }
+    }
+    return false;
+}
