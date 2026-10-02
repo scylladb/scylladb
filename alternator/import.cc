@@ -133,6 +133,8 @@ import_table_request parse_import_table_request(const rjson::value& request, con
 
     auto table_creation_parameters = get_table_creation_parameters(request);
     auto validated_table_params = validate_create_table_request(table_creation_parameters, feat, tablets_mode, "ImportTable");
+    // FIXME: commit_table_creation()'s checks of the table's keyspace (vector indexes need
+    // tablets, RF-rack validity, object storage) are deferred until the table is created.
 
     return import_table_request {
         std::move(client_token),
