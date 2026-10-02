@@ -267,6 +267,7 @@ public:
     named_value<bool> commitlog_use_o_dsync;
     named_value<bool> commitlog_use_hard_size_limit;
     named_value<bool> commitlog_use_fragmented_entries;
+    named_value<bool> strongly_consistent_tables_start_on_damaged_commitlog;
     named_value<bool> compaction_preheat_key_cache;
     named_value<uint32_t> concurrent_compactors;
     named_value<uint32_t> in_memory_compaction_limit_in_mb;
