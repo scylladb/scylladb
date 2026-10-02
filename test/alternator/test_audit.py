@@ -15,6 +15,7 @@ from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.alternator.util import new_test_table, unique_table_name
+from test.alternator.test_import import delete_table_afterwards
 from test.alternator.test_vector import need_vector_search_in_botocore
 
 
@@ -534,7 +535,7 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
     before_rows = _get_audit_log_rows(cql)
     # The format inside expected is: (category, consistency, error(bool), keyspace_name, table_name, [fragments that should appear in the operation text])
     expected = []
-    try:
+    with delete_table_afterwards(client, table_name):
         # CreateTable
         client.create_table(
             TableName=table_name,
@@ -580,8 +581,8 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
         # DeleteTable
         client.delete_table(TableName=table_name)
         expected.append(("DDL", "", False, ks_name, table_name, ["DeleteTable", table_name]))
-        # ImportTable. It imports nothing yet, and creates no table; once it
-        # does, the finally block below deletes it.
+        # ImportTable. It creates no table yet; if it does,
+        # delete_table_afterwards() above deletes it.
         client.import_table(
             S3BucketSource={"S3Bucket": "my-bucket"},
             InputFormat="DYNAMODB_JSON",
@@ -596,11 +597,6 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
         # Each individual Alternator call above must be audited.
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
         _assert_audit_entries(new_rows, expected, ks_name, table_name)
-    finally:
-        try:
-            client.delete_table(TableName=table_name)
-        except ClientError:
-            pass  # Table was already deleted by the test
 
 
 # Test auditing of QUERY table-level operations: DescribeTable, ListTagsOfResource,
