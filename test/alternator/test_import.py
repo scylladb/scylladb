@@ -1065,8 +1065,6 @@ def test_import_table_validation(dynamodb, overrides, parameter):
 # A missing TableCreationParameters makes DynamoDB fail with InternalFailure
 # (HTTP 500) instead of a ValidationException, although the member is
 # required. Alternator refuses it with a ValidationException naming it.
-# client_no_transform() also drops botocore's retries, which DynamoDB's
-# InternalFailure would otherwise trigger.
 def test_import_table_missing_table_creation_parameters(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
                            ClientToken=random_string(20),
