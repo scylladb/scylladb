@@ -10,6 +10,7 @@
 
 #include <array>
 #include <chrono>
+#include <utility>
 #include <seastar/core/coroutine.hh>
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
@@ -137,11 +138,29 @@ import_table_request parse_import_table_request(const rjson::value& request, con
         std::move(client_token),
         std::move(s3_bucket),
         std::move(s3_key_prefix),
-        std::move(input_format),
-        std::move(input_compression_type),
+        import_input_format::dynamodb_json,
+        input_compression_type == "GZIP" ? import_input_compression_type::gzip : import_input_compression_type::none,
         std::move(table_creation_parameters),
         std::move(validated_table_params),
     };
+}
+
+static std::string_view input_format_name(import_input_format input_format) {
+    switch (input_format) {
+        case import_input_format::dynamodb_json:
+            return "DYNAMODB_JSON";
+    }
+    std::unreachable();
+}
+
+static std::string_view input_compression_type_name(import_input_compression_type input_compression_type) {
+    switch (input_compression_type) {
+        case import_input_compression_type::none:
+            return "NONE";
+        case import_input_compression_type::gzip:
+            return "GZIP";
+    }
+    std::unreachable();
 }
 
 rjson::value make_import_table_description(const import_table_request& parsed) {
@@ -174,8 +193,8 @@ rjson::value make_import_table_description(const import_table_request& parsed) {
     rjson::add(description, "TableId", rjson::from_string(parsed.validated_table_params.builder.uuid().to_sstring()));
     rjson::add(description, "ClientToken", rjson::from_string(parsed.client_token));
     rjson::add(description, "S3BucketSource", std::move(s3_bucket_source));
-    rjson::add(description, "InputFormat", rjson::from_string(parsed.input_format));
-    rjson::add(description, "InputCompressionType", rjson::from_string(parsed.input_compression_type));
+    rjson::add(description, "InputFormat", rjson::from_string(input_format_name(parsed.input_format)));
+    rjson::add(description, "InputCompressionType", rjson::from_string(input_compression_type_name(parsed.input_compression_type)));
     rjson::add(description, "TableCreationParameters", rjson::copy(parsed.table_creation_parameters));
     rjson::add(description, "StartTime", rjson::value(std::chrono::duration<double>(now.time_since_epoch()).count()));
     rjson::add(description, "ProcessedItemCount", rjson::value(0));
