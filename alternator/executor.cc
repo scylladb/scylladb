@@ -27,7 +27,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
-#include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
 #include "mutation/timestamp.hh"
 #include "types/map.hh"
@@ -1971,7 +1970,7 @@ static std::optional<std::string> build_vector_index_non_key_attributes(const st
     return rjson::print(arr);
 }
 
-create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat) {
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
     // (e.g., verify that this table doesn't already exist) - we can only
@@ -2270,18 +2269,6 @@ create_table_params validate_create_table_request(const rjson::value& request, c
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
-    if (stream_enabled) {
-        const bool uses_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode).has_value();
-        if (uses_tablets) {
-            if (!feat.cdc_block_tablet_merges_for_alternator_streams) {
-                throw api_error::validation(
-                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
-                        "support blocking tablet merges for Alternator Streams");
-            }
-            block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
-        }
-    }
-
     return create_table_params {
         std::move(builder),
         std::move(view_builders),
@@ -2289,6 +2276,7 @@ create_table_params validate_create_table_request(const rjson::value& request, c
         std::move(table_name),
         std::move(tags_map),
         vector_indexes && vector_indexes->Size() > 0,
+        stream_enabled,
     };
 }
 
@@ -2323,10 +2311,25 @@ future<executor::request_return_type> executor::commit_table_creation(
         auto group0_guard = co_await _mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
+        auto existing_ks = _proxy.data_dictionary().try_find_keyspace(keyspace_name);
+        auto ksm = existing_ks ? existing_ks->metadata() : create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
+
+        // Derived from the pre-built schema on every attempt, so that a retry
+        // resolving a vnodes keyspace leaves the flag out.
+        schema_ptr table_schema = schema;
+        if (validated.stream_enabled && rs->uses_tablets()) {
+            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
+                co_return api_error::validation(
+                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
+                        "support blocking tablet merges for Alternator Streams");
+            }
+            schema_builder table_builder(schema);
+            block_tablet_merges_for_alternator_streams(table_builder, /*defer_enablement=*/false);
+            table_schema = table_builder.build();
+        }
 
         // Vector indexes is a new feature that we decided to only support
         // on tablets.
@@ -2397,12 +2400,10 @@ future<executor::request_return_type> executor::commit_table_creation(
             }
         }
         bool table_already_exists = false;
-        try {
+        if (existing_ks) {
+            table_already_exists = _proxy.data_dictionary().has_schema(keyspace_name, table_name);
+        } else {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
-        } catch (exceptions::already_exists_exception&) {
-            if (_proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
-                table_already_exists = true;
-            }
         }
         if (table_already_exists) {
             // The user may have retried a CreateTable operation after it timed
@@ -2421,7 +2422,7 @@ future<executor::request_return_type> executor::commit_table_creation(
             co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
         }
         std::vector<schema_ptr> schemas;
-        schemas.push_back(schema);
+        schemas.push_back(table_schema);
         for (schema_builder& view_builder : view_builders) {
             schemas.push_back(view_builder.build());
         }
@@ -2484,7 +2485,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
-    create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode);
+    create_table_params validated = validate_create_table_request(request, _proxy.features());
 
     co_return co_await commit_table_creation(std::move(request), std::move(validated), std::move(client_state), tablets_mode);
 }

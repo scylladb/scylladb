@@ -33,7 +33,7 @@ struct import_table_request {
 
 // Validate an ImportTable request, throwing api_error::validation on the
 // first problem. Only parses: looks up neither imports nor tables.
-import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat, db::tablets_mode_t::mode tablets_mode);
+import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat);
 
 // The ImportTableDescription of an import which has just been accepted:
 // FAILED with NotImplemented for now, with zero counters and a fresh ImportArn.

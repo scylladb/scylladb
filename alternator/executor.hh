@@ -92,6 +92,7 @@ struct create_table_params {
     std::string table_name;
     std::map<sstring, sstring> tags_map;
     bool has_vector_indexes;
+    bool stream_enabled;
 };
 
 class executor : public peering_sharded_service<executor> {
@@ -220,7 +221,7 @@ public:
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);
 };
 
-create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat);
 
 // The ARN of a table, also for one which is not created yet.
 rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name);
