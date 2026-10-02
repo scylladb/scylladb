@@ -16,15 +16,24 @@
 
 namespace alternator {
 
+// The InputFormat values ImportTable supports so far.
+enum class import_input_format {
+    dynamodb_json,
+};
+
+// The InputCompressionType values ImportTable supports so far.
+enum class import_input_compression_type {
+    none,
+    gzip,
+};
+
 // A validated ImportTable request.
 struct import_table_request {
     std::string client_token;
     std::string s3_bucket;
     std::string s3_key_prefix;
-    // Only DYNAMODB_JSON so far.
-    std::string input_format;
-    // NONE or GZIP.
-    std::string input_compression_type;
+    import_input_format input_format;
+    import_input_compression_type input_compression_type;
     // Only the TableCreationParameters members ImportTable accepts, kept
     // here so there's no need to re-serialize for the response.
     rjson::value table_creation_parameters;
