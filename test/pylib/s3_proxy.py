@@ -16,14 +16,12 @@ import struct
 import sys
 import asyncio
 
-import requests
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import uuid
 from functools import partial
 from collections import OrderedDict
-from requests import Response
 from typing_extensions import Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -99,6 +97,8 @@ def forwarding_session():
     global _forwarding_session
     with _forwarding_session_lock:
         if _forwarding_session is None:
+            import requests
+            import requests.adapters
             session = requests.Session()
             session.cookies.set_policy(_block_all_cookies())
             # Enough connections for every test the suite runs against the server
@@ -253,6 +253,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 policy.server_should_fail = False
                 policy.should_forward = True
 
+            from requests import Response
             response = Response()
             body = None
 
@@ -264,6 +265,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 target_url = self.s3_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
+                    # imported here, not at module level: each worker pays for every
+                    # module-level import whether or not its tests reach this code
+                    import requests
                     response = forwarding_session().request(self.command, target_url, headers=headers, data=body,
                                                             timeout=self.forward_timeout)
                 except requests.exceptions.RequestException as e:
@@ -288,9 +292,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
                 if self.command == 'HEAD':
                     # `requests` hands us no body for a HEAD reply, so the length has to
-                    # come from the S3 server. It may not have sent one - S3Mock omits it
-                    # on error replies - and a HEAD body is empty either way, so fall back
-                    # to zero rather than throwing the response away.
+                    # come from the S3 server. It may not have sent one, and a HEAD body
+                    # is empty either way, so fall back to zero rather than throwing the
+                    # response away.
                     self.send_header("Content-Length", response.headers.get('Content-Length', '0'))
                 else:
                     self.send_header("Content-Length", str(len(response.content)))
@@ -351,7 +355,7 @@ class S3ProxyServer:
             self.logger.info('Starting S3 proxy server on %s', self.server.server_address)
             self._set_environ()
             loop = asyncio.get_running_loop()
-            self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
+            self.server_thread = loop.run_in_executor(None, self.server.serve_forever, 0.05)
             self.is_running = True
 
     async def stop(self):

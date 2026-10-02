@@ -13,6 +13,8 @@ import subprocess
 import uuid
 from typing import Callable
 
+from test.pylib.container_accounting import register_container_pid
+
 logger = logging.getLogger("DockerizedServer")
 
 # Number of times we retry launching the container when the host port forward
@@ -36,6 +38,18 @@ class _PortInUseError(RuntimeError):
     """
 
 
+async def register_container(exe, name: str) -> None:
+    """Charge a container to the xdist worker that started it; the controller's go uncharged."""
+    try:
+        inspect = await asyncio.create_subprocess_exec(exe, "inspect", "--format", "{{.State.Pid}}", name,
+                                                       stdout=asyncio.subprocess.PIPE,
+                                                       stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await inspect.communicate()
+        register_container_pid(int(out.decode().strip()))
+    except (OSError, ValueError):
+        pass            # accounting is best effort; a test must not fail over it
+
+
 class DockerizedServer:
     """class for running an external dockerized service image, typically mock server
 
@@ -53,8 +67,11 @@ class DockerizedServer:
                  docker_args : Callable[[str, int], list[str]] | list[str] = [],
                  image_args : Callable[[str, int], list[str]] | list[str] = [],
                  host = '127.0.0.1',
-                 port = None):
+                 port = None,
+                 env : dict[str, str] | None = None):
         self.image = image
+        # Environment for the container runtime's own process, None to inherit ours.
+        self.env = env
         self.host = host
         self.log_dir = log_dir
         self.logfilenamebase = logfilenamebase
@@ -138,7 +155,7 @@ class DockerizedServer:
         # stdout, others to stderr, and podman itself reports launch failures on stderr.
         # Reading a single stream keeps the success/failure matching below unaware of
         # which one the image happens to use.
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=self.env)
         loop = asyncio.get_running_loop()
         ready_fut = loop.create_future()
 
@@ -204,6 +221,7 @@ class DockerizedServer:
             proc.wait()
             raise RuntimeError("Could not query port from container")
         self.proc = proc
+        await register_container(exe, name)
 
     async def stop(self):
         """Stops docker image"""

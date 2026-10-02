@@ -4,11 +4,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-import boto3
 import urllib.error
 import urllib.request
-from botocore import UNSIGNED
-from botocore.config import Config
 from packaging.version import Version
 from pathlib import Path
 import time
@@ -34,6 +31,12 @@ def _list_scylla_release_entries(bucket: str, prefix: str, pack: str = "") -> li
 
     pack_part = rf"{re.escape(pack)}-" if pack else ""    
     pattern = re.compile(rf"^scylla(?:db)?-{pack_part}\d{{4}}\.\d+(?:\.\d+)?(?:/|$|[~.-])")
+
+    # imported here, not at module level: each worker pays for every module-level
+    # import whether or not its tests ever reach this code
+    import boto3
+    from botocore import UNSIGNED
+    from botocore.config import Config
 
     s3 = boto3.client("s3", region_name="us-east-1", config=Config(
         signature_version=UNSIGNED,
