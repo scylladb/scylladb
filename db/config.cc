@@ -941,7 +941,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* batch: Used with commitlog_sync_batch_window_in_ms (Default: disabled ``**``) to control how long Scylla waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"
         "\n"
         "Related information: Durability")
-    , commitlog_segment_size_in_mb(this, "commitlog_segment_size_in_mb", value_status::Used, 64,
+    , commitlog_segment_size_in_mb(this, "commitlog_segment_size_in_mb", value_status::Used, 32,
         "Sets the size of the individual commitlog file segments. A commitlog segment may be archived, deleted, or recycled after all its data has been flushed to SSTables. This amount of data can potentially include commitlog segments from every table in the system. The default size is usually suitable for most commitlog archiving, but if you want a finer granularity, 8 or 16 MB is reasonable. See Commit log archive configuration.\n"
         "\n"
         "Related information: Commit log archive configuration")
@@ -965,7 +965,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Unused, true,
         "Whether or not to reuse commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
     , commitlog_flush_threshold_in_mb(this, "commitlog_flush_threshold_in_mb", value_status::Used, -1,
-        "Threshold for commitlog disk usage. When used disk space goes above this value, Scylla initiates flushes of memtables to disk for the oldest commitlog segments, removing those log segments. Adjusting this affects disk usage vs. write latency. Default is (approximately) commitlog_total_space_in_mb - <num shards>*commitlog_segment_size_in_mb.")
+        "Threshold for commitlog disk usage. When used disk space goes above this value, Scylla initiates flushes of memtables to disk for the oldest commitlog segments, removing those log segments. Adjusting this affects disk usage vs. write latency. Default is half of commitlog_total_space_in_mb.")
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Deprecated, true,
