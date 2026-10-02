@@ -1282,46 +1282,56 @@ public:
         })
     {
         _progress.total = total;
-        _progress_update_timer.arm(lowres_clock::now());
     }
 
     tasks::task_manager::task::progress get() const noexcept {
         return _progress;
     }
 
-    // The total was known upfront, so mark it all completed and stop polling.
-    void complete() noexcept {
-        _progress_update_timer.cancel();
-        _progress.completed = _progress.total;
+    void start() noexcept {
+        _progress_update_timer.arm(lowres_clock::now());
     }
 
+    // Waits for a poll in flight; only complete() may touch the progress afterwards.
     future<> stop() noexcept {
         _progress_update_timer.cancel();
         co_await _gate.close();
+    }
+
+    // The total was known upfront. Must be called after stop(), or a late poll could undo it.
+    void complete() noexcept {
+        _progress.completed = _progress.total;
     }
 };
 
 future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
         std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
-    co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
-
+    progress.start();
     std::exception_ptr eptr;
     try {
-        co_await _ss.local().restore_tablets(tid, snap_name);
+        co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
+
+        try {
+            co_await _ss.local().restore_tablets(tid, snap_name);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
+            eptr = std::current_exception();
+        }
+
+        try {
+            llog.info("Restoring table with tid {} to the original schema", tid);
+            // remove_unset: the table saved nullopt because it had no hint of its own, and
+            // passing nullopt back would leave it pinned at min == max forever.
+            co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
+                    service::wait_balancer::no, service::remove_unset::yes);
+        } catch (...) {
+            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
+        }
     } catch (...) {
-        llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
         eptr = std::current_exception();
     }
 
-    try {
-        llog.info("Restoring table with tid {} to the original schema", tid);
-        // remove_unset: the table saved nullopt because it had no hint of its own, and
-        // passing nullopt back would leave it pinned at min == max forever.
-        co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
-                service::wait_balancer::no, service::remove_unset::yes);
-    } catch (...) {
-        llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
-    }
+    co_await progress.stop();
 
     if (eptr) {
         std::rethrow_exception(eptr);
@@ -1434,9 +1444,6 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                     (void)_ss.local().abort_restore_tablets(tid).handle_exception([tid] (std::exception_ptr ex) {
                         llog.warn("Failed to abort restore for table {}: {}", tid, ex);
                     });
-                })
-                .set_finalizer([progress] () noexcept {
-                    return progress->stop();
                 });
     auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
             original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
