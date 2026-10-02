@@ -451,3 +451,4 @@ void appending_hash<mutation_fragment>::operator()(Hasher& h, const mutation_fra
 
 // Instantiation for repair/row_level.cc
 template void appending_hash<mutation_fragment>::operator()<xx_hasher>(xx_hasher& h, const mutation_fragment& cells, const schema& s) const;
+template void appending_hash<mutation_fragment>::operator()<buffered_xx_hasher>(buffered_xx_hasher& h, const mutation_fragment& cells, const schema& s) const;
