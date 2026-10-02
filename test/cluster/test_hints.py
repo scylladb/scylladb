@@ -5,6 +5,7 @@
 #
 import asyncio
 import glob
+import itertools
 import os
 import pytest
 import time
@@ -22,7 +23,9 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
-from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import (commitlog_sector_has_data, corrupt_commitlog_segment,
+                               get_commitlog_segment_id, get_topology_coordinator,
+                               keyspace_has_tablets, new_test_keyspace, new_test_table)
 
 
 logger = logging.getLogger(__name__)
@@ -73,9 +76,13 @@ def list_hint_target_dirs(hints_dir: str) -> set[str]:
     return {os.path.basename(path) for path in glob.glob(os.path.join(hints_dir, "*", "*"))}
 
 
-def count_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> int:
+def list_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> list[str]:
     shard_glob = "*" if shard is None else str(shard)
-    return len(glob.glob(os.path.join(hints_dir, shard_glob, str(target_host_id), "HintsLog-*.log")))
+    return glob.glob(os.path.join(hints_dir, shard_glob, str(target_host_id), "HintsLog-*.log"))
+
+
+def count_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> int:
+    return len(list_hint_segments(hints_dir, target_host_id, shard))
 
 
 async def wait_for_hint_dir_removed(hints_dir: str, target_host_id: str,
@@ -1565,3 +1572,105 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
                                                 consistency_level=ConsistencyLevel.ONE))
     assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_corrupted_segment(manager: ScyllaClusterManager):
+    """
+    A corrupted segment is detected and removed. Hints that can be delivered
+    are still delivered.
+    """
+    # Use one shard so that all hints land in the same segment.
+    cmdline = ["--smp=1", "--logger-log-level", "hints_manager=debug"]
+    # Speed up the test.
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    hints_dir = await get_hints_dir(manager, node1)
+    host_id = await manager.get_host_id(node2.server_id)
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = "
+                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.others_not_see_server(node2.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    # This should be enough to generate at least two sectors.
+    row_count = 4000
+    batch_size = 1000
+    for batch in itertools.batched(range(row_count), batch_size):
+        await gather_safely(*[cql.run_async(stmt, (key, key)) for key in batch])
+    await wait_until_hint_writing_settled(manager, [node1])
+    written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+    assert written > 0, "No hints have been written"
+
+    await manager.server_stop_gracefully(node1.server_id)
+    segments = list_hint_segments(hints_dir, host_id)
+    assert len(segments) > 0, "No segments present on disk"
+
+    # Pick the first segment to be replayed.
+    segments = sorted(segments, key=get_commitlog_segment_id)
+    logger.info(f"Found {len(segments)} segments: {segments}")
+    # The segment must contain enough data. Otherwise, corrupting it could be
+    # useless for the purpose of this test.
+    eligible_segments = [segment for segment in segments if commitlog_sector_has_data(segment, 1)]
+    assert len(eligible_segments) > 0, "No segment has enough data"
+
+    victim_segment = eligible_segments[0]
+    corrupt_commitlog_segment(victim_segment)
+
+    # Remove other segments. There's no point in trying to send them.
+    # Note that a hint cannot span multiple segments.
+    redundant_segments = [segment for segment in segments if segment != victim_segment]
+    if len(redundant_segments) > 0:
+        logger.info(f"Removing redundant segments: {redundant_segments}. Leaving: {victim_segment}")
+        for segment in redundant_segments:
+            os.remove(segment)
+        logger.info(f"All redundant segments removed: {redundant_segments}")
+    else:
+        logger.info(f"No redundant segments. Working with: {victim_segment}")
+
+    await manager.server_start(node1.server_id)
+
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
+    await manager.server_start(node2.server_id)
+
+    # Wait for hint sender to notice the corruption.
+    victim_filename = re.escape(os.path.basename(victim_segment))
+    await log.wait_for(f"Segment error in .*{victim_filename}",
+                       f"Segment .*{victim_filename} has been sent in full and deleted",
+                       from_mark=mark)
+
+    all_metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+    corrupted_files = all_metrics["corrupted_files"]
+    sent_total = all_metrics["sent_total"]
+    send_errors = all_metrics["send_errors"]
+    assert corrupted_files == 1, f"Unexpected value of corrupted_files metric: {corrupted_files}"
+    assert sent_total > 0, "No hint has been sent"
+
+    # Make sure the segment is really gone.
+    assert not os.path.isfile(victim_segment)
+
+    await manager.server_stop(node1.server_id, convict=True)
+
+    # Verify that node 2 received the hints that node 1 sent.
+    cql = await manager.get_cql_exclusive(node2)
+    stmt = SimpleStatement("SELECT count(*) FROM ks.tbl", consistency_level=ConsistencyLevel.ONE)
+    results = await cql.run_async(stmt)
+    row_count = results[0].count
+
+    if send_errors == 0:
+        assert row_count == sent_total, f"Unexpected number of rows: {row_count} vs. {sent_total}"
+    else:
+        # If sending a hint failed, hint sender retried the segment starting from that hint,
+        # so some of the hints following it might have been sent twice and counted
+        # in sent_total twice.
+        assert 0 < row_count <= sent_total, \
+            f"Unexpected number of rows: {row_count} vs. {sent_total} ({send_errors} send errors)"
