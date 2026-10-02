@@ -40,6 +40,7 @@
 #include "mutation/timestamp.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
+#include "utils/error_injection.hh"
 #include <optional>
 #include "db/config.hh"
 #include "replica/database.hh"
@@ -345,6 +346,11 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
     }
     ), cmd.change);
+
+    // The mutations are now readable from the tables, but the in-memory state they
+    // describe is only rebuilt below. Lets a test hold the command in that window.
+    co_await utils::get_local_injector().inject("group0_pause_before_topology_transition",
+            utils::wait_for_message(std::chrono::minutes(5)), false);
 
     if (_in_memory_state_machine_enabled) {
         if (topology_state_change_hint) {
