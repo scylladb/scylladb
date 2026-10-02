@@ -835,6 +835,77 @@ SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
     }, tablet_cql_test_config());
 }
 
+// A set column is overwritten by emitting a tombstone at timestamp-1 and the surviving
+// elements at timestamp, so several overwrites of one column at the same write timestamp
+// merge as the union of their elements rather than the later one winning. A caller that
+// drops ids one mutation at a time therefore loses every removal. Both sets the topology
+// coordinator maintains this way have to be updated with a single overwrite per pass.
+SEASTAR_TEST_CASE(test_set_removals_in_one_batch_need_a_single_overwrite) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        auto& sys_ks = e.get_system_keyspace().local();
+
+        // ongoing_restore_requests, as generate_migration_updates() maintains it.
+        const auto id1 = utils::UUID_gen::get_time_UUID();
+        const auto id2 = utils::UUID_gen::get_time_UUID();
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id1).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id2).build());
+        });
+        auto topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite per removal, which is what the coordinator used to emit: the two
+        // merge as their union and neither removal sticks. Asserted rather than left as a
+        // comment, because it is the whole reason the plural builder has to be used.
+        const auto ongoing = topology.ongoing_restore_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1}).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite carrying both removals empties the set.
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1, id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.ongoing_restore_requests.empty());
+
+        // paused_rf_change_requests, as the rack_list colocation path maintains it: one plan
+        // can carry both a request to resume and a request to fail.
+        const auto p1 = utils::UUID_gen::get_time_UUID();
+        const auto p2 = utils::UUID_gen::get_time_UUID();
+        topo.pause_rf_change_request(p1);
+        topo.pause_rf_change_request(p2);
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        const auto paused = topology.paused_rf_change_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_request(paused, p1).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_request(paused, p2).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_requests(paused, {p1, p2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.paused_rf_change_requests.empty());
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
