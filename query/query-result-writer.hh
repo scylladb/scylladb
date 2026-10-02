@@ -166,11 +166,23 @@ public:
                 return std::move(pw).skip_key();
             }
         }();
-        if (_request != result_request::only_result) {
+        // The writer takes the snapshot of the digest which retract()
+        // restores. Under xxHash, the snapshot includes the key, so the
+        // digest covers the key of a partition which the result omits. Under
+        // xxHash_without_empty_partitions, the snapshot precedes the key, so
+        // the digest covers only the partitions of the result.
+        const bool digest_key = _request != result_request::only_result;
+        if (digest_key && !query::digest_omits_empty_partitions(_digest.algorithm())) {
+            _digest.feed_hash(key, s);
+            return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                    _partition_count, _last_modified);
+        }
+        auto pw = partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                   _partition_count, _last_modified);
+        if (digest_key) {
             _digest.feed_hash(key, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
-                                _partition_count, _last_modified);
+        return pw;
     }
 
     result build(std::optional<full_position> last_pos = {}) {
