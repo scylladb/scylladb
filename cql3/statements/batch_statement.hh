@@ -15,6 +15,7 @@
 #include "service_permit.hh"
 #include "exceptions/coordinator_result.hh"
 #include "tracing/trace_state.hh"
+#include "cql3/statements/batch_executor.hh"
 
 namespace cql_transport::messages {
     class result_message;
@@ -73,6 +74,7 @@ private:
     // all columns of the table, including the primary key.
     column_set _columns_of_cas_result_set;
     cql_stats& _stats;
+    const batch_executor* _executor;
 public:
     /**
      * Creates a new BatchStatement from a list of statements
@@ -103,8 +105,6 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    // Validates a prepared batch statement without validating its nested statements.
-    void validate();
 
     bool has_conditions() const { return _has_conditions; }
 
@@ -114,10 +114,23 @@ public:
     //   or in QueryProcessor.processBatch() - for native protocol batches.
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
-    const std::vector<single_statement>& get_statements();
-private:
-    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
-            bool local, api::timestamp_type now, service::query_state& query_state) const;
+    const std::vector<single_statement>& get_statements() const;
+
+    // What a batch_executor needs to commit this batch. Everything else about
+    // the batch stays private.
+    type batch_type() const { return _type; }
+    // Only the const predicates a batch_executor validates against. The one
+    // attribute that is evaluated rather than inspected is forwarded below,
+    // because evaluating it is not a const operation on attributes.
+    const attributes& get_attrs() const { return *_attrs; }
+    int64_t get_timestamp(int64_t now, const query_options& options) const;
+    cql_stats& stats() const { return _stats; }
+    const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
+    const seastar::shared_ptr<metadata>& cas_result_metadata() const { return _metadata; }
+
+    // How this batch reaches storage. Set when the batch is built and never null
+    // afterwards; see cql3::statements::batch_executor.
+    const batch_executor& executor() const { return *_executor; }
 
 public:
     /**
@@ -139,20 +152,6 @@ private:
             query_processor& qp,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
-
-    future<exceptions::coordinator_result<>> execute_without_conditions(
-            query_processor& qp,
-            utils::chunked_vector<mutation> mutations,
-            db::consistency_level cl,
-            db::timeout_clock::time_point timeout,
-            tracing::trace_state_ptr tr_state,
-            service_permit permit,
-            db::large_data_violation_type* violations) const;
-
-    future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
-            query_processor& qp,
-            const query_options& options,
-            service::query_state& state) const;
 
 public:
     // FIXME: no cql_statement::to_string() yet
