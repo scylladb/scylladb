@@ -77,29 +77,40 @@ def test_quoted_ann_function_in_where_clause(cql, indexed_vector_table):
 
 def test_quoted_ann_function_in_where_clause_without_ordering(cql, indexed_vector_table):
     # Without an ORDER BY nothing claims the restriction. It must not be silently dropped:
-    # scoring restrictions never reach the filtering machinery.
-    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
+    # scoring restrictions never reach the filtering machinery. Threshold filtering is rejected
+    # whatever the ORDER BY, so the message does not suggest adding one.
+    with pytest.raises(InvalidRequest, match="Filtering by ANN similarity in the WHERE clause is not supported"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 LIMIT 5')
 
 # ANN() selected reports the score the rows are ranked by, so it needs an ANN ordering to agree
 # with, on the query vector and the column both.
 def test_ann_function_in_select_clause_without_ordering(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest,
-            match=re.escape("ANN() is not supported in the SELECT clause without a matching ANN ordering")):
+            match=re.escape("ANN() in SELECT must match an ANN search in ORDER BY, with the same column and query vector; ORDER BY has no ANN search")):
         cql.execute(f"SELECT p, ANN(v, [0.1, 0.2, 0.3]) FROM {indexed_vector_table} WHERE p = 1")
 
 def test_ann_function_in_select_with_different_query_vector(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest,
-            match=re.escape("ANN() in SELECT must use the same query vector as the ANN ordering")):
+            match=re.escape("ANN() in SELECT must match an ANN search in ORDER BY, with the same column and query vector; the query vector differs")):
         cql.execute(f"SELECT p, ANN(v, [0.4, 0.5, 0.6]) FROM {indexed_vector_table} "
                     f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
+def test_two_ann_calls_on_one_order_by_column_must_agree(cql, test_keyspace, indexed_vector_table):
+    """Two calls on one column in an ORDER BY expression are one search, so they must use the same
+    query vector."""
+    body = "(a tuple<float, int>, b tuple<float, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body) as fuse:
+        with pytest.raises(InvalidRequest, match=re.escape(
+                "ANN() in ORDER BY must use the same query vector as the other ANN calls on the same column")):
+            cql.prepare(f"SELECT p FROM {indexed_vector_table} "
+                        f"ORDER BY {test_keyspace}.{fuse}(ANN(v, [0.1, 0.2, 0.3]), ANN(v, [0.4, 0.5, 0.6])) LIMIT 5")
 
 def test_ann_function_in_select_on_different_column(cql, test_keyspace, scylla_only):
     schema = 'p int primary key, v vector<float, 3>, w vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
         with pytest.raises(InvalidRequest,
-                match=re.escape("ANN() in SELECT must reference the same column as the ANN ordering")):
+                match=re.escape("ANN() in SELECT must match an ANN search in ORDER BY, with the same column and query vector; ORDER BY has no ANN search on column w")):
             cql.execute(f"SELECT p, ANN(w, [0.1, 0.2, 0.3]) FROM {table} "
                         f"ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5")
 
@@ -171,7 +182,7 @@ def test_ann_function_in_select_with_null_bind_marker(cql, indexed_vector_table)
 def test_ann_score_in_select_with_different_bound_query_vector(cql, indexed_vector_table):
     stmt = cql.prepare(f"SELECT p, ANN_SCORE(v, ?) FROM {indexed_vector_table} ORDER BY ANN(v, ?) LIMIT 5")
     with pytest.raises(InvalidRequest,
-            match=re.escape("ANN_SCORE() in SELECT must use the same query vector as the ANN ordering")):
+            match=re.escape("ANN_SCORE() in SELECT must match an ANN search in ORDER BY, with the same column and query vector; the query vector differs")):
         cql.execute(stmt, [[0.4, 0.5, 0.6], [0.1, 0.2, 0.3]])
 
 def test_unknown_scoring_function_in_order_by(cql, indexed_vector_table):

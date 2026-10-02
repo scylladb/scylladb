@@ -107,9 +107,9 @@ query wants::
         ORDER BY BM25(v, 'search term')
         LIMIT 10;
 
-All three describe the search the rows are ranked by, so each needs the two clauses above and has
-to reference the same column and the same search term they do. A query using several of them still
-makes a single request.
+All three describe the search the rows are ranked by, so each needs a BM25 search on the same
+column in the ``ORDER BY`` clause, and has to use the same search term as that search. A query using
+several of them still makes a single request.
 
 The rank is the position in the index's result, not in the result set. If the index returns a row
 that is no longer in the base table, that row's rank is missing from the result and the ranks after
@@ -129,8 +129,8 @@ terms marked, for showing the reader why a row was returned::
         LIMIT 10;
 
 It is accepted only in the ``SELECT`` clause, under the same rules as ``BM25()``
-there: the query must have the ``WHERE`` and ``ORDER BY`` clauses above, and
-the call must reference the same column and the same search term they do.
+there: the ``ORDER BY`` clause must have a BM25 search on the same column, and
+the call must use the same search term as that search.
 
 The result is a single fragment of type ``text``, holding HTML: the matched
 terms are wrapped in ``<b>`` and ``</b>``, and the text around them is
@@ -208,12 +208,12 @@ FTS queries enforce the following rules:
    * - Fulltext index required
      - The queried column must have a ``fulltext_index``. A regular secondary
        index does not satisfy this requirement.
-   * - Selecting a score or a rank needs the other two clauses
+   * - Selecting a score or a rank needs a BM25 search in ``ORDER BY``
      - ``BM25()`` returns a ``tuple<float, int>``, the row's relevance score and
        its rank; ``BM25_SCORE()`` and ``BM25_RANK()`` return one element each.
-       Any of them may be used as a selector, but only in a query that already
-       has the required ``WHERE`` and ``ORDER BY`` clauses. Every occurrence
-       must reference the same column and the same search term.
+       Any of them may be used as a selector, but only in a query whose
+       ``ORDER BY`` clause has a BM25 search on the same column, and every
+       occurrence must use the same search term as that search.
    * - ``BM25_HIGHLIGHT()`` is a selector only
      - ``BM25_HIGHLIGHT()`` is accepted in the ``SELECT`` clause under the same
        rules as ``BM25()``, and rejected in every other clause. See

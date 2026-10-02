@@ -100,7 +100,7 @@ query_value evaluate_query_value(const search_source& source, const query_option
     }
     for (const auto& deferred : source.deferred) {
         if (expr::evaluate(deferred.value, options) != value) {
-            throw exceptions::invalid_request_exception(query_value_mismatch_message(source.family, deferred.function_name));
+            throw exceptions::invalid_request_exception(query_value_mismatch_message(source.family, deferred.function_name, deferred.clause));
         }
     }
 

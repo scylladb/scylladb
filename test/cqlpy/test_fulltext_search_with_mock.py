@@ -317,7 +317,7 @@ def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, ve
     vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
     cql.execute(stmt, ["hello", "hello", "hello"])
     # SELECT marker differs from ORDER BY marker: raises
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ["world", "hello", "hello"])
 
 
@@ -929,5 +929,5 @@ def test_highlight_bind_marker_mismatch_raises(cql, distinct_fts_table, vector_s
     vector_store_mock.set_next_highlight_response(200, highlight_response(["a"]))
     cql.execute(stmt, ["fox", "fox", "fox"])
 
-    with pytest.raises(InvalidRequest, match="BM25_HIGHLIGHT\\(\\) in SELECT must use the same search term"):
+    with pytest.raises(InvalidRequest, match="BM25_HIGHLIGHT\\(\\) in SELECT must match a BM25 search in ORDER BY, with the same column and search term; the search term differs"):
         cql.execute(stmt, ["dog", "fox", "fox"])

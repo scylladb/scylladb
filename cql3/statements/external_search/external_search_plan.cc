@@ -43,22 +43,43 @@ secondary_index::index index_for(functions::search_family family, data_dictionar
     std::unreachable();
 }
 
-sstring no_search_message(const functions::external_search_function& fun) {
-    switch (fun.family()) {
-    case functions::search_family::ann:
-        return seastar::format("{}() is not supported in the SELECT clause without a matching ANN ordering", fun.display_name());
-    case functions::search_family::bm25:
-        return seastar::format("{}() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses", fun.display_name());
+std::string_view clause_name(search_clause clause) {
+    switch (clause) {
+    case search_clause::ordering:
+        return "ORDER BY";
+    case search_clause::selectors:
+        return "SELECT";
+    case search_clause::restrictions:
+        return "WHERE";
     }
     std::unreachable();
 }
 
-sstring column_mismatch_message(const functions::external_search_function& fun) {
+/// The rejection of a call in SELECT or WHERE when ORDER BY has no search of its family. In WHERE
+/// the call is named after its family, the relation arriving rewritten to the score function (see
+/// prepare_external_search_relation_lhs()); an ANN relation is rejected before it gets here.
+sstring no_search_message(const functions::external_search_function& fun, search_clause clause) {
     switch (fun.family()) {
     case functions::search_family::ann:
-        return seastar::format("{}() in SELECT must reference the same column as the ANN ordering", fun.display_name());
+        return seastar::format("{}() in {} must match an ANN search in ORDER BY, with the same column and query vector; "
+                "ORDER BY has no ANN search", fun.display_name(), clause_name(clause));
     case functions::search_family::bm25:
-        return seastar::format("{}() in SELECT must reference the same column as BM25() in WHERE and ORDER BY", fun.display_name());
+        return seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
+                "ORDER BY has no BM25 search", clause == search_clause::restrictions ? "BM25" : fun.display_name(), clause_name(clause));
+    }
+    std::unreachable();
+}
+
+/// The same, when ORDER BY searches the family, but on another column.
+sstring column_mismatch_message(const functions::external_search_function& fun, search_clause clause, const column_definition& column) {
+    switch (fun.family()) {
+    case functions::search_family::ann:
+        return seastar::format("{}() in {} must match an ANN search in ORDER BY, with the same column and query vector; "
+                "ORDER BY has no ANN search on column {}", fun.display_name(), clause_name(clause), column.name_as_cql_string());
+    case functions::search_family::bm25:
+        return seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
+                "ORDER BY has no BM25 search on column {}", clause == search_clause::restrictions ? "BM25" : fun.display_name(),
+                clause_name(clause), column.name_as_cql_string());
     }
     std::unreachable();
 }
@@ -81,12 +102,20 @@ bool has_other_restrictions(const restrictions::select_restrictions& restriction
 
 } // anonymous namespace
 
-sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name) {
+sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name, search_clause clause) {
+    // A column is searched once per query, so two ORDER BY calls on one column are one search and
+    // have to agree; a call anywhere else has to agree with the search ORDER BY introduced.
     switch (family) {
     case functions::search_family::ann:
-        return seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", function_name);
+        return clause == search_clause::ordering
+                ? seastar::format("{}() in ORDER BY must use the same query vector as the other ANN calls on the same column", function_name)
+                : seastar::format("{}() in {} must match an ANN search in ORDER BY, with the same column and query vector; "
+                        "the query vector differs", function_name, clause_name(clause));
     case functions::search_family::bm25:
-        return seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", function_name);
+        return clause == search_clause::ordering
+                ? seastar::format("{}() in ORDER BY must use the same search term as the other BM25 calls on the same column", function_name)
+                : seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
+                        "the search term differs", clause == search_clause::restrictions ? "BM25" : function_name, clause_name(clause));
     }
     std::unreachable();
 }
@@ -108,10 +137,6 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
         return source.family == fun.family() && source.column == column;
     });
     if (it == _sources.end()) {
-        if (clause == search_clause::restrictions) {
-            throw exceptions::invalid_request_exception(seastar::format(
-                    "{}() in WHERE names a search that the ORDER BY clause does not run", fun.display_name()));
-        }
         if (clause == search_clause::ordering) {
             _sources.push_back(search_source{
                     .family = fun.family(),
@@ -121,8 +146,10 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
             });
             return _sources.back();
         }
+        // Any call of the family on the column in ORDER BY introduces the search.
         const bool on_another_column = find(fun.family()) != nullptr;
-        throw exceptions::invalid_request_exception(on_another_column ? column_mismatch_message(fun) : no_search_message(fun));
+        throw exceptions::invalid_request_exception(
+                on_another_column ? column_mismatch_message(fun, clause, *column) : no_search_message(fun, clause));
     }
     auto* source = &*it;
 
@@ -134,14 +161,14 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
     const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name()));
+            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name(), clause));
         }
         // A selector's value is taken out of the selector tree, so nothing else registers its bind
         // markers. The ORDER BY clause was registered whole by select_statement::prepare().
         if (clause == search_clause::selectors) {
             expr::fill_prepare_context(query_value, _ctx);
         }
-        source->deferred.push_back({std::move(query_value), sstring(fun.display_name())});
+        source->deferred.push_back({std::move(query_value), sstring(fun.display_name()), clause});
     }
     return *source;
 }
@@ -228,6 +255,12 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
         const auto& fc = expr::as<expr::function_call>(binop.lhs);
         const auto* fun = functions::as_external_search_function(fc);
         throwing_assert(fun);
+        // Threshold filtering, WHERE ANN(column, query_vector) > score, is not implemented, whatever
+        // the ORDER BY clause. The message names no function: the user's ANN() arrives here as
+        // ANN_SCORE() (see prepare_external_search_relation_lhs()).
+        if (fun->family() == functions::search_family::ann) {
+            throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
+        }
         search_of(fc, *fun, search_clause::restrictions);
     }
     if (_sources.empty()) {
@@ -237,12 +270,7 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
     auto& source = _sources.front();
     switch (source.family) {
     case functions::search_family::ann:
-        // Threshold filtering, WHERE ANN(column, query_vector) > score, is not implemented. The
-        // message names no function: the user's ANN() arrives here as ANN_SCORE() (see
-        // prepare_external_search_relation_lhs()).
-        if (!scoring.empty()) {
-            throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
-        }
+        // Its relations were rejected above.
         return;
     case functions::search_family::bm25:
         if (scoring.empty()) {

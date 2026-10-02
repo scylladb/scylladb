@@ -469,7 +469,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         rows = list(cql.execute(stmt, [ANN_QUERY_VECTOR, ANN_QUERY_VECTOR]))
         assert [row.id for row in rows] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9], ANN_QUERY_VECTOR])
 
         # Case 2: the call the marker was written in is the one replaced with a temporary, so the
@@ -481,7 +481,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         assert [row.id for row in cql.execute(stmt, [ANN_QUERY_VECTOR])] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
         # Case 3: here the ordering's own expression is what mentions the marker.
@@ -492,7 +492,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         assert [row.id for row in cql.execute(stmt, [ANN_QUERY_VECTOR])] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
 
@@ -576,7 +576,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
         for row, d_row in zip(rows, data[:2]):
             assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9], ANN_QUERY_VECTOR])
 
         # Case 2
@@ -590,7 +590,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
         for row, d_row in zip(rows, data[:2]):
             assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
 

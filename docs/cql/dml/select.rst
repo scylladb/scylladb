@@ -415,9 +415,10 @@ index gave the row, and the row's **rank**, its position in the index's result c
       FROM ImageEmbeddings
       ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
-All three describe the search the rows are ranked by, so each is only accepted in a query that
-already orders by an ANN clause, and every occurrence must name the same column and the same query
-vector as that clause. A query using several of them still makes a single request.
+All three describe the search the rows are ranked by, so each is only accepted in a query whose
+``ORDER BY`` clause has an ANN search, in either form, on the same column, and every occurrence must
+use the same query vector as that search. A query using several of them still makes a single
+request.
 
 An index configured for :ref:`rescoring <create-vector-index-statement>` recomputes the similarity
 on the coordinator and reorders the rows by it, so the rank the Vector Store gave them no longer
@@ -522,10 +523,10 @@ Return the score and the rank of each row::
 **rank**, its position in the index's result counted from 1. ``BM25_SCORE()`` and ``BM25_RANK()``
 return the two values on their own.
 
-All three describe the search the rows are ranked by, so each is only accepted in a query that
-already has the required ``WHERE`` and ``ORDER BY`` clauses, and every occurrence must reference the
-same column and the same search term. ``WHERE BM25(...) > 0`` compares the score, and is the same
-as ``WHERE BM25_SCORE(...) > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause.
+All three describe the search the rows are ranked by, so each is only accepted in a query whose
+``ORDER BY`` clause has a BM25 search on the same column, and every occurrence must use the same
+search term as that search. ``WHERE BM25(...) > 0`` compares the score, and is the same as
+``WHERE BM25_SCORE(...) > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause.
 
 The ``BM25()`` operator is not a reserved word. If a user-defined function named
 ``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
