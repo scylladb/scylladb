@@ -98,7 +98,7 @@ static rjson::value get_table_creation_parameters(const rjson::value& request) {
     return accepted;
 }
 
-import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat, db::tablets_mode_t::mode tablets_mode) {
+import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat) {
     // Documented as optional, but DynamoDB requires it.
     auto client_token = get_non_empty_string_attribute(request, "ClientToken");
     if (!is_valid_client_token(client_token)) {
@@ -132,7 +132,7 @@ import_table_request parse_import_table_request(const rjson::value& request, con
     }
 
     auto table_creation_parameters = get_table_creation_parameters(request);
-    auto validated_table_params = validate_create_table_request(table_creation_parameters, feat, tablets_mode, "ImportTable");
+    auto validated_table_params = validate_create_table_request(table_creation_parameters, feat, "ImportTable");
     // FIXME: commit_table_creation()'s checks of the table's keyspace (vector indexes need
     // tablets, RF-rack validity, object storage) are deferred until the table is created.
 
@@ -226,8 +226,7 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // As on DynamoDB, everything is validated before the ClientToken is
     // looked up: a replay with invalid parameters fails even if its token
     // is known.
-    import_table_request parsed = parse_import_table_request(request, _proxy.features(),
-            _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces());
+    import_table_request parsed = parse_import_table_request(request, _proxy.features());
 
     // If there is an import with this token return it, even when parameters differ.
     auto import_description = co_await get_in_progress_import_description(parsed.client_token);
