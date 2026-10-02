@@ -4482,7 +4482,7 @@ void max_ongoing_compaction_fn(test_env& env) {
     std::vector<table_for_tests> tables;
     auto stop_tables = defer([&tables] noexcept {
         for (auto& t : tables) {
-            t->stop().get();
+            t.stop().get();
         }
     });
 
@@ -5915,7 +5915,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         std::vector<utils::observer<sstable&>> observers;
         // Signaled from the _on_closed handler below once every sstable has closed.
         // Neither this nor `observers` capture `t`, so both can safely stay connected
-        // through t->stop()/~t below -- which is exactly where a straggling transient
+        // through t.stop()/~t below -- which is exactly where a straggling transient
         // sstable reference (held by compaction/table bookkeeping outside this
         // function's control) is expected to be dropped, firing a delayed _on_closed.
         seastar::condition_variable sstables_closed_cv;
@@ -5951,7 +5951,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         // happened must fail the test rather than spin here forever.
         BOOST_REQUIRE_EQUAL(sstables_deleted, sstables_nr);
 
-        t->stop().get();
+        t.stop().get();
 
         // Unlike _on_delete, _on_closed is raised from sstable::close_files(), which only
         // runs once every shared_sstable reference has been dropped -- possibly only just
