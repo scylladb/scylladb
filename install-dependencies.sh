@@ -150,6 +150,29 @@ fedora_packages=(
     # test.py re-execs itself under `uv run --locked` against
     # test/pyproject.toml (see _ensure_running_under_uv() in test.py)
     uv
+
+    # Seastar's dependencies, in place of seastar/install-dependencies.sh, which also
+    # pulls in doxygen and lttng; fmt and c-ares come from submodules, gcc via clang.
+    boost-devel
+    cmake
+    gnutls-devel
+    hwloc-devel
+    libatomic
+    liburing-devel
+    lksctp-tools-devel
+    ninja-build
+    openssl
+    protobuf-compiler
+    protobuf-devel
+    ragel
+    systemtap-sdt-devel
+    xfsprogs-devel
+    # gnutls's private dependency, for linking Seastar statically
+    libunistring-devel
+    # ./configure.py --enable-dpdk
+    meson
+    numactl-devel
+    python3-pyelftools
 )
 
 fedora_python3_packages=(
@@ -304,7 +327,10 @@ fi
 
 umask 0022
 
-./seastar/install-dependencies.sh
+# Fedora lists Seastar's dependencies in fedora_packages.
+if [ "$ID" != "fedora" ]; then
+    ./seastar/install-dependencies.sh
+fi
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
