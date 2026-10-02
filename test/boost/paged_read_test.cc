@@ -344,6 +344,25 @@ SEASTAR_THREAD_TEST_CASE(test_witness_of_digest_of_omitted_partition) {
     });
 }
 
+// A case which catches a defect of a DISTINCT query with filtering. The
+// filtering pager sets the per-partition limit of each read command to the
+// page size. If the per-partition limit of a DISTINCT read overrides its
+// limit of one row, the replica returns two rows of the partition, and the
+// query returns the partition twice.
+SEASTAR_THREAD_TEST_CASE(test_witness_of_distinct_with_filtering) {
+    const read_case witness{
+        placed_history{
+            {row_marker_write{1, 1, 1, lifetime::permanent}, 0b1},
+            {row_marker_write{1, 2, 2, lifetime::permanent}, 0b1},
+        },
+        select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::pk, comparison::gt, 0}}},
+        read_options{.replica_count = 1, .page_size = 100},
+    };
+    with_harness([&] (harness& hs) {
+        run_and_check(hs, witness);
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.

@@ -145,8 +145,10 @@ std::string describe(const history& h);
 // A random valid history. Tests shouldn't make other assumptions about it.
 history random_history(size_t max_writes = 12);
 
-// A non-key column which a query can filter on.
-enum class column { s, v1, v2 };
+// A column which a query can filter on: a non-key column, or the partition
+// key. A restriction on the partition key which is not part of the list of
+// partitions requires filtering, except an equality.
+enum class column { s, v1, v2, pk };
 
 enum class comparison { eq, lt, gt };
 
@@ -184,8 +186,10 @@ struct select_query {
 
 // Throws std::invalid_argument if the model does not support `q`.
 //
-// A DISTINCT query can only select the static column and have a limit. A
-// query with a partition limit cannot filter, because a read command counts
+// A DISTINCT query can only select the static column, filter on the
+// partition key and have a limit. A query can have at most one restriction
+// on the partition key, and only if it does not list its partitions. A query
+// with a partition limit cannot filter, because a read command counts
 // partitions before filtering. A list of partitions cannot be empty, and its
 // keys must be distinct. The clustering range cannot be empty, and the limits
 // must be positive.
