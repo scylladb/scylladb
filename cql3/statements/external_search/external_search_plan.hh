@@ -61,8 +61,6 @@ struct search_source {
     /// the index, and the third is computed by the coordinator from the stored vector.
     external_search::search_temporaries temporaries;
     std::vector<deferred_query_value> deferred;
-    /// BM25 only: the WHERE clause's term, likewise compared by execution.
-    std::optional<expr::expression> deferred_where_term;
 
     /// True for a vector index that reports a quantized similarity: the coordinator recomputes it
     /// and reorders the rows by it.
@@ -130,6 +128,11 @@ private:
     /// The search the call `fc` refers to, by family and column. In ORDER BY a call with no
     /// matching search adds one; elsewhere it is an error.
     search_source& search_of(const expr::function_call& fc, const functions::external_search_function& fun, search_clause clause);
+
+    /// Rejects `query_value`, written in `clause`, if it differs from the one `source` runs with,
+    /// or leaves the comparison to execution if a bind marker hides the difference.
+    void check_query_value(search_source& source, expr::expression query_value, const functions::external_search_function& fun,
+            search_clause clause);
 
     /// The expression that replaces `call_expr`: a read of the temporary the value is delivered in,
     /// or the similarity the coordinator computes itself for a rescoring index.

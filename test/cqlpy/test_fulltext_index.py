@@ -661,7 +661,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
 
 def test_bm25_different_search_terms_rejected(cql, fulltext_table):
     """WHERE BM25 and ORDER BY BM25 with different search terms must be rejected."""
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; the search term differs")):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'world') LIMIT 1")
 
 

@@ -95,9 +95,6 @@ query_value evaluate_query_value(const search_source& source, const query_option
         throw exceptions::invalid_request_exception(seastar::format("Unsupported null value for column {}", source.column->name_as_text()));
     }
 
-    if (source.deferred_where_term && expr::evaluate(*source.deferred_where_term, options) != value) {
-        throw exceptions::invalid_request_exception("Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
-    }
     for (const auto& deferred : source.deferred) {
         if (expr::evaluate(deferred.value, options) != value) {
             throw exceptions::invalid_request_exception(query_value_mismatch_message(source.family, deferred.function_name, deferred.clause));

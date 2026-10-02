@@ -151,26 +151,31 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
         throw exceptions::invalid_request_exception(
                 on_another_column ? column_mismatch_message(fun, clause, *column) : no_search_message(fun, clause));
     }
-    auto* source = &*it;
+    auto& source = *it;
 
-    if (clause == search_clause::restrictions) {
-        // The relation's query value is compared by the family's own restriction check.
-        return *source;
+    // A relation's query value is compared once the family has checked the relation's form.
+    if (clause != search_clause::restrictions) {
+        check_query_value(source, std::move(query_value), fun, clause);
     }
+    return source;
+}
 
-    const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
-    if (values_equal != external_search::equality::always) {
-        if (values_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name(), clause));
-        }
-        // A selector's value is taken out of the selector tree, so nothing else registers its bind
-        // markers. The ORDER BY clause was registered whole by select_statement::prepare().
-        if (clause == search_clause::selectors) {
-            expr::fill_prepare_context(query_value, _ctx);
-        }
-        source->deferred.push_back({std::move(query_value), sstring(fun.display_name()), clause});
+void external_search_plan::check_query_value(search_source& source, expr::expression query_value,
+        const functions::external_search_function& fun, search_clause clause) {
+    const auto values_equal = external_search::unevaluated_equality(query_value, source.query_value);
+    if (values_equal == external_search::equality::always) {
+        return;
     }
-    return *source;
+    if (values_equal == external_search::equality::never) {
+        throw exceptions::invalid_request_exception(query_value_mismatch_message(source.family, fun.display_name(), clause));
+    }
+    // A selector's value is taken out of the selector tree, so nothing else registers its bind
+    // markers. The ORDER BY clause was registered whole by select_statement::prepare(), and a WHERE
+    // relation with the restrictions.
+    if (clause == search_clause::selectors) {
+        expr::fill_prepare_context(query_value, _ctx);
+    }
+    source.deferred.push_back({std::move(query_value), sstring(fun.display_name()), clause});
 }
 
 expr::expression external_search_plan::replacement_for(const functions::external_search_function& fun,
@@ -279,7 +284,11 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
         if (scoring.size() > 1) {
             throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
         }
-        source.deferred_where_term = bm25_search::validate_restriction(scoring.front(), source.query_value);
+        const auto& relation = scoring.front();
+        bm25_search::validate_restriction(relation);
+        const auto& fc = expr::as<expr::function_call>(relation.lhs);
+        const auto& fun = *functions::as_external_search_function(fc);
+        check_query_value(source, external_search::extract_call_arguments(fc, fun.display_name()).second, fun, search_clause::restrictions);
         if (has_other_restrictions(restrictions)) {
             throw exceptions::invalid_request_exception("Full-text search queries do not support additional WHERE restrictions");
         }

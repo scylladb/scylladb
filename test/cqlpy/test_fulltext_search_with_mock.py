@@ -12,6 +12,7 @@
 ###############################################################################
 
 import json
+import re
 
 import pytest
 from cassandra.protocol import InvalidRequest
@@ -114,12 +115,12 @@ def test_bm25_mixed_constant_and_bind_marker_search_term(cql, fts_setup_with_moc
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ['world'])
     cql.execute(stmt, ['hello'])
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ['world'])
     cql.execute(stmt, ['hello'])
 
@@ -129,7 +130,7 @@ def test_bm25_two_bind_markers_search_term(cql, fts_setup_with_mock):
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; the search term differs")):
         cql.execute(stmt, ['hello', 'world'])
     cql.execute(stmt, ['hello', 'hello'])
 
