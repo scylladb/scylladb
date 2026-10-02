@@ -440,30 +440,35 @@ public:
         auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media",
                 _bucket, seastar::http::internal::url_encode(_object_name), _generation);
         auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
-        size_t result = 0;
+        // The request may be retried with this same handler after it has run, when it
+        // fails afterwards, so the handler only keeps the reply of its own attempt --
+        // dropping a failed attempt's before reading its own -- and the reply is copied
+        // to the buffer once the request succeeded.
+        std::vector<temporary_buffer<char>> received;
         co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
                 [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
+                    received.clear();
                     if (rep._status != seastar::http::reply::status_type::ok
                             && rep._status != seastar::http::reply::status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
-                    auto bufs = co_await util::read_entire_stream(in);
-                    const bool inject_reset = inject_reset_after_partial_read(bufs);
-                    auto dst = reinterpret_cast<char*>(buffer);
-                    for (auto& buf : bufs) {
-                        auto n = std::min(buf.size(), len - result);
-                        std::copy_n(buf.get(), n, dst + result);
-                        result += n;
-                        _impl->count_read_bytes(n);
-                    }
-                    if (inject_reset) {
+                    received = co_await util::read_entire_stream(in);
+                    if (inject_reset_after_partial_read(received)) {
                         throw_injected_reset();
                     }
                 },
                 httpclient::method_type::GET,
                 rest::key_values({{ RANGE, range }}),
                 _as);
+        size_t result = 0;
+        auto dst = reinterpret_cast<char*>(buffer);
+        for (auto& buf : received) {
+            auto n = std::min(buf.size(), len - result);
+            std::copy_n(buf.get(), n, dst + result);
+            result += n;
+            _impl->count_read_bytes(n);
+        }
         co_return result;
     }
 
@@ -1102,25 +1107,22 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
             );
             auto range = fmt::format("bytes={}-{}", s.position, s.position+to_read-1); // inclusive range
 
+            // The request may be retried with this same handler after it has run, when it
+            // fails afterwards, so the handler only keeps the reply of its own attempt --
+            // dropping a failed attempt's before reading its own -- and the reply is added
+            // to the state once the request succeeded.
+            std::vector<temporary_buffer<char>> received;
             co_await _impl->send_with_retry(path
                 , GCP_OBJECT_SCOPE_READ_ONLY
                 , ""s
                 , ""s
                 , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
+                    received.clear();
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = s.position;
-                    // ensure these are on our coroutine frame.
-                    auto bufs = co_await util::read_entire_stream(in);
-                    const bool inject_reset = inject_reset_after_partial_read(bufs);
-                    for (auto&& buf : bufs) {
-                        s.position += buf.size();
-                        _impl->count_read_bytes(buf.size());
-                        s.buffers.emplace_back(std::move(buf));
-                    }
-                    gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
-                    if (inject_reset) {
+                    received = co_await util::read_entire_stream(in);
+                    if (inject_reset_after_partial_read(received)) {
                         throw_injected_reset();
                     }
                 }
@@ -1128,6 +1130,13 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , rest::key_values({ { RANGE, range } })
                 , _as
             );
+            auto old = s.position;
+            for (auto&& buf : received) {
+                s.position += buf.size();
+                _impl->count_read_bytes(buf.size());
+                s.buffers.emplace_back(std::move(buf));
+            }
+            gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
         }
     }
 
