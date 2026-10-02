@@ -2317,6 +2317,17 @@ future<executor::request_return_type> executor::commit_table_creation(
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
 
+        // The tag only configures a keyspace Alternator creates, so refuse one an existing keyspace contradicts.
+        // A tag asking for tablets in an existing keyspace using them doesn't change its tablet count either.
+        if (existing_ks && tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
+            const bool tag_asks_for_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
+            if (tag_asks_for_tablets != ksm->uses_tablets()) {
+                co_return api_error::validation(fmt::format("Tag {} asks for {}, but table {} goes into the existing keyspace {}, which uses {}",
+                        INITIAL_TABLETS_TAG_KEY, tag_asks_for_tablets ? "tablets" : "vnodes", table_name, keyspace_name,
+                        ksm->uses_tablets() ? "tablets" : "vnodes"));
+            }
+        }
+
         // Derived from the pre-built schema on every attempt, so that a retry
         // resolving a vnodes keyspace leaves the flag out.
         schema_ptr table_schema = schema;
