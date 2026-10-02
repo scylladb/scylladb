@@ -1645,7 +1645,7 @@ async def test_corrupted_segment(manager: ScyllaClusterManager):
     # Wait for hint sender to notice the corruption.
     victim_filename = re.escape(os.path.basename(victim_segment))
     await log.wait_for(f"Segment error in .*{victim_filename}",
-                       f"Segment .*{victim_filename} has been sent in full and deleted",
+                       f"Corrupted segment .*{victim_filename} has been deleted",
                        from_mark=mark)
 
     all_metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
@@ -1794,7 +1794,10 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
 
     # Let hint sender process the segment again.
     await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
-    await log.wait_for(f"Segment .*{victim_filename} has been sent in full and deleted", from_mark=mark)
+    await log.wait_for(f"Corrupted segment .*{victim_filename} has been deleted", from_mark=mark)
+    # The segment should still be reported only once.
+    corrupted_files = await get_hint_metrics(manager.metrics, node1.ip_addr, "corrupted_files")
+    assert corrupted_files == 1, f"Unexpected value of corrupted_files metric: {corrupted_files}"
 
     # Make sure the segment is really gone.
     assert not os.path.isfile(victim_segment)
