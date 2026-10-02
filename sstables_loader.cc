@@ -1237,6 +1237,8 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     };
 }
 
+static constexpr auto restore_tablets_task_type = "restore_tablets";
+
 class tablet_restore_progress {
     replica::database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
@@ -1296,75 +1298,6 @@ public:
     future<> stop() noexcept {
         _progress_update_timer.cancel();
         co_await _gate.close();
-    }
-};
-
-class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
-    sharded<sstables_loader>& _loader;
-    table_id _tid;
-    sstring _snap_name;
-    size_t _tablet_count;
-    // Pre-restore tablet hints, recovered by restore_tablets() from the schema
-    // persisted in system_distributed.snapshot_tables; run() alters the table
-    // back to them once the restore is done.
-    std::optional<size_t> _original_min_tablet_count;
-    std::optional<size_t> _original_max_tablet_count;
-    tablet_restore_progress _progress;
-
-public:
-    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name, manifest_summary ms,
-            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) noexcept
-        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-        , _loader(loader)
-        , _tid(std::move(tid))
-        , _snap_name(std::move(snap_name))
-        , _tablet_count(ms.tablet_count)
-        , _original_min_tablet_count(original_min_tablet_count)
-        , _original_max_tablet_count(original_max_tablet_count)
-        , _progress(loader.local()._db.local(), loader.local()._sys_dist_ks, _tid, _snap_name, ms.nr_sstables)
-    {
-        _status.progress_units = "sstables";
-    }
-
-    virtual std::string type() const override {
-        return "restore_tablets";
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::no;
-    }
-
-    virtual tasks::is_user_task is_user_task() const noexcept override {
-        return tasks::is_user_task::yes;
-    }
-
-    tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    void abort() noexcept override {
-        tasks::task_manager::task::impl::abort();
-        // Closing the restore sessions makes the in-flight download RPCs fail and the
-        // topology coordinator clear the restore transitions, which lets run() (waiting
-        // on the topology request) return. Fire-and-forget: the task's own abort source,
-        // already triggered above, surfaces the abort_requested error to the caller.
-        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
-            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
-        });
-    }
-
-    future<tasks::task_manager::task::progress> get_progress() const override {
-        co_return _progress.get();
-    }
-
-    future<> release_resources() noexcept override {
-        return _progress.stop();
-    }
-
-protected:
-    virtual future<> run() override {
-        return _loader.local().do_restore_tablets(_progress, _tid, _snap_name, _tablet_count, _original_min_tablet_count, _original_max_tablet_count);
     }
 };
 
@@ -1482,7 +1415,32 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     }
     auto original_hints = original_schema->tablet_options();
 
-    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>(tasks::make_empty_task_info(), container(), keyspace, tid, std::move(snap_name), summary,
-            original_hints.min_tablet_count, original_hints.max_tablet_count);
+    auto progress = make_lw_shared<tablet_restore_progress>(_db.local(), _sys_dist_ks, tid, snap_name, summary.nr_sstables);
+    tasks::task_manager::task_builder task_builder{_task_manager_module, restore_tablets_task_type};
+    task_builder.set_scope("node")
+                .set_keyspace(keyspace)
+                .set_progress_units("sstables")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] {
+                    return make_ready_future<tasks::task_manager::task::progress>(progress->get());
+                })
+                .set_abort_fn([this, tid] (abort_source&) noexcept {
+                    // Closing the restore sessions makes the in-flight download RPCs fail and the
+                    // topology coordinator clear the restore transitions, which lets the action (waiting
+                    // on the topology request) return. Fire-and-forget: the task's own abort source,
+                    // already triggered, surfaces the abort_requested error to the caller.
+                    (void)_ss.local().abort_restore_tablets(tid).handle_exception([tid] (std::exception_ptr ex) {
+                        llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+                    });
+                })
+                .set_finalizer([progress] () noexcept {
+                    return progress->stop();
+                });
+    auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
+            original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
+        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
+    });
     co_return task->id();
 }

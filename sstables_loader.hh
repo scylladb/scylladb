@@ -181,8 +181,6 @@ public:
     replica::database& local_db() {
         return _db.local();
     }
-
-    class tablet_restore_task_impl;
 };
 
 template <>
