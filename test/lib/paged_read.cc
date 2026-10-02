@@ -366,6 +366,12 @@ class coordinator {
         }
     }
 
+    // The digest algorithm which the replicas use, like storage_proxy's
+    // digest_algorithm().
+    query::digest_algorithm digest_algorithm() const {
+        return _opts.read_frontiers ? query::digest_algorithm::xxHash_without_empty_partitions : query::digest_algorithm::xxHash;
+    }
+
     // Whether a read of `cmd` from `replica` uses the legacy reversed format.
     bool legacy_format(size_t replica, const query::read_command& cmd) const {
         return cmd.slice.is_reversed() && !_opts.native_reverse_queries && _local_replica != replica;
@@ -621,7 +627,7 @@ class coordinator {
         // The data requests also ask for a digest when there is more than one
         // replica, like abstract_read_executor::make_requests().
         const auto data_opts = targets > 1
-                ? query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash}
+                ? query::result_options{query::result_request::result_and_digest, digest_algorithm()}
                 : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         struct first_round_reply {
             size_t replica;
@@ -636,7 +642,7 @@ class coordinator {
                         describe(s, data->last_position()));
                 first_round.push_back({i, true, std::move(data)});
             } else {
-                auto digest = read_data(i, query_schema, *cmd, query::result_options::only_digest(query::digest_algorithm::xxHash), range);
+                auto digest = read_data(i, query_schema, *cmd, query::result_options::only_digest(digest_algorithm()), range);
                 // Like storage_proxy::query_result_local_digest(), the reply
                 // omits the short-read flag. Only the trace shows it. A
                 // digest result does not count its rows.
@@ -980,6 +986,9 @@ outcome harness::run(const read_case& c) {
     if (opts.native_reverse_queries && !opts.empty_replica_mutation_pages) {
         throw std::invalid_argument("A cluster which enables native_reverse_queries also enables empty_replica_mutation_pages");
     }
+    if (opts.read_frontiers && !opts.native_reverse_queries) {
+        throw std::invalid_argument("A cluster which enables read_frontiers also enables native_reverse_queries");
+    }
     if (opts.apply_repairs && opts.querier_cache) {
         throw std::invalid_argument("A case which applies repairs cannot keep queriers, because a cached querier reads the contents from before a repair");
     }
@@ -1192,6 +1201,14 @@ read_case harness::shrink(read_case c) {
             candidate.options.native_reverse_queries = true;
             try_candidate(std::move(candidate));
         }
+        if (!c.options.read_frontiers) {
+            auto candidate = c;
+            candidate.options.read_frontiers = true;
+            candidate.options.native_reverse_queries = true;
+            candidate.options.empty_replica_mutation_pages = true;
+            candidate.options.empty_replica_pages = true;
+            try_candidate(std::move(candidate));
+        }
         if (c.query.limit) {
             auto candidate = c;
             candidate.query.limit.reset();
@@ -1253,6 +1270,9 @@ auto fmt::formatter<tests::paged_read::read_options>::format(const tests::paged_
     }
     if (!o.native_reverse_queries) {
         fields.push_back(".native_reverse_queries = false");
+    }
+    if (!o.read_frontiers) {
+        fields.push_back(".read_frontiers = false");
     }
     if (o.querier_cache) {
         fields.push_back(".querier_cache = true");
