@@ -1347,7 +1347,7 @@ SEASTAR_TEST_CASE(test_groups_quiescent_group_releases_on_flush_round) {
         const auto before = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
         BOOST_CHECK_EQUAL(before.idx, raft::index_t(0));
 
-        // What groups_manager's flush handler does on a (raft_groups, pos) round.
+        // What groups_manager's commit-externally handler does on a (raft_groups, pos) round.
         storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 
@@ -1487,7 +1487,7 @@ SEASTAR_TEST_CASE(test_groups_giving_up_a_command_free_segment_asks_for_nothing)
 // a round never repeats for the same segment. So the release gate also reads the
 // commitlog's own flush position; without that half of closed_up_to() a record
 // in this state is never releasable.
-SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_flush_position) {
+SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_commit_externally_position) {
     return do_with_cql_env_small_commitlog([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
@@ -1515,7 +1515,7 @@ SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_flush_position) {
         const auto filler_table = table_id(utils::UUID_gen::get_time_UUID());
         const auto payload = bytes(64 * 1024, int8_t('x'));
         std::vector<db::rp_handle> filler_held;
-        for (int written = 0; cl.flush_position().id <= record_segment; ++written) {
+        for (int written = 0; cl.commit_externally_position().id <= record_segment; ++written) {
             filler_held.push_back(co_await cl.add_mutation(filler_table, payload.size(),
                     db::commitlog::force_sync::no, [&payload](db::commitlog::output& dst) {
                 dst.write(reinterpret_cast<const char*>(payload.data()), payload.size());
@@ -1540,7 +1540,7 @@ SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_flush_position) {
 
 // A record released after its segment's flush round asks both of its tables to
 // flush, one position past the segment. The commitlog names a closed segment's
-// dirty tables exactly once (segment_manager::_flush_position), and this
+// dirty tables exactly once (segment_manager::_commit_externally_position), and this
 // record's descriptor enters the raft_groups memtable after that round, so
 // without the release's own request the segment stays on disk for good.
 SEASTAR_TEST_CASE(test_groups_release_after_the_round_asks_for_the_flush) {
@@ -1571,7 +1571,7 @@ SEASTAR_TEST_CASE(test_groups_release_after_the_round_asks_for_the_flush) {
         // Nothing has said the segment is closed, so nothing was released yet.
         BOOST_REQUIRE(flushes.requests.empty());
 
-        // The round, as groups_manager's flush handler reports it.
+        // The round, as groups_manager's commit-externally handler reports it.
         storage.mark_segment_closed(db::replay_position(
                 std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
 

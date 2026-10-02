@@ -263,9 +263,10 @@ public:
     future<> wait_for_pending_deletes() noexcept;
 
     /**
-     * A 'flush_handler' is invoked when the CL determines that size on disk has
-     * exceeded allowable threshold. It is called once for every currently active
-     * CF id with the highest replay_position which we would prefer to free "until".
+     * A 'commit_externally_handler' is invoked when size on disk has exceeded
+     * allowable threshold, or data exceeds its max lifetime. It is called once
+     * for every currently active CF id with the highest replay_position which
+     * we would prefer to free "until".
      * I.e. a the highest potentially freeable position in the CL.
      *
      * Whatever the callback does to help (or not) this desire is up to him.
@@ -273,28 +274,28 @@ public:
      * in the background.
      *
      */
-    typedef std::function<void(cf_id_type, replay_position)> flush_handler;
-    typedef uint64_t flush_handler_id;
+    typedef std::function<void(cf_id_type, replay_position)> commit_externally_handler;
+    typedef uint64_t commit_externally_handler_id;
 
-    class flush_handler_anchor {
+    class commit_externally_handler_anchor {
     public:
         friend class commitlog;
-        ~flush_handler_anchor();
-        flush_handler_anchor(flush_handler_anchor&&);
-        flush_handler_anchor(const flush_handler_anchor&) = delete;
+        ~commit_externally_handler_anchor();
+        commit_externally_handler_anchor(commit_externally_handler_anchor&&);
+        commit_externally_handler_anchor(const commit_externally_handler_anchor&) = delete;
 
-        flush_handler_id release(); // disengage anchor - danger danger.
+        commit_externally_handler_id release(); // disengage anchor - danger danger.
         void unregister();
 
     private:
-        flush_handler_anchor(commitlog&, flush_handler_id);
+        commit_externally_handler_anchor(commitlog&, commit_externally_handler_id);
 
         commitlog & _cl;
-        flush_handler_id _id;
+        commit_externally_handler_id _id;
     };
 
-    flush_handler_anchor add_flush_handler(flush_handler);
-    void remove_flush_handler(flush_handler_id);
+    commit_externally_handler_anchor add_commit_externally_handler(commit_externally_handler);
+    void remove_commit_externally_handler(commit_externally_handler_id);
 
     /**
      * Returns a vector of the segment names
@@ -396,10 +397,10 @@ public:
     // be replayed on the next reboot.
     replay_position min_position() const;
 
-    // How far the flush requests have got: every closed segment at or below this
-    // position has had its dirty tables asked to flush, and will not be asked again.
+    // How far the external commit requests have got: every closed segment at or below this
+    // position has had its dirty tables asked to commit externally, and will not be asked again.
     // Advanced after a round's handlers run, so a handler sees the previous value.
-    replay_position flush_position() const;
+    replay_position commit_externally_position() const;
 
     // For testing only. Returns the active segments current position
     // (ignoring chunk overhead etc)
