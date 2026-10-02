@@ -2161,6 +2161,9 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
 
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto& sg_stats = get_cql_sg_stats();
+    // Replaced by a copy marked as forwarded when a failed forward falls back to local execution.
+    service::client_state* cs = &client_state;
+    std::optional<service::client_state> fallback_client_state;
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
         version, permit, trace_state, init_trace, {}, dialect, sg_stats, request_start_timestamp, _memory_available));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
@@ -2171,7 +2174,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
         if (target_host == my_host_id) {
             // Shard bounce
             auto sg = _config.bounce_request_smp_service_group;
-            auto gcs = client_state.move_to_other_shard();
+            auto gcs = cs->move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
             msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
@@ -2205,9 +2208,31 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .cached_fn_calls = std::move(cached_fn_calls),
             };
 
-            auto response = co_await forward_cql(
+            auto group0_barrier = (*bounce_msg)->group0_barrier();
+            auto forwarded = co_await coroutine::as_future(forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
-                stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
+                stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished()));
+
+            if (forwarded.failed() && group0_barrier) {
+                // The group 0 leader went away before replying. Run the statement here
+                // as the local path would have; it waits for a new leader through Raft.
+                clogger.debug("Forwarding to {} failed: {}. Executing locally.", target_host, forwarded.get_exception());
+                fallback_client_state.emplace(client_state.move_to_other_shard().get(&_abort_source));
+                fallback_client_state->set_forwarded();
+                cs = &*fallback_client_state;
+                bytes_ostream linearization_buffer;
+                request_reader local_in(is, linearization_buffer);
+                msg = co_await coroutine::try_future(process_fn(*cs, _query_processor, local_in, stream, version, permit,
+                        trace_state, false, {}, dialect, sg_stats, request_start_timestamp, _memory_available));
+                continue;
+            }
+            auto response = forwarded.get();
+
+            if (group0_barrier) {
+                // Catch up with the leader so the change is applied here when the
+                // client gets the reply, as with local execution.
+                co_await _query_processor.invoke_on(0, [] (cql3::query_processor& qp) { return qp.group0_read_barrier(); });
+            }
 
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
