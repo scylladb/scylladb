@@ -2,6 +2,7 @@ add_library(vector_search STATIC)
 target_sources(vector_search
   PRIVATE
     vector_store_client.cc
+    hybrid_search.cc
     dns.cc
     client.cc
     clients.cc

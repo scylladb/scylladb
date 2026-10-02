@@ -40,6 +40,13 @@ static const function_name ANN_RANK_FUNCTION_NAME = function_name::native_functi
 /// The return type of BM25() and ANN(): tuple<float, int> holding (score, rank).
 data_type score_and_rank_type();
 
+/// RRF(ANN(...), BM25(...), ...) -> float: reciprocal-rank fusion of several searches' ranks.
+static const function_name RRF_FUNCTION_NAME = function_name::native_function("rrf");
+
+/// Creates the RRF function for a call with `arity` arguments. Variadic, so like the ANN family it
+/// is built per call site rather than declared once.
+shared_ptr<function> make_rrf_function(size_t arity);
+
 /// Whether `name` is one of the ANN family, whose argument types are not fixed but inferred from
 /// the call site.
 bool is_ann_function_name(const function_name& name);

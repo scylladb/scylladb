@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 namespace cql3 {
 namespace functions {
@@ -46,6 +47,20 @@ const external_search_function* as_external_search_function(const expr::function
     return dynamic_cast<const external_search_function*>(std::get<shared_ptr<function>>(fc.func).get());
 }
 
+namespace {
+
+const function_name& score_function_name(search_family family) {
+    switch (family) {
+    case search_family::ann:
+        return ANN_SCORE_FUNCTION_NAME;
+    case search_family::bm25:
+        return BM25_SCORE_FUNCTION_NAME;
+    }
+    std::unreachable();
+}
+
+} // anonymous namespace
+
 expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data_dictionary::database db, const schema& table_schema) {
     const auto* fc = expr::as_if<expr::function_call>(&lhs);
     const auto* fun = fc ? as_external_search_function(*fc) : nullptr;
@@ -69,9 +84,8 @@ expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data
     for (const auto& arg : fc->args) {
         provided_args.push_back(expr::as_assignment_testable(arg, expr::type_of(arg)));
     }
-    const auto& score_name = fun->family() == search_family::bm25 ? BM25_SCORE_FUNCTION_NAME : ANN_SCORE_FUNCTION_NAME;
     return expr::function_call{
-        .func = instance().get(db, table_schema.ks_name(), score_name, provided_args, table_schema.ks_name(), table_schema.cf_name(), nullptr),
+        .func = instance().get(db, table_schema.ks_name(), score_function_name(fun->family()), provided_args, table_schema.ks_name(), table_schema.cf_name(), nullptr),
         .args = fc->args,
         .lwt_cache_id = fc->lwt_cache_id,
     };
@@ -141,6 +155,36 @@ shared_ptr<function> make_bm25_highlight_function() {
     return ::make_shared<external_search_function>(
             BM25_HIGHLIGHT_FUNCTION_NAME.name, utf8_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
             search_value::fragment);
+}
+
+/// The constant k in reciprocal-rank fusion, sum(1 / (k + rank)) over the searches that found the
+/// row. It flattens the curve so that agreement between searches can outweigh one search's first
+/// place. 60 is the value from the original paper (Cormack, Clarke and Buettcher, 2009) and the one
+/// other implementations use.
+constexpr int32_t RRF_K = 60;
+
+shared_ptr<function> make_rrf_function(size_t arity) {
+    // rrf(hit, hit, ...) -> float, where each hit is the (score, rank) tuple ANN() or BM25() returns.
+    //
+    // Pure, unlike the search functions: it is an ordinary computation over its arguments.
+    return make_native_scalar_function<true>(RRF_FUNCTION_NAME.name, float_type,
+            std::vector<data_type>(arity, score_and_rank_type()),
+            [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
+        float score = 0.0f;
+        for (const auto& arg : args) {
+            if (!arg) {
+                continue;
+            }
+            auto hit = value_cast<tuple_type_impl::native_type>(score_and_rank_type()->deserialize(managed_bytes_view(*arg)));
+            // Only the rank is used: ranks are comparable between searches, scores are not. A null
+            // rank is a search that did not return the row.
+            if (hit.size() < 2 || hit[1].is_null()) {
+                continue;
+            }
+            score += 1.0f / static_cast<float>(RRF_K + value_cast<int32_t>(hit[1]));
+        }
+        return managed_bytes(float_type->decompose(score));
+    });
 }
 
 shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types) {

@@ -58,16 +58,17 @@ equality unevaluated_equality(const expr::expression& a, const expr::expression&
 /// keyed by primary key, and that is how it is matched to its row.
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema);
 
-/// The temporaries holding the score and the rank of one search. Each is allocated by the first
-/// SELECT call asking for that value and filled per row by values_provider from the
-/// index's response.
+/// The temporaries holding what one search reports: its score, its rank and, for a full-text
+/// search, a fragment. Each is allocated by the first call asking for that value, in SELECT or in
+/// an ORDER BY expression such as RRF(), and filled per row by values_provider from the index's
+/// response.
 struct search_temporaries {
     std::optional<size_t> score;
     std::optional<size_t> rank;
     /// Only a full-text search has a fragment to report; see search_value::fragment.
     std::optional<size_t> fragment;
 
-    /// True when the query returns some value of the search.
+    /// True when some call reads a value of the search, so its answer has to be matched to the rows.
     bool any() const {
         return score.has_value() || rank.has_value() || fragment.has_value();
     }
@@ -82,7 +83,7 @@ struct search_temporaries {
 /// A temporary that replaces a whole call carries the call in replaced_expr, so an unaliased
 /// selector still formats as the call. The two temporaries inside the tuple carry no call; see
 /// name_selector_as_written().
-expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+expr::expression search_call_replacement(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
         expr::temporary_allocator& allocator);
 
 /// Names an unaliased selector after `written`, the expression the user wrote, when what it was
