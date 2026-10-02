@@ -2344,6 +2344,13 @@ future<executor::request_return_type> executor::commit_table_creation(
             try {
                 locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
             } catch (const std::invalid_argument& ex) {
+                // The rack counts below hold only for the replication factor Alternator picks itself.
+                if (existing_ks) {
+                    co_return api_error::validation(fmt::format("{}: {}", view_builders.empty()
+                            ? "Tables using tablets require an RF-rack-valid keyspace when 'rf_rack_valid_keyspaces' is enabled"
+                            : "GlobalSecondaryIndexes and LocalSecondaryIndexes on a table using tablets require an RF-rack-valid keyspace",
+                            ex.what()));
+                }
                 if (!view_builders.empty()) {
                     co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
                         "using tablets require the number of racks in the cluster to be either 1 or 3"));
