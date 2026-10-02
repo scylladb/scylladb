@@ -204,6 +204,13 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates what the coordinator relies on in the replies of replicas:
+    // - the frontier of each reply, query::read_frontier, which states how far
+    //   the replica read. Older replicas do not send it;
+    // - query::digest_algorithm::xxHash_without_empty_partitions. Digests are
+    //   only comparable between replicas which use the same algorithm, so the
+    //   whole cluster must support it.
+    gms::feature read_frontiers { *this, "READ_FRONTIERS"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
