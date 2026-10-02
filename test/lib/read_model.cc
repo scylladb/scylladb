@@ -92,6 +92,7 @@ std::string_view column_name(column c) {
     case column::s: return "s";
     case column::v1: return "v1";
     case column::v2: return "v2";
+    case column::pk: return "pk";
     }
     std::abort();
 }
@@ -207,8 +208,9 @@ struct live_row {
     std::optional<int32_t> v2;
 };
 
-bool satisfies(const live_row& r, const predicate& p) {
-    const auto& value = p.col == column::s ? r.s : p.col == column::v1 ? r.v1 : r.v2;
+// Whether row `r` of partition `pk` satisfies `p`.
+bool satisfies(int32_t pk, const live_row& r, const predicate& p) {
+    const auto value = p.col == column::pk ? std::optional(pk) : p.col == column::s ? r.s : p.col == column::v1 ? r.v1 : r.v2;
     if (!value) {
         return false;
     }
@@ -248,11 +250,16 @@ std::vector<answer_row> partition_answer(int32_t pk, const partition_state& p, c
         }
     }
 
+    const auto accepted = [&] (const live_row& r) {
+        return std::ranges::all_of(q.filter, [&] (const predicate& p) { return satisfies(pk, r, p); });
+    };
+
     if (q.distinct) {
-        if (candidates.empty() && !s) {
+        const live_row row{std::nullopt, s, std::nullopt, std::nullopt};
+        if ((candidates.empty() && !s) || !accepted(row)) {
             return {};
         }
-        return {project(pk, live_row{std::nullopt, s, std::nullopt, std::nullopt}, q)};
+        return {project(pk, row, q)};
     }
 
     if (q.reversed) {
@@ -269,7 +276,7 @@ std::vector<answer_row> partition_answer(int32_t pk, const partition_state& p, c
         if (rows.size() == per_partition_limit) {
             break;
         }
-        if (std::ranges::all_of(q.filter, [&r] (const predicate& p) { return satisfies(r, p); })) {
+        if (accepted(r)) {
             rows.push_back(project(pk, r, q));
         }
     }
@@ -523,8 +530,13 @@ void validate(const select_query& q) {
     if (is_empty(q.ck_start, q.ck_end)) {
         throw std::invalid_argument(fmt::format("The clustering range of a query cannot be empty: {}", q));
     }
-    if (q.distinct && (q.ck_start || q.ck_end || q.reversed || q.select_v1 || q.select_v2 || !q.filter.empty() || q.per_partition_limit)) {
-        throw std::invalid_argument(fmt::format("A DISTINCT query can only select the static column and have a limit: {}", q));
+    const auto on_pk = [] (const predicate& p) { return p.col == column::pk; };
+    if (q.distinct && (q.ck_start || q.ck_end || q.reversed || q.select_v1 || q.select_v2 || !std::ranges::all_of(q.filter, on_pk)
+            || q.per_partition_limit)) {
+        throw std::invalid_argument(fmt::format("A DISTINCT query can only select the static column, filter on the partition key and have a limit: {}", q));
+    }
+    if (std::ranges::count_if(q.filter, on_pk) > (q.partitions ? 0 : 1)) {
+        throw std::invalid_argument(fmt::format("A query can restrict the partition key once, and only if it does not list its partitions: {}", q));
     }
     if (q.partition_limit && !q.filter.empty()) {
         throw std::invalid_argument(fmt::format("A query with a partition limit cannot filter: {}", q));
@@ -608,9 +620,18 @@ select_query random_query() {
     if (tests::random::get_int(0, 2) == 0) {
         q.limit = tests::random::get_int<uint64_t>(1, 4);
     }
+    // A restriction of the partition key, with a value from just below the
+    // keys to just above them.
+    const auto random_pk_predicate = [] {
+        const auto op = std::array{comparison::eq, comparison::lt, comparison::gt}[tests::random::get_int(0, 2)];
+        return predicate{column::pk, op, tests::random::get_int<int32_t>(0, 6)};
+    };
     if (q.distinct) {
         q.select_v1 = false;
         q.select_v2 = false;
+        if (!q.partitions && tests::random::get_int(0, 2) == 0) {
+            q.filter.push_back(random_pk_predicate());
+        }
         return q;
     }
     q.select_v1 = tests::random::get_bool();
@@ -621,7 +642,13 @@ select_query random_query() {
     q.reversed = q.partitions && q.partitions->size() == 1 && tests::random::get_bool();
     if (tests::random::get_int(0, 3) == 0) {
         for (int i = tests::random::get_int(1, 2); i > 0; --i) {
-            const auto col = std::array{column::s, column::v1, column::v2}[tests::random::get_int(0, 2)];
+            const auto col = std::array{column::s, column::v1, column::v2, column::pk}[tests::random::get_int(0, 3)];
+            if (col == column::pk) {
+                if (!q.partitions && std::ranges::none_of(q.filter, [] (const predicate& p) { return p.col == column::pk; })) {
+                    q.filter.push_back(random_pk_predicate());
+                }
+                continue;
+            }
             const auto op = std::array{comparison::eq, comparison::lt, comparison::gt}[tests::random::get_int(0, 2)];
             q.filter.push_back(predicate{col, op, tests::random::get_int<int32_t>(0, 9)});
         }

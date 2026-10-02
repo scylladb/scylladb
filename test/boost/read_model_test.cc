@@ -246,6 +246,12 @@ SEASTAR_THREAD_TEST_CASE(test_distinct) {
     with_limit.limit = 1;
     BOOST_REQUIRE_EQUAL(evaluate(*s, h, with_limit).size(), 1);
     BOOST_REQUIRE_EQUAL(evaluate(*s, h, with_limit).front(), evaluate(*s, h, distinct).front());
+
+    // A filter on the partition key keeps the rows of the partitions which
+    // it accepts.
+    auto pk_above_1 = distinct;
+    pk_above_1.filter = {{column::pk, comparison::gt, 1}};
+    BOOST_REQUIRE_EQUAL(evaluate(*s, h, pk_above_1), in_ring_order(*s, {{2, {{.pk = 2, .s = 6}}}, {3, {{.pk = 3}}}}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_order_and_limits) {
@@ -280,6 +286,10 @@ SEASTAR_THREAD_TEST_CASE(test_order_and_limits) {
     // The per-partition limit counts the rows which the filter accepts.
     const auto v1_above_10 = std::vector<predicate>{{column::v1, comparison::gt, 10}};
     BOOST_REQUIRE_EQUAL(evaluate(*s, h, select_query{.filter = v1_above_10, .per_partition_limit = 1}), in_ring_order(*s, {{1, {p1[1]}}, {2, {p2[0]}}}));
+
+    // A filter on the partition key accepts every row of its partitions.
+    const auto pk_below_2 = std::vector<predicate>{{column::pk, comparison::lt, 2}};
+    BOOST_REQUIRE_EQUAL(evaluate(*s, h, select_query{.filter = pk_below_2}), p1);
 }
 
 // A scan of the whole ring returns partitions in ring order, but CQL sorts the
@@ -302,6 +312,11 @@ SEASTAR_THREAD_TEST_CASE(test_invalid_inputs) {
     BOOST_REQUIRE_NO_THROW(validate(history{range_deletion{1, bound{2, true}, bound{2, true}, 1}}));
 
     BOOST_REQUIRE_THROW(validate(select_query{.distinct = true}), std::invalid_argument);
+    BOOST_REQUIRE_THROW(validate(select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::s, comparison::eq, 1}}}),
+            std::invalid_argument);
+    BOOST_REQUIRE_NO_THROW(validate(select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::pk, comparison::gt, 1}}}));
+    BOOST_REQUIRE_THROW(validate(select_query{.partitions = std::vector<int32_t>{1}, .filter = {{column::pk, comparison::gt, 1}}}), std::invalid_argument);
+    BOOST_REQUIRE_THROW(validate(select_query{.filter = {{column::pk, comparison::gt, 1}, {column::pk, comparison::lt, 3}}}), std::invalid_argument);
     BOOST_REQUIRE_THROW(validate(select_query{.partitions = std::vector<int32_t>{1, 1}}), std::invalid_argument);
     BOOST_REQUIRE_THROW(validate(select_query{.filter = {{column::v1, comparison::eq, 1}}, .partition_limit = 1}), std::invalid_argument);
     BOOST_REQUIRE_THROW(validate(select_query{.limit = 0}), std::invalid_argument);
@@ -320,6 +335,8 @@ SEASTAR_THREAD_TEST_CASE(test_to_cql) {
     BOOST_REQUIRE_EQUAL(to_cql(select_query{.ck_end = bound{3, true}}, "ks", "cf"), "SELECT pk, ck, s, v1, v2 FROM ks.cf WHERE ck <= 3 ALLOW FILTERING");
     BOOST_REQUIRE_EQUAL(to_cql(select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .limit = 1}, "ks", "cf"),
             "SELECT DISTINCT pk, s FROM ks.cf LIMIT 1");
+    BOOST_REQUIRE_EQUAL(to_cql(select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::pk, comparison::gt, 1}}}, "ks", "cf"),
+            "SELECT DISTINCT pk, s FROM ks.cf WHERE pk > 1 ALLOW FILTERING");
 }
 
 namespace {
@@ -392,7 +409,11 @@ std::vector<select_query> standard_queries(const std::vector<int32_t>& pks) {
         select_query{.distinct = true, .select_v1 = false, .select_v2 = false},
         select_query{.distinct = true, .select_s = false, .select_v1 = false, .select_v2 = false},
         select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .limit = 1},
+        select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::pk, comparison::gt, 1}}},
+        select_query{.distinct = true, .select_v1 = false, .select_v2 = false, .filter = {{column::pk, comparison::lt, 3}}, .limit = 1},
         select_query{.filter = {{column::v1, comparison::gt, 5}}},
+        select_query{.filter = {{column::pk, comparison::gt, 1}, {column::v1, comparison::gt, 5}}},
+        select_query{.filter = {{column::pk, comparison::eq, 2}}, .per_partition_limit = 1},
         select_query{.filter = {{column::s, comparison::eq, 5}}},
         select_query{.filter = {{column::v2, comparison::lt, 30}}, .per_partition_limit = 1},
         // In two_partitions(), the filter rejects the first row of partition 1.
