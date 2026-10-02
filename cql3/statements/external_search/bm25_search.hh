@@ -41,8 +41,9 @@ void validate_restriction(const expr::binary_operator& binop);
 /// The text of each row is `row.columns[column]`. The texts are sent in one request, and the reply
 /// is an array of the same length: reply[i] is the excerpt of the i-th row sent. A row is not sent
 /// if it is dropped, its excerpt being thrown away with the row, or if it has no text, there being
-/// nothing to find an excerpt in; either gets a null. A row the index found no excerpt in gets a
-/// null and is kept. If the request fails, the query fails.
+/// nothing to find an excerpt in; either gets a null. A row the search did not return has no text,
+/// since the join leaves it out (see join_table_results()). A row the index found no excerpt in
+/// gets a null and is kept. If the request fails, the query fails.
 seastar::future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
         const secondary_index::index& index, const sstring& search_term, std::span<const external_search::joined_row> rows, size_t column,
         seastar::abort_source& as);

@@ -13,6 +13,7 @@
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/values_provider.hh"
 #include "cql3/expr/evaluate.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
 #include "utils/assert.hh"
 #include "vector_search/hybrid_search.hh"
@@ -69,12 +70,19 @@ auto wrap_result_to_error_message(C&& c) {
 
 using functions::search_family;
 
-bool is_ann(const std::vector<search_source>& sources) {
-    return sources.front().family == search_family::ann;
+bool is_hybrid(const std::vector<search_source>& sources) {
+    return sources.size() > 1;
+}
+
+bool is_ann_only(const std::vector<search_source>& sources) {
+    return !is_hybrid(sources) && sources.front().family == search_family::ann;
 }
 
 /// The name of the kind of query, as the messages and the paging warning spell it.
 std::string_view query_kind_name(const std::vector<search_source>& sources) {
+    if (is_hybrid(sources)) {
+        return "Hybrid search";
+    }
     switch (sources.front().family) {
     case search_family::ann:
         return "Vector search";
@@ -91,7 +99,6 @@ using query_value = std::variant<std::vector<float>, sstring>;
 query_value evaluate_query_value(const search_source& source, const query_options& options) {
     auto value = expr::evaluate(source.query_value, options);
     if (value.is_null()) {
-        // Before the agreement checks, or a null would surface as a disagreement instead.
         throw exceptions::invalid_request_exception(seastar::format("Unsupported null value for column {}", source.column->name_as_text()));
     }
 
@@ -110,8 +117,8 @@ query_value evaluate_query_value(const search_source& source, const query_option
     std::unreachable();
 }
 
-/// How many candidates the search is asked for.
-uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
+/// The limit one search of this statement is asked with.
+uint64_t request_limit(const search_source& source, uint64_t limit) {
     switch (source.family) {
     case search_family::ann:
         return ann_search::candidates_wanted(source.index, limit);
@@ -126,9 +133,6 @@ uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
 ::shared_ptr<select_statement> external_index_select_statement::prepare(
         std::vector<search_source> sources, external_statement_args args) {
     throwing_assert(!sources.empty());
-    if (sources.size() > 1) {
-        throw exceptions::invalid_request_exception("Combining several searches in one query is not supported yet");
-    }
 
     if (!args.limit.has_value()) {
         throw exceptions::invalid_request_exception(
@@ -143,7 +147,6 @@ uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
                 seastar::format("{} queries cannot be run with aggregation", query_kind_name(sources)));
     }
 
-    // The results are matched to the rows by primary key.
     if (std::ranges::any_of(sources, &search_source::has_temporaries)) {
         external_search::fetch_primary_key_columns(*args.selection, *args.schema);
     }
@@ -154,7 +157,7 @@ uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
         }
     }
 
-    auto prepared_filter = is_ann(sources)
+    auto prepared_filter = is_ann_only(sources)
             ? external_search::prepare_filter(*args.restrictions, args.parameters->allow_filtering())
             : external_search::prepared_filter{{}, args.parameters->allow_filtering()};
 
@@ -175,7 +178,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
 
     if (limit > max_query_limit) {
         // The ANN wording is pinned by test/cqlpy/cassandra_tests/vector_invalid_query_test.py.
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(is_ann(_sources)
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(is_ann_only(_sources)
                         ? seastar::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}",
                                   max_query_limit, limit)
                         : seastar::format("{} queries require a LIMIT that is not greater than {}. LIMIT was {}",
@@ -185,25 +188,36 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto aoe = abort_on_expiry(timeout);
 
-    const auto& source = _sources.front();
-    const auto value = evaluate_query_value(source, options);
+    // A bad query value fails the query before any request is sent.
+    auto query_values = std::vector<query_value>{};
+    query_values.reserve(_sources.size());
+    for (const auto& source : _sources) {
+        query_values.push_back(evaluate_query_value(source, options));
+    }
 
     auto& client = qp.vector_store_client();
-    auto filter_json = _prepared_filter.to_json(options);
-    const auto wanted = candidates_wanted(source, limit);
-    const auto& index_name = source.index.metadata().name();
-
     auto requests = std::vector<vector_search::search_request>{};
-    switch (source.family) {
-    case search_family::ann:
-        requests.push_back(vector_search::ann_request{
-                .keyspace = _schema->ks_name(), .index = index_name, .vector = std::get<std::vector<float>>(value), .fetch = wanted,
-                .limit = source.rescores() ? wanted : limit, .filter = std::move(filter_json)});
-        break;
-    case search_family::bm25:
-        requests.push_back(vector_search::bm25_request{.keyspace = _schema->ks_name(), .index = index_name, .term = std::get<sstring>(value), .limit = wanted});
-        break;
+    requests.reserve(_sources.size());
+    for (size_t i = 0; i < _sources.size(); ++i) {
+        const auto& source = _sources[i];
+        const auto wanted = request_limit(source, limit);
+        const auto& index_name = source.index.metadata().name();
+        switch (source.family) {
+        case search_family::ann:
+            requests.push_back(vector_search::ann_request{.keyspace = _schema->ks_name(),
+                    .index = index_name,
+                    .vector = std::get<std::vector<float>>(query_values[i]),
+                    .fetch = wanted,
+                    .limit = source.rescores() ? wanted : limit,
+                    .filter = _prepared_filter.to_json(options)});
+            break;
+        case search_family::bm25:
+            requests.push_back(vector_search::bm25_request{
+                    .keyspace = _schema->ks_name(), .index = index_name, .term = std::get<sstring>(query_values[i]), .limit = wanted});
+            break;
+        }
     }
+
     auto searched = co_await vector_search::search_all(client, _schema, std::move(requests), aoe.abort_source());
     if (!searched) {
         co_await coroutine::return_exception(exceptions::invalid_request_exception(
@@ -211,32 +225,36 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
     }
     auto candidates = std::move(*searched);
 
-    auto table_results = co_await query_base_table(qp, state, options, timeout, candidates);
+    auto read = co_await query_base_table(qp, state, options, timeout, candidates);
 
     auto provider = std::optional<external_search::values_provider>{};
-    if (table_results && source.temporaries.any()) {
-        // A fragment does not exist until the index has been sent the text of the rows it is to be
-        // generated from, so that text is read out of the rows as they are joined.
-        auto columns = std::vector<const column_definition*>{};
-        auto text_column = std::optional<size_t>{};
-        if (source.temporaries.fragment) {
-            text_column = columns.size();
-            columns.push_back(source.column);
+    if (read && std::ranges::any_of(_sources, &search_source::has_temporaries)) {
+        auto columns = std::vector<external_search::column_read>{};
+        auto fragment_column_of = std::vector<std::optional<size_t>>(_sources.size(), std::nullopt);
+        for (size_t i = 0; i < _sources.size(); ++i) {
+            if (_sources[i].temporaries.fragment) {
+                fragment_column_of[i] = columns.size();
+                columns.push_back(external_search::column_read{.column = _sources[i].column, .for_search = i});
+            }
         }
-        const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates, columns);
 
-        auto filled = external_search::search_values_of(source.temporaries, rows, 0, candidates);
-        if (source.temporaries.fragment) {
-            // Matched to a row by position: the fragments come back in the order the rows were sent.
-            auto fragments = co_await bm25_search::highlights_of(
-                    client, *_schema, source.index, std::get<sstring>(value), rows, *text_column, aoe.abort_source());
-            filled.push_back(external_search::external_values{
-                    .temporary_index = *source.temporaries.fragment, .values = std::move(fragments)});
+        const auto& table_read = read.value();
+        auto rows = external_search::join_table_results(*table_read.rows, table_read.command->slice, *_schema, &candidates, columns);
+
+        auto filled = std::vector<external_search::external_values>{};
+        for (size_t i = 0; i < _sources.size(); ++i) {
+            const auto& source = _sources[i];
+            std::ranges::move(external_search::search_values_of(source.temporaries, rows, i, candidates), std::back_inserter(filled));
+            if (source.temporaries.fragment) {
+                auto excerpts = co_await bm25_search::highlights_of(client, *_schema, source.index, std::get<sstring>(query_values[i]), rows,
+                        *fragment_column_of[i], aoe.abort_source());
+                filled.push_back(external_search::external_values{
+                        .temporary_index = *source.temporaries.fragment, .values = std::move(excerpts)});
+            }
         }
         provider.emplace(std::move(filled), rows);
     }
-    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
+    co_return co_await emit_result_set(std::move(read), options, provider ? &*provider : nullptr);
 }
 
 lw_shared_ptr<query::read_command> external_index_select_statement::prepare_command_for_base_query(

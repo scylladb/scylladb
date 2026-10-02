@@ -253,9 +253,19 @@ void external_search_plan::resolve_ordering(const expr::expression& prepared_ord
 }
 
 void external_search_plan::check_restrictions(const restrictions::select_restrictions& restrictions) {
+    const auto& scoring = restrictions.get_scoring_function_restrictions();
+    if (_sources.size() > 1) {
+        // A vector index prefilters and a full-text index does not, and how to combine them is not
+        // decided. Rejected before a relation is matched to a search, which would ask for a search
+        // that could not make the WHERE clause acceptable.
+        if (!scoring.empty() || has_other_restrictions(restrictions)) {
+            throw exceptions::invalid_request_exception("A query running several searches does not support a WHERE clause");
+        }
+        return;
+    }
+
     // select_restrictions holds out the relations whose left-hand side is a call to an external
     // search function; nothing else would apply them, so each has to name a search.
-    const auto& scoring = restrictions.get_scoring_function_restrictions();
     for (const auto& binop : scoring) {
         const auto& fc = expr::as<expr::function_call>(binop.lhs);
         const auto* fun = functions::as_external_search_function(fc);

@@ -34,8 +34,17 @@ struct joined_row {
     std::optional<size_t> candidate;
     /// True if the row is left out of the result set; see join_table_results().
     bool dropped = false;
-    /// The values of the columns the join was asked to read out of the row, in the order asked.
+    /// The values of the columns the join was asked to read out of the row, in the order asked; null
+    /// where a column is read for a search that did not return the row (see column_read).
     std::vector<managed_bytes_opt> columns;
+};
+
+/// A column the join reads out of the rows: out of every row, or, given `for_search`, only out of
+/// the rows that search returned. The others get a null for it, as they get for the search's score
+/// and rank.
+struct column_read {
+    const column_definition* column;
+    std::optional<size_t> for_search;
 };
 
 /// Walks the rows just read from the base table, in the order the result set is built from them,
@@ -48,9 +57,9 @@ struct joined_row {
 ///
 /// Matching needs the key columns in `slice`, and every column of `columns` must be one `slice`
 /// asked for; both are asserted. A null `candidates` skips matching, leaving every row unnamed and
-/// none dropped. Nothing is deserialized.
+/// none dropped, and then no column can be read only for a search. Nothing is deserialized.
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const std::vector<vector_search::search_candidate>* candidates, std::span<const column_definition* const> columns);
+        const std::vector<vector_search::search_candidate>* candidates, std::span<const column_read> columns);
 
 /// The score one search gave each joined row, null where it has no hit for the row.
 std::vector<cql3::raw_value> scores_of(

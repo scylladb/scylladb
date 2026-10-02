@@ -40,7 +40,8 @@ An FTS query is identified at prepare time by the presence of a `BM25(column, te
 in the `ORDER BY` clause. The index is resolved from that column, and all structural
 validations are enforced at prepare time: `LIMIT` is required; `PER PARTITION LIMIT` and
 aggregation are rejected; a matching `WHERE BM25(column, ...) > 0` must be present on the
-**same column** as the `ORDER BY`; any additional `WHERE` restrictions are rejected. The
+**same column** as the `ORDER BY`, unless the `ORDER BY` runs several searches, when no `WHERE`
+is accepted (see `hybrid_search.md`); any additional `WHERE` restrictions are rejected. The
 search-term expression is captured during prepare so that bind markers are correctly
 evaluated at execute time.
 
@@ -92,7 +93,9 @@ keys. Position is exact because `join_table_results()` walks the serialized `que
 serialized, and `result_set_builder::visitor` later walks the same `query::result` the same way,
 so the join sees the rows the result set is built from, in the same order. A row the join marked
 dropped is not sent, since its fragment would be thrown away with the row, and neither is a row
-with no text, there being nothing to find a fragment in; either gets a null in its slot. The score
+with no text, there being nothing to find a fragment in; either gets a null in its slot. A row
+the full-text search did not return, in a query running several searches, has no text: the join
+leaves the highlighted column out of it, as its score and rank are null. The score
 is delivered by position too, although it is matched by key.
 
 A row the index found no fragment in gets a null and is kept. A failed or timed-out `/highlight`

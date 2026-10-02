@@ -55,6 +55,7 @@ using namespace cql3;
 using namespace cql3::expr;
 using namespace cql3::expr::test_utils;
 
+using cql3::statements::external_search::column_read;
 using cql3::statements::external_search::equality;
 using cql3::statements::external_search::values_provider;
 using cql3::statements::external_search::external_values;
@@ -412,11 +413,11 @@ SEASTAR_THREAD_TEST_CASE(test_columns_are_read_out_of_every_row) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto s = make_schema(true);
     auto slice = make_slice(*s);
-    auto columns = std::vector<const column_definition*>{
-            s->get_column_definition("pk"),
-            s->get_column_definition("ck"),
-            s->get_column_definition("s"),
-            s->get_column_definition("v"),
+    auto columns = std::vector<column_read>{
+            {s->get_column_definition("pk"), std::nullopt},
+            {s->get_column_definition("ck"), std::nullopt},
+            {s->get_column_definition("s"), std::nullopt},
+            {s->get_column_definition("v"), std::nullopt},
     };
 
     auto m = mutation(s, pkey(*s, 1));
@@ -447,6 +448,49 @@ SEASTAR_THREAD_TEST_CASE(test_columns_are_read_out_of_every_row) {
     BOOST_REQUIRE(!static_joined[0].columns[1]);
     BOOST_REQUIRE_EQUAL(int_of(static_joined[0].columns[2]), 9);
     BOOST_REQUIRE(!static_joined[0].columns[3]);
+}
+
+// A column read for a search is null in the rows that search did not return, whatever its
+// kind: a key column is copied and then dropped, a cell is not copied at all, and the cells after
+// one stepped over still land in their own slots.
+SEASTAR_THREAD_TEST_CASE(test_a_column_read_for_a_search_is_null_where_it_did_not_return_the_row) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto s = make_schema(true);
+    auto slice = make_slice(*s);
+    auto columns = std::vector<column_read>{
+            {s->get_column_definition("pk"), 0},
+            {s->get_column_definition("ck"), 0},
+            {s->get_column_definition("s"), 1},
+            {s->get_column_definition("v"), 1},
+    };
+
+    auto m = mutation(s, pkey(*s, 1));
+    m.set_static_cell("s", data_value(7), api::new_timestamp());
+    m.set_clustered_cell(ckey(*s, 10), "v", data_value(100), api::new_timestamp());
+    m.set_clustered_cell(ckey(*s, 20), "v", data_value(200), api::new_timestamp());
+    m.set_clustered_cell(ckey(*s, 30), "v", data_value(300), api::new_timestamp());
+    auto rows = read_rows(s, semaphore.make_permit(), {m}, slice);
+
+    // Search 0 returned the row at 10, search 1 the row at 20, and neither the row at 30.
+    auto candidates = std::vector<search_candidate>{
+            {m.decorated_key(), ckey(*s, 10), {search_hit{0.5f, 1}, std::nullopt}},
+            {m.decorated_key(), ckey(*s, 20), {std::nullopt, search_hit{0.75f, 1}}},
+    };
+
+    auto joined = join_table_results(rows, slice, *s, &candidates, columns);
+    BOOST_REQUIRE_EQUAL(joined.size(), 3u);
+
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[0]), 1);
+    BOOST_REQUIRE_EQUAL(int_of(joined[0].columns[1]), 10);
+    BOOST_REQUIRE(!joined[0].columns[2]);
+    BOOST_REQUIRE(!joined[0].columns[3]);
+
+    BOOST_REQUIRE(!joined[1].columns[0]);
+    BOOST_REQUIRE(!joined[1].columns[1]);
+    BOOST_REQUIRE_EQUAL(int_of(joined[1].columns[2]), 7);
+    BOOST_REQUIRE_EQUAL(int_of(joined[1].columns[3]), 200);
+
+    BOOST_REQUIRE(std::ranges::none_of(joined[2].columns, [] (const managed_bytes_opt& value) { return value.has_value(); }));
 }
 
 // The provider's position moves for every row it is offered, dropped ones included - otherwise the
