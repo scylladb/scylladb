@@ -254,6 +254,11 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     const auto& tm = ermp->get_token_metadata();
     const auto dst = end_point_key();
 
+    co_await utils::get_local_injector().inject("hinted_handoff_fail_hint_send", [] (auto& handler) -> future<> {
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + 5min);
+        throw std::runtime_error("Sending a hint failed due to: hinted_handoff_fail_hint_send");
+    });
+
     if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
         manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
         // dst is not duplicated in pending_endpoints because it's in natural_endpoints
@@ -506,7 +511,6 @@ bool hint_sender::send_one_file(const sstring& fname) {
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
                 _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch  (const canceled_draining_exception&) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
