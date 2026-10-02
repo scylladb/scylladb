@@ -1846,6 +1846,7 @@ async def test_migration_status_reset_between_migrations(manager: ScyllaClusterM
                 assert len(res) == 1 and res[0].initial_tablets is not None, \
                     f"Keyspace {ks} is still using vnodes after migration finalization"
 
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
     """Verify a migration started on a cluster that has not finished upgrading runs to the end.
@@ -1880,8 +1881,12 @@ async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
         {'name': 'suppress_features', 'value': 'TOPOLOGY_CURRENT_STORAGE_MODE'}]}
 
     logger.info("Starting one node that does not support the feature and one that does")
-    old_node = await manager.server_add(cmdline=['--smp', '2'], config=suppressed)
-    new_node = await manager.server_add(cmdline=['--smp', '2'], config=cfg)
+    # One node per rack, so that the keyspace (RF=2) will be RF-rack-valid with
+    # tablets, which the migration requires when rf_rack_valid_keyspaces is set.
+    old_node = await manager.server_add(cmdline=['--smp', '2'], config=suppressed,
+                                        property_file={"dc": "dc1", "rack": "rack1"})
+    new_node = await manager.server_add(cmdline=['--smp', '2'], config=cfg,
+                                        property_file={"dc": "dc1", "rack": "rack2"})
     servers = [old_node, new_node]
     host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
     cql, _ = await manager.get_ready_cql(servers)

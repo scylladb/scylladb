@@ -11,6 +11,8 @@
 
 #include "db/config.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/exception_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include "locator/tablets.hh"
 #include "service/storage_service.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -550,6 +552,163 @@ SEASTAR_TEST_CASE(test_table_size_estimate_fails_on_rf_0_dc) {
                     });
         });
     });
+}
+
+// Validation tests for replication strategy and replication factor:
+
+namespace {
+
+// Creates a vnode keyspace with a table. Without `rf_per_dc`, the keyspace
+// replicates to every DC with RF=1.
+void create_vnode_keyspace_with_table(cql_test_env& e, const sstring& ks_name,
+        const std::map<sstring, size_t>& rf_per_dc = {}) {
+    auto replication = rf_per_dc.empty()
+            ? std::string("'replication_factor': 1")
+            : fmt::to_string(fmt::join(rf_per_dc | std::views::transform([] (const auto& dc_rf) {
+                    return fmt::format("'{}': {}", dc_rf.first, dc_rf.second);
+              }), ", "));
+    e.execute_cql(fmt::format("CREATE KEYSPACE {} WITH replication = "
+            "{{'class': 'NetworkTopologyStrategy', {}}} AND tablets = {{'enabled': false}}",
+            ks_name, replication)).get();
+    e.execute_cql(fmt::format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
+}
+
+// Adds a new DC with the given number of nodes in each rack, and returns its name.
+sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
+    topology_builder topo(e);
+    for (size_t i = 0; i < nodes_per_rack.size(); ++i) {
+        if (i > 0) {
+            topo.start_new_rack();
+        }
+        for (size_t n = 0; n < nodes_per_rack[i]; ++n) {
+            topo.add_node();
+        }
+    }
+    return topo.dc();
+}
+
+// The migration estimates table sizes from the local node's data, so test
+// keyspaces also replicate to the local DC.
+sstring local_dc(cql_test_env& e) {
+    const auto& tm = e.local_db().get_token_metadata();
+    return tm.get_topology().get_location(tm.get_my_id()).dc;
+}
+
+cql_test_config rf_rack_valid_keyspaces_config(bool enabled) {
+    cql_test_config cfg;
+    cfg.db_config->rf_rack_valid_keyspaces.set(bool(enabled));
+    return cfg;
+}
+
+} // anonymous namespace
+
+// Only NetworkTopologyStrategy supports tablets.
+// The migration must reject other strategies with an error.
+SEASTAR_TEST_CASE(test_prepare_rejects_simple_strategy) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get(),
+                std::runtime_error,
+                exception_predicate::message_contains("does not support tablets"));
+    });
+}
+
+// Vnode keyspaces allow an RF larger than the number of token-owning nodes in
+// a datacenter, but tablet allocation rejects it, so the migration must reject
+// such keyspaces, whether RF-rack-validity is enforced or not.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_larger_than_node_count) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {1});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("doesn't have enough token-owning nodes"));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// With enforce_rack_list enabled, nodes refuse to start if a tablet keyspace
+// has a numeric replication factor. The migration keeps the numeric
+// replication factors of the vnode keyspace, so it must reject it, even if the
+// keyspace is RF-rack-valid.
+SEASTAR_TEST_CASE(test_prepare_rejects_keyspace_when_rack_list_enforced) {
+    cql_test_config cfg;
+    cfg.db_config->enforce_rack_list.set(true);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("the enforce_rack_list option is enabled"));
+    }, cfg);
+}
+
+// Tablet keyspaces with views must be RF-rack-valid, even if
+// rf_rack_valid_keyspaces is disabled, so the migration must reject a keyspace
+// with views that would not be RF-rack-valid.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_rack_invalid_keyspace_with_views) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+        e.execute_cql("CREATE MATERIALIZED VIEW test_migration_ks.mv AS SELECT * FROM test_migration_ks.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)").get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is required to be RF-rack-valid"));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// With rf_rack_valid_keyspaces enabled, all tablet keyspaces must be
+// RF-rack-valid, so the migration must reject a keyspace that would not be,
+// even without views.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_rack_invalid_keyspace_when_enforced) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is required to be RF-rack-valid"));
+    }, rf_rack_valid_keyspaces_config(true));
+}
+
+// Without views and with rf_rack_valid_keyspaces disabled, an RF-rack-invalid
+// keyspace is allowed with tablets, so the migration must accept it.
+SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_invalid_keyspace_when_not_enforced) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get();
+
+        auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
+        BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// An RF equal to the number of racks is RF-rack-valid, so the migration must
+// accept it even when RF-rack-validity is enforced.
+SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_valid_keyspace) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {1, 1});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get();
+
+        auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
+        BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
+    }, rf_rack_valid_keyspaces_config(true));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
