@@ -22,7 +22,7 @@ struct repair_sync_boundary {
     public:
         tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
         std::strong_ordering operator()(
-                const dht::decorated_key& a_pk, const position_in_partition& a_pos, const dht::decorated_key& b_pk, const position_in_partition& b_pos) const {
+                const dht::decorated_key& a_pk, position_in_partition_view a_pos, const dht::decorated_key& b_pk, position_in_partition_view b_pos) const {
             auto ret = _pk_cmp(a_pk, b_pk);
             if (ret == 0) {
                 ret = _position_cmp(a_pos, b_pos);

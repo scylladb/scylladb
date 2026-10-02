@@ -831,6 +831,8 @@ private:
     netw::messaging_service& _messaging;
     schema_ptr _schema;
     reader_permit _permit;
+    reader_permit _row_buf_permit;
+    freeze_growth_tracker _freeze_growth;
     dht::token_range _range;
     repair_sync_boundary::tri_compare _cmp;
     // The algorithm used to find the row difference
@@ -987,6 +989,8 @@ public:
             , _messaging(rs.get_messaging())
             , _schema(s)
             , _permit(std::move(permit))
+            , _row_buf_permit(rs.make_row_buf_permit(s))
+            , _freeze_growth(rs.memory_sem())
             , _range(range)
             , _cmp(repair_sync_boundary::tri_compare(*_schema))
             , _algo(algo)
@@ -1308,7 +1312,7 @@ private:
         co_return combined;
     }
 
-    void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+    void handle_mutation_fragment(mutation_fragment&& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader->set_current_dk(start.key());
@@ -1321,7 +1325,8 @@ private:
             return;
         }
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
+        repair_row r(_repair_reader->get_current_dk(), hash, is_dirty_on_master::no,
+                make_lw_shared<mutation_fragment>(mutation_fragment(_row_buf_permit, std::move(mf))));
         rlogger.trace("Reading: r.boundary={{ {}, {} }}, r.hash={}", r.get_dk_with_hash()->dk, r.position(), r.hash());
         auto sz = r.size();
         _metrics.row_from_disk_nr++;
@@ -1505,7 +1510,7 @@ private:
                     co_await _repair_reader->on_end_of_stream();
                     break;
                 }
-                handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
+                handle_mutation_fragment(std::move(*mfopt), cur_size, new_rows_size, cur_rows);
             }
         } catch (...) {
             ex = std::current_exception();
@@ -1525,6 +1530,7 @@ private:
     future<> clear_working_row_buf() {
         co_await utils::clear_gently(_working_row_buf);
         _working_row_buf_combined_hash.clear();
+        _freeze_growth.release();
     }
 
     // Read rows from disk until _max_row_buf_size of rows are filled into _row_buf.
@@ -1550,7 +1556,7 @@ private:
         std::optional<repair_sync_boundary> sb_max;
         if (!_row_buf.empty()) {
             const auto& last = _row_buf.back();
-            sb_max = repair_sync_boundary{last.get_dk_with_hash()->dk, last.position()};
+            sb_max = repair_sync_boundary{last.get_dk_with_hash()->dk, position_in_partition(last.position())};
         }
         rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                       new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
@@ -1600,6 +1606,7 @@ private:
         rlogger.trace("SET _current_sync_boundary to {}, common_sync_boundary={}", _current_sync_boundary, common_sync_boundary);
         _working_row_buf.clear();
         _working_row_buf_combined_hash.clear();
+        _freeze_growth.release();
 
         if (_row_buf.empty()) {
             co_return get_combined_row_hash_response();
@@ -1612,10 +1619,21 @@ private:
         co_return get_combined_row_hash_response{_working_row_buf_combined_hash};
     }
 
+    void freeze_buffered_row(repair_row& r) {
+        auto before = r.size();
+        r.freeze_for_send(*_schema);
+        // Only the master reserves from the memory semaphore.
+        if (_repair_master) {
+            _freeze_growth.add(ssize_t(r.size()) - ssize_t(before));
+        }
+    }
+
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf() {
         std::list<repair_row> rows;
-        for (const repair_row& r : _working_row_buf) {
+        for (repair_row& r : _working_row_buf) {
+            // Freeze once, not once per peer.
+            freeze_buffered_row(r);
             rows.push_back(r);
             co_await coroutine::maybe_yield();
         }
@@ -1625,8 +1643,9 @@ private:
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf_within_set_diff(repair_hash_set set_diff) {
         std::list<repair_row> rows;
-        for (const repair_row& r : _working_row_buf) {
+        for (repair_row& r : _working_row_buf) {
             if (set_diff.contains(r.hash())) {
+                freeze_buffered_row(r);
                 rows.push_back(r);
             }
             co_await coroutine::maybe_yield();
@@ -1641,11 +1660,16 @@ private:
     get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
             if (!_repair_master || _nr_peer_nodes == 1) {
-                return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
+                // All rows are sent, so freeze them here to count frozen bytes.
+                for (repair_row& r : _working_row_buf) {
+                    freeze_buffered_row(r);
+                    co_await coroutine::maybe_yield();
+                }
+                co_return std::move(_working_row_buf);
             }
-            return copy_rows_from_working_row_buf();
+            co_return co_await copy_rows_from_working_row_buf();
         } else {
-            return copy_rows_from_working_row_buf_within_set_diff(std::move(set_diff));
+            co_return co_await copy_rows_from_working_row_buf_within_set_diff(std::move(set_diff));
         }
     }
 
@@ -1810,17 +1834,17 @@ private:
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
         lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
         repair_rows_on_wire rows;
-        size_t row_bytes = co_await get_repair_rows_size(row_list);
         _metrics.tx_row_nr += row_list.size();
-        _metrics.tx_row_bytes += row_bytes;
         fragments_limiter limiter(_schema->ks_name(), _schema->cf_name());
         auto msg_split_feature = bool(_db.local().features().repair_msg_split);
         while (!row_list.empty()) {
             repair_row r = std::move(row_list.front());
             row_list.pop_front();
             const auto& dk_with_hash = r.get_dk_with_hash();
+            r.freeze_for_send(*_schema);
             auto mf = std::move(r.get_frozen_mutation());
             const auto size = mf.representation().size();
+            _metrics.tx_row_bytes += size;
             bool same_pk = !rows.empty() && last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0;
 
             if (same_pk && (!msg_split_feature || limiter.no_split(size))) {
@@ -4047,6 +4071,10 @@ future<> repair_service::start(utils::disk_space_monitor* dsm) {
     _state = state::running;
 }
 
+reader_permit repair_service::make_row_buf_permit(schema_ptr s) {
+    return _row_buf_sem.make_tracking_only_permit(std::move(s), "repair-row-buf", db::no_timeout, {});
+}
+
 future<> repair_service::stop() {
   try {
     rlogger.debug("Stopping repair task module");
@@ -4059,6 +4087,9 @@ future<> repair_service::stop() {
         rlogger.debug("Unregistering gossiper helper");
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
+    // Leftover metas hold row-buffer permits, which stop() waits for.
+    co_await remove_repair_meta();
+    co_await _row_buf_sem.stop();
     _state = state::stopped;
     rlogger.info("Stopped repair_service");
   } catch (...) {
