@@ -42,10 +42,10 @@ from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
+from botocore.exceptions import ClientError
 
-from .util import new_test_table, random_string, scylla_config_read, scylla_config_temporary, unique_table_name, wait_for_gsi
+from .util import new_test_table, random_string, scylla_config_temporary, unique_table_name, wait_for_gsi
 from test.cqlpy.util import keyspace_has_tablets
-from test.pylib.skip_types import skip_env
 
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
@@ -334,12 +334,6 @@ def precreated_keyspace(cql, name, options=''):
 def tablets_option(enabled):
     return "AND TABLETS = {'enabled': %s}" % str(enabled).lower()
 
-# The enforced tablets mode refuses to create a keyspace with vnodes, so a test
-# that needs one cannot run.
-def skip_if_tablets_enforced(dynamodb):
-    if scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces') == '"enforced"':
-        skip_env('Cannot pre-create a keyspace with vnodes when tablets are enforced')
-
 # The keyspace which a user pre-created with CQL is used as it is: Alternator
 # creates the table in it without touching its configuration. Check this with
 # an option Alternator never sets itself, so that the pre-creation technique
@@ -357,18 +351,36 @@ def test_precreated_keyspace(dynamodb, cql):
             table.put_item(Item={'p': p, 'x': 'hello'})
             assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}
 
-# Under "enforced", a tag asking for vnodes is refused for a keyspace that
-# Alternator creates, but not for a pre-created one which uses vnodes.
-def test_precreated_keyspace_enforced(dynamodb, cql):
+# The "system:initial_tablets" tag only configures a keyspace Alternator
+# creates, so for a pre-created keyspace CreateTable refuses a tag which
+# contradicts the keyspace, and accepts one which agrees with it or no tag at
+# all, whatever the tablets mode - also under "enforced", which refuses a tag
+# asking for vnodes only for a keyspace that Alternator creates. The number in
+# a tag asking for tablets is not compared with the keyspace's.
+@pytest.mark.parametrize('accepted_tag', [True, False], ids=['agreeing_tag', 'no_tag'])
+@pytest.mark.parametrize('mode', ['disabled', 'enabled', 'enforced'])
+@pytest.mark.parametrize('tablets', [False, True])
+def test_precreated_keyspace_tag(dynamodb, cql, tablets, mode, accepted_tag):
     name = unique_table_name()
+    schema = {'BillingMode': 'PAY_PER_REQUEST',
+              'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+              'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}]}
+    contradicting = [{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}]
+    # A tablet count other than the keyspace's own "initial", which is 0.
+    agreeing = [{'Key': 'system:initial_tablets', 'Value': '4' if tablets else 'none'}]
     # "enabled" allows pre-creating a keyspace with vnodes, which "enforced" refuses.
-    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'), precreated_keyspace(cql, name, tablets_option(False)):
-        with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
-            with new_test_table(dynamodb, name=name,
-                    Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
-                    KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-                    AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]):
-                pass
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'), precreated_keyspace(cql, name, tablets_option(tablets)):
+        with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', mode):
+            with pytest.raises(ClientError, match='ValidationException.*existing keyspace'):
+                with new_test_table(dynamodb, name=name, Tags=contradicting, **schema):
+                    pass
+            with new_test_table(dynamodb, name=name, Tags=agreeing if accepted_tag else [], **schema):
+                # The tag is checked before the table's existence, so only a
+                # request whose tag agrees gets ResourceInUseException.
+                with pytest.raises(ClientError, match='ValidationException.*existing keyspace'):
+                    dynamodb.create_table(TableName=name, Tags=contradicting, **schema)
+                with pytest.raises(ClientError, match='ResourceInUseException'):
+                    dynamodb.create_table(TableName=name, Tags=agreeing, **schema)
 
 # CreateTable pre-marks the views implementing a table's GSIs as built when the
 # table uses tablets. Here the pre-created keyspace uses tablets while the
