@@ -218,3 +218,12 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
+If the keyspace `alternator_<table name>` already exists - for example, because
+it was pre-created with CQL to configure it differently - the table is created
+in that keyspace and uses tablets or vnodes as the keyspace does, whatever
+`tablets_mode_for_new_keyspaces` says. CreateTable then refuses a
+`system:initial_tablets` tag asking for tablets when the keyspace uses vnodes,
+or for vnodes when it uses tablets. A tag asking for tablets in a keyspace that
+uses tablets is accepted, but the number in it is not applied: the table gets
+its tablets as the keyspace configures them.
+
