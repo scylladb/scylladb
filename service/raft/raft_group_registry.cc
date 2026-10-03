@@ -171,7 +171,15 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_read_quorum(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
-        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum, gid] (raft_rpc& rpc) mutable {
+            // A read_quorum names its sender as the leader just like an append_request does, so a
+            // test that isolates a follower from its leader has to drop both.
+            if (auto ignore_group_id = utils::get_local_injector().inject_parameter<std::string_view>("raft_drop_incoming_read_quorum_for_specified_group"); ignore_group_id) {
+                if (gid == raft::group_id{utils::UUID(*ignore_group_id)}) {
+                    rslog.debug("Dropping read_quorum from {} for group {}", from, gid);
+                    return;
+                }
+            }
             rpc.read_quorum_request(std::move(from), std::move(read_quorum));
         });
     });
