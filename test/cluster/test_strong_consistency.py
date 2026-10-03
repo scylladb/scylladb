@@ -8,9 +8,11 @@ import re
 from datetime import datetime
 from typing import Tuple
 
+from test.pylib.async_cql import _wrap_future
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table, DEFAULT_CMDLINE, wait_for_leader, get_table_raft_group_id, \
+    FeatureConfigurations
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -31,31 +33,9 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+SC_CONFIG = FeatureConfigurations.STRONG_CONSISTENCY.value
+DEFAULT_CONFIG = SC_CONFIG.get_cluster_cfg()
 
-DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
-DEFAULT_CMDLINE = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-
-
-async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
-                          expected_host_id: str | None = None):
-    """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
-    reports that one.
-
-    current_leader() on a follower is the last leader it heard from, so a replica that a
-    migration has just removed keeps being reported until the follower's election timeout
-    fires. A caller that knows which node has to end up leading must wait that window out
-    instead of asserting on the first reading.
-    """
-    async def get_leader_host_id():
-        result = await manager.api.get_raft_leader(s.ip_addr, group_id)
-        if uuid.UUID(result).int == 0:
-            return None
-        return result if expected_host_id is None or result == expected_host_id else None
-    label = f"group {group_id} to be led by {expected_host_id}" if expected_host_id else f"a leader of group {group_id}"
-    return await wait_for(get_leader_host_id, time.time() + 60, label=label)
 
 async def collect_all_raft_state(cql, host):
     state = {}
@@ -124,11 +104,6 @@ async def assert_no_cross_shard_routing(manager: ScyllaClusterManager, server: S
             f"Sharder routed token {token} to shard {shard}, "
             f"but partitioner computed shard {shard_from_partitioner}."
         )
-
-async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
-    table_id = await manager.get_table_id(ks, table)
-    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
-    return str(rows[0].raft_group_id)
 
 async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
@@ -2719,3 +2694,150 @@ async def test_bootstrap_with_existing_sc_table(manager: ScyllaClusterManager):
 
             rows = await cql.run_async(f"SELECT c FROM {table} WHERE pk = 1", host=hosts[1])
             assert [r.c for r in rows] == [1]
+
+
+async def test_create_table_serves_immediately(manager: ScyllaClusterManager):
+    """
+    A strongly consistent table serves every coordinator role as soon as
+    CREATE TABLE returns: the statement waits for the table's raft groups to
+    start, and a group only counts as started once it knows a leader.
+    """
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(4, config=SC_CONFIG.get_cluster_cfg(), cmdline=DEFAULT_CMDLINE, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    await manager.disable_tablet_balancing()
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [str(h) for h in await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])]
+
+    async with new_test_keyspace(manager, SC_CONFIG.get_keyspace_opts("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")) as ks:
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        logger.info("Creating the table")
+        fut = cql.execute_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)", host=hosts[0])
+        await _wrap_future(fut)
+        logger.info(f"CREATE TABLE returned, warnings: {fut.warnings}")
+        assert not fut.warnings, f"CREATE TABLE returned warnings: {fut.warnings}"
+
+        # No client-side wait from here on: the statement's own wait is under test.
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        replica_hosts = [str(h) for h, _ in await get_tablet_replicas(manager, servers[0], ks, "test", 0)]
+        assert len(replica_hosts) == 3, f"Expected 3 replicas, got {replica_hosts}"
+        non_replica_idx = [i for i, h in enumerate(host_ids) if h not in replica_hosts]
+        assert len(non_replica_idx) == 1 and non_replica_idx[0] in (2, 3), \
+            f"Expected exactly one non-replica, in rack3: host_ids={host_ids}, replicas={replica_hosts}"
+        non_replica = host_ids[non_replica_idx[0]]
+
+        leader = str(await manager.api.get_raft_leader(servers[0].ip_addr, group_id))
+        assert uuid.UUID(leader).int != 0, f"Group {group_id} has no leader right after CREATE TABLE"
+        assert leader in replica_hosts, f"Leader {leader} is not a replica: {replica_hosts}"
+        non_leader = next(h for h in replica_hosts if h != leader)
+        logger.info(f"group_id={group_id} leader={leader} non_leader={non_leader} "
+                    f"non_replica={non_replica} (servers[{non_replica_idx[0]}])")
+
+        for pk, host_id in [(1, leader), (2, non_leader), (3, non_replica)]:
+            host = hosts[host_ids.index(host_id)]
+            logger.info(f"Writing and reading pk={pk} through {host_id} ({host})")
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {10 * pk})", host=host)
+            rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test WHERE pk = {pk}", host=host)
+            assert len(rows) == 1 and rows[0].c == 10 * pk, f"pk={pk} through {host_id}: {rows}"
+
+        logger.info("Checking that no node logged a timed-out or failed raft group wait")
+        for s, log, mark in zip(servers, logs, marks):
+            timed_out = await log.grep(r"update\(\): waiting for leader timed out", from_mark=mark)
+            assert timed_out == [], f"servers[{servers.index(s)}] timed out waiting for a leader: {timed_out}"
+            failed = await log.grep("wait_for_table_raft_groups_on_all_hosts: failed to complete on node", from_mark=mark)
+            assert failed == [], f"servers[{servers.index(s)}] failed a remote group wait: {failed}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_create_table_warns_when_group_start_delayed(manager: ScyllaClusterManager):
+    """
+    If the coordinating replica cannot start the table's raft group in time,
+    CREATE TABLE still succeeds but returns a warning.
+
+    request_timeout_in_ms is 10 s so that the statement's wait expires well
+    inside the pause injection's 1 min budget; the framework default would not.
+    """
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(4, config=SC_CONFIG.get_cluster_cfg({'request_timeout_in_ms': 10000}), cmdline=DEFAULT_CMDLINE, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    await manager.disable_tablet_balancing()
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, SC_CONFIG.get_keyspace_opts("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")) as ks:
+        log0 = await manager.server_open_log(servers[0].server_id)
+        mark = await log0.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "sc_start_raft_group_pause", one_shot=True)
+        try:
+            logger.info("Creating the table with the coordinator's raft group start paused")
+            fut = cql.execute_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)", host=hosts[0])
+            await _wrap_future(fut)
+            logger.info(f"CREATE TABLE returned, warnings: {fut.warnings}")
+            assert fut.warnings and any("Failed to wait for raft groups" in w for w in fut.warnings), \
+                f"Expected a 'Failed to wait for raft groups' warning, got {fut.warnings}"
+            assert await log0.grep("sc_start_raft_group_pause: waiting for message", from_mark=mark), \
+                "servers[0] did not reach sc_start_raft_group_pause"
+        finally:
+            await manager.api.message_injection(servers[0].ip_addr, "sc_start_raft_group_pause")
+
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        leader = await wait_for_leader(manager, servers[0], group_id)
+        logger.info(f"Pause released, group {group_id} is led by {leader}; writing and reading pk=1 through servers[0]")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 10)", host=hosts[0])
+        rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test WHERE pk = 1", host=hosts[0])
+        assert len(rows) == 1 and rows[0].c == 10, f"pk=1 through servers[0]: {rows}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-1563",
+                      reason="a read that started before ALTER ... TYPE silently drops the cells of the new type")
+async def test_alter_column_type_keeps_row_visible(manager: ScyllaClusterManager):
+    """
+    Changing a column's type must not change what an already running read
+    returns. Strongly consistent reads also end in table::query, so
+    replica_query_wait can park one.
+    """
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3, config=SC_CONFIG.get_cluster_cfg(), cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    await manager.disable_tablet_balancing()
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [str(h) for h in await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])]
+
+    async with new_test_keyspace(manager, SC_CONFIG.get_keyspace_opts("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        # Every node is a replica; a QUORUM read is served by the leader, so park it there.
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+        leader = servers[host_ids.index(leader_host_id)]
+        leader_host = hosts[host_ids.index(leader_host_id)]
+
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 10)", host=leader_host)
+        select = cql.prepare(f"SELECT pk, c FROM {ks}.test WHERE pk = ?")
+        select.consistency_level = ConsistencyLevel.QUORUM
+        rows = await cql.run_async(select, [1], host=leader_host)
+        assert len(rows) == 1 and rows[0].c == 10, f"Before ALTER: {rows}"
+
+        log = await manager.server_open_log(leader.server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(leader.ip_addr, "replica_query_wait", one_shot=False, parameters={"table": "test"})
+        read = asyncio.ensure_future(cql.run_async(select, [1], host=leader_host))
+        try:
+            await log.wait_for("replica_query_wait: waiting", from_mark=mark, timeout=60)
+            logger.info("Read parked on the leader; changing c from int to varint")
+            await cql.run_async(f"ALTER TABLE {ks}.test ALTER c TYPE varint")
+        finally:
+            await manager.api.message_injection(leader.ip_addr, "replica_query_wait")
+            await manager.api.disable_injection(leader.ip_addr, "replica_query_wait")
+            # Drain the read without letting its error replace one raised above.
+            await asyncio.wait([read], timeout=60)
+        rows = await asyncio.wait_for(read, 60)
+        assert len(rows) == 1 and rows[0].c == 10, f"The row written before ALTER TYPE lost its value: {rows}"
