@@ -20,5 +20,8 @@ add_scylla_test(sstable_scan_footprint_test
   KIND SEASTAR)
 add_scylla_test(streaming_histogram_test
   KIND BOOST)
+add_scylla_test(s3_storage_roundtrip_test
+  KIND SEASTAR
+  LIBRARIES alternator)
 add_scylla_test(bti_cassandra_compatibility_test
   KIND SEASTAR)
