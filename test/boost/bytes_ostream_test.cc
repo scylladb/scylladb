@@ -420,3 +420,131 @@ BOOST_AUTO_TEST_CASE(test_write_managed_bytes_view) {
     buf2.write(source_bytes_view);
     BOOST_REQUIRE(std::move(buf2).to_managed_bytes() == source_bytes);
 }
+
+static size_t count_fragments(const bytes_ostream& b) {
+    return std::ranges::distance(b.fragments());
+}
+
+static bytes write_in_pieces(bytes_ostream& buf, size_t n, size_t piece) {
+    auto data = tests::random::get_bytes(n);
+    for (size_t off = 0; off < n; off += piece) {
+        buf.write(bytes_view(data).substr(off, piece));
+    }
+    return data;
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_single_chunk) {
+    bytes_ostream buf;
+    buf.reserve(3000);
+    BOOST_REQUIRE(buf.empty());
+    auto data = write_in_pieces(buf, 3000, 7);
+    BOOST_REQUIRE(buf.is_linearized());
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_write_past_reservation) {
+    bytes_ostream buf;
+    buf.reserve(1000);
+    auto data = write_in_pieces(buf, 2500, 100);
+    BOOST_REQUIRE(!buf.is_linearized());
+    BOOST_REQUIRE_EQUAL(buf.size(), 2500);
+    BOOST_REQUIRE_EQUAL(bytes(buf.linearize()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_non_empty_is_noop) {
+    bytes_ostream buf;
+    auto data = write_in_pieces(buf, 10, 10);
+    buf.reserve(100000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(buf.size(), 10);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_zero) {
+    bytes_ostream buf;
+    buf.reserve(0);
+    BOOST_REQUIRE(buf.empty());
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 0);
+    auto data = write_in_pieces(buf, 100, 100);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_capped_at_max_chunk_size) {
+    bytes_ostream buf;
+    size_t n = bytes_ostream::max_chunk_size() * 2 + 5;
+    buf.reserve(n);
+    auto data = write_in_pieces(buf, n, 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 3);
+    BOOST_REQUIRE_EQUAL(bytes(buf.linearize()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_exact_max_chunk_size) {
+    bytes_ostream buf;
+    buf.reserve(bytes_ostream::max_chunk_size());
+    auto data = write_in_pieces(buf, bytes_ostream::max_chunk_size(), 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_to_managed_bytes_partial) {
+    bytes_ostream buf;
+    buf.reserve(4096);
+    auto data = write_in_pieces(buf, 1234, 50);
+    BOOST_REQUIRE(std::move(buf).to_managed_bytes() == managed_bytes(data));
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_clear_retract_remove_suffix) {
+    bytes_ostream buf;
+    buf.reserve(1000);
+    auto data = write_in_pieces(buf, 600, 600);
+    auto pos = buf.pos();
+    write_in_pieces(buf, 300, 300);
+    buf.retract(pos);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+    buf.remove_suffix(100);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), bytes(bytes_view(data).substr(0, 500)));
+    buf.clear();
+    BOOST_REQUIRE(buf.empty());
+    auto data2 = write_in_pieces(buf, 1000, 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data2);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_untouched_to_managed_bytes) {
+    bytes_ostream buf;
+    buf.reserve(100);
+    BOOST_REQUIRE(std::move(buf).to_managed_bytes().empty());
+}
+// Deserializing a bytes field into a bytes_ostream must yield one chunk.
+BOOST_AUTO_TEST_CASE(test_deserialize_bytes_ostream_single_chunk) {
+    for (size_t n : {size_t(600), size_t(5000), size_t(100000)}) {
+        auto data = tests::random::get_bytes(n);
+
+        bytes_ostream out;
+        ser::serialize(out, bytes_view(data));
+
+        // Simple input stream.
+        {
+            auto lin = bytes_ostream(out);
+            auto in = ser::as_input_stream(lin.linearize());
+            auto res = ser::deserialize(in, std::type_identity<bytes_ostream>());
+            BOOST_REQUIRE(res.is_linearized());
+            BOOST_REQUIRE_EQUAL(bytes(res.view()), data);
+        }
+
+        // Fragmented input stream: build a many-fragment source.
+        {
+            bytes_ostream frag(64);
+            bytes all(out.linearize());
+            for (size_t off = 0; off < all.size(); off += 64) {
+                frag.write(bytes_view(all).substr(off, 64));
+            }
+            BOOST_REQUIRE(!frag.is_linearized());
+            auto in = ser::as_input_stream(frag);
+            auto res = ser::deserialize(in, std::type_identity<bytes_ostream>());
+            BOOST_REQUIRE(res.is_linearized());
+            BOOST_REQUIRE_EQUAL(bytes(res.view()), data);
+        }
+    }
+}
