@@ -491,3 +491,110 @@ BOOST_AUTO_TEST_CASE(test_equality_after_retract_and_remove_suffix) {
     BOOST_REQUIRE(b == bytes_ostream());
     BOOST_REQUIRE(bytes_ostream() == b);
 }
+
+static size_t count_fragments(const bytes_ostream& b) {
+    return std::ranges::distance(b.fragments());
+}
+
+static bytes write_in_pieces(bytes_ostream& buf, size_t n, size_t piece) {
+    auto data = tests::random::get_bytes(n);
+    for (size_t off = 0; off < n; off += piece) {
+        buf.write(bytes_view(data).substr(off, piece));
+    }
+    return data;
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_single_chunk) {
+    bytes_ostream buf;
+    buf.reserve(3000);
+    BOOST_REQUIRE(buf.empty());
+    auto data = write_in_pieces(buf, 3000, 7);
+    BOOST_REQUIRE(buf.is_linearized());
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_write_past_reservation) {
+    bytes_ostream buf;
+    buf.reserve(1000);
+    auto data = write_in_pieces(buf, 2500, 100);
+    BOOST_REQUIRE(!buf.is_linearized());
+    BOOST_REQUIRE_EQUAL(buf.size(), 2500);
+    BOOST_REQUIRE_EQUAL(bytes(buf.linearize()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_non_empty_is_noop) {
+    bytes_ostream buf;
+    auto data = write_in_pieces(buf, 10, 10);
+    buf.reserve(100000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(buf.size(), 10);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_zero) {
+    bytes_ostream buf;
+    buf.reserve(0);
+    BOOST_REQUIRE(buf.empty());
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 0);
+    auto data = write_in_pieces(buf, 100, 100);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_capped_at_max_chunk_size) {
+    bytes_ostream buf;
+    size_t n = bytes_ostream::max_chunk_size() * 2 + 5;
+    buf.reserve(n);
+    auto data = write_in_pieces(buf, n, 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 3);
+    BOOST_REQUIRE_EQUAL(bytes(buf.linearize()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_exact_max_chunk_size) {
+    bytes_ostream buf;
+    buf.reserve(bytes_ostream::max_chunk_size());
+    auto data = write_in_pieces(buf, bytes_ostream::max_chunk_size(), 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_to_managed_bytes_partial) {
+    bytes_ostream buf;
+    buf.reserve(4096);
+    auto data = write_in_pieces(buf, 1234, 50);
+    BOOST_REQUIRE(std::move(buf).to_managed_bytes() == managed_bytes(data));
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_clear_retract_remove_suffix) {
+    bytes_ostream buf;
+    buf.reserve(1000);
+    auto data = write_in_pieces(buf, 600, 600);
+    auto pos = buf.pos();
+    write_in_pieces(buf, 300, 300);
+    buf.retract(pos);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data);
+    buf.remove_suffix(100);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), bytes(bytes_view(data).substr(0, 500)));
+    buf.clear();
+    BOOST_REQUIRE(buf.empty());
+    auto data2 = write_in_pieces(buf, 1000, 1000);
+    BOOST_REQUIRE_EQUAL(count_fragments(buf), 1);
+    BOOST_REQUIRE_EQUAL(bytes(buf.view()), data2);
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_untouched_to_managed_bytes) {
+    bytes_ostream buf;
+    buf.reserve(100);
+    BOOST_REQUIRE(std::move(buf).to_managed_bytes().empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_reserve_untouched_equality) {
+    bytes_ostream reserved;
+    reserved.reserve(100);
+    bytes_ostream full;
+    full.write(bytes("abc"));
+    BOOST_REQUIRE(!(reserved == full));
+    BOOST_REQUIRE(!(full == reserved));
+    BOOST_REQUIRE(reserved == bytes_ostream());
+    BOOST_REQUIRE(bytes_ostream() == reserved);
+}
