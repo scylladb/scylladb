@@ -205,7 +205,8 @@ private:
 
     std::optional<tombstone_gc_state_snapshot> _tombstone_gc_snapshot;
 
-    void update(db::rp_handle&&);
+    db::replay_position track(db::rp_handle&&);
+    void advance_replay_position(db::replay_position) noexcept;
     friend class ::row_cache;
     friend class memtable_entry;
     friend class flush_reader;
