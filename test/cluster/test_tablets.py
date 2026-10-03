@@ -3001,3 +3001,87 @@ async def test_rf_reduction_preserves_quorum_writes(manager: ScyllaClusterManage
             rows = await excl_cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = 2", consistency_level=ConsistencyLevel.ONE))
             assert len(rows) == 1 and rows[0].v == 200, f"pk=2 should be present on {label}, got {rows}"
             logger.info(f"Confirmed: pk=2 is present on {label}")
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_monitor_does_not_block_group0_when_quorum_is_lost(manager: ScyllaClusterManager):
+    """The tablet split monitor must not hold the group0 operation mutex indefinitely.
+
+    process_tablet_split_candidate() takes a group0 guard before it checks
+    needs_split(). start_operation() acquires _operation_mutex, which serialises
+    every group0 operation on the node, and only then runs a read barrier that
+    needs quorum. Taken without a timeout, the guard is held for as long as the
+    quorum is missing, and every other group0 operation on the node queues behind
+    it however short its own timeout is.
+
+    Park the monitor before it takes that guard, remove the quorum, then let it
+    through. An unrelated DDL issued afterwards must still fail on its own group0
+    timeout rather than wait for a quorum that is not coming back.
+    """
+    group0_timeout_ms = 3000
+    # Comfortably above the group0 timeout plus one backoff, far below a hang.
+    ddl_must_settle_within_s = 60
+
+    config = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'error_injections_at_startup': ['tablet_split_monitor_wait'],
+    }
+    servers = await manager.servers_add(3, config=config, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    survivor = servers[0]
+    log = await manager.server_open_log(survivor.server_id)
+
+    # Not new_test_keyspace(): it drops the keyspace on exit, and this test ends with
+    # no quorum, so the DROP could not complete. The cluster is torn down anyway.
+    ks = await create_new_test_keyspace(
+        cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+
+    await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int) "
+                        "WITH tablets = {'min_tablet_count': 1}")
+    # Makes needs_split() true, which registers the table as a split candidate and
+    # starts the monitor fiber; it then parks on the injection above.
+    await cql.run_async(f"ALTER TABLE {ks}.t WITH tablets = {{'min_tablet_count': 2}}")
+    await manager.api.wait_for_injection_enter(survivor.ip_addr, 'tablet_split_monitor_wait')
+
+    # Shorten the group0 timeout only now: cluster formation needs the default.
+    mark = await log.mark()
+    await manager.server_update_config(survivor.server_id,
+                                       'group0_raft_op_timeout_in_ms', group0_timeout_ms)
+    await log.wait_for("completed re-reading configuration file", from_mark=mark, timeout=60)
+
+    logger.info("Removing the quorum")
+    await asyncio.gather(*(manager.server_stop(s.server_id, convict=True) for s in servers[1:]))
+
+    mark = await log.mark()
+    logger.info("Releasing the split monitor into its group0 operation, with no quorum")
+    await manager.api.message_injection(survivor.ip_addr, 'tablet_split_monitor_wait')
+    # Let it take _operation_mutex before the DDL asks for it, so the DDL really does
+    # queue behind the monitor rather than racing ahead of it.
+    await asyncio.sleep(5)
+
+    coord_cql = await manager.get_cql_exclusive(survivor)
+    started = time.time()
+    ddl = asyncio.ensure_future(
+        coord_cql.run_async(f"CREATE TABLE {ks}.blocked (pk int PRIMARY KEY)", timeout=300))
+    done, _ = await asyncio.wait([ddl], timeout=ddl_must_settle_within_s)
+    elapsed = time.time() - started
+    if not done:
+        ddl.cancel()
+    assert done, (f"CREATE TABLE was still blocked {elapsed:.1f}s after being issued, despite "
+                  f"carrying a {group0_timeout_ms}ms group0 operation timeout; the split monitor "
+                  f"is holding _operation_mutex across an unbounded read barrier")
+
+    # It must have failed, and failed on the timeout: there is no quorum to commit it.
+    exc = ddl.exception()
+    assert exc is not None, "CREATE TABLE unexpectedly succeeded without a quorum"
+    # The driver wraps the coordinator's error, so look inside the message.
+    assert re.search(r"timed out|no raft quorum", str(exc)), \
+        f"CREATE TABLE failed for an unexpected reason: {exc}"
+    logger.info(f"CREATE TABLE settled after {elapsed:.1f}s with: {exc}")
+
+    # And the monitor must have hit the timeout itself and gone around again, which is
+    # what proves the bounded path was the one exercised.
+    assert await log.grep("Failed to complete splitting of table.*retrying after", from_mark=mark), \
+        "the split monitor never reported a timed-out group0 operation"
