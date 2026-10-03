@@ -47,9 +47,9 @@ class logstor_group;
 struct separator_index_update {
     primary_index* index;
     primary_index_key key;
-    log_location prev_location;
+    record_location prev_location;
 
-    void operator()(log_location new_location, seastar::gate::holder) const;
+    void operator()(record_location new_location, seastar::gate::holder) const;
 };
 
 using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
@@ -209,10 +209,10 @@ float compaction_shares_pressure(uint64_t available_segments, free_segment_water
 inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
-    // free_space = segment_size - net_data_size
+    // free_space = segment_size - record_bytes
     // initially set to segment_size
-    // when writing records, decrease by total net data size
-    // when freeing a record, increase by the record's net data size
+    // when writing records, decrease by the record frame sizes written
+    // when freeing a record, increase by that record's frame size
     size_t free_space{0};
     size_t record_count{0};
     segment_set* owner{nullptr}; // non-owning, set when added to a segment_set
@@ -226,25 +226,26 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
         record_count = 0;
     }
 
-    size_t net_data_size(size_t segment_size) const noexcept {
+    // The frame sizes of the live records of the segment summed, their padding excluded.
+    size_t record_bytes(size_t segment_size) const noexcept {
         return segment_size - free_space;
     }
 
-    void on_write(size_t net_data_size, size_t cnt = 1) noexcept {
-        free_space -= net_data_size;
+    void on_write(size_t record_bytes, size_t cnt = 1) noexcept {
+        free_space -= record_bytes;
         record_count += cnt;
     }
 
-    void on_write(log_location loc) noexcept {
+    void on_write(record_location loc) noexcept {
         on_write(loc.size);
     }
 
-    void on_free(size_t net_data_size, size_t cnt = 1) noexcept {
-        free_space += net_data_size;
+    void on_free(size_t record_bytes, size_t cnt = 1) noexcept {
+        free_space += record_bytes;
         record_count -= cnt;
     }
 
-    void on_free(log_location loc) noexcept {
+    void on_free(record_location loc) noexcept {
         on_free(loc.size);
     }
 };
@@ -453,8 +454,8 @@ struct separator_buffer {
         return !buf || !buf->has_data();
     }
 
-    size_t offset_in_buffer() const noexcept {
-        return buf ? buf->offset_in_buffer() : 0;
+    size_t serialized_size() const noexcept {
+        return buf ? buf->serialized_size() : 0;
     }
 
     future<> close() {

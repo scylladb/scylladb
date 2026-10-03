@@ -442,7 +442,7 @@ public:
         return result;
     }
 
-    bool populate_cache(const primary_index_key& key, log_location read_location, const mutation& m) const {
+    bool populate_cache(const primary_index_key& key, record_location read_location, const mutation& m) const {
         if (!_cache_tracker) {
             return false;
         }
@@ -456,7 +456,7 @@ public:
         return true;
     }
 
-    bool is_record_alive(const primary_index_key& key, log_location location) const {
+    bool is_record_alive(const primary_index_key& key, record_location location) const {
         auto it = find_key(key);
         if (it != _partitions.end()) {
             return it->_e.location == location;
@@ -465,7 +465,7 @@ public:
         }
     }
 
-    bool update_record_location(const primary_index_key& key, log_location old_location, log_location new_location) {
+    bool update_record_location(const primary_index_key& key, record_location old_location, record_location new_location) {
         auto it = find_key(key);
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
@@ -518,7 +518,7 @@ public:
         return {insert_result::inserted, std::nullopt};
     }
 
-    bool erase(const primary_index_key& key, log_location loc) {
+    bool erase(const primary_index_key& key, record_location loc) {
         auto it = find_key(key);
         if (it != _partitions.end() && it->_e.location == loc) {
             it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
@@ -556,7 +556,7 @@ public:
 class key_mismatch_error : public std::runtime_error {
 public:
     struct cache_location {};
-    using location_variant = std::variant<log_location, cache_location>;
+    using location_variant = std::variant<record_location, cache_location>;
 
     key_mismatch_error(const partition_key& expected, const partition_key& actual, const location_variant& location)
         : std::runtime_error(format_message(expected, actual, location))
@@ -566,7 +566,7 @@ private:
     static std::string format_message(const partition_key& expected, const partition_key& actual, const location_variant& location) {
         return std::visit([&](auto&& loc) {
             using T = std::decay_t<decltype(loc)>;
-            if constexpr (std::is_same_v<T, log_location>) {
+            if constexpr (std::is_same_v<T, record_location>) {
                 return format("logstor: key mismatch reading log entry at {}: expected {}, got {}",
                     loc, expected, actual);
             } else {

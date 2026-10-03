@@ -13,21 +13,17 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/queue.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/expiring_fifo.hh>
 #include <seastar/core/timed_out_error.hh>
+#include <seastar/core/timer.hh>
 
-#include "replica/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
-#include "schema/schema_fwd.hh"
-#include "types.hh"
 #include "timeout_config.hh"
 
 namespace replica {
@@ -50,98 +46,76 @@ struct write_target {
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
-
     using ostream = seastar::simple_memory_output_stream;
 
     log_record _record;
-    mutable std::optional<size_t> _data_size;
-
-    void compute_sizes() const;
 
 public:
     explicit log_record_writer(log_record record)
         : _record(std::move(record))
     {}
 
-    size_t header_size() const {
-        return ondisk::log_record_header_size(_record.header);
-    }
+    const log_record& record() const { return _record; }
+    const record_header& header() const { return _record.header; }
 
-    // The data size is computed lazily, as it requires measuring the serialized mutation.
-    size_t data_size() const {
-        if (!_data_size) {
-            compute_sizes();
-        }
-        return *_data_size;
-    }
+    size_t header_size() const { return ondisk::record_header_size(_record.header); }
+    size_t value_size() const { return _record.value.size(); }
+    // The record without its frame header: the record header and the value.
+    size_t record_size() const { return header_size() + value_size(); }
 
-    // Total serialized content size (header + data)
-    size_t size() const {
-        return header_size() + data_size();
-    }
-
-    // Write the record to an output stream
-    void write(ostream& out) const;
-
-    const log_record& record() const {
-        return _record;
-    }
-
-    const log_record_header& header() const {
-        return _record.header;
-    }
+    // Write the record's frame - frame header, record header, value - to an output stream.
+    void write_frame(ostream& out) const;
 };
 
 // Writer for log records that stores pre-serialized bytes.
 // Used in compaction and separator rewriting to avoid deserialization.
 class log_record_bytes_writer {
-
     using ostream = seastar::simple_memory_output_stream;
 
-    log_record_header _header;
+    record_header _header;
     bytes_view _header_bytes;
-    bytes_view _data_bytes;
+    bytes_view _value_bytes;
 
 public:
-    log_record_bytes_writer(log_record_header header, log_record_bytes_view record_bytes)
+    log_record_bytes_writer(record_header header, log_record_bytes_view record_view)
         : _header(std::move(header))
-        , _header_bytes(record_bytes.header)
-        , _data_bytes(record_bytes.data)
+        , _header_bytes(record_view.header)
+        , _value_bytes(record_view.value)
     {}
 
-    const log_record_header& header() const { return _header; }
+    const record_header& header() const { return _header; }
 
     size_t header_size() const { return _header_bytes.size(); }
-    size_t data_size() const { return _data_bytes.size(); }
-    size_t size() const { return header_size() + data_size(); }
+    size_t value_size() const { return _value_bytes.size(); }
+    size_t record_size() const { return header_size() + value_size(); }
 
-    void write(ostream& out) const;
+    void write_frame(ostream& out) const;
 };
 
 template <typename T>
 concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_output_stream& out) {
-    { w.header() } -> std::convertible_to<const log_record_header&>;
+    { w.header() } -> std::convertible_to<const record_header&>;
     { w.header_size() } -> std::convertible_to<size_t>;
-    { w.data_size() } -> std::convertible_to<size_t>;
-    { w.size() } -> std::convertible_to<size_t>;
-    { w.write(out) };
+    { w.value_size() } -> std::convertible_to<size_t>;
+    { w.record_size() } -> std::convertible_to<size_t>;
+    { w.write_frame(out) };
 };
 
-using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
+using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
-// Where a record that sits at `offset_in_buffer` of a buffer ends up, once that buffer has been
-// written to a segment at `buffer_location`. A buffer learns where it was written once, and the
+// Where a record whose frame sits at `frame_offset` of a buffer ends up, once that buffer has been
+// written to a segment at `buffer_position`. A buffer learns where it was written once, and the
 // location of every record in it follows from that.
-inline log_location record_location(log_location buffer_location, size_t offset_in_buffer, size_t size) noexcept {
-    return log_location {
-        .segment = buffer_location.segment,
-        .offset = static_cast<uint32_t>(buffer_location.offset + offset_in_buffer),
-        .size = static_cast<uint32_t>(size),
+inline record_location locate_record(segment_position buffer_position, size_t frame_offset, size_t frame_size) noexcept {
+    return record_location {
+        .segment = buffer_position.segment,
+        .offset = static_cast<uint32_t>(buffer_position.offset + frame_offset),
+        .size = static_cast<uint32_t>(frame_size),
     };
 }
 
 struct buffered_write_result {
-    future<log_location_with_holder> persisted;
+    future<record_location_with_holder> persisted;
 };
 
 // Serializes one in-memory logstor buffer.
@@ -151,11 +125,11 @@ struct buffered_write_result {
 // layout is:
 //   buffer_header
 //   (segment_header)?                 // for segment_kind::full only
-//   record_header + log_record_header (fixed fields + partition key) + canonical_mutation
+//   record_frame_header + record_header (fixed fields + partition key) + record value
 //   ...
 //   zero padding to the requested final alignment
 //
-// Each record payload is aligned to record_alignment. For full buffers,
+// Each record frame is padded to record_alignment. For full buffers,
 // the segment header stores the owning table and the min/max token range of the
 // appended records. This type is serialization-only and is used directly by tests
 // and internally by write_buffer.
@@ -164,9 +138,11 @@ public:
 
     using ostream = seastar::simple_memory_output_stream;
 
+    // Where the appended record frame starts in the buffer, and how many bytes it takes
+    // without its padding - which is what record_location::size holds.
     struct append_result {
-        size_t record_header_offset;
-        size_t total_size;
+        size_t frame_offset;
+        size_t frame_size;
     };
 
 private:
@@ -181,7 +157,8 @@ private:
     ostream _header_stream;
     ostream _segment_header_stream;
 
-    size_t _net_data_size{0};
+    // The frame sizes of the appended records summed, their padding excluded.
+    size_t _record_bytes{0};
     size_t _record_count{0};
     std::optional<dht::token> _min_token;
     std::optional<dht::token> _max_token;
@@ -201,29 +178,26 @@ public:
     raw_write_buffer& operator=(raw_write_buffer&&) noexcept = default;
 
     const char* data() const noexcept { return _buffer.get(); }
-    size_t serialized_size() const noexcept { return offset_in_buffer(); }
 
-    size_t get_buffer_size() const noexcept { return _buffer_size; }
-    size_t offset_in_buffer() const noexcept { return _buffer_size - _stream.size(); }
+    // The bytes written to the buffer so far, which after seal() is the whole buffer to write out.
+    size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
 
-    bool can_fit(size_t data_size) const noexcept;
+    size_t buffer_size() const noexcept { return _buffer_size; }
+
+    bool can_fit(size_t record_size) const noexcept;
 
     template <log_record_writer_concept Writer>
     bool can_fit(const Writer& writer) const noexcept {
-        return can_fit(writer.size());
-    }
-
-    bool can_fit(size_t header_size, size_t data_size) const noexcept {
-        return can_fit(header_size + data_size);
+        return can_fit(writer.record_size());
     }
 
     bool has_data() const noexcept;
 
-    // The largest record that fits an empty buffer of this size and kind. The kinds differ in what
-    // they carry ahead of their records, so a record can fit a buffer of one kind and not of the
-    // other.
+    // The largest record - record header and value, the frame header aside - that fits an
+    // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
+    // records, so a record can fit a buffer of one kind and not of the other.
     static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = header_size(kind) + ondisk::record_header_size;
+        const size_t overhead = buffer_headers_size(kind) + ondisk::record_frame_header_size;
         return buffer_size > overhead ? buffer_size - overhead : 0;
     }
 
@@ -240,7 +214,7 @@ public:
         return max_record_size(_buffer_size, _segment_kind);
     }
 
-    size_t net_data_size() const noexcept { return _net_data_size; }
+    size_t record_bytes() const noexcept { return _record_bytes; }
     size_t record_count() const noexcept { return _record_count; }
     segment_kind kind() const noexcept { return _segment_kind; }
 
@@ -249,13 +223,16 @@ public:
 
     size_t sealed_size(size_t alignment) const noexcept;
 
-    static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind);
+    // How many segments of this kind `record_count` records of `record_bytes` bytes take.
+    static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
 
     bool with_segment_header() const noexcept {
         return _segment_kind == segment_kind::full;
     }
 
-    static constexpr size_t header_size(segment_kind kind) noexcept {
+    // What a buffer of this kind carries ahead of its records: the buffer header, and the
+    // segment header too for a full segment.
+    static constexpr size_t buffer_headers_size(segment_kind kind) noexcept {
         size_t s = ondisk::buffer_header_size;
         if (kind == segment_kind::full) {
             s += ondisk::segment_header_size;
@@ -263,16 +240,8 @@ public:
         return s;
     }
 
-    size_t header_size() const noexcept {
-        return header_size(_segment_kind);
-    }
-
-    static bool validate_header(const ondisk::buffer_header& bh) {
-        return ondisk::validate_header(bh);
-    }
-
-    static bool validate_record_header(const ondisk::record_header& rh) {
-        return ondisk::validate_record_header(rh);
+    size_t buffer_headers_size() const noexcept {
+        return buffer_headers_size(_segment_kind);
     }
 
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
@@ -282,11 +251,7 @@ private:
     // table is set for segment_kind::full
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
-    template <std::invocable<ostream&> WriteRecordPayload>
-    append_result append_record(const log_record_header& header, size_t header_size, size_t data_size, WriteRecordPayload write_payload);
-
     void pad_to_alignment(size_t alignment);
-    void finalize(size_t alignment);
 
     friend class write_buffer;
 };
@@ -295,7 +260,7 @@ private:
 //
 // This is the buffer type used by the segment manager, buffered_writer,
 // compaction, and separator flows. write() appends a record to the underlying
-// raw buffer and returns a future that resolves to the final log_location once
+// raw buffer and returns a future that resolves to the final record_location once
 // the buffer is flushed. The returned gate holder keeps the buffer alive for
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
@@ -303,21 +268,21 @@ class write_buffer {
 public:
     struct record_in_buffer {
         log_record_writer writer;
-        // Where the record sits in the buffer, rather than a future of where it ended up: the
-        // separator only ever looks at these once the buffer has been written, so a record can be
-        // located from the buffer's own location instead of waiting for one of its own.
-        size_t offset_in_buffer;
-        size_t size;
+        // Where the record's frame sits in the buffer, rather than a future of where it ended up:
+        // the separator only ever looks at these once the buffer has been written, so a record can
+        // be located from the buffer's own position instead of waiting for one of its own.
+        size_t frame_offset;
+        size_t frame_size;
         write_target target;
 
-        log_location location(log_location buffer_location) const noexcept {
-            return record_location(buffer_location, offset_in_buffer, size);
+        record_location location(segment_position buffer_position) const noexcept {
+            return locate_record(buffer_position, frame_offset, frame_size);
         }
     };
 
 private:
     raw_write_buffer _raw;
-    shared_promise<log_location> _written;
+    shared_promise<segment_position> _written;
     seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
@@ -340,19 +305,18 @@ public:
     const char* data() const noexcept { return _raw.data(); }
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
 
-    size_t get_buffer_size() const noexcept { return _raw.get_buffer_size(); }
-    size_t offset_in_buffer() const noexcept { return _raw.offset_in_buffer(); }
+    size_t buffer_size() const noexcept { return _raw.buffer_size(); }
 
-    bool can_fit(size_t data_size) const noexcept { return _raw.can_fit(data_size); }
+    bool can_fit(size_t record_size) const noexcept { return _raw.can_fit(record_size); }
     template <log_record_writer_concept Writer>
     bool can_fit(const Writer& writer) const noexcept { return _raw.can_fit(writer); }
     bool has_data() const noexcept { return _raw.has_data(); }
 
     size_t max_record_size() const noexcept { return _raw.max_record_size(); }
-    size_t net_data_size() const noexcept { return _raw.net_data_size(); }
+    size_t record_bytes() const noexcept { return _raw.record_bytes(); }
     size_t record_count() const noexcept { return _raw.record_count(); }
 
-    size_t sealed_size(size_t alignment) {
+    size_t sealed_size(size_t alignment) const noexcept {
         return _raw.sealed_size(alignment);
     }
 
@@ -361,14 +325,14 @@ public:
     }
 
     // Write a record to the buffer.
-    // Returns a future that will be resolved with the log location once flushed and a gate holder
+    // Returns a future that will be resolved with the record location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
     template <log_record_writer_concept Writer>
-    future<log_location_with_holder> write(Writer writer, write_target target = {});
+    future<record_location_with_holder> write(Writer writer, write_target target = {});
 
-    // Complete all tracked writes with their locations when the buffer is flushed to base_location
-    future<> complete_writes(log_location base_location);
+    // Complete all tracked writes with their locations when the buffer is flushed to buffer_position
+    future<> complete_writes(segment_position buffer_position);
     future<> abort_writes(std::exception_ptr);
 
 private:
@@ -386,8 +350,8 @@ private:
 extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
 extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
-extern template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
-extern template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+extern template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+extern template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
 
 class write_buffer_pool;
 
@@ -554,7 +518,7 @@ class buffered_writer {
 
     struct queued_write {
         seastar::promise<buffered_write_result> accepted_pr; // written to buffer
-        seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
+        seastar::promise<record_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
         write_target target;
         // Keeps the writer from finishing its stop() while the record is on the queue. It is held
@@ -634,7 +598,7 @@ class buffered_writer {
     bool should_rotate_head_for_flush() const noexcept;
     bool maybe_advance_head() noexcept;
 
-    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
+    std::optional<future<record_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
     // Puts a record that found no room in the ring on the queue of writes waiting for some, and
     // waits there for it to be taken into a buffer.

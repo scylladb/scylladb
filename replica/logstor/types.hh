@@ -11,7 +11,7 @@
 #include <fmt/format.h>
 #include "dht/decorated_key.hh"
 #include "replica/logstor/key_utils.hh"
-#include "mutation/canonical_mutation.hh"
+#include "bytes_ostream.hh"
 #include "mutation/timestamp.hh"
 
 namespace replica::logstor {
@@ -23,12 +23,22 @@ struct log_segment_id {
     auto operator<=>(const log_segment_id& other) const noexcept = default;
 };
 
-struct log_location {
+struct segment_position {
+    log_segment_id segment;
+    uint32_t offset;
+
+    bool operator==(const segment_position& other) const noexcept = default;
+};
+
+// Where a record frame lives. `size` is its frame size: the record frame header, the record header
+// and the value, without the padding that follows the frame inside a buffer. It is what
+// segment_manager::read() reads and what the space accounting counts.
+struct record_location {
     log_segment_id segment;
     uint32_t offset;
     uint32_t size;
 
-    bool operator==(const log_location& other) const noexcept = default;
+    bool operator==(const record_location& other) const noexcept = default;
 };
 
 struct primary_index_key {
@@ -56,13 +66,13 @@ struct primary_index_key {
 };
 
 struct index_entry {
-    log_location location;
+    record_location location;
     api::timestamp_type timestamp;
 
     bool operator==(const index_entry& other) const noexcept = default;
 };
 
-struct log_record_header {
+struct record_header {
     dht::decorated_key key;
     api::timestamp_type timestamp;
     table_id table;
@@ -73,7 +83,7 @@ struct log_record_header {
         return primary_index_key(key);
     }
 
-    bool operator==(const log_record_header& other) const noexcept {
+    bool operator==(const record_header& other) const noexcept {
         return key.token() == other.key.token()
             && key.key().representation() == other.key.key().representation()
             && timestamp == other.timestamp
@@ -81,14 +91,35 @@ struct log_record_header {
     }
 };
 
+// The value of a record: the partition it holds, encoded. The bytes are opaque everywhere but in
+// replica/logstor/record_value.hh, where the two functions that encode and decode them live.
+class record_value {
+    bytes_ostream _data;
+
+public:
+    record_value() = default;
+    explicit record_value(bytes_ostream data) noexcept
+        : _data(std::move(data))
+    { }
+    // A copy of the value's bytes, as read from a record on disk.
+    explicit record_value(bytes_view data) {
+        _data.write(data);
+    }
+
+    size_t size() const noexcept { return _data.size(); }
+    const bytes_ostream& representation() const noexcept { return _data; }
+
+    bool operator==(const record_value& other) const noexcept { return _data == other._data; }
+};
+
 struct log_record {
-    log_record_header header;
-    canonical_mutation mut;
+    record_header header;
+    record_value value;
 };
 
 struct log_record_bytes_view {
     bytes_view header;
-    bytes_view data;
+    bytes_view value;
 };
 
 struct segment_sequence {
@@ -121,8 +152,8 @@ enum class segment_kind : uint8_t {
 class space_accounting_subscriber {
 public:
     virtual ~space_accounting_subscriber() = default;
-    virtual void on_add_record(log_location location) noexcept = 0;
-    virtual void on_free_record(log_location location) noexcept = 0;
+    virtual void on_add_record(record_location location) noexcept = 0;
+    virtual void on_free_record(record_location location) noexcept = 0;
 };
 
 }
@@ -137,9 +168,17 @@ struct fmt::formatter<replica::logstor::log_segment_id> : fmt::formatter<string_
 };
 
 template <>
-struct fmt::formatter<replica::logstor::log_location> : fmt::formatter<string_view> {
+struct fmt::formatter<replica::logstor::segment_position> : fmt::formatter<string_view> {
     template <typename FormatContext>
-    auto format(const replica::logstor::log_location& loc, FormatContext& ctx) const {
+    auto format(const replica::logstor::segment_position& pos, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{segment:{}, offset:{}}}", pos.segment, pos.offset);
+    }
+};
+
+template <>
+struct fmt::formatter<replica::logstor::record_location> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const replica::logstor::record_location& loc, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{segment:{}, offset:{}, size:{}}}",
                              loc.segment, loc.offset, loc.size);
     }

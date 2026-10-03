@@ -29,7 +29,7 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 - **Recovery**: Scans segments on startup to rebuild the index
 - **Separator**: Writes to all _compaction groups_ (tablets and even tables) go to a single active segment. The separator splits these mixed segments, which have records from different compaction groups, into segments that each has a single compaction group. This separation is useful when migrating tablets.
 
-The data in the segments consists of records of type `log_record`. Each record contains the value for some key as a `canonical_mutation` and additional metadata.
+The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata. On disk a record is stored as a **record frame**, described under [Record Frames](#record-frames) below, which is also the unit the index points at.
 
 The `segment_manager` receives new writes via a `write_buffer` and writes them sequentially to the active segment with 4k-block alignment.
 
@@ -184,21 +184,21 @@ A buffer within a segment has the following layout:
 ```
 buffer_header
 (segment_header)?       -- present only when kind == full
-record_1
-record_2
+record_frame_1
+record_frame_2
 ...
-record_n
+record_frame_n
 zero_padding            -- to align the entire buffer to block_alignment (4096 bytes)
 ```
 
-buffer_header, segment_header, and records are aligned by `record_alignment` (8 bytes).
+buffer_header, segment_header, and record frames are aligned by `record_alignment` (8 bytes).
 
 All integer fields in the structures below are serialized little-endian, including the two
 64-bit halves of a UUID.
 
 #### Buffer Header
 
-A serialized form of `write_buffer::buffer_header`.
+A serialized form of `ondisk::buffer_header`.
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
@@ -207,7 +207,7 @@ A serialized form of `write_buffer::buffer_header`.
 | 5      | 1    | `version`   | Version of the write buffer format. |
 | 6      | 2    | `reserved`  | Reserved for future use. Currently written as zero and included in the CRC. |
 | 8      | 8    | `segment_seq` | Monotonic segment sequence number used during recovery and segment ordering checks. |
-| 16     | 4    | `data_size` | Size in bytes of all record data following the header(s). |
+| 16     | 4    | `records_size` | Size in bytes of the record frames following the header(s), their padding included. |
 | 20     | 4    | `crc`       | CRC32 of all preceding buffer header fields. Used for validating the header. |
 
 The buffer header is 24 bytes long, which keeps it aligned to `record_alignment` (8 bytes).
@@ -216,7 +216,7 @@ The buffer header is 24 bytes long, which keeps it aligned to `record_alignment`
 
 Immediately follows the buffer header when `kind == full`.
 
-A serialized form of `write_buffer::segment_header`.
+A serialized form of `ondisk::segment_header`.
 
 | Offset | Size | Field         | Description |
 |--------|------|---------------|-------------|
@@ -224,27 +224,39 @@ A serialized form of `write_buffer::segment_header`.
 | 40     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
 | 48     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
 
-#### Records
+#### Record Frames
 
-Each record within the buffer is structured as:
+Each record within the buffer is stored as a record frame:
 
 ```
-record_header        (8 bytes)
-log_record_header    (32 + key_size bytes)
-canonical_mutation   (data_size bytes)
+record_frame_header  (8 bytes)
+record_header        (32 + key_size bytes)
+record_value         (value_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
-**Record Header** (`ondisk::record_header`):
+The sizes of the parts of a frame are named consistently throughout the code, since several of
+them are otherwise easy to confuse:
+
+| Name | Bytes |
+|------|-------|
+| `header_size`  | The serialized `record_header`: its fixed part plus `key_size`. |
+| `value_size`   | The serialized `record_value`. Stored in the frame header. |
+| `record_size`  | `header_size + value_size` — the record without its frame header. This is what `max_record_size()` bounds. |
+| `frame_size`   | `record_frame_header_size + record_size` — the frame without its padding. This is what `record_location::size` holds. |
+| `records_size` | All the frames of one buffer, their padding included. Stored in the buffer header. |
+| `record_bytes` | The frame sizes of a set of records summed, their padding excluded. What a `segment_descriptor` and the `live_record_bytes` metric count. |
+
+**Record Frame Header** (`ondisk::record_frame_header`):
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
-| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `log_record_header` that follows. |
-| 4      | 4    | `data_size` | Size in bytes of the serialized `canonical_mutation` that follows the `log_record_header`. |
+| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `record_header` that follows. |
+| 4      | 4    | `value_size` | Size in bytes of the `record_value` that follows the `record_header`. |
 
-**Log Record Header** (`log_record_header`):
+**Record Header** (`record_header`):
 
-Written by `ondisk::write_log_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
+Written by `ondisk::write_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
 
 | Offset | Size       | Field       | Description |
 |--------|------------|-------------|-------------|
@@ -253,12 +265,25 @@ Written by `ondisk::write_log_record_header()`. The fixed fields come first, at 
 | 16     | 16         | `table`     | `table_id` (UUID) — the table this record belongs to, written as its most significant and then its least significant 64-bit half. |
 | 32     | `key_size` | `key`       | The partition key in its internal representation (`partition_key::representation()`). |
 
-**Mutation Data**:
+**Record Value** (`record_value`):
 
-The `data_size` bytes immediately following the log record header are the IDL-serialized `canonical_mutation`, which holds the full partition value.
+The `value_size` bytes immediately following the record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is.
 
-**Record Location** (`log_location`):
+The encoding is written and read in `replica/logstor/record_value.cc`, behind `encode_record_value()` and `decode_record_value()`. It is a `canonical_mutation` stripped of what the record header already carries, the table id and the partition key, with the remaining parts each written by the serializer `canonical_mutation` uses for it:
 
-The `log_location` stored in the index for each record points to the start of the `record_header`:
-- `offset`: byte offset from the start of the segment to the `record_header`.
-- `size`: total size including `record_header` + `log_record_header` + `canonical_mutation`
+| Offset | Size       | Field                | Description |
+|--------|------------|----------------------|-------------|
+| 0      | 16         | `schema_version`     | The version of the schema the record was written under, as its most significant and then its least significant 64-bit half. |
+| 16     | variable   | `column_mapping`     | The columns of that schema version, IDL-serialized. A read under the same schema version steps over it; a read under another version uses it to map the record's columns onto the schema's, so a record stays readable after an `ALTER TABLE`. It is stored in the record because the schema history in the system tables keeps superseded versions only for a while. |
+|        | variable   | `mutation_partition` | The partition, IDL-serialized as `mutation_partition_serializer` writes it. |
+
+The value has no frame or size of its own: `value_size` gives its size.
+
+**Record Location** (`record_location`):
+
+The `record_location` stored in the index for each record points to the start of the `record_frame_header`:
+- `segment`: the `log_segment_id` holding the frame.
+- `offset`: byte offset from the start of the segment to the `record_frame_header`.
+- `size`: the `frame_size` — `record_frame_header` + `record_header` + `record_value`, without the padding that follows the frame. Reading exactly these bytes at this offset yields the whole record, which is what `segment_manager::read()` does.
+
+Where a sealed buffer itself landed is a `segment_position` instead: the segment and the offset, with no size. Each record location is derived from it by adding the record's frame offset within the buffer. The two are separate types so that a buffer position cannot be read as a record location.

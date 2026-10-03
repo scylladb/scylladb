@@ -125,10 +125,10 @@ public:
 
     future<> write(write_buffer& wb);
 
-    future<log_record> read(log_location location);
+    future<log_record> read(record_location location);
 
-    void on_add_record(log_location location) noexcept override;
-    void on_free_record(log_location location) noexcept override;
+    void on_add_record(record_location location) noexcept override;
+    void on_free_record(record_location location) noexcept override;
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
