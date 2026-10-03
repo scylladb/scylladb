@@ -6,10 +6,24 @@
 
 import logging
 import math
+import os
+import pathlib
+import re
+import resource
+import ssl
+import sys
+from subprocess import PIPE, Popen, check_output
 
 import pytest
+from cassandra import InvalidRequest, WriteFailure
+from cassandra.cluster import NoHostAvailable, Session
+from ccmlib.cluster import Cluster
+from ccmlib.node import Node
 
 from dtest_class import Tester, create_ks
+from tools.data import wait_for_schema_agreement
+from tools.metrics import get_node_metrics
+from tools.misc import generate_ssl_stores, is_coverage
 
 from test.pylib.skip_types import skip_env
 
@@ -31,6 +45,9 @@ MAX_CELLS_COLUMNS = LIMIT_32K
 MAX_CELLS_BATCH_SIZE = 50
 MAX_CELLS = 16777216
 
+# Timeout in seconds for long-running DDL operations (e.g., CREATE TABLE with many columns)
+TIMEOUT = 90
+
 # Those are values used to validate the tests code
 # MAX_KEY_SIZE = 1000
 # MAX_BLOB_SIZE = 1000
@@ -42,6 +59,7 @@ MAX_CELLS = 16777216
 # MAX_CELLS = 1000
 
 
+@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestLimits(Tester):
     def prepare(self):
@@ -288,3 +306,256 @@ class TestLimits(Tester):
         self._create_max_cell_count_table(session)
         stmt = self._prepare_max_cell_count_insert(session, MAX_CELLS_COLUMNS)
         self._do_test_max_cell_count(session, stmt)
+
+    def _do_test_max_columns(self, session, count, expect_failure=False):
+        print("Testing maximum numbers of columns with count {}.{}".format(count, " Expected failure..." if expect_failure else ""))
+
+        # we must count the primary key
+        count -= 1
+        count = max(count, 0)
+
+        keys = ""
+        keys_create = ""
+        for i in range(count):
+            keys += "key" + str(i) + ", "
+            keys_create += "key" + str(i) + " int, "
+        values = "1, " * count
+
+        c = """CREATE TABLE test1 (%s blub int PRIMARY KEY,)""" % keys_create
+        if expect_failure:
+            expected_error = r"Command size \d+ is greater than the configured limit \d+"
+            self.ignore_log_patterns += [expected_error]
+            with pytest.raises(Exception, match=expected_error):
+                session.execute(c)
+            return
+
+        session.execute(c)
+
+        c = f"insert into ks.test1  ({keys} blub) values ({values} 1);"
+        session.execute(c)
+
+        session.execute("""DROP TABLE test1""")
+        wait_for_schema_agreement(session)  # to prevent raft errors during shutdown
+
+    @pytest.mark.skip_mode(mode="debug", reason="client times out in debug mode")
+    def test_max_columns_and_query_parameters(self):
+        cluster = self.prepare()
+
+        if is_coverage(self.cluster.get_install_dir()):
+            skip_env("Client timeout when coverage is enabled")
+
+        cluster.set_configuration_options(
+            values={
+                "query_tombstone_page_limit": 9999999,
+                "request_timeout_in_ms": int(TIMEOUT * 1000),
+                "group0_raft_op_timeout_in_ms": int(TIMEOUT * 2 * 1000),
+            }
+        )
+        cluster.populate(1).start(jvm_args=["--memory", "4G"])
+        node = cluster.nodelist()[0]
+        session = self.patient_cql_connection(node, request_timeout=TIMEOUT)
+        create_ks(session, "ks", 1)
+        session.execute("UPDATE system.config SET value='100000' WHERE name='query_tombstone_page_limit'")
+
+        count = 1
+        for i in range(int(math.log(MAX_COLUMNS, 2))):
+            count <<= 1
+            self._do_test_max_columns(session, count - 1, expect_failure=count == MAX_COLUMNS)
+
+    def populate_cluster_with_ssl_enabled(self, nodes_num: int) -> Cluster:
+        cluster = self.cluster
+        # scylla-dtest could name the node addresses before the nodes existed:
+        # ccm handed out get_ipprefix()+1, +2, ...  Here every node leases its
+        # address from a pool shared with the other clusters of this worker, so
+        # the addresses are only known once the cluster has been populated.
+        # Populating first costs nothing - the nodes are not started yet, and
+        # set_configuration_options() below writes the option to each of them.
+        cluster.populate(nodes_num)
+        generate_ssl_stores(self.cluster.get_path(), ip_addresses=[node.address() for node in cluster.nodelist()])
+        options = {"enabled": True, "certificate": os.path.join(self.cluster.get_path(), "ccm_node.pem"), "keyfile": os.path.join(self.cluster.get_path(), "ccm_node.key")}
+        cluster.set_configuration_options({"client_encryption_options": options})
+        return cluster
+
+    def create_cql_session_with_ssl(self, node_to_connect: Node) -> Session:
+        # cause of issue https://github.com/scylladb/python-driver/issues/261
+        # we are reverting to older TLS version, until we'll figure it out
+        # or release a driver with work-around
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        ssl_context.load_cert_chain(certfile=os.path.join(self.cluster.get_path(), "ccm_node.pem"), keyfile=os.path.join(self.cluster.get_path(), "ccm_node.key"))
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context.load_verify_locations(cafile=os.path.join(self.cluster.get_path(), "ccm_node.cer"))
+
+        return self.patient_cql_connection(node=node_to_connect, ssl_context=ssl_context)
+
+    @pytest.mark.parametrize("mode", ["SSL", "non-SSL"])
+    def test_accepted_large_request(self, mode):
+        """
+        Tests #19472 - we now handle requests
+        as long as they can fit into commitlog as whole (including overhead)
+        thus the below inserts both should be fine.
+        """
+        if mode == "SSL":
+            cluster_populate = self.populate_cluster_with_ssl_enabled
+            create_session = self.create_cql_session_with_ssl
+        else:
+            cluster_populate = self.prepare().populate
+            create_session = self.patient_cql_connection
+
+        logger.debug("Preparing the cluster...")
+        cluster = cluster_populate(1)
+        cluster.start(jvm_args=["--smp", "2", "--commitlog-total-space-in-mb", "1024", "--memory", "2G"])
+        logger.debug("Cluster has been prepared...")
+        node = cluster.nodelist()[0]
+
+        session = create_session(node)
+
+        logger.debug("Creating a keyspace...")
+        create_ks(session=session, name="test_keyspace", rf=1)
+
+        logger.debug("Creating a table...")
+        session.execute("create table test_keyspace.test_table(id int primary key, test_string text);")
+
+        logger.info("Trying to send a large request to database (insert a large string into table)...")
+        long_string = "scylla" * 5 * 1024 * 1024
+        id_value = 17
+        session.execute(query=f"insert into test_keyspace.test_table (id, test_string) values ({id_value}, '{long_string}');")
+
+        session = create_session(node)
+        output = session.execute(f"select test_string from test_keyspace.test_table where id = {id_value};")
+        assert long_string == output.current_rows[0].test_string, "Expected the table contains very long string"
+
+        logger.info("Trying to send a regular request to database (insert a string of regular size into table)...")
+        short_string = "scylla" * 1024 * 1024
+        session.execute(query=f"insert into test_keyspace.test_table (id, test_string) values ({id_value}, '{short_string}');")
+        output = session.execute(f"select test_string from test_keyspace.test_table where id = {id_value};")
+        assert short_string == output.current_rows[0].test_string, "Expected to get the regular string inserted, but did not find it in the table!"
+
+    @pytest.mark.parametrize("mode", ["SSL", "non-SSL"])
+    def test_request_too_large(self, mode):
+        """
+        The request is considered as "too large" if it, and its overhead, cannot fit into a shards commitlog.
+        The test scenario is following:
+        1. Create node with 2 shards and total size 60mb.
+        2. Create a new keyspace and a new table.
+        3. Generate a too large request: try to insert a very large string into the table.
+        4. Check the exception was raised.
+        5. Create a new session and check the table is still empty.
+        6. Try to send a regular size request (insert a small string).
+        7. Check the string was inserted into the table
+        """
+        if mode == "SSL":
+            cluster_populate = self.populate_cluster_with_ssl_enabled
+            create_session = self.create_cql_session_with_ssl
+        else:
+            cluster_populate = self.prepare().populate
+            create_session = self.patient_cql_connection
+
+        logger.debug("Preparing the cluster...")
+        cluster = cluster_populate(1)
+        cluster.start(jvm_args=["--smp", "2", "--commitlog-total-space-in-mb", "60", "--commitlog-segment-size-in-mb", "6"])
+        logger.debug("Cluster has been prepared...")
+        node = cluster.nodelist()[0]
+
+        session = create_session(node)
+
+        logger.debug("Creating a keyspace...")
+        create_ks(session=session, name="test_keyspace", rf=1)
+
+        logger.debug("Creating a table...")
+        session.execute("create table test_keyspace.test_table(id int primary key, test_string text);")
+
+        logger.info("Trying to send a large request to database (insert a large string into table)...")
+        long_string = "scylla" * 5 * 1024 * 1024
+        id_value = 17
+        expected_error = "Could not write mutation test_keyspace:test_table.*std::invalid_argument.*Mutation.*is too large"
+        self.ignore_log_patterns.append(expected_error)
+        with pytest.raises((NoHostAvailable, WriteFailure, InvalidRequest)):
+            session.execute(query=f"insert into test_keyspace.test_table (id, test_string) values ({id_value}, '{long_string}');")
+
+        session = create_session(node)
+        output = session.execute(f"select test_string from test_keyspace.test_table where id = {id_value};")
+        assert not output.current_rows, "Expected the table was empty, but id had rows inserted!"
+
+        logger.info("Trying to send a regular request to database (insert a string of regular size into table)...")
+        short_string = "scylla" * 1024 * 1024
+        session.execute(query=f"insert into test_keyspace.test_table (id, test_string) values ({id_value}, '{short_string}');")
+        output = session.execute(f"select test_string from test_keyspace.test_table where id = {id_value};")
+        assert short_string == output.current_rows[0].test_string, "Expected to get the regular string inserted, but did not find it in the table!"
+
+
+@pytest.mark.dtest_full
+@pytest.mark.single_node
+class TestMaxCQLConnections(Tester):
+    def test_max_cql_connections(self):
+        """
+        Verifies fix https://github.com/scylladb/scylla/pull/9052 which aimed issue for crashing scylla when
+        there was more than 10000 connections per shard. Fix adds possibility to set max no of connections and
+        increased default value. But still db crashes when reaching this limit (tracked by #9056).
+
+        Test verifies also if connection pool is properly released after connection shutdown.
+        """
+        workers = 10  # opening many connections in python gets slower and slower. Spreading to workers helps.
+        connections_per_worker = 1050
+        total_connections = workers * connections_per_worker
+        self._tune_max_open_files_limit(total_connections)
+        self.cluster.populate(1).start(jvm_args=["--smp", "1", "--max-networking-io-control-blocks", str(total_connections)])
+        address = self.cluster.nodelist()[0].address()
+        processes, connections_created = self._create_cql_connections(address, connections_per_worker=connections_per_worker, workers=workers)
+
+        connections_created_metric = self._get_cql_connections_from_metrics(address)
+        assert connections_created_metric >= connections_created, f"only {connections_created_metric} connections created from {connections_created} required"
+        self._close_connections(processes)
+
+        # repeat to verify scylla closed connections correctly and can create new ones
+        processes, connections_created = self._create_cql_connections(address, connections_per_worker=connections_per_worker, workers=workers)
+        self._close_connections(processes)
+        connections_created_metric = self._get_cql_connections_from_metrics(address)
+        assert connections_created_metric >= connections_created, f"only {connections_created_metric} connections created from {connections_created} required"
+
+    def _create_cql_connections(self, address, connections_per_worker, workers):
+        logger.info("starting creating connections")
+        script_path = pathlib.Path(__file__).parent.absolute() / "scripts" / "create_dummy_cql_connections.py"
+        processes = []
+        connections_regex = re.compile(r"(\d+) cql connections created.")
+        connections_created = 0
+        for _ in range(workers):
+            process = Popen([sys.executable, script_path, address, str(connections_per_worker)], stdin=PIPE, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+            processes.append(process)
+            # wait for finish connection creation
+            line = process.stdout.readline()
+            try:
+                connections = int(connections_regex.match(line).group(1))
+                connections_created += connections
+            except ValueError:
+                assert False, f"Dummy connections creation script failed after creating {connections_created} connections. stdout: {line}, stderr: {'\n'.join(process.stderr.readlines())}"
+            if not connections == connections_per_worker:
+                break
+        logger.info(f"Created {connections_created} connections")
+        assert connections_created == (workers * connections_per_worker), f"Only {connections_created} connections created from {workers * connections_per_worker} requested"
+
+        logger.info("All connections created successfully")
+        return processes, connections_created
+
+    def _close_connections(self, processes):
+        """dummy cql connections scripts end after pressing any key."""
+        for process in processes:
+            _stdout, stderr = process.communicate("a", timeout=10)
+            assert process.returncode == 0, f"Error in create dummy connections script: {stderr}"
+
+    def _get_cql_connections_from_metrics(self, address) -> int:
+        return get_node_metrics(address, ['scylla_transport_cql_connections{shard="0"}'])['scylla_transport_cql_connections{shard="0"}']
+
+    def _tune_max_open_files_limit(self, total_connections):
+        """each connection creates 1 open file per shard.
+        Creating many connections requires tuning max open files in system."""
+        pid = os.getpid()
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        soft_new_limit = max(soft, 2 * total_connections)
+        hard_new_limit = max(hard, 2 * total_connections)
+        logger.debug(f"current limits: {soft}, {hard}")
+        if soft < soft_new_limit:
+            check_output(f"sudo prlimit --pid {pid} --nofile={soft_new_limit}:{hard_new_limit}", shell=True, universal_newlines=True)
+        ulimit = int(check_output("ulimit -n", shell=True, universal_newlines=True))
+        assert ulimit == soft_new_limit
+        logger.info(f"Updated max open files limit to: {ulimit}")

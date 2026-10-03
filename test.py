@@ -223,6 +223,12 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
+    parser.add_argument('--force-resource-intensive-tests', action='store_true', default=False,
+                        help="dtest: run the tests marked resource_intensive even when the machine is too small for them")
+    parser.add_argument('--skip-resource-intensive-tests', action='store_true', default=False,
+                        help="dtest: deselect the tests marked resource_intensive")
+    parser.add_argument('--execute-upgrade-tests', action='store_true', default=False,
+                        help="dtest: run the tests marked upgrade_test, which are deselected by default")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"
                              "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
@@ -236,6 +242,12 @@ def parse_cmd_line() -> argparse.Namespace:
                         help = "Do not delete llvm indexed profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-lcovs",action = 'store_true',
                         help = "Do not delete intermediate lcov traces when processing coverage reports.")
+    parser.add_argument("--select-tests-as-mode", action="store", default=None, metavar="MODE",
+                        help="Choose tests by MODE's run_in_*/skip_in_* lists, whatever mode runs them "
+                             "(e.g. --mode coverage --select-tests-as-mode dev).")
+    parser.add_argument("--coverage-per-test", action="store", default=None, metavar="DIR",
+                        help="Write an LLVM coverage profile of every test (all scylla processes it ran) to "
+                             "DIR/<test>.profdata.zst, with its outcome in DIR/<test>.json.  Needs --mode coverage.")
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
@@ -416,6 +428,10 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.select_tests_as_mode:
+        args.append(f'--select-tests-as-mode={options.select_tests_as_mode}')
+    if options.coverage_per_test:
+        args.append(f'--coverage-per-test={os.path.abspath(options.coverage_per_test)}')
     if options.coverage:
         args.append('--coverage')
         args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
@@ -441,6 +457,9 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append('--save-log-on-success')
     if options.markers:
         args.append(f'-m={options.markers}')
+    for flag in ("force_resource_intensive_tests", "skip_resource_intensive_tests", "execute_upgrade_tests"):
+        if getattr(options, flag):
+            args.append("--" + flag.replace("_", "-"))
     if options.log_level:
         args.append(f'--log-level={options.log_level}')
     args.extend(files_to_run)

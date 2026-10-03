@@ -1,0 +1,44 @@
+keyspace: keyspace1
+
+keyspace_definition: |
+  CREATE KEYSPACE keyspace1 WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+
+table: standard1
+
+table_definition:
+
+  CREATE TABLE standard1 (
+    p_key bigint,
+    c1 text,
+    c2 text,
+    c3 text,
+    c4 text,
+    c5 timeuuid,
+    PRIMARY KEY(p_key)
+  );
+
+columnspec:
+  - name: p_key
+    population: gaussian(1..3000,1500)
+  - name: c1
+    size: fixed(16)
+  - name: c2
+    size: uniform(1..32)
+  - name: c3
+    size: fixed(80) # sha-512
+  - name: c3
+    size: uniform(16..50)
+  - name: c4
+    size: uniform(20..40)
+  - name: c5
+    size: gaussian(100..500)
+
+insert:
+  partitions: fixed(1)
+  select:    fixed(1)/1
+  batchtype: UNLOGGED
+
+queries:
+  single:
+    cql: select * from standard1 where p_key = ? LIMIT 1
+    fields: samerow

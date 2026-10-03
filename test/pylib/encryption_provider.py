@@ -20,7 +20,6 @@ from test.pylib.kmip_wrapper import KMIPServerWrapper
 from test.pylib.azure_vault_server_mock import MockAzureVaultServer
 from test.pylib.gcp_kms_server_mock import MockGcpKmsServer
 
-import boto3
 
 class KeyProvider(Enum):
     """Enumeration of key providers in scylla"""
@@ -214,6 +213,9 @@ class KMSKeyProviderFactory(KeyProviderFactory):
     @cached_property
     def kms_client(self):
         """A boto client"""
+        # imported here, not at module level: each worker pays for every module-level
+        # import whether or not its tests ever reach this code
+        import boto3
         return boto3.client("kms", endpoint_url=self.endpoint_url, region_name="None")
 
     def create_master_key(self, alias_name:str = None):

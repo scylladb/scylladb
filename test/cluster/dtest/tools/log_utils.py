@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -23,6 +24,31 @@ control_char_re = re.compile("[%s]" % re.escape(control_chars))
 
 def remove_control_chars(s):
     return control_char_re.sub("", s)
+
+
+# Restored verbatim (imports aside) from scylla-dtest's tools/log_utils.py,
+# since not-yet-adapted dtest/unported test modules (via dtest_setup.copy_logs)
+# import it.
+def get_test_log_name(request, directory=None, reserve_extension_chars=4):
+    """
+    Generate a consistent log/directory name for a test based on its start time and node ID.
+    This ensures that test logs and cluster log directories have matching names.
+
+    :param request: pytest request object with node.nodeid and node._start_time_for_logging
+                   (the _start_time_for_logging attribute is set by fixture_test_start_time)
+    :param directory: directory path to check for PC_NAME_MAX, defaults to current directory
+    :param reserve_extension_chars: number of characters to reserve for file extension (e.g., 4 for ".log")
+    :return: truncated name string suitable for file or directory naming
+    """
+    safe_name = request.node.nodeid.replace("/", "_")
+    if directory is None:
+        directory = "."
+    try:
+        name_max = os.pathconf(directory, "PC_NAME_MAX")
+    except (OSError, ValueError) as e:
+        raise RuntimeError(f"Failed to get maximum filename length for directory '{directory}': {e}") from e
+    log_name = f"{request.node._start_time_for_logging}_{safe_name}"[: name_max - reserve_extension_chars]
+    return log_name
 
 
 class DisableLogger:

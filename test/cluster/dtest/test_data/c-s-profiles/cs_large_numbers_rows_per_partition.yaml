@@ -1,0 +1,38 @@
+keyspace: keyspace1
+
+keyspace_definition: |
+  CREATE KEYSPACE keyspace1 WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+
+table: standard1
+
+table_definition: |
+  CREATE TABLE standard1 (
+    p_key bigint,
+    p_key1 bigint,
+    cl_key bigint,
+    c1 text,
+    PRIMARY KEY((p_key,p_key1),cl_key)
+  );
+
+columnspec:
+  - name: p_key
+    population: gaussian(1..3000,1500)
+  - name: p_key1
+    population: gaussian(1..3000,1500)
+  - name: cl_key
+    cluster: uniform(1..1000)
+  - name: c1
+    size: fixed(16)
+
+insert:
+  partitions: fixed(1)
+  select:    uniform(1..10)/1000
+  batchtype: UNLOGGED
+
+queries:
+  single:
+    cql: select * from standard1 where p_key = ? and p_key1 = ? LIMIT 1
+    fields: samerow
+  multi_row:
+    cql: select * from standard1 where p_key = ? and p_key1 = ? LIMIT 10
+    fields: samerow

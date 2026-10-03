@@ -499,23 +499,23 @@ class ScyllaCluster:
         assert server_id in self.servers, f"Server {server_id} unknown"
         return self.servers[server_id].get_config()
 
-    def update_config(self, server_id: ServerNum, config_options: dict[str, Any]) -> None:
+    def update_config(self, server_id: ServerNum, config_options: dict[str, Any], reload: bool = True) -> None:
         """Update conf/scylla.yaml of the given server with `config_options` dict.
 
-        If the server is running, reload the config with a SIGHUP.
+        If the server is running, reload the config with a SIGHUP, unless `reload` is False.
         Fail if the server cannot be found.
         """
         assert server_id in self.servers, f"Server {server_id} unknown"
-        self.servers[server_id].update_config(config_options=config_options)
+        self.servers[server_id].update_config(config_options=config_options, reload=reload)
 
-    def remove_config_option(self, server_id: ServerNum, key: str) -> None:
+    def remove_config_option(self, server_id: ServerNum, key: str, reload: bool = True) -> None:
         """Remove an option from conf/scylla.yaml of the given server.
 
-        If the server is running, reload the config with a SIGHUP.
+        If the server is running, reload the config with a SIGHUP, unless `reload` is False.
         Fail if the server cannot be found.
         """
         assert server_id in self.servers, f"Server {server_id} unknown"
-        self.servers[server_id].remove_config_option(key=key)
+        self.servers[server_id].remove_config_option(key=key, reload=reload)
 
     def update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
         """Update the command-line options of the given server by merging the new options into the existing ones.
