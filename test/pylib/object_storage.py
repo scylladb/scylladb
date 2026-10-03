@@ -23,9 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
-import boto3
 import pytest
-import requests
 
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
@@ -90,6 +88,9 @@ class S3Server:
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
+        # imported here, not at module level: each worker pays for every module-level
+        # import whether or not its tests ever reach this code
+        import boto3
         return boto3.resource('s3',
             endpoint_url=self.address,
             aws_access_key_id=self.acc_key,
@@ -188,6 +189,9 @@ class GSFront:
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
+        # imported here, not at module level: each worker pays for every module-level
+        # import whether or not its tests ever reach this code
+        import boto3
         return boto3.resource('s3',
             endpoint_url=self.endpoint,
             config=boto3.session.Config(signature_version='s3v4'),
@@ -404,6 +408,7 @@ class GSServerImpl(GSFront):
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using GCS HTTP API (fake server doesn't support S3 XML for this)."""
         self.bucket_name = _make_bucket_name(test_name)
+        import requests
         response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json={
             'name': self.bucket_name, 'location': 'US', 'storageClass': 'STANDARD',
             'iamConfiguration': {
@@ -428,6 +433,7 @@ class GSServerImpl(GSFront):
             bucket = resource.Bucket(self.bucket_name)
             bucket.objects.all().delete()
             # Delete the bucket via GCS HTTP API
+            import requests
             response = requests.delete(f'{self.endpoint}/storage/v1/b/{self.bucket_name}', timeout=10)
             response.raise_for_status()
         except Exception as e:
