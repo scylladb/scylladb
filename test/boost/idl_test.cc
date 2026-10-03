@@ -22,6 +22,7 @@
 #include "test/lib/test_utils.hh"
 #include "bytes.hh"
 #include "bytes_ostream.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 struct simple_compound {
     // TODO: change this to test for #905
@@ -483,4 +484,128 @@ BOOST_AUTO_TEST_CASE(test_const_template_arg)
     auto in = ser::as_input_stream(buf);
     auto deser_obj = ser::deserialize(in, std::type_identity<const_template_arg_test_object>());
     BOOST_REQUIRE(obj == deser_obj);
+}
+
+// Tests for fragmented_view types (SCYLLADB-1668)
+// Verify that IDL-generated X_fragmented_view types can deserialize
+// from a fragmented_temporary_buffer stream without re-copying into a bytes_ostream.
+
+namespace {
+
+fragmented_temporary_buffer bytes_ostream_to_ftb(bytes_ostream& buf) {
+    auto bv = buf.linearize();
+    if (bv.empty()) {
+        return fragmented_temporary_buffer({}, 0);
+    }
+    std::vector<temporary_buffer<char>> frags;
+    // Split into two fragments to exercise the fragmented path
+    size_t half = bv.size() / 2;
+    if (half > 0) {
+        frags.push_back(temporary_buffer<char>(reinterpret_cast<const char*>(bv.data()), half));
+    }
+    frags.push_back(temporary_buffer<char>(reinterpret_cast<const char*>(bv.data()) + half, bv.size() - half));
+    return fragmented_temporary_buffer(std::move(frags), bv.size());
+}
+
+auto ftb_input_stream(const fragmented_temporary_buffer& ftb) {
+    return seastar::fragmented_memory_input_stream(fragmented_temporary_buffer::view(ftb).begin(), ftb.size_bytes());
+}
+
+} // anonymous namespace
+
+BOOST_AUTO_TEST_CASE(test_fragmented_view_simple)
+{
+    simple_compound sc = { 0xdeadbeef, 0xbadc0ffe };
+
+    bytes_ostream buf;
+    ser::writer_of_writable_simple_compound<bytes_ostream> wr(buf);
+    std::move(wr).write_foo(sc.foo).write_bar(sc.bar).end_writable_simple_compound();
+
+    // Deserialize using the fragmented_view directly from fragmented buffer
+    auto ftb = bytes_ostream_to_ftb(buf);
+    auto in = ftb_input_stream(ftb);
+    auto view = ser::deserialize(in, std::type_identity<ser::writable_simple_compound_fragmented_view>());
+    BOOST_REQUIRE_EQUAL(sc.foo, view.foo());
+    BOOST_REQUIRE_EQUAL(sc.bar, view.bar());
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_view_with_variant)
+{
+    bytes_ostream buf;
+    ser::writer_of_just_a_variant(buf)
+            .start_variant_writable_simple_compound()
+            .write_foo(0x1234abcd)
+            .write_bar(0x1111ffff)
+            .end_writable_simple_compound()
+            .end_just_a_variant();
+
+    auto ftb = bytes_ostream_to_ftb(buf);
+    auto in = ftb_input_stream(ftb);
+    auto view = ser::deserialize(in, std::type_identity<ser::just_a_variant_fragmented_view>());
+
+    bool fired = false;
+    seastar::visit(
+            view.variant(),
+            [&] (ser::writable_simple_compound_fragmented_view v) {
+                fired = true;
+                BOOST_CHECK_EQUAL(v.foo(), 0x1234abcd);
+                BOOST_CHECK_EQUAL(v.bar(), 0x1111ffff);
+            },
+            [&] (simple_compound) {
+                BOOST_FAIL("should not reach");
+            },
+            [&] (ser::unknown_variant_type) {
+                BOOST_FAIL("should not reach");
+            });
+    BOOST_CHECK(fired);
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_view_matches_legacy)
+{
+    // Verify that fragmented_view produces the same results as legacy view
+    simple_compound sc = { 0xaaaabbbb, 0xccccdddd };
+
+    bytes_ostream buf;
+    ser::writer_of_writable_simple_compound<bytes_ostream> wr(buf);
+    std::move(wr).write_foo(sc.foo).write_bar(sc.bar).end_writable_simple_compound();
+
+    auto in1 = ser::as_input_stream(buf);
+    auto legacy_view = ser::deserialize(in1, std::type_identity<ser::writable_simple_compound_view>());
+
+    auto ftb = bytes_ostream_to_ftb(buf);
+    auto in2 = ftb_input_stream(ftb);
+    auto frag_view = ser::deserialize(in2, std::type_identity<ser::writable_simple_compound_fragmented_view>());
+
+    BOOST_REQUIRE_EQUAL(legacy_view.foo(), frag_view.foo());
+    BOOST_REQUIRE_EQUAL(legacy_view.bar(), frag_view.bar());
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_view_with_vector)
+{
+    std::vector<simple_compound> vec = {
+        { 0x11112222, 0x33334444 },
+        { 0x55556666, 0x77778888 },
+        { 0x9999aaaa, 0xbbbbcccc },
+    };
+
+    bytes_ostream buf;
+    auto first_writer = ser::writer_of_writable_vector<bytes_ostream>(buf).start_vector();
+    for (auto& c : vec) {
+        first_writer.add_vector(c);
+    }
+    std::move(first_writer).end_vector().end_writable_vector();
+
+    auto ftb = bytes_ostream_to_ftb(buf);
+    auto in = ftb_input_stream(ftb);
+    auto view = ser::deserialize(in, std::type_identity<ser::writable_vector_fragmented_view>());
+
+    auto deser_vec = view.vector();
+    size_t i = 0;
+    for (auto&& elem : deser_vec) {
+        BOOST_REQUIRE(i < vec.size());
+        BOOST_CHECK_EQUAL(elem.foo, vec[i].foo);
+        BOOST_CHECK_EQUAL(elem.bar, vec[i].bar);
+        ++i;
+    }
+    BOOST_CHECK_EQUAL(i, vec.size());
 }
