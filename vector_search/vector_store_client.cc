@@ -44,6 +44,7 @@ using namespace std::chrono_literals;
 
 using ann_error = vector_search::vector_store_client::ann_error;
 using fts_error = vector_search::vector_store_client::fts_error;
+using like_error = vector_search::vector_store_client::like_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
 using vs_vector = vector_search::vector_store_client::vs_vector;
@@ -254,7 +255,7 @@ auto read_column_values(std::span<result_column const> columns, std::size_t idx)
     return values;
 }
 
-auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name,
+auto read_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::optional<std::string_view> score_field_name,
         const std::vector<std::string>& return_columns = {}) -> std::expected<primary_keys, ann_error> {
     if (!json.IsObject()) {
         vslogger.error("Vector Store returned invalid JSON: the reply is not an object");
@@ -270,21 +271,37 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
         return std::unexpected{service_reply_format_error{}};
     }
 
-    auto const* score_json = rjson::find(json, score_field_name);
-    if (score_json == nullptr) {
-        vslogger.error("Vector Store returned invalid JSON: missing '{}'", score_field_name);
+    auto const first_key_column_name = schema->partition_key_columns().begin()->name_as_text();
+    auto const* first_key_json = rjson::find(keys_json, first_key_column_name);
+    if (first_key_json == nullptr) {
+        vslogger.error("Vector Store returned invalid JSON: missing key column '{}'", first_key_column_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    if (!score_json->IsArray()) {
-        vslogger.error("Vector Store returned invalid JSON: '{}' is not an array", score_field_name);
+    if (!first_key_json->IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: key column '{}' is not an array", first_key_column_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& score_arr = score_json->GetArray();
-
-    // We assume that the score_arr, and all the key arrays in keys_json
+    // We assume that the score array, if any, and all the key arrays in keys_json
     // have the same length, which is the number of results returned
     // by the vector store.
-    auto size = score_arr.Size();
+    auto size = first_key_json->GetArray().Size();
+
+    rjson::value const* score_json = nullptr;
+    if (score_field_name) {
+        score_json = rjson::find(json, *score_field_name);
+        if (score_json == nullptr) {
+            vslogger.error("Vector Store returned invalid JSON: missing '{}'", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+        if (!score_json->IsArray()) {
+            vslogger.error("Vector Store returned invalid JSON: '{}' is not an array", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+        if (score_json->Size() != size) {
+            vslogger.error("Vector Store returned invalid JSON: '{}' array size differs from the key columns", *score_field_name);
+            return std::unexpected{service_reply_format_error{}};
+        }
+    }
 
     auto columns = result_columns_from_json(json, return_columns, size);
     if (!columns) {
@@ -302,13 +319,14 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
         if (!ck) {
             return std::unexpected{ck.error()};
         }
-        auto const& score_val = score_arr[idx];
         float score = 0;
-        if (score_val.IsNumber()) {
+        if (score_json) {
+            auto const& score_val = score_json->GetArray()[idx];
+            if (!score_val.IsNumber()) {
+                vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", *score_field_name, idx, rjson::print(score_val));
+                return std::unexpected{service_reply_format_error{}};
+            }
             score = score_val.GetFloat();
-        } else {
-            vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", score_field_name, idx, rjson::print(score_val));
-            return std::unexpected{service_reply_format_error{}};
         }
         keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, score, read_column_values(*columns, idx)});
     }
@@ -317,7 +335,7 @@ auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& s
 
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema, const std::vector<std::string>& return_columns)
         -> std::expected<primary_keys, ann_error> {
-    return read_scored_primary_keys_json(json, schema, "similarity_scores", return_columns);
+    return read_primary_keys_json(json, schema, "similarity_scores", return_columns);
 }
 
 auto write_bm25_json(query_string query, limit limit) -> json_content {
@@ -325,7 +343,15 @@ auto write_bm25_json(query_string query, limit limit) -> json_content {
 }
 
 auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, fts_error> {
-    return read_scored_primary_keys_json(json, schema, "scores");
+    return read_primary_keys_json(json, schema, "scores");
+}
+
+auto write_like_json(query_string pattern, limit limit) -> json_content {
+    return seastar::format(R"({{"pattern":{},"limit":{}}})", rjson::from_string(pattern), limit);
+}
+
+auto read_like_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, like_error> {
+    return read_primary_keys_json(json, schema, std::nullopt);
 }
 
 auto write_highlight_json(query_string query, documents docs) -> json_content {
@@ -633,6 +659,22 @@ struct vector_store_client::impl {
         }
     }
 
+    auto like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, like_error>> {
+        auto content = co_await post_to_index("like", format("/api/v1/indexes/{}/{}/like", keyspace, name),
+                write_like_json(std::move(pattern), limit), as);
+        if (!content) {
+            co_return std::unexpected{content.error()};
+        }
+
+        try {
+            co_return read_like_json(rjson::parse(std::move(*content)), schema);
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
+
     auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents docs, abort_source& as)
             -> future<std::expected<highlights, fts_error>> {
         auto documents_sent = docs.size();
@@ -782,6 +824,11 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, fts_error>> {
     return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
+}
+
+auto vector_store_client::like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
+        -> future<std::expected<primary_keys, like_error>> {
+    return _impl->like(std::move(keyspace), std::move(name), schema, std::move(pattern), limit, as);
 }
 
 auto vector_store_client::highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents documents, abort_source& as)

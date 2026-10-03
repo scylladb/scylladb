@@ -557,7 +557,7 @@ def test_bm25_where_with_ann_order_by_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
-        with pytest.raises(InvalidRequest, match="BM25 and ANN cannot be combined in the same query"):
+        with pytest.raises(InvalidRequest, match="No two of BM25, ANN and LIKE can be combined in the same query"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0] LIMIT 1")
 
 

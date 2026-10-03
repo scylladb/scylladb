@@ -423,6 +423,12 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
+                // wrong size of similarity_scores in the reply - service should return format error
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2,0.3]})"});
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
                 // correct reply - service should return keys
                 server->next_ann_response({status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
@@ -1335,6 +1341,12 @@ SEASTAR_TEST_CASE(vector_store_client_test_bm25_request) {
 
     // wrong size of ck2 key in the reply - service should return format error
     server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // wrong size of scores in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"scores":[0.1,0.2,0.3]})"});
     keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
     BOOST_REQUIRE(!keys);
     BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
