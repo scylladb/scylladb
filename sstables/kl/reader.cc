@@ -578,9 +578,9 @@ public:
                 return;
             }
             if (is_multi_cell) {
-                auto& value_type = visit(*col.cdef->type, make_visitor(
-                    [] (const collection_type_impl& ctype) -> const abstract_type& { return *ctype.value_comparator(); },
-                    [&] (const user_type_impl& utype) -> const abstract_type& {
+                visit(*col.cdef->type, make_visitor(
+                    [] (const collection_type_impl&) { },
+                    [&] (const user_type_impl& utype) {
                         if (col.collection_extra_data.size() != sizeof(int16_t)) {
                             throw_malformed_sstable_exception(format("wrong size of field index while reading UDT column: expected {}, got {}",
                                         sizeof(int16_t), col.collection_extra_data.size()));
@@ -591,14 +591,12 @@ public:
                             throw_malformed_sstable_exception(format("field index too big while reading UDT column: type has {} fields, got {}",
                                         utype.size(), field_idx));
                         }
-
-                        return *utype.type(field_idx);
                     },
-                    [] (const abstract_type& o) -> const abstract_type& {
+                    [] (const abstract_type& o) {
                         throw_malformed_sstable_exception(format("attempted to read multi-cell column, but expected type was {}", o.name()));
                     }
                 ));
-                auto ac = make_atomic_cell(value_type,
+                auto ac = make_atomic_cell(*col.cdef->type,
                                            api::timestamp_type(timestamp),
                                            value,
                                            gc_clock::duration(ttl),
