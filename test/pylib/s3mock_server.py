@@ -77,8 +77,8 @@ class S3MockServer:
     # an accept queue of 100 - leave connections waiting for a worker or dropped by
     # the queue, which a client sees as a connection reset. See SCYLLADB-4576.
     SPRING_PROPERTIES = {'SERVER_TOMCAT_THREADS_MAX': '400',
-                         'SERVER_TOMCAT_ACCEPT_COUNT': '1000',
-                         'SERVER_TOMCAT_MAX_CONNECTIONS': '20000'}
+                         'SERVER_TOMCAT_ACCEPT_COUNT': '2000',
+                         'SERVER_TOMCAT_MAX_CONNECTIONS': '40000'}
     STARTED_MESSAGE = 'Started S3MockApplication'
 
     def __init__(self, log_dir, logger):
