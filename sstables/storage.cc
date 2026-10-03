@@ -33,6 +33,7 @@
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -202,6 +203,8 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto tgt_dir = !readonly && _temp_dir ? *_temp_dir : _dir.path();
     auto name = tgt_dir / sst.component_basename(type);
 
+    co_await utils::get_local_injector().inject("sstable_open_component/pause_after_path", utils::wait_for_message(std::chrono::seconds(5)));
+
     auto f = open_sstable_component_file_non_checked(name.native(), flags, options, check_integrity);
 
     if (!readonly) {
@@ -212,7 +215,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
         });
     }
 
-    return maybe_wrap_file(sst, type, flags, std::move(f));
+    co_return co_await maybe_wrap_file(sst, type, flags, std::move(f));
 }
 
 void filesystem_storage::open(sstable& sst) {
@@ -470,6 +473,7 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    utils::get_local_injector().inject("filesystem_storage_move/entered", [] {});
     co_await touch_directory(new_dir);
     sstring old_dir = _dir.native();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
