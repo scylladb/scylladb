@@ -19,8 +19,12 @@
 namespace db {
 
 void virtual_table::set_cell(row& cr, const bytes& column_name, data_value value) {
+    set_cell(*schema(), cr, column_name, std::move(value));
+}
+
+void virtual_table::set_cell(const class schema& s, row& cr, const bytes& column_name, data_value value) {
     auto ts = api::new_timestamp();
-    auto cdef = schema()->get_column_definition(column_name);
+    auto cdef = s.get_column_definition(column_name);
     if (!cdef) {
         throw_with_backtrace<std::runtime_error>(format("column not found: {}", column_name));
     }
