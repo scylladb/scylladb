@@ -391,6 +391,7 @@ add_scylla_test(combined_tests
     network_topology_strategy_test.cc
     paxos_state_test.cc
     per_partition_rate_limit_test.cc
+    perf_sstable_test.cc
     pluggable_test.cc
     querier_cache_test.cc
     query_processor_test.cc
