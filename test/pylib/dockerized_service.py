@@ -53,8 +53,11 @@ class DockerizedServer:
                  docker_args : Callable[[str, int], list[str]] | list[str] = [],
                  image_args : Callable[[str, int], list[str]] | list[str] = [],
                  host = '127.0.0.1',
-                 port = None):
+                 port = None,
+                 env : dict[str, str] | None = None):
         self.image = image
+        # Environment for the container runtime's own process, None to inherit ours.
+        self.env = env
         self.host = host
         self.log_dir = log_dir
         self.logfilenamebase = logfilenamebase
@@ -138,7 +141,7 @@ class DockerizedServer:
         # stdout, others to stderr, and podman itself reports launch failures on stderr.
         # Reading a single stream keeps the success/failure matching below unaware of
         # which one the image happens to use.
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=self.env)
         loop = asyncio.get_running_loop()
         ready_fut = loop.create_future()
 
