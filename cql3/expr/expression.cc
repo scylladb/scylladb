@@ -748,7 +748,12 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                                 out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
-                                if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
+                                auto* count_arg = fc.args.size() == 1 ? as_if<constant>(&fc.args[0]) : nullptr;
+                                if (fn->name() == cql3::functions::function_name::native_function("count") && count_arg && !count_arg->is_null()) {
+                                    // count(<constant>) counts every row, like countRows(), and is named
+                                    // like it: Cassandra parses count(1) as countRows().
+                                    out = fmt::format_to(out, "count");
+                                } else if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
                                     auto cast_type = fn_name.substr(6);
                                     out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | std::views::transform(to_printer), ", "),
                                          cast_type);

@@ -79,6 +79,20 @@ def test_count_in_partition(cql, table1):
     cql.execute(stmt, [p, 3, 3])
     assert [(3,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
 
+# count(1) counts rows like count(*), and its result column is named "count"
+# like count(*)'s: Cassandra parses count(1) as count(*). Scylla once named it
+# "system.count(1)", which broke clients reading the column by name
+# (lwt_banking_load_test in dtest).
+def test_count_1_column_name(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"insert into {table1} (p, c, v) values (?, ?, ?)")
+    cql.execute(stmt, [p, 1, 1])
+    cql.execute(stmt, [p, 2, None])
+    for q in ['count(*)', 'count(1)']:
+        row = cql.execute(f"select {q} from {table1} where p = {p}").one()
+        assert row._fields == ('count',)
+        assert row.count == 2
+
 # Using count(v) instead of count(*) allows counting only rows with a non-NULL
 # value in v
 def test_count_specific_column(cql, test_keyspace, table1):
