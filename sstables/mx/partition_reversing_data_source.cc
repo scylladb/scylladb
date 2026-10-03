@@ -12,6 +12,7 @@
 #include "partition_reversing_data_source.hh"
 #include "reader_permit.hh"
 #include "sstables/consumer.hh"
+#include "sstables/exceptions.hh"
 #include "sstables/processing_result_generator.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
@@ -41,7 +42,7 @@ public:
     }
     void verify_end_state() const {
         if (!_finished) {
-            throw std::runtime_error("partition_header_context - no more data but parsing is incomplete");
+            throw_malformed_sstable_exception("partition_header_context - no more data but parsing is incomplete");
         }
     }
     uint64_t header_end_pos() {
@@ -191,7 +192,7 @@ public:
     }
     void verify_end_state() const {
         if (!_finished) {
-            throw std::runtime_error("row_body_skipping_context - no more data but parsing is incomplete");
+            throw_malformed_sstable_exception("row_body_skipping_context - no more data but parsing is incomplete");
         }
     }
     bool end_of_partition() const {
