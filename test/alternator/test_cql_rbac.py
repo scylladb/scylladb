@@ -574,6 +574,18 @@ def test_rbac_createtable(dynamodb, cql):
                     # verifies that the role was correctly auto-granted the
                     # DROP permission.
 
+# CreateTable checks the CREATE permission before validating the rest of the
+# request, so a role without it gets AccessDeniedException even for an
+# invalid request.
+def test_rbac_createtable_invalid_request(dynamodb, cql):
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Missing AttributeDefinitions makes this request invalid.
+            with pytest.raises(ClientError, match='AccessDeniedException'):
+                d.meta.client.create_table(TableName=unique_table_name(),
+                    BillingMode='PAY_PER_REQUEST',
+                    KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}])
+
 # Test UpdateTable's support for permissions. It requires the "ALTER"
 # permission permission on the given table (or, as usual, something
 # containing it - like a keyspace, all keyspaces, or another role).
