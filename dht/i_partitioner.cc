@@ -342,6 +342,27 @@ to_partition_range(dht::token_range r) {
     return { std::move(start), std::move(end) };
 }
 
+dht::token_range
+to_token_range(const dht::partition_range& r) {
+    using bound = dht::token_range::bound;
+    using bound_opt = std::optional<bound>;
+    // The token of a bound is excluded only if the range cannot contain any key
+    // with that token: a start bound which lies after all keys of its token
+    // (relation_to_keys() > 0), or an end bound which lies before all keys of
+    // its token (relation_to_keys() < 0). In every other case a key sharing the
+    // token can fall inside the range, so the token must be included, no matter
+    // whether the bound itself is inclusive or exclusive.
+    auto start = r.start()
+                 ? bound_opt(bound(r.start()->value().token(), r.start()->value().relation_to_keys() <= 0))
+                 : bound_opt();
+
+    auto end = r.end()
+               ? bound_opt(bound(r.end()->value().token(), r.end()->value().relation_to_keys() >= 0))
+               : bound_opt();
+
+    return { std::move(start), std::move(end) };
+}
+
 dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges, utils::can_yield can_yield) {
     dht::partition_range_vector prs;
     prs.reserve(ranges.size());
