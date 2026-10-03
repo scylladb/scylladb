@@ -511,6 +511,7 @@ public:
     [[gnu::always_inline]]
     operator bytes_ostream() && {
         bytes_ostream v;
+        v.reserve(_stream.size());
         _stream.copy_to(v);
         return v;
     }
