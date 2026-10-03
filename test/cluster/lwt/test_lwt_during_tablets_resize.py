@@ -51,7 +51,7 @@ async def run_random_resizes(
     ks: str,
     table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
-    pause_range=(0.5, 2.0)
+    pause_range=(0.1, 0.5)
 ):
     """
     Perform randomized tablet count changes (splits/merges) until target resize count is reached
