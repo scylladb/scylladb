@@ -2308,6 +2308,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_SCHEDULING_GROUPS_COUNT=25',
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
+        '-DSeastar_DOCS=OFF', # Seastar's docs need doxygen at configure time; we don't build them
         '-DSeastar_LTTNG=OFF', # https://scylladb.atlassian.net/browse/SCYLLADB-3797, https://bugs.lttng.org/issues/1438
         '-DSeastar_ASSUME_C_ARES_DNS_FREEZE_FIXED=ON',
     ]
