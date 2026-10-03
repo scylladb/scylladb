@@ -754,6 +754,11 @@ private:
     // data at any point in time. In short, writes can operate on compaction group level, but reads
     // must operate on storage group level.
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const;
+    // Like storage_groups_for_token_range(), but for multiple token ranges.
+    // The token ranges are produced by next_token_range and they are expected
+    // to be sorted and disjoint.
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_ranges(
+            noncopyable_function<std::optional<dht::token_range>()> next_token_range) const;
     storage_group& storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
@@ -882,6 +887,20 @@ private:
              streamed_mutation::forwarding fwd,
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
+    // Multi-range overload for the streaming reader. Creates memtable readers
+    // on all storage groups that overlap with the provided ranges.
+    // The provided ranges must be sorted, disjoint and non-empty.
+    // The created readers are always fast-forwardable, since they are positioned
+    // at the first range and reach the remaining ones only by being fast-forwarded.
+    // Use the single-range overload above if a non-fast-forwardable reader is needed.
+    void add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
+             const schema_ptr& s,
+             const reader_permit& permit,
+             const dht::partition_range_vector& ranges,
+             const query::partition_slice& slice,
+             const tracing::trace_state_ptr& trace_state,
+             streamed_mutation::forwarding fwd,
+             std::function<void(size_t)> reserve_fn) const;
 public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
@@ -963,8 +982,10 @@ public:
     // Requires ranges to be sorted and disjoint.
     // When compaction_time is engaged, the reader's output will be compacted, with the provided query time.
     // This compaction doesn't do tombstone garbage collection.
+    // Reads the full slice, unless `slice` is given, which must outlive the reader.
     mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit,
-            const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time) const;
+            const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time,
+            const query::partition_slice* slice = nullptr) const;
 
     // Single range overload.
     mutation_reader make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
@@ -2386,6 +2407,23 @@ mutation_reader make_multishard_streaming_reader(
         gc_clock::time_point compaction_time,
         std::optional<size_t> multishard_reader_buffer_size,
         read_ahead read_ahead);
+
+// Creates a streaming reader for `ranges` (sorted, disjoint) of a tablet-based
+// table, reading from all shards, as one stream in token order.
+//
+// Reads each tablet on the shard that owns it, one tablet at a time. The
+// tablet's reader is an auto-paused evictable reader, so it holds no resources
+// on its shard between reads, and is recreated where it left off if evicted.
+// See make_streaming_reader() for `compaction_time`.
+// `buffer_size`, if set, is the buffer size of the tablet's reader on its
+// shard, i.e. how much is read there, and copied over, at a time.
+mutation_reader make_tablet_streaming_reader(
+        sharded<replica::database>& db,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range_vector& ranges,
+        gc_clock::time_point compaction_time,
+        std::optional<size_t> buffer_size = {});
 
 bool is_internal_keyspace(std::string_view name);
 

@@ -88,6 +88,9 @@
 #include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
+#include "readers/foreign.hh"
+#include "readers/evictable.hh"
+#include "readers/delegating_impl.hh"
 #include "utils/labels.hh"
 #include "service/paxos/paxos_state.hh"
 #include "tracing/trace_keyspace_helper.hh"
@@ -3798,6 +3801,178 @@ mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
         rd.set_max_buffer_size(*multishard_reader_buffer_size);
     }
     return rd;
+}
+
+namespace {
+
+// Delegates to a reader and keeps `T` alive for as long as the reader.
+template <typename T>
+class holding_reader : public delegating_reader {
+    T _held;
+public:
+    holding_reader(mutation_reader underlying, T held)
+        : delegating_reader(std::move(underlying))
+        , _held(std::move(held)) {
+    }
+};
+
+template <typename T>
+mutation_reader make_holding_reader(mutation_reader underlying, T held) {
+    return make_mutation_reader<holding_reader<T>>(std::move(underlying), std::move(held));
+}
+
+// The parts of `ranges` within `range`.
+dht::partition_range_vector ranges_within(const dht::partition_range_vector& ranges, const dht::partition_range& range,
+        const dht::ring_position_comparator& cmp) {
+    dht::partition_range_vector ret;
+    for (const auto& r : ranges) {
+        if (auto i = r.intersection(range, cmp)) {
+            ret.push_back(std::move(*i));
+        }
+    }
+    return ret;
+}
+
+// What a tablet's reader on its shard must keep alive.
+struct tablet_read_state {
+    dht::partition_range_vector ranges;
+    // Spans all of `ranges`: the range of the evictable reader.
+    dht::partition_range span;
+    utils::phased_barrier::operation read_op;
+};
+
+// The requested ranges within one tablet, and the shard that reads it.
+struct tablet_read {
+    shard_id shard;
+    dht::partition_range_vector ranges;
+};
+
+// Reads a tablet-based table's ranges from all shards, one tablet at a time.
+class tablet_streaming_reader : public mutation_reader::impl {
+    sharded<replica::database>& _db;
+    // Keeps the tablet-to-shard assignment the reads rely on valid, and
+    // makes topology changes wait for the reader.
+    locator::effective_replication_map_ptr _keep_alive_erm;
+    gc_clock::time_point _compaction_time;
+    std::optional<size_t> _buffer_size;
+    std::vector<tablet_read> _tablets;
+    size_t _next_tablet = 0;
+    mutation_reader_opt _current;
+
+    future<mutation_reader> open(const tablet_read& t) {
+        auto remote = co_await _db.invoke_on(t.shard,
+                [gs = global_schema_ptr(_schema), &remote_ranges = t.ranges, compaction_time = _compaction_time, buffer_size = _buffer_size] (replica::database& db)
+                        -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
+            auto s = gs.get();
+            // Copy here, so that the copy is allocated on this shard.
+            auto ranges = remote_ranges;
+            auto& cf = db.find_column_family(s);
+            auto permit = co_await cf.streaming_read_concurrency_semaphore().obtain_permit(s, "tablet-streaming-reader",
+                    cf.estimate_read_memory_cost(), db::no_timeout, {});
+            auto span = dht::partition_range(ranges.front().start(), ranges.back().end());
+            auto state = make_lw_shared<tablet_read_state>(std::move(ranges), std::move(span), cf.read_in_progress());
+            // Called with the span, or after eviction with the rest of it.
+            // Owned by the evictable reader, the factory also keeps `state`
+            // alive for as long as that reader, which refers to its span.
+            // After an eviction in the middle of a partition, the slice skips the
+            // rows of that partition which were already read.
+            auto ms = mutation_source([&cf, state, compaction_time, buffer_size] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
+                    const query::partition_slice& slice, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
+                // The multi-range reader refers to its ranges, so keep them with it.
+                auto ranges = make_lw_shared<const dht::partition_range_vector>(
+                        ranges_within(state->ranges, range, dht::ring_position_comparator(*s)));
+                auto rd = cf.make_streaming_reader(s, std::move(permit), *ranges, compaction_time, &slice);
+                if (buffer_size) {
+                    rd.set_max_buffer_size(*buffer_size);
+                }
+                return make_holding_reader(std::move(rd), std::move(ranges));
+            });
+            auto rd = make_auto_paused_evictable_reader(std::move(ms), s, std::move(permit), state->span, s->full_slice(), {},
+                    mutation_reader::forwarding::no);
+            co_return make_foreign(std::make_unique<mutation_reader>(std::move(rd)));
+        });
+        co_return make_foreign_reader(_schema, _permit, std::move(remote));
+    }
+public:
+    tablet_streaming_reader(sharded<replica::database>& db, schema_ptr schema, reader_permit permit,
+            locator::effective_replication_map_ptr erm, std::vector<tablet_read> tablets, gc_clock::time_point compaction_time,
+            std::optional<size_t> buffer_size)
+        : impl(std::move(schema), std::move(permit))
+        , _db(db)
+        , _keep_alive_erm(std::move(erm))
+        , _compaction_time(compaction_time)
+        , _buffer_size(buffer_size)
+        , _tablets(std::move(tablets)) {
+    }
+
+    virtual future<> fill_buffer() override {
+        while (!is_buffer_full() && !is_end_of_stream()) {
+            if (!_current) {
+                if (_next_tablet == _tablets.size()) {
+                    _end_of_stream = true;
+                    break;
+                }
+                _current = co_await open(_tablets[_next_tablet++]);
+            }
+            co_await _current->fill_buffer();
+            _current->move_buffer_content_to(*this);
+            if (_current->is_end_of_stream() && _current->is_buffer_empty()) {
+                co_await _current->close();
+                _current = {};
+            }
+        }
+    }
+
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty() && _current) {
+            co_await _current->next_partition();
+        }
+    }
+
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+
+    virtual future<> fast_forward_to(position_range) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+
+    virtual future<> close() noexcept override {
+        if (_current) {
+            return _current->close();
+        }
+        return make_ready_future<>();
+    }
+};
+
+} // anonymous namespace
+
+mutation_reader make_tablet_streaming_reader(sharded<replica::database>& db, schema_ptr schema, reader_permit permit,
+        const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time, std::optional<size_t> buffer_size) {
+    auto erm = db.local().find_column_family(schema).get_effective_replication_map();
+    const auto& tm = erm->get_token_metadata();
+    const auto& tablets = tm.tablets().get_tablet_map(schema->id());
+
+    // Group the pieces of `ranges` by tablet. The splitter yields them in
+    // token order, one per (range, tablet) pair, and skips tablets that have
+    // no replica here.
+    std::vector<tablet_read> reads;
+    std::optional<locator::tablet_id> last_tablet;
+    locator::tablet_range_splitter_for_reads splitter{schema, tablets, tm.get_topology().this_node()->host_id(), ranges};
+    while (auto piece = splitter()) {
+        // A piece's end lies within its tablet; its start may be the
+        // exclusive end of the previous tablet.
+        const auto& end = piece->range.end();
+        const auto tablet = end ? tablets.get_tablet_id(end->value().token()) : tablets.last_tablet();
+        if (tablet != last_tablet) {
+            reads.push_back(tablet_read{piece->shard, {}});
+            last_tablet = tablet;
+        }
+        reads.back().ranges.push_back(std::move(piece->range));
+    }
+
+    return make_mutation_reader<tablet_streaming_reader>(db, std::move(schema), std::move(permit), std::move(erm), std::move(reads), compaction_time, buffer_size);
 }
 
 auto fmt::formatter<gc_clock::time_point>::format(gc_clock::time_point tp, fmt::format_context& ctx) const
