@@ -13,8 +13,16 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/util/noncopyable_function.hh>
+#include "schema/schema_fwd.hh"
+#include "service_permit.hh"
 #include "utils/rjson.hh"
+
+namespace service {
+class storage_proxy;
+}
 
 namespace alternator {
 
@@ -91,5 +99,61 @@ std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_mem
 // You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 // you need to complete sink pipeline first, then create and run source pipeline.
 std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+
+/// Perform a full table scan over an Alternator table, calling `cb` for
+/// every item found. The callback receives an `rjson::value` representing
+/// one DynamoDB-style item (JSON object with typed attribute values).
+///
+/// Guarantees. All of them hold whether or not the table is written to while the scan runs -
+/// writes concurrent with the scan never make it fail, stop early, restart, or revisit an item.
+/// This is because the scan never restarts from the beginning and never remembers "how many rows
+/// I already read": each page is read from the key position where the previous page ended
+/// (exclusive), taken from the paging state of the last page read successfully - including after
+/// a failed page is retried on a fresh pager. Inserting, deleting or updating items does not move
+/// the items around the token ring, so it cannot move that position either:
+///  - Every item which exists in the table for the whole duration of the scan is visited
+///    exactly once. Deleting some other item (even the very item the last page ended at,
+///    or every item of the partition it ended in) does not change that.
+///  - An item added or deleted while the scan runs may or may not be visited - but, like any
+///    other item, it is never visited twice.
+///  - The scan is not a snapshot: different items are read at different points in time, so
+///    the visited items need not be a state the table ever had as a whole. An item updated
+///    while the scan is running is visited once, either with its pre-update or with its
+///    post-update value (and, if the update did not reach all replicas, possibly with a
+///    per-attribute mix of the two, exactly as a plain quorum read of it would return).
+///  - Calls to `cb` are sequential (never parallel).
+///  - Items may be visited in any order (not necessarily sort-key order).
+///  - Aborting `as` stops the scan, which then fails with the exception the abort source
+///    carries (`as.abort_requested_exception_ptr()`) - `abort_requested_exception` for a plain
+///    `request_abort()`, or the caller-supplied exception for `request_abort_ex()`. Callers
+///    telling "cancelled" apart from "failed" must not assume the exception type.
+///    A read which is already in flight cannot be cancelled, so an abort is only observed
+///    once that read completes or times out - the scan stops issuing new work immediately,
+///    but its future can still take a read timeout to resolve.
+///  - When the returned future resolves - successfully, with a failure or with an abort -
+///    no read started by the scan is still running and `permit` has been released.
+///
+/// The function underneath performs global scan over whole table, using single-threaded query_pager.
+/// The scan uses LOCAL_QUORUM consistency and bypasses the cache to avoid polluting it.
+/// The scan takes ownership of `permit` and holds it for the duration of the scan.
+///
+/// IMPORTANT: this is an *internal* read. It runs on `service::client_state::for_internal_calls()`,
+/// not on the client state of whoever requested the export, which means:
+///  - no authorization check of any kind is performed - unlike the Scan request path, the function
+///    will happily read a table the requesting user has no permission to read. The caller is
+///    responsible for authorizing the user against the table *before* calling this function.
+///  - the read does not run under the requesting user's service level, so none of that level's
+///    workload prioritization or timeout settings apply to it.
+
+seastar::future<> export_scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    seastar::abort_source& as,
+    service_permit permit,
+    seastar::noncopyable_function<seastar::future<>(rjson::value)> cb);
+
+/// Hardcoded page size for export_scan_table - nothing special about the number itself, but it's hardcoded.
+/// The number is public so tests could use it to verify pagination works.
+static constexpr uint32_t export_scan_table_page_size = 4096u;
 
 } // namespace alternator
