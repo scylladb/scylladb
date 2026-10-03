@@ -346,8 +346,6 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         return;
     }
 
-    init_messaging_service();
-
     auto ls = {
         sm::make_counter("cql-connections", _stats.connects,
                         sm::description("Counts a number of client connections.")),
@@ -414,12 +412,29 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     }
 
     _metrics.add_group("transport", std::move(transport_metrics));
+
+    // Last: a throwing constructor never runs stop(), so it would leak the handlers.
+    init_messaging_service();
 }
 
 cql_server::~cql_server() = default;
 
+future<> cql_server::shutdown() {
+    co_await server::shutdown();
+    // Requests may outlive shutdown and delay stop(); release the forward_cql
+    // handlers and metric names so a restarted server can register them.
+    if (!_used_by_maintenance_socket) {
+        co_await uninit_messaging_service();
+    }
+    _metrics.clear();
+}
+
 future<> cql_server::stop() {
-    co_await when_all_succeed(uninit_messaging_service(), server::stop()).discard_result();
+    // A start that failed after construction never ran shutdown().
+    if (!_gate.is_closed()) {
+        co_await shutdown();
+    }
+    co_await server::stop();
 }
 
 void cql_server::init_messaging_service() {
