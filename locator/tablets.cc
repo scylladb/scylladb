@@ -8,6 +8,8 @@
 
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include <cmath>
+#include <limits>
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "locator/tablet_sharder.hh"
@@ -704,6 +706,25 @@ dht::token tablet_map::get_first_token(tablet_id id) const {
     } else {
         return dht::next_token(get_last_token(tablet_id(size_t(id) - 1)));
     }
+}
+
+// Position of a token in the ring, in [0, 2^64). minimum_token() and maximum_token() share the
+// same raw value and differ only in kind, so they cannot go through unbias().
+static uint64_t token_position(dht::token t) {
+    if (t.is_maximum()) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    if (t.is_minimum()) {
+        return 0;
+    }
+    return t.unbias();
+}
+
+double tablet_map::token_space_fraction(tablet_id id) const {
+    check_tablet_id(id);
+    auto end = token_position(get_last_token(id));
+    auto start = id == first_tablet() ? 0 : token_position(get_last_token(tablet_id(size_t(id) - 1)));
+    return std::ldexp(double(end - start), -64);
 }
 
 dht::token_range tablet_map::get_token_range(tablet_id id) const {

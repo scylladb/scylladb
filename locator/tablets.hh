@@ -474,6 +474,9 @@ struct tablet_migration_streaming_info {
     // more work than just moving the tablet around. The stream_weight for all
     // other migrations are set to 1.
     int stream_weight = tablet_migration_stream_weight_default;
+    // On-disk size of the data streamed by this transition, or nullopt when it is not known.
+    // Filled in by the load balancer, which is the one holding tablet size statistics.
+    std::optional<uint64_t> size_in_bytes;
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
@@ -855,6 +858,13 @@ public:
     /// Returns the smallest token owned by a given tablet.
     /// \throws std::logic_error If the given id does not belong to this instance.
     dht::token get_first_token(tablet_id id) const;
+
+    /// Returns the fraction of the ring owned by a given tablet, in (0, 1].
+    /// Tablet boundaries are arbitrary in the general case, so tablets of one table can own token
+    /// ranges of very different size and their count says little about how much of the table they
+    /// cover.
+    /// \throws std::logic_error If the given id does not belong to this instance.
+    double token_space_fraction(tablet_id id) const;
 
     /// Returns token_range which contains all tokens owned by a given tablet and only such tokens.
     /// \throws std::logic_error If the given id does not belong to this instance.
