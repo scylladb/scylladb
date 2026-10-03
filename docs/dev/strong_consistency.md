@@ -40,7 +40,8 @@ We introduce a separate set of Raft system tables for strongly consistent tablet
 - `system.raft_groups_snapshots`
 - `system.raft_groups_snapshot_config`
 
-`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx) — unlike
+`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx, and the last
+truncate the group applied: `truncated_at`, `last_truncate_request_id`, `truncate_index`) — unlike
 `system.raft`, it does not contain log entries (those are stored in the commitlog).
 `system.raft_groups_snapshots` and `system.raft_groups_snapshot_config` mirror the logical
 contents of `system.raft_snapshots` and `system.raft_snapshot_config` respectively.
@@ -165,6 +166,73 @@ acquire_replay_position_handles_for(N)
 This reuses the same mechanism that normal mutations use to tie commitlog segment
 lifetime to memtable flush — no new GC logic needed.
 
+### Truncate
+
+`TRUNCATE TABLE` on a strongly consistent table is serialized in each tablet's Raft log as
+a `truncate_command`, the alternative of `raft_command` next to `write_mutation`. The
+group's leader stamps it with a write timestamp from the same generator as the writes
+(`truncated_at`). The entry's position in the log is the linearization point: applying it
+drops every write ordered before it and keeps every write ordered after it, which `apply()`
+applies to the emptied tablet in log order like any other entry of the batch.
+
+`apply()` handles the command with `apply_truncate_command()`:
+
+1. If the group's record in `system.raft_groups` already carries the command's
+   `request_id`, the entry is a retry of a truncate this replica has applied and is a no-op.
+   The topology coordinator retries a `TRUNCATE` until every tablet has committed its entry,
+   and a retry can land a second entry in the same log. Dropping the tablet twice is not the
+   same as dropping it once when a read can observe the state in between, so the writes
+   committed between the two entries survive. The id is the topology request's id, so a new
+   `TRUNCATE` statement is a new truncate.
+2. Otherwise `table::truncate_tablet_locally()` drops the tablet's data on this shard:
+   memtables without flushing them, sstables by deleting them. The storage group stays
+   writable for the entries that follow.
+3. Then the record is written: `truncated_at`, `last_truncate_request_id` and the entry's
+   log index, `truncate_index`. It is written after the drop because it is a receipt, not the
+   intent; the intent is the entry in the log. A crash between the two leaves no record, so
+   the entry is applied again onto an already empty tablet.
+
+   The record does not go through the commitlog. It is applied to the memtable of
+   `system.raft_groups` on a clone of the entry's own replay position
+   (`rp_handle::clone()`), so the segment holding the entry stays until the flush which
+   makes the record durable. Until then a crash replays the entry; after it, the record
+   tells the replay which entries the truncate discarded.
+
+No `system.truncated` record is written. It would raise the minimum replay position of the
+shard and make the commitlog replay skip whole segments, together with the Raft entries of
+every other group stored in them.
+
+The topology coordinator drives the operation, over the same
+`global_topology_request::truncate_table` the eventually consistent truncate uses. For a
+table whose tablet map carries Raft groups (`tablet_map::has_raft_info()`),
+`handle_truncate_table()` sends `truncate_tablet` to the replicas of every tablet instead of
+`truncate_with_tablets` to every host. A replica answers whether it has committed the entry
+as the group's leader. The coordinator asks the tablet's live, non-excluded replicas at once,
+and repeats the round after a pause until one of them commits the entry.
+The RPC phase needs only a Raft quorum per tablet: dead and excluded replicas are skipped,
+and a tablet without a quorum keeps the request waiting. The topology barrier which fences
+the operation still has to reach every node which is not ignored (see the FIXME in
+`global_tablet_token_metadata_barrier()`), so a node which is merely down holds the truncate
+at the barrier until it is back or ignored, as it holds every topology operation.
+
+Success means that every tablet's group has committed its `truncate_command`. A replica
+which missed the entry still holds the data until it catches up on the log, and a read
+which is not linearizable may return pre-truncate data from it meanwhile; a linearizable
+read runs a read barrier first and never does.
+
+The commitlog replay (`process_raft_replayed_items()`) honours the record: a committed entry
+at or below `truncate_index` is dropped, since the record is durable only if the drop it
+stands for happened, and a committed `truncate_command` above it is applied with
+`apply_truncate_command()`, which drops the entries replayed before it. The record that
+writes carries no commitlog reference; the flush which follows the replay makes it durable
+before the old segments are deleted.
+
+Not implemented yet, planned as a follow-up:
+
+- A snapshot at the truncate index, which is what would let the commitlog reclaim the
+  segments holding the tablet's pre-truncate entries. Snapshots are not implemented for
+  these groups.
+
 ### Crash recovery (commitlog replay)
 
 On startup, the commitlog replayer reads all segments and encounters both normal
@@ -186,15 +254,17 @@ After replay completes, each group's collected entries are processed by
 Replayed entries for group G
     │
     ▼
-Load commit_idx and snapshot from CQL tables
+Load commit_idx and the truncate record from CQL tables
     │
     ▼
 Sort and deduplicate entries, handle leader changes
 (higher term + lower index → discard old uncommitted tail)
     │
+    ├── entries with idx ≤ truncate_index: dropped by the recorded truncate
+    │
     ├── entries with idx ≤ commit_idx (committed):
     │     deserialize mutations
-    │     apply to memtable in-memory
+    │     apply to memtable in-memory, or run the truncate
     │     (they may not have been flushed before crash)
     │
     └── entries with idx > commit_idx (uncommitted):
