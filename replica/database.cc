@@ -917,7 +917,7 @@ static auto add_fragmented_listeners(const gms::feature& f, db::commitlog& cl) {
 future<>
 database::init_commitlog() {
     if (_commitlog) {
-        return make_ready_future<>();
+        co_return;
     }
 
     auto config = db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory);
@@ -925,6 +925,17 @@ database::init_commitlog() {
     // utils::get_local_injector().resolve("decrease_commitlog_base_segment_id")
     if (utils::get_local_injector().enter("decrease_commitlog_base_segment_id")) {
         config.base_segment_id = 0;
+    }
+    if (this_shard_id() != 0) {
+        // shard 0 inits first and may delete the highest-id kept Recycled-* files before
+        // we list the dir; inherit its id floor so we can't mint ids it would replay/delete.
+        auto floor = co_await container().invoke_on(0, [](const database& db) -> std::optional<db::segment_id_type> {
+            auto* cl = db.commitlog();
+            return cl ? std::optional(cl->min_position().base_id()) : std::nullopt;
+        });
+        if (floor) {
+            config.base_segment_id = *floor;
+        }
     }
     if (features().fragmented_commitlog_entries) {
         config.allow_fragmented_entries = true;
@@ -936,24 +947,23 @@ database::init_commitlog() {
     if (_cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         config.descriptor_tag = detail::variant_format_tag;
     }
-    return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
-        _commitlog = std::make_unique<db::commitlog>(std::move(log));
+    auto log = co_await db::commitlog::create_commitlog(std::move(config));
+    _commitlog = std::make_unique<db::commitlog>(std::move(log));
 
-        auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
+    auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
 
-        _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
-            if (!_tables_metadata.contains(id)) {
-                // the CF has been removed.
-                _commitlog->discard_completed_segments(id);
-                return;
-            }
-            // Initiate a background flush. Waited upon in `stop()`.
-            (void)_tables_metadata.get_table(id).flush(pos);
-        }).release(); // we have longer life time than CL. Ignore reg anchor
+    _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
+        if (!_tables_metadata.contains(id)) {
+            // the CF has been removed.
+            _commitlog->discard_completed_segments(id);
+            return;
+        }
+        // Initiate a background flush. Waited upon in `stop()`.
+        (void)_tables_metadata.get_table(id).flush(pos);
+    }).release(); // we have longer life time than CL. Ignore reg anchor
 
-        _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
-            _commitlog->update_max_data_lifetime(max_time == 0 ? std::nullopt : std::make_optional(uint64_t(max_time)));
-        });
+    _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
+        _commitlog->update_max_data_lifetime(max_time == 0 ? std::nullopt : std::make_optional(uint64_t(max_time)));
     });
 }
 

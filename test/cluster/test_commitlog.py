@@ -7,6 +7,7 @@
 import asyncio
 import pytest
 import logging
+import pathlib
 import time
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables
@@ -88,3 +89,35 @@ async def test_reboot(request, manager: ScyllaClusterManager):
     logging.info(f"table content before crash [{table_content_before_crash}], "
                  f"after crash [{table_content_after_crash}]")
     assert table_content_before_crash == table_content_after_crash
+
+
+async def test_o_dsync_keeps_recycled_segments(manager: ScyllaClusterManager):
+    # With O_DSYNC, a clean stop keeps pre-written segments as Recycled-*, and
+    # the next start reuses them without taking the commitlog replay path.
+    server = await manager.server_add(cmdline=['--commitlog-use-o-dsync', '1'])
+    cql = manager.cql
+    await cql.run_async("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("create table ks.t (pk int primary key, v text)")
+    await asyncio.gather(*[cql.run_async(f"insert into ks.t (pk, v) values ({i}, 'v{i}')") for i in range(100)])
+
+    workdir = pathlib.Path(await manager.server_get_workdir(server.server_id))
+    def count_recycled() -> int:
+        return len(list(workdir.rglob('Recycled-*.log')))
+
+    await manager.server_stop_gracefully(server.server_id)
+    kept = count_recycled()
+    assert kept > 0
+
+    log = await manager.server_open_log(server.server_id)
+    for _ in range(2):
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+        rows = await cql.run_async("select pk, v from ks.t")
+        assert sorted((r.pk, r.v) for r in rows) == [(i, f'v{i}') for i in range(100)]
+        assert not await log.grep(r"replaying (schema )?commit log", from_mark=mark)
+        assert not await log.grep(r"commitlog\S* - (Corrupted|Truncated) file", from_mark=mark)
+        await manager.server_stop_gracefully(server.server_id)
+        recycled = count_recycled()
+        assert 0 < recycled <= kept
