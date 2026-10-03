@@ -134,6 +134,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     bool _merging_into_cache = false;
+    bool _merged_into_cache = false;
     // Tracks the difference between the amount of memory "spooled" during the flush
     // and the memory freed during the flush.
     //
@@ -152,7 +153,6 @@ private:
     // But we are only interested in the maximal total decrease since the beginning of flush.
     // This tracks the lowest value of _total_memory seen during the flush.
     uint64_t _total_memory_low_watermark_during_flush = 0;
-    bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
     // Lets the table flush timer skip a memtable created recently (e.g. after another flush trigger).
     seastar::lowres_clock::time_point _created_at = seastar::lowres_clock::now();
