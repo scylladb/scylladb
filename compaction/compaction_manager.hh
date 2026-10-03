@@ -393,7 +393,12 @@ public:
             sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
+    // pre_flush_gc_state is engaged if the caller flushed the table's memtables before calling, and
+    // holds a snapshot of the gc state taken before that flush. It is a precondition for narrowing
+    // tombstone GC to skip the memtable check, so a major that did not flush keeps consulting the
+    // memtables. See tombstone_gc_scope.
+    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false,
+            std::optional<tombstone_gc_state> pre_flush_gc_state = {});
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See compaction_type_options::splitting::classifier.
@@ -607,6 +612,10 @@ protected:
     future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
                                 sstables::offstrategy offstrategy = sstables::offstrategy::no);
+    // The gc state compact_sstables() runs the compaction with, see compaction_descriptor::gc_state.
+    // Called before the compaction's sstable set snapshot is taken, with the descriptor's gc scope
+    // already narrowed by the table's own property, see effective_gc_scope().
+    virtual tombstone_gc_state make_gc_state(const compaction_descriptor& descriptor) const;
     // Delegates to compaction_manager::update_history
     future<> update_history(::compaction::compaction_group_view& t, compaction_result&& res, const compaction_data& cdata) {
         return _cm.update_history(t, std::move(res), cdata);

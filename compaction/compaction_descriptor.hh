@@ -19,6 +19,7 @@
 #include "enum_set.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "utils/chunked_vector.hh"
+#include "tombstone_gc.hh"
 
 namespace compaction {
 
@@ -202,6 +203,68 @@ std::string_view to_string(compaction_type_options::scrub::mode);
 
 std::string_view to_string(compaction_type_options::scrub::quarantine_mode);
 
+// A tombstone can only be collected once nothing is left that it might still shadow.
+// Besides the sstables being compacted, the data that could shadow it lives in the
+// memtables, in the uncompacting sstables and in the commitlog, and compaction
+// consults all three by default.
+//
+// Note that these checks are not perfect. W.r.to memtables and uncompacting sstables,
+// if their minimum timestamp is less than that of the tombstone and they contain the
+// key, the tombstone will not be collected. No row-level, cell-level check takes place.
+// W.r.to the commitlog, there is currently no way to check if the key exists; only the
+// minimum timestamp comparison, similar to memtables, is performed.
+//
+// Some compactions can prove that consulting a given source is unnecessary and narrow
+// the scope. The values are ordered from most to least conservative, so two independent
+// requirements combine with std::max().
+//
+// A compaction with a narrowed scope is given a snapshot of the gc state, taken before its
+// snapshot of the sstable set, see compaction_descriptor::gc_state. Narrowing is only safe for
+// tombstones that were already GC-eligible when the snapshot was taken. With a live gc state, a
+// repair completing mid-compaction could make more tombstones GC-eligible, including ones that
+// shadow data the compaction ignores.
+enum class tombstone_gc_scope : uint8_t {
+    // Consult the memtables, the uncompacting sstables and the commitlog.
+    all = 0,
+
+    // Skip the memtables; still consult the uncompacting sstables and the commitlog.
+    //
+    // Used when the tombstone's GC eligibility is already ordered after the delivery of
+    // anything it could shadow, which holds in two cases, both requiring
+    // tombstone_gc = {'mode': 'repair'} so that gc_before is derived from a repair time:
+    //
+    //  - a major compaction *that flushed the memtables first*, and so takes every
+    //    sstable of the compaction group as input. Everything resident at flush time is
+    //    merged with the tombstones covering it rather than decided by a purge check, so
+    //    the memtables can only hold writes that arrived after the flush. The repair time
+    //    is the time at which repair flushed hints -- including view hints, see
+    //    repair_service::flush_hints() and storage_proxy::create_hint_sync_point() -- so
+    //    anything a GC-eligible tombstone covers was delivered and reconciled before
+    //    gc_before could advance past it. The flush is a precondition, not a detail: a
+    //    major run with flush_memtables=false can leave data delivered *before*
+    //    repair_time sitting in a memtable, never merged with the tombstone that shadows
+    //    it, and purging that tombstone would resurrect the row. For the same reason the
+    //    gc state is snapshotted before the flush, not when the compaction starts. RF=1
+    //    tables are excluded: they are never repaired, and repair mode collects their
+    //    tombstones immediately;
+    //
+    //  - a repaired sstable view, i.e. incremental repair on tablets, where unrepaired
+    //    data is always newer than any GC-eligible tombstone. That one is a property of
+    //    the table rather than of the compaction, see
+    //    compaction_group_view::skip_memtable_for_tombstone_gc().
+    //
+    // Both arguments assume that nothing arrives out of order by more than tombstone_gc's
+    // propagation_delay_in_seconds. This assumption is a core part of the repair-mode
+    // tombstone-gc contract.
+    skip_memtable = 1,
+
+    // Consult only the sstables being compacted, skipping the memtables, the uncompacting
+    // sstables and the commitlog alike. Requested explicitly by the operator via
+    // major compaction's consider_only_existing_data, which trades the guarantee for
+    // reclaiming space now.
+    compacting_sstables_only = 2,
+};
+
 class dummy_tag {};
 using has_only_fully_expired = seastar::bool_class<dummy_tag>;
 
@@ -233,15 +296,22 @@ struct compaction_descriptor {
     // Denotes if this compaction task is comprised solely of completely expired SSTables
     has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
 
-    // If set to true, gc will check only the compacting sstables to collect tombstones.
-    // If set to false, gc will check the memtables, commit log and other uncompacting
-    // sstables to decide if a tombstone can be collected. Note that these checks are
-    // not perfect. W.r.to memtables and uncompacted SSTables, if their minimum timestamp
-    // is less than that of the tombstone and they contain the key, the tombstone will
-    // not be collected. No row-level, cell-level check takes place. W.r.to the commit
-    // log, there is currently no way to check if the key exists; only the minimum
-    // timestamp comparison, similar to memtables, is performed.
-    bool gc_check_only_compacting_sstables = false;
+    // How much data outside the sstables being compacted is consulted when deciding
+    // whether a tombstone can be collected. See tombstone_gc_scope.
+    //
+    // The compaction takes it as is. It is up to the caller to narrow it by the table's own
+    // property too, see effective_gc_scope(), from the same view of the table its sstable set
+    // for tombstone gc was selected with, so the two cannot disagree if the table's
+    // tombstone_gc mode changes in the meantime.
+    tombstone_gc_scope gc_scope = tombstone_gc_scope::all;
+
+    // The gc state the compaction decides tombstone collection with. It is up to the caller to
+    // provide it, usually the table's (compaction_group_view::get_tombstone_gc_state()); the
+    // default collects no tombstones.
+    //
+    // A compaction whose scope is narrower than tombstone_gc_scope::all is given a snapshot,
+    // taken before all_sstables_snapshot, see tombstone_gc_scope.
+    tombstone_gc_state gc_state = tombstone_gc_state::no_gc();
 
     compaction_descriptor() = default;
 

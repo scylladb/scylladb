@@ -200,9 +200,14 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     return "(invalid)";
 }
 
+tombstone_gc_scope effective_gc_scope(const compaction_group_view& table_s, tombstone_gc_scope descriptor_scope) {
+    auto table_scope = table_s.skip_memtable_for_tombstone_gc() ? tombstone_gc_scope::skip_memtable : tombstone_gc_scope::all;
+    return std::max(descriptor_scope, table_scope);
+}
+
 static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& table_s, sstables::sstable_set::incremental_selector& selector,
         const std::unordered_set<sstables::shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
-        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
+        const api::timestamp_type compacting_max_timestamp, const tombstone_gc_scope gc_scope, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
@@ -210,42 +215,48 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     }
 
     auto timestamp = api::max_timestamp;
-    if (gc_check_only_compacting_sstables) {
-        // If gc_check_only_compacting_sstables is enabled, do not
-        // check memtables and other sstables not being compacted.
-        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_check_only_compacting_sstables=true, returning max_timestamp",
+    if (gc_scope == tombstone_gc_scope::compacting_sstables_only) {
+        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=compacting_sstables_only, returning max_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
         return max_purgeable(timestamp);
     }
 
     auto source = max_purgeable::timestamp_source::none;
-    api::timestamp_type memtable_min_timestamp;
-    if (is_shadowable) {
-        // For shadowable tombstones, check the minimum live row_marker timestamp
-        // as rows with timestamp larger than the tombstone's would shadow the tombstone,
-        // exposing all live cells in the row with timestamps potentially lower than
-        // the shadowable tombstone (and those are tracked in the min_memtable_live_timestamp).
-        // In contrast, a shadowable tombstone applies to rows with row_marker whose timestamp
-        // is less than or equal to the tombstone's timestamp, the same way as a regular tombstone would.
-        // See https://github.com/scylladb/scylladb/issues/20424
-        memtable_min_timestamp = table_s.min_memtable_live_row_marker_timestamp();
+    // The queries below are not free -- min_memtable_live_*_timestamp() and
+    // memtable_has_key() are evaluated for every purge attempt -- so bail out before
+    // making them rather than discarding their result.
+    if (gc_scope == tombstone_gc_scope::skip_memtable) {
+        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=skip_memtable, not checking the memtable",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name());
     } else {
-        // For regular tombstones, check the minimum live data timestamp.
-        // Even if purgeable tombstones shadow dead data in the memtable, it's ok to purge them;
-        // since "resurrecting" the already-dead data will no have effect, as they are already dead.
-        // See https://github.com/scylladb/scylladb/issues/20423
-        memtable_min_timestamp = table_s.min_memtable_live_timestamp();
-    }
-    clogger.trace("get_max_purgeable_timestamp {}.{}: memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
-            table_s.schema()->ks_name(), table_s.schema()->cf_name(),
-            memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
-    // Use memtable timestamp if it contains live data older than the sstables being compacted,
-    // and if the memtable also contains the key we're calculating max purgeable timestamp for.
-    // First condition helps to not penalize the common scenario where memtable only contains
-    // newer data.
-    if (!table_s.skip_memtable_for_tombstone_gc() && memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
-        timestamp = memtable_min_timestamp;
-        source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+        api::timestamp_type memtable_min_timestamp;
+        if (is_shadowable) {
+            // For shadowable tombstones, check the minimum live row_marker timestamp
+            // as rows with timestamp larger than the tombstone's would shadow the tombstone,
+            // exposing all live cells in the row with timestamps potentially lower than
+            // the shadowable tombstone (and those are tracked in the min_memtable_live_timestamp).
+            // In contrast, a shadowable tombstone applies to rows with row_marker whose timestamp
+            // is less than or equal to the tombstone's timestamp, the same way as a regular tombstone would.
+            // See https://github.com/scylladb/scylladb/issues/20424
+            memtable_min_timestamp = table_s.min_memtable_live_row_marker_timestamp();
+        } else {
+            // For regular tombstones, check the minimum live data timestamp.
+            // Even if purgeable tombstones shadow dead data in the memtable, it's ok to purge them;
+            // since "resurrecting" the already-dead data will no have effect, as they are already dead.
+            // See https://github.com/scylladb/scylladb/issues/20423
+            memtable_min_timestamp = table_s.min_memtable_live_timestamp();
+        }
+        clogger.trace("get_max_purgeable_timestamp {}.{}: memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name(),
+                memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
+        // Use memtable timestamp if it contains live data older than the sstables being compacted,
+        // and if the memtable also contains the key we're calculating max purgeable timestamp for.
+        // First condition helps to not penalize the common scenario where memtable only contains
+        // newer data.
+        if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
+            timestamp = memtable_min_timestamp;
+            source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+        }
     }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : std::views::concat(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
@@ -605,6 +616,8 @@ protected:
     std::vector<sstables::shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
     tombstone_gc_state _tombstone_gc_state;
+    // See compaction_descriptor::gc_scope.
+    const tombstone_gc_scope _gc_scope = tombstone_gc_scope::all;
     int64_t _output_repaired_at = 0;
 private:
     // Keeps track of monitors for input sstable.
@@ -654,10 +667,11 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
-        , _tombstone_gc_state(_table_s.get_tombstone_gc_state())
+        , _tombstone_gc_state(descriptor.gc_state)
+        , _gc_scope(descriptor.gc_scope)
         , _progress_monitor(progress_monitor)
     {
-        if (descriptor.gc_check_only_compacting_sstables) {
+        if (_gc_scope == tombstone_gc_scope::compacting_sstables_only) {
             _tombstone_gc_state = _tombstone_gc_state.with_commitlog_check_disabled();
         }
         std::unordered_set<sstables::run_id> ssts_run_ids;
@@ -1059,7 +1073,8 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(), is_shadowable);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp,
+                    _gc_scope, is_shadowable);
         };
     }
 
@@ -1467,6 +1482,7 @@ private:
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
         for (auto& pending_replacement : pending_replacements) {
+            bool replaces_snapshot_sstable = false;
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
@@ -1474,6 +1490,17 @@ private:
                     continue;
                 }
                 _sstable_set->erase(sst);
+                replaces_snapshot_sstable = true;
+            }
+            // If none of the removed sstables is in the snapshot, the added ones hold only data
+            // which was not in it either: data written or flushed after the snapshot was taken.
+            // A compaction with a narrowed gc scope has established that no GC-eligible tombstone
+            // can shadow such data, see tombstone_gc_scope, so it has no reason to consult them.
+            // Adding them anyway lets data written during a long compaction block the purge of
+            // tombstones, once another compaction happens to rewrite it.
+            // Otherwise the added sstables must be consulted: they hold data of the snapshot.
+            if (!replaces_snapshot_sstable && _gc_scope != tombstone_gc_scope::all) {
+                continue;
             }
             for (auto& sst : pending_replacement.added) {
                 _sstable_set->insert(sst);
