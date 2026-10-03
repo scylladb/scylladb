@@ -109,6 +109,12 @@ struct result_to_error_message_wrapper {
     }
 };
 
+std::vector<dependent_table> view_indexed_table_select_statement::dependent_tables() const {
+    auto ret = select_statement::dependent_tables();
+    ret.push_back(dependent_table{_view_schema->id(), _view_schema->ks_name(), _view_schema->cf_name()});
+    return ret;
+}
+
 template<typename C>
 auto wrap_result_to_error_message(C&& c) {
     return result_to_error_message_wrapper<C>{std::move(c)};
@@ -292,8 +298,12 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
     }
 }
 
-bool select_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
+std::vector<dependent_table> select_statement::dependent_tables() const {
+    return {dependent_table{_schema->id(), _schema->ks_name(), _schema->cf_name()}};
+}
+
+std::vector<dependent_table> mutation_fragments_select_statement::dependent_tables() const {
+    return {dependent_table{_underlying_schema->id(), _underlying_schema->ks_name(), _underlying_schema->cf_name()}};
 }
 
 const sstring& select_statement::keyspace() const {
