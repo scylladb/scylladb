@@ -92,7 +92,6 @@ class compaction_data;
 class compaction_descriptor;
 class compaction_manager;
 class compaction_reenabler;
-class compaction_task_impl;
 }
 
 class frozen_mutation;
@@ -1502,7 +1501,6 @@ public:
     tombstone_gc_state get_tombstone_gc_state() const;
 
     friend class compaction_group;
-    friend class compaction::compaction_task_impl;
 
     future<> update_repaired_at_for_merge();
 
