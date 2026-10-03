@@ -3535,12 +3535,27 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
 void table::on_flush_timer() {
     tlogger.debug("on table {}.{} flush timer, period {}ms", _schema->ks_name(), _schema->cf_name(), _schema->memtable_flush_period());
-    (void)with_gate(_async_gate, [this] {
-        return flush().finally([this] {
-            if (_schema->memtable_flush_period() > 0) {
-                _flush_timer.rearm(timer<lowres_clock>::clock::now() + std::chrono::milliseconds(_schema->memtable_flush_period()));
-            }
-        });
+    (void)with_gate(_async_gate, [this] () -> future<> {
+        const auto period = std::chrono::milliseconds(_schema->memtable_flush_period());
+        const auto now = lowres_clock::now();
+        auto next = now + period;
+        if (!_pending_flushes_phaser.is_closed()) {
+            auto op = _pending_flushes_phaser.start();
+            co_await parallel_foreach_compaction_group([&] (compaction_group& cg) -> future<> {
+                const auto due = cg.memtables()->back()->created_at() + period;
+                // Memtable was sealed recently by another trigger: wait until it is a period old.
+                if (due > now) {
+                    next = std::min(next, due);
+                    co_return;
+                }
+                co_await cg.flush();
+            }).finally([&] {
+                // set_schema() re-arms the timer itself if the period changed meanwhile.
+                if (_schema->memtable_flush_period() > 0 && !_flush_timer.armed()) {
+                    _flush_timer.rearm(next);
+                }
+            });
+        }
     });
 }
 
