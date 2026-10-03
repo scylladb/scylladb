@@ -7,6 +7,7 @@
  */
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/util/defer.hh>
 
 #include "sstables/sstable_writer.hh"
 #include "test/lib/eventually.hh"
@@ -357,7 +358,9 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         BOOST_REQUIRE_EQUAL(fmt::to_string(reclaimed_set.begin()->get_filename()), fmt::to_string(sst->get_filename()));
 
         // hold a copy of shared sst object in async thread to test reload after unlink
+        utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink");
         utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
+        auto disable_injector = seastar::defer([] noexcept { utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink"); });
         auto async_sst_holder = seastar::async([sst] {
             // do nothing just hold a copy of sst and wait for message signalling test completion
             utils::get_local_injector().inject("test_bloom_filter_reload_after_unlink", [] (auto& handler) {
@@ -412,6 +415,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
 
         // hold a copy of shared sst object in async thread to test reclaim after unlink
         utils::get_local_injector().enable("test_bloom_filter_reclaim_after_unlink");
+        auto disable_injector = seastar::defer([] noexcept { utils::get_local_injector().disable("test_bloom_filter_reclaim_after_unlink"); });
         auto async_sst_holder = seastar::async([sst1] {
             // do nothing just hold a copy of sst and wait for message signalling test completion
             utils::get_local_injector().inject("test_bloom_filter_reclaim_after_unlink", [] (auto& handler) {
