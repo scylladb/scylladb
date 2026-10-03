@@ -4751,6 +4751,14 @@ size_t table::get_logstor_memory_usage() const {
     return m;
 }
 
+size_t table::get_logstor_index_entries_bytes() const {
+    size_t m = 0;
+    if (_logstor_index) {
+        m += _logstor_index->get_entries_memory_usage();
+    }
+    return m;
+}
+
 db::commitlog* table::commitlog() const {
     if (_readonly) [[unlikely]] {
         on_internal_error(dblog, ::format("table {}.{} is readonly", _schema->ks_name(), _schema->cf_name()));
