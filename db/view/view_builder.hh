@@ -245,6 +245,8 @@ public:
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
+    virtual void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) override;
+    virtual void on_before_drop_keyspace(const sstring& ks_name, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) override;
 
     // For tests
     future<> wait_until_built(const sstring& ks_name, const sstring& view_name);
@@ -279,8 +281,8 @@ private:
     future<> handle_drop_view_global_cleanup(const sstring& ks_name, const sstring& view_name);
     future<view_builder_units> get_or_adopt_view_builder_lock(view_builder_units_opt units);
 
-    future<> mark_view_build_started(sstring ks_name, sstring view_name);
-    future<> mark_view_build_success(sstring ks_name, sstring view_name);
+    future<> mark_view_build_started(view_ptr view);
+    future<> mark_view_build_success(view_ptr view);
     future<> remove_view_build_status(sstring ks_name, sstring view_name);
     future<std::unordered_map<locator::host_id, sstring>> view_status(sstring ks_name, sstring view_name) const;
 

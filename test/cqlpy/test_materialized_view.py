@@ -12,7 +12,7 @@ from .util import new_test_table, unique_name, new_materialized_view, new_second
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from .rest_api import scylla_inject_error
+from .rest_api import scylla_inject_error, wait_for_injection_enter, message_injection
 
 from . import nodetool
 
@@ -1840,3 +1840,77 @@ def test_prepared_view_options_validated_on_every_execute(cql, test_keyspace):
 
         with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
             rejected_twice(cql.prepare(f"ALTER MATERIALIZED VIEW {mv}{bad_options}"))
+
+# When a materialized view has finished building, an entry for it appears in
+# system_distributed.view_build_status, and this is what wait_for_view_built()
+# checks. In this test we check that when the materialized view is DROPed,
+# this entry must be removed - immediately. If we don't remove it, and a new
+# view with the same name is re-created, wait_for_view_built() will think
+# the new view has finished building immediately.
+# As long as tablets and vnodes are still both supported, we run this test on
+# both because the view-building tracking code has different code paths for
+# tablets and vnodes.
+# If the entry in system_distributed.view_build_status never removed, this
+# test will always fail; But if the entry is removed eventually instead of
+# immediately (before DROP returns), this test will fail intermittently,
+# reproducing SCYLLADB-4869.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_view_build_status_removed_on_drop(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            wait_for_view_built(cql, mv)
+            # Although wait_for_view_built() does the same check, let's be
+            # explicit here: After the view is built, it gets an entry in
+            # system_distributed.view_build_status:
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+        # Leaving the "with" above dropped the view. The view_build_status
+        # entry must already be already gone *now* - it's not enough that it
+        # is removed eventually in the background, because if this entry
+        # remains and a user re-creates the same view immediately after the
+        # drop of the old one, the user might think the *new* view has
+        # already been built (this was SCYLLADB-4869).
+        assert list(cql.execute(query)) == []
+
+# Same as test_view_build_status_removed_on_drop, but reproduces SCYLLADB-4869
+# deterministically instead of intermittently. With vnodes, the entry is
+# removed by a background fiber that first needs the view builder's
+# semaphore on every shard, so it is delayed as long as the view builder is
+# busy building some other view. We use error injection to pause the view
+# builder in the middle of building another view (while holding that
+# semaphore), and then drop our view.
+# scylla_only because it uses error injection. The test above,
+# test_view_build_status_removed_on_drop does run on both Cassandra and
+# Scylla and reproduces the same bug, but only intermittently.
+def test_view_build_status_removed_on_drop_while_building(scylla_only, cql, test_keyspace_vnodes):
+    injection = 'view_builder_consume_end_of_partition_delay'
+    with new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as table, \
+         new_test_table(cql, test_keyspace_vnodes, 'p int PRIMARY KEY, v int') as other_table:
+        # The other view's build must go through at least one partition,
+        # to reach the injection point.
+        cql.execute(f'INSERT INTO {other_table} (p, v) VALUES (1, 2)')
+        # Our view must be built before the view builder is paused, but
+        # dropped while it is still paused, so it can't use a "with"
+        # nested with the other view's.
+        mv = f'{test_keyspace_vnodes}.{unique_name()}'
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE v IS NOT NULL AND p IS NOT NULL PRIMARY KEY (v, p)')
+        try:
+            wait_for_view_built(cql, mv)
+            ks, name = mv.split('.')
+            query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                        consistency_level=ConsistencyLevel.ONE)
+            assert [r.status for r in cql.execute(query)] == ['SUCCESS']
+            with scylla_inject_error(cql, injection, one_shot=True):
+                with new_materialized_view(cql, other_table, '*', 'v, p', 'v is not null and p is not null'):
+                    try:
+                        # The view builder is now paused in the middle of
+                        # building the other view.
+                        wait_for_injection_enter(cql, injection)
+                        cql.execute(f'DROP MATERIALIZED VIEW {mv}')
+                        assert list(cql.execute(query)) == []
+                    finally:
+                        message_injection(cql, injection)
+        finally:
+            cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {mv}')

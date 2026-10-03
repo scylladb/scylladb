@@ -2479,7 +2479,7 @@ void view_builder::setup_shard_build_step(
         if (auto view = maybe_fetch_view(view_name)) {
             if (vbi.built_views.contains(view->id())) {
                 if (this_shard_id() == 0) {
-                    auto f = mark_view_build_success(std::move(view_name.first), std::move(view_name.second)).then([this, view = std::move(view)] {
+                    auto f = mark_view_build_success(view).then([this, view = std::move(view)] {
                         return _sys_ks.remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     vbi.bookkeeping_ops.push_back(std::move(f));
@@ -2569,7 +2569,7 @@ static future<> announce_with_raft(
         cql3::query_processor& qp,
         ::service::raft_group0_client& group0_client,
         seastar::abort_source& as,
-        noncopyable_function<future<mutation>(api::timestamp_type)> mutation_gen,
+        noncopyable_function<future<std::optional<mutation>>(api::timestamp_type)> mutation_gen,
         std::string_view description) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -2579,9 +2579,15 @@ static future<> announce_with_raft(
         auto guard = co_await group0_client.start_operation(as);
         auto timestamp = guard.write_timestamp();
 
+        // mutation_gen() runs under the group0 guard, and again on each
+        // retry, so it can decide based on up-to-date group0 state (such
+        // as the schema) that there is nothing to write.
         auto mut = co_await mutation_gen(guard.write_timestamp());
+        if (!mut) {
+            co_return;
+        }
         utils::chunked_vector<canonical_mutation> cmuts;
-        cmuts.emplace_back(std::move(mut));
+        cmuts.emplace_back(std::move(*mut));
 
         auto group0_cmd = group0_client.prepare_command(
             ::service::write_mutations{
@@ -2601,23 +2607,44 @@ static future<> announce_with_raft(
     }
 }
 
-future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
+// The view builder writes a view's build status in the background, so by the
+// time it does, the view may have already been dropped. The DROP removed the
+// view's status in the same group0 command (see on_before_drop_column_family()),
+// so writing it now would leave a status row for a view that no longer exists.
+// So we only write the status if the view still exists. This check is done under
+// the group0 guard, so it is ordered with the DROP. A view re-created with the
+// same name has a different ID, so this check also doesn't let the old view's
+// status overwrite the new view's.
+future<> view_builder::mark_view_build_started(view_ptr view) {
     auto host_id = _db.get_token_metadata().get_my_id();
-    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
-                return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, view = std::move(view), host_id] (auto ts) -> future<std::optional<mutation>> {
+                if (!_db.column_family_exists(view->id())) {
+                    co_return std::nullopt;
+                }
+                co_return co_await _sys_ks.make_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()}, host_id, build_status::STARTED);
             }, "view builder: mark view build STARTED");
 }
 
-future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
+future<> view_builder::mark_view_build_success(view_ptr view) {
     auto host_id = _db.get_token_metadata().get_my_id();
-    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
-                return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, view = std::move(view), host_id] (auto ts) -> future<std::optional<mutation>> {
+                if (!_db.column_family_exists(view->id())) {
+                    co_return std::nullopt;
+                }
+                co_return co_await _sys_ks.make_view_build_status_update_mutation(ts, {view->ks_name(), view->cf_name()}, host_id, build_status::SUCCESS);
             }, "view builder: mark view build SUCCESS");
 }
 
+// Called on startup, to remove a leftover status of a view that no longer
+// exists. The caller checked this without the group0 guard, so a view with
+// the same name may have been re-created since, and the status we would
+// remove may be the new view's. So check again under the group0 guard.
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
-    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) {
-                return _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) -> future<std::optional<mutation>> {
+                if (_db.has_schema(ks_name, view_name) && _db.find_schema(ks_name, view_name)->is_view()) {
+                    co_return std::nullopt;
+                }
+                co_return co_await _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
             }, "view builder: delete view build status");
 }
 
@@ -2660,7 +2687,7 @@ view_builder::view_build_statuses(sstring keyspace, sstring view_name, const gms
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
     if (this_shard_id() == 0) {
-        co_await mark_view_build_started(view->ks_name(), view->cf_name());
+        co_await mark_view_build_started(view);
     }
 
     if (this_shard_id() == this_smp_shard_count() - 1) {
@@ -2825,11 +2852,33 @@ future<> view_builder::handle_drop_view_global_cleanup(const sstring& ks_name, c
             [this, &ks_name, &view_name] -> future<>  {
                 co_await _sys_ks.remove_view_build_progress_across_all_shards(ks_name, view_name); },
             [this, &ks_name, &view_name] -> future<>  {
-                co_await _sys_ks.remove_built_view(ks_name, view_name); },
-            [this, &ks_name, &view_name] -> future<>  {
-                co_await remove_view_build_status(ks_name, view_name); });
+                co_await _sys_ks.remove_built_view(ks_name, view_name); });
     } catch (...) {
         vlogger.warn("Failed to cleanup view {}.{}: {:t}", ks_name, view_name, std::current_exception());
+    }
+}
+
+// The view's entries in the group0 table `system.view_build_status_v2` are
+// removed in the same group0 command that drops the view, not later in the
+// background by handle_drop_view_global_cleanup(). Otherwise, if a view with
+// the same name is re-created right after the drop, the old view's entries
+// would make it look as if the new view had already been built, and the
+// background removal could even delete the new view's entries.
+// Views in tablet keyspaces are handled by the view building coordinator,
+// which removes their entries in the drop command itself.
+void view_builder::on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
+    if (!s.is_view() || should_ignore_tablet_keyspace(_db, s.ks_name())) {
+        return;
+    }
+    mutations.push_back(_sys_ks.make_remove_view_build_status_mutation(ts, {s.ks_name(), s.cf_name()}).get());
+}
+
+void view_builder::on_before_drop_keyspace(const sstring& ks_name, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
+    if (should_ignore_tablet_keyspace(_db, ks_name)) {
+        return;
+    }
+    for (auto& view : _db.find_keyspace(ks_name).metadata()->views()) {
+        mutations.push_back(_sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()}).get());
     }
 }
 
@@ -3205,7 +3254,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
 future<> view_builder::mark_as_built(view_ptr view) {
     return seastar::when_all_succeed(
             _sys_ks.mark_view_as_built(view->ks_name(), view->cf_name()),
-            mark_view_build_success(view->ks_name(), view->cf_name())).discard_result();
+            mark_view_build_success(view)).discard_result();
 }
 
 future<> view_builder::mark_existing_views_as_built() {
