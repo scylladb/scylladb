@@ -2449,14 +2449,21 @@ def test_scylla_sstable_layout(cql, test_keyspace, scylla_path, scylla_data_dir)
                 os.unlink(unsealed + component)
 
         # an sstable can be deleted by the running scylla between being listed
-        # and being loaded, leaving components of it missing; it is left out
-        # rather than failing the whole operation
+        # and being loaded, leaving components of it missing; it fails the
+        # operation, unless --ignore-incomplete-sstables asks for it to be left out
         deleted = os.path.join(table_dir, "mc-998-big-")
         try:
             # a sealed sstable, but the components its TOC lists are gone
             shutil.copy(sstables[0], deleted + "Data.db")
             shutil.copy(sstables[0].replace("-Data.db", "-TOC.txt"), deleted + "TOC.txt")
-            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+            for args in ([table_dir], [deleted + "Data.db"] + sstables):
+                subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file] + args,
+                                       "--ignore-incomplete-sstables")
+            assert sorted(sst["name"] for ssts in layout("--ignore-incomplete-sstables", table_dir).values()
+                          for sst in ssts) == sorted(laid_out)
+            assert sorted(sst["name"] for ssts in layout("--ignore-incomplete-sstables", deleted + "Data.db",
+                                                         *sstables).values()
+                          for sst in ssts) == sorted(laid_out)
         finally:
             for component in ("Data.db", "TOC.txt"):
                 os.unlink(deleted + component)
