@@ -17,6 +17,7 @@
 #include "commitlog_entry.hh"
 #include "db/timeout_clock.hh"
 #include "gc_clock.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 namespace seastar { class file; }
@@ -386,8 +387,8 @@ public:
      */
     future<> release();
 
-    future<std::vector<descriptor>> list_existing_descriptors() const;
-    future<std::vector<descriptor>> list_existing_descriptors(const sstring& dir) const;
+    future<utils::chunked_vector<descriptor>> list_existing_descriptors() const;
+    future<utils::chunked_vector<descriptor>> list_existing_descriptors(const sstring& dir) const;
 
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
