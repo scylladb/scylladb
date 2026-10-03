@@ -58,7 +58,8 @@ void shared_tombstone_gc_state::drop_repair_history_for_table(const table_id& id
 // The knows_entire_range is set to true:
 // 1) if the tombstone_gc_mode is not repair, since we have the same value for all the keys in the ranges.
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
-tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
+tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& requested_query_time) const {
+    const auto query_time = effective_query_time(requested_query_time);
     switch (_mode) {
         case mode::no_gc: return get_gc_before_for_range_result{gc_clock::time_point::min(), gc_clock::time_point::min(), true};
         case mode::gc_all: return get_gc_before_for_range_result{gc_clock::time_point::max(), gc_clock::time_point::max(), true};
@@ -152,7 +153,8 @@ gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_
     return t;
 }
 
-gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& requested_query_time) const {
+    const auto query_time = effective_query_time(requested_query_time);
     switch (_mode) {
         case mode::no_gc: return gc_clock::time_point::min();
         case mode::gc_all: return gc_clock::time_point::max();
@@ -304,16 +306,21 @@ void shared_tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point 
     _group0_gc_time = refresh_time;
 }
 
-tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
-    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time, _rf_one_tables));
+shared_tombstone_gc_state shared_tombstone_gc_state::clone() const {
+    return shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time, _rf_one_tables);
 }
 
-tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
-    : _shared_state(std::move(shared_state)), _query_time(gc_clock::now())
-{ }
-
-gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const {
-    return tombstone_gc_state(_shared_state, check_commitlog).get_gc_before_for_key(s, dk, _query_time);
+tombstone_gc_state tombstone_gc_state::snapshot(gc_clock::time_point snapshot_time) const {
+    if (_snapshot_time) {
+        return *this;
+    }
+    auto ret = *this;
+    if (_shared_state) {
+        ret._frozen_shared_state = make_lw_shared<const shared_tombstone_gc_state>(_shared_state->clone());
+        ret._shared_state = ret._frozen_shared_state.get();
+    }
+    ret._snapshot_time = snapshot_time;
+    return ret;
 }
 
 static bool is_local_replication_table(const locator::abstract_replication_strategy& rs) {

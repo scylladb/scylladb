@@ -202,7 +202,7 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
 
 static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& table_s, sstables::sstable_set::incremental_selector& selector,
         const std::unordered_set<sstables::shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
-        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
+        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const bool skip_memtable, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
@@ -243,7 +243,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
     // First condition helps to not penalize the common scenario where memtable only contains
     // newer data.
-    if (!table_s.skip_memtable_for_tombstone_gc() && memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
+    if (!skip_memtable && memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
         timestamp = memtable_min_timestamp;
         source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
@@ -605,6 +605,8 @@ protected:
     std::vector<sstables::shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
     tombstone_gc_state _tombstone_gc_state;
+    // See compaction_descriptor::skip_memtable_for_tombstone_gc.
+    const bool _skip_memtable_for_tombstone_gc = false;
     int64_t _output_repaired_at = 0;
 private:
     // Keeps track of monitors for input sstable.
@@ -654,7 +656,8 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
-        , _tombstone_gc_state(_table_s.get_tombstone_gc_state())
+        , _tombstone_gc_state(descriptor.gc_state)
+        , _skip_memtable_for_tombstone_gc(descriptor.skip_memtable_for_tombstone_gc)
         , _progress_monitor(progress_monitor)
     {
         if (descriptor.gc_check_only_compacting_sstables) {
@@ -1059,7 +1062,8 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(), is_shadowable);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(),
+                    _skip_memtable_for_tombstone_gc, is_shadowable);
         };
     }
 
