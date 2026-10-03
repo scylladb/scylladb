@@ -70,6 +70,22 @@ Keyspace and table configuration
   to prevent tombstone garbage collection from running during migration.
   For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
 
+  Materialized views are an exception: after the migration they become
+  :term:`co-located tables <Colocated Table>`, which do not support the
+  ``repair`` mode, so every view must use a different mode (e.g. ``timeout``)
+  **before** the migration is started. ``repair`` is the default mode for
+  views in vnode-based keyspaces, so this typically requires an explicit
+  change, for example:
+
+  .. code-block:: cql
+
+     ALTER MATERIALIZED VIEW ks.my_view WITH tombstone_gc = {'mode': 'timeout'};
+
+  The backing view of a local secondary index (named ``<index name>_index``)
+  can be changed the same way.
+* All materialized views in the keyspace must be **fully built** before the
+  migration is started.
+
 Limitations
 -----------
 
@@ -82,14 +98,26 @@ The current migration procedure has the following limitations:
   not yet supported.
 
 * **No schema changes** during the migration. Do not create, alter, or drop
-  tables in the migrating keyspace until the migration is finished.
+  tables, views, or indexes in the migrating keyspace until the migration is
+  finished. In particular, creating a view or altering a view to the
+  ``repair`` ``tombstone_gc`` mode during the migration will cause the
+  finalization to fail with an error; fix the keyspace and retry the
+  finalization.
 * **No topology changes** during the migration. Do not add, remove, decommission,
   replace, or rebuild nodes while a migration is in progress.
 * **No repair** operations during the migration. Do not run ``nodetool repair``
   on the migrating keyspace while a migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
-* Only **CQL base tables** can be migrated. Materialized views, secondary
-  indexes, CDC tables, and Alternator tables are not supported.
+* Only **CQL tables and materialized views** can be migrated. CDC tables and
+  Alternator tables are not supported.
+* Materialized views are migrated as tables **co-located** with their base
+  table (sharing its tablets), so every view in the keyspace must be eligible
+  for co-location: its partition key must consist of exactly the base table's
+  partition key columns, in the same order. Views with a different partition
+  key must be dropped before the migration.
+* **Local secondary indexes** are supported (their backing views share the
+  base table's partition key). **Global secondary indexes** are not; they
+  must be dropped before the migration.
 * Tables with **counters** or **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.

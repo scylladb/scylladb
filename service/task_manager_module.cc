@@ -732,6 +732,10 @@ pow2_convergence_virtual_task::find_converging_table_for_task_id(tasks::task_id 
         if (!ks.uses_tablets()) {
             continue;
         }
+        // Iterate base tables only (all pow2 convergence tracking does):
+        // views migrated from vnodes are co-located with their base table
+        // and share its tablet map, so they converge through the base
+        // table and must not produce tasks of their own.
         for (const auto& schema : ks.metadata()->tables()) {
             if (!tablet_metadata.has_tablet_map(schema->id())) {
                 continue;
