@@ -10,9 +10,9 @@
 import json
 
 import pytest
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement
-from .util import new_test_table
+from .util import new_test_table, new_materialized_view
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
 @pytest.fixture(scope="module", autouse=True)
@@ -166,6 +166,42 @@ def test_logstor_counter_columns_disabled(cql, test_keyspace):
         with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c counter",
                             " WITH storage_engine = 'logstor'") as table:
             pass
+
+# Test that storage_engine can't be changed via ALTER TABLE.
+def test_logstor_alter_table_storage_engine_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(ConfigurationException, match="Cannot alter storage_engine of an existing table"):
+            cql.execute(f"ALTER TABLE {table} WITH storage_engine = 'logstor'")
+
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        with pytest.raises(ConfigurationException, match="Cannot alter storage_engine of an existing table"):
+            cql.execute(f"ALTER TABLE {table} WITH storage_engine = 'logstor'")
+
+# Same as above, but for ALTER MATERIALIZED VIEW (a separate code path).
+def test_logstor_alter_materialized_view_storage_engine_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with new_materialized_view(cql, table, "*", "v, pk", "v is not null and pk is not null") as mv:
+            with pytest.raises(ConfigurationException, match="Cannot alter storage_engine of an existing table"):
+                cql.execute(f"ALTER MATERIALIZED VIEW {mv} WITH storage_engine = 'logstor'")
+
+# Test that CREATE MATERIALIZED VIEW can't set its own storage_engine either:
+# views skip create_table_statement.cc's clustering-column check that would
+# otherwise reject logstor, and views normally have clustering columns.
+def test_logstor_create_materialized_view_storage_engine_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, c int, v int, PRIMARY KEY (pk, c)") as table:
+        with pytest.raises(InvalidRequest, match="storage_engine"):
+            with new_materialized_view(cql, table, "*", "v, pk, c",
+                                       "v is not null and pk is not null and c is not null",
+                                       " WITH storage_engine = 'logstor'") as mv:
+                pass
+
+# Test that CREATE INDEX can't set its own storage_engine (mixing engines
+# between a base table and its index isn't supported).
+def test_logstor_create_index_storage_engine_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match="Cannot set storage_engine on an index"):
+            cql.execute(f"CREATE INDEX ON {table}(v) WITH storage_engine = 'logstor'")
 
 # Test frozen map column with logstor storage engine.
 def test_logstor_frozen_map(cql, test_keyspace):
