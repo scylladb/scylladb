@@ -249,6 +249,11 @@ public:
         return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
     }
 
+    std::vector<sstring> endpoints(sstring type = "") const noexcept {
+        SCYLLA_ASSERT(_storage != nullptr);
+        return _storage->endpoints(std::move(type));
+    }
+
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
