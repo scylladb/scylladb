@@ -542,6 +542,52 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
     });
 }
 
+// Apply must absorb every injected allocation failure, including those in LSA alloc points
+// reached from noexcept scopes.
+static void test_apply_under_failure_injection(std::function<void(replica::memtable&, const mutation&, const frozen_mutation&)> do_apply) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    auto s = gen.schema();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    for (auto&& m : gen(4)) {
+        auto fm = freeze(m);
+        {
+            // Warm-up: first use of thread_local state must not happen under injection.
+            replica::memtable warm_mt(s);
+            do_apply(warm_mt, m, fm);
+        }
+        auto& injector = memory::local_failure_injector();
+        uint64_t i = 0;
+        do {
+            // Fresh section per attempt: its std reserve doubles on every injected failure.
+            replica::table_stats tbl_stats;
+            replica::memtable_table_shared_data table_shared_data;
+            replica::dirty_memory_manager mgr;
+            auto mt = make_lw_shared<replica::memtable>(s, mgr, table_shared_data, tbl_stats);
+            injector.fail_after(i++);
+            try {
+                do_apply(*mt, m, fm);
+            } catch (...) {
+                injector.cancel();
+                throw;
+            }
+            injector.cancel();
+            assert_that(mt->make_mutation_reader(s, semaphore.make_permit())).produces(m).produces_end_of_stream();
+        } while (injector.failed());
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_apply_frozen_mutation_under_failure_injection) {
+    test_apply_under_failure_injection([] (replica::memtable& mt, const mutation& m, const frozen_mutation& fm) {
+        mt.apply(fm, m.schema());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_apply_mutation_under_failure_injection) {
+    test_apply_under_failure_injection([] (replica::memtable& mt, const mutation& m, const frozen_mutation&) {
+        mt.apply(m);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     simple_schema ss;

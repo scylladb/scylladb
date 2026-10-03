@@ -218,6 +218,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
         // To prevent a `bad_alloc` during the tree insertion, we have to preallocate
         // some memory for the new tree nodes. This is done by the `hold_reserve`
         // constructed after the lambda.
+        memory::scoped_critical_alloc_section dfg; // allocations are reserved above; keep the injector out
         if (this_sentinel) {
             SCYLLA_ASSERT(p_i != p._rows.end());
             auto rt = this_sentinel->range_tombstone();
