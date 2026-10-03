@@ -12,6 +12,12 @@ env:
 jobs:
   mark-ready:
     if: github.event.label.name == 'conflicts'
+    # Job-level (not workflow-level) concurrency: a run triggered by removing a
+    # non-conflicts label skips this job, and must not cancel an in-progress run
+    # that is marking the PR ready.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

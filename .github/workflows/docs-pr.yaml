@@ -18,6 +18,11 @@ on:
       - "docs/**"
       - "db/config.hh"
       - "db/config.cc"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
