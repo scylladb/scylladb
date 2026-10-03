@@ -9,7 +9,7 @@ import subprocess
 from test.nodetool.utils import check_nodetool_fails_with_all, check_nodetool_fails_with_error_contains
 
 
-def test_jmx_compatibility_args(nodetool, scylla_only):
+def test_jmx_compatibility_args(nodetool):
     """Check that all JMX arguments inherited to nodetool are ignored.
 
     These arguments are unused in the scylla-native nodetool and should be
@@ -33,7 +33,7 @@ def test_jmx_compatibility_args(nodetool, scylla_only):
              expected_requests=dummy_request)
 
 
-def test_nodetool_no_args(nodetool_path, scylla_only):
+def test_nodetool_no_args(nodetool_path):
     res = subprocess.run([nodetool_path, "nodetool"], capture_output=True, text=True)
 
     assert res.stdout == ""
@@ -43,7 +43,7 @@ Try `scylla nodetool --help` for more information.
 """
 
 
-def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server):
+def test_nodetool_api_request_failed(nodetool, rest_api_mock_server):
     ip, port = rest_api_mock_server
 
     error_messages = [
@@ -61,7 +61,7 @@ def test_nodetool_api_request_failed(nodetool, scylla_only, rest_api_mock_server
         error_messages)
 
 
-def test_nodetool_nonexistent_command(nodetool, scylla_only):
+def test_nodetool_nonexistent_command(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("non-existent-command",),
@@ -69,7 +69,7 @@ def test_nodetool_nonexistent_command(nodetool, scylla_only):
             ["error: unrecognized operation argument: expected one of"])
 
 
-def test_global_options_order(nodetool_path, rest_api_mock_server, scylla_only):
+def test_global_options_order(nodetool_path, rest_api_mock_server):
     with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 
@@ -85,7 +85,7 @@ def test_global_options_order(nodetool_path, rest_api_mock_server, scylla_only):
         subprocess.run([nodetool_path, "nodetool", "-h", ip, "-p", port, "compact", "-u", "us3r"], check=True)
 
 
-def test_jvm_options(nodetool_path, rest_api_mock_server, scylla_only):
+def test_jvm_options(nodetool_path, rest_api_mock_server):
     with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 
@@ -99,7 +99,7 @@ def test_jvm_options(nodetool_path, rest_api_mock_server, scylla_only):
         subprocess.run([nodetool_path, "nodetool", jvm_opt, "compact", "-h", ip, "-p", port], check=True)
 
 
-def test_alternative_api_port(nodetool_path, rest_api_mock_server, scylla_only):
+def test_alternative_api_port(nodetool_path, rest_api_mock_server):
     with expected_requests_manager(rest_api_mock_server, [
             expected_request("POST", "/storage_service/compact", multiple=expected_request.MULTIPLE)]):
 

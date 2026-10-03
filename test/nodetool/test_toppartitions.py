@@ -34,9 +34,8 @@ class Record(NamedTuple):
 
 
 def normalize_samplings(samplings):
-    # Cassandra's nodetool uses Map under the hood for collecting the samplings,
-    # and prints out the items in the map, but the order is not guaranteed to be
-    # ordered or consistent, so let's extract the state values out and sort them
+    # The order of the samplings in the output is not guaranteed to be
+    # consistent, so let's extract the state values out and sort them
     # before comparing.
     normalized = {}
     header = None
@@ -65,7 +64,7 @@ def normalize_samplings(samplings):
                                                       (True, ""),
                                                       (False, "WRITES"),
                                                       (False, "")])
-def test_toppartitions(nodetool, request, empty_samplings, samplers):
+def test_toppartitions(nodetool, empty_samplings, samplers):
 
     if empty_samplings:
         samplings = {
@@ -115,10 +114,8 @@ def test_toppartitions(nodetool, request, empty_samplings, samplers):
         'duration': str(duration),
         'table_filters': 'ks:cf',
         'capacity': str(capacity),
+        'list_size': str(list_size),
     }
-    if request.config.getoption("nodetool") == "scylla":
-        # scylla sends list_size, while cassandra's nodetool does not.
-        params['list_size'] = str(list_size)
     res = nodetool("toppartitions", *args, expected_requests=[
         expected_request("GET", "/storage_service/toppartitions/",
                          params=params,
@@ -152,7 +149,7 @@ def test_toppartitions(nodetool, request, empty_samplings, samplers):
     assert normalize_samplings(actual_output) == normalize_samplings(expected_output)
 
 
-def test_toppartitions_invalid_capacity(nodetool, request):
+def test_toppartitions_invalid_capacity(nodetool):
     options = {
         "--duration": 50000,
         "-s": 20,

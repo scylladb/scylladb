@@ -17,11 +17,9 @@ def create_schema_version(num_hosts):
 
 
 def normalize_cluster_info(cluster_info):
-    # Cassandra's nodetool uses HashMap under the hood for collecting the map
-    # from versions to hosts on that version, and print out them by iterating
-    # the keys, but the order is not guaranteed to be ordered or consistent, so
-    # let's extract the items in "schema_versions" out and sort them before
-    # comparing.
+    # The order of the schema versions in the output is not guaranteed to be
+    # consistent, so let's extract the items in "schema_versions" out and sort
+    # them before comparing.
     expecting_schema_versions = False
     normalized = []
     schema_versions = []
