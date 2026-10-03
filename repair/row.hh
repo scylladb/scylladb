@@ -9,6 +9,7 @@
 #pragma once
 #include <optional>
 #include "mutation/frozen_mutation.hh"
+#include "mutation/mutation_fragment.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/hash.hh"
@@ -19,6 +20,22 @@ using namespace seastar;
 using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
 class decorated_key_with_hash;
 class repair_hash;
+
+namespace detail {
+
+struct permit_mover {
+    const schema& s;
+    reader_permit permit;
+    mutation_fragment consume(auto&& x) { return mutation_fragment(s, permit, std::move(x)); }
+};
+
+} // namespace detail
+
+/// Moves mf onto permit, releasing the memory it holds on its current permit.
+inline mutation_fragment move_to_permit(const schema& s, reader_permit permit, mutation_fragment&& mf) {
+    detail::permit_mover m{s, std::move(permit)};
+    return std::move(mf).consume(m);
+}
 
 class repair_row {
     std::optional<frozen_mutation_fragment> _fm;
@@ -52,6 +69,15 @@ public:
     void reset_mutation_fragment() {
         _mf = nullptr;
     }
+    // Rows read from disk keep one form: frozen once sent. Rows from peers keep _mf for flush.
+    void freeze_for_send(const schema& s) {
+        if (!_fm) {
+            _fm = freeze(s, get_mutation_fragment());
+        }
+        if (!_dirty_on_master) {
+            _mf = nullptr;
+        }
+    }
     frozen_mutation_fragment& get_frozen_mutation() {
         if (!_fm) {
             throw std::runtime_error("empty frozen_mutation_fragment");
@@ -68,10 +94,7 @@ public:
         return _dk_with_hash;
     }
     size_t size() const {
-        if (!_fm) {
-            throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
-        }
-        auto size = sizeof(repair_row) + _fm->representation().size();
+        auto size = sizeof(repair_row) + (_fm ? _fm->representation().size() : 0);
         if (_boundary) {
             size += _boundary->pk.external_memory_usage() + _boundary->position.external_memory_usage();
         }
