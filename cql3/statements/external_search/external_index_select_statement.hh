@@ -69,6 +69,13 @@ protected:
         return false; // All filtering is done by the index query, so no post-filtering is allowed.
     }
 
+    size_t object_size() const override {
+        return sizeof(*this);
+    }
+    size_t external_memory_usage() const override {
+        return select_statement::external_memory_usage() + secondary_index_external_memory_usage(_index);
+    }
+
 private:
     lw_shared_ptr<query::read_command> prepare_command_for_base_query(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;

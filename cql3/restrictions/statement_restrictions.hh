@@ -97,6 +97,9 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws
     /// invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 };
 
 /**
@@ -158,6 +161,9 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws
     /// invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 };
 
 /**
@@ -340,6 +346,9 @@ public:
     bool has_non_primary_key_restriction() const { return _analysis.has_non_primary_key_restriction(); }
     bool is_restricted(const column_definition* cdef) const { return _analysis.is_restricted(cdef); }
     bool is_empty() const { return _analysis.is_empty(); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
         return _analysis.get_partition_key_ranges(options);

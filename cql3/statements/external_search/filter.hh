@@ -10,6 +10,7 @@
 
 #include "utils/rjson.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/memory_usage.hh"
 
 namespace cql3 {
 
@@ -35,6 +36,16 @@ struct prepared_restriction {
     std::variant<rjson::value, prepared_rhs> rhs;
 
     rjson::value rhs_to_json(const query_options& options) const;
+
+    // The rjson::value fields' own heap allocations are not counted here (rapidjson's
+    // internal allocator arena isn't introspectable); only the prepared_rhs's owned
+    // expression, which recurses through the usual external_memory_usage().
+    size_t external_memory_usage() const {
+        if (auto* r = std::get_if<prepared_rhs>(&rhs)) {
+            return r->expr.external_memory_usage();
+        }
+        return 0;
+    }
 };
 
 class prepared_filter {
@@ -52,6 +63,14 @@ public:
 
     /// Serializes the prepared filter to JSON compatible with the Vector Store service filtering API.
     rjson::value to_json(const query_options& options) const;
+
+    size_t external_memory_usage() const {
+        size_t s = vector_external_memory_usage(_restrictions);
+        for (const auto& r : _restrictions) {
+            s += r.external_memory_usage();
+        }
+        return s;
+    }
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
