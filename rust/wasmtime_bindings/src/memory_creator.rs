@@ -77,6 +77,13 @@ unsafe impl LinearMemory for ScyllaLinearMemory {
                 std::ptr::copy_nonoverlapping(self.ptr, new_ptr, copy_size);
             };
         }
+        if new_size_aligned > copy_size {
+            // WebAssembly requires new memory to be zero-filled, but aligned_alloc()
+            // may return memory left over from previous allocations.
+            unsafe {
+                std::ptr::write_bytes(new_ptr.add(copy_size), 0, new_size_aligned - copy_size);
+            };
+        }
         unsafe { free(self.ptr) };
         self.size = new_size_aligned;
         self.ptr = new_ptr;
