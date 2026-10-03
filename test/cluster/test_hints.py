@@ -12,7 +12,7 @@ import re
 from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.internal_types import IPAddress
+from test.pylib.internal_types import IPAddress, ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
@@ -28,6 +28,30 @@ logger = logging.getLogger(__name__)
 async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, metric_name: str):
     metrics = await client.query(server_ip)
     return metrics.get(f"scylla_hints_manager_{metric_name}")
+
+
+async def wait_until_hint_writing_settled(manager: ManagerClient, servers: list[ServerInfo],
+                                          timeout: float = 180) -> None:
+    async def check():
+        all_in_progress = await gather_safely(*[get_hint_metrics(manager.metrics, srv.ip_addr, "size_of_hints_in_progress") for srv in servers])
+        logger.debug(f"Waiting for hint writing to settle. All in progress: {all_in_progress}")
+        in_progress = sum(all_in_progress)
+        return True if in_progress == 0 else None
+    await wait_for(check, time.time() + timeout)
+
+
+async def wait_until_hints_are_sent_from(manager: ManagerClient, servers: list[ServerInfo],
+                                         expected_count: float, timeout: float = 180) -> None:
+    """
+    Wait until `expected_count` hints have been sent on `servers`.
+    """
+    async def check():
+        all_sent_total = await gather_safely(*[get_hint_metrics(manager.metrics, srv.ip_addr, "sent_total") for srv in servers])
+        logger.debug(f"Waiting for {expected_count} hints in total to be sent. All sent total: {all_sent_total}")
+        sent_total = sum(all_sent_total)
+        return True if sent_total >= expected_count else None
+    await wait_for(check, time.time() + timeout)
+
 
 async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress) -> str:
     response = await client.post_json("/hinted_handoff/sync_point", host=server_ip, port=10_000)
@@ -434,3 +458,292 @@ async def test_hint_to_pending(manager: ManagerClient):
             task.result()
 
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
+<<<<<<< HEAD
+||||||| parent of e26fec5e79 (test/cluster/test_hints.py: Migrate dtest test_hintedhandoff_retransmit)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
+    '''
+    This test checks if hint_sender sends a mutation to a leaving replica if the mutation
+    belongs to a tablet which is being removed due to RF--. This is needed to improve
+    consistency. https://scylladb.atlassian.net/browse/SCYLLADB-287
+    '''
+    # We have only one shard to force the two sets of hints to the same shard and avoid
+    # the problem with waiting for hint sync point timing out when the only hint on a shard has been dropped
+    # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+    cmdline = ['--smp=1', "--logger-log-level", "hints_manager=trace"]
+    servers = await manager.servers_add(3, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ], cmdline=cmdline)
+    cql = await manager.get_cql_exclusive(servers[0])
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int) WITH tablets = {{'min_tablet_count': 1}};")
+        host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+
+        # Stop the servers with replicas
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.others_not_see_server(servers[1].ip_addr)
+        await manager.server_stop_gracefully(servers[2].server_id)
+        await manager.others_not_see_server(servers[2].ip_addr)
+
+        # This will cause the hint for host_ids[1] to be dropped
+        await manager.api.enable_injection(servers[0].ip_addr, 'drop_hint_for_host', one_shot=False, parameters={'hint_host_dst': host_ids[1]})
+
+        # This will attempt to write the hints for both replicas, but only the write for the hint for host_ids[2] will succeed
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ANY))
+
+        # Write another record, but this time disable dropping the hint. This is needed to get around the problem
+        # where waiting for the hint sync point times out when we only have a single hint which was dropped
+        # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+        await manager.api.disable_injection(servers[0].ip_addr, 'drop_hint_for_host')
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY))
+
+        await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        await manager.api.enable_injection(coord_serv.ip_addr, "stream_tablet_wait", one_shot=False)
+
+        alter_rf_fut = cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'dc1': ['r2']}}")
+
+        async def migration_reached_streaming():
+            stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='{ks}' ALLOW FILTERING")
+            logger.info(f"Current stages: {[row.stage for row in stages]}")
+            return set(["streaming"]) == set([row.stage for row in stages]) or None
+        await wait_for(migration_reached_streaming, time.time() + 60)
+
+        sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
+
+        # Complete hints handoff
+        await manager.api.disable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay")
+        assert await await_sync_point(manager.api.client, servers[0].ip_addr, sync_point, 30)
+
+        await manager.api.disable_injection(coord_serv.ip_addr, "stream_tablet_wait")
+
+        await alter_rf_fut
+
+        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
+=======
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
+    '''
+    This test checks if hint_sender sends a mutation to a leaving replica if the mutation
+    belongs to a tablet which is being removed due to RF--. This is needed to improve
+    consistency. https://scylladb.atlassian.net/browse/SCYLLADB-287
+    '''
+    # We have only one shard to force the two sets of hints to the same shard and avoid
+    # the problem with waiting for hint sync point timing out when the only hint on a shard has been dropped
+    # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+    cmdline = ['--smp=1', "--logger-log-level", "hints_manager=trace"]
+    servers = await manager.servers_add(3, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ], cmdline=cmdline)
+    cql = await manager.get_cql_exclusive(servers[0])
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int) WITH tablets = {{'min_tablet_count': 1}};")
+        host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+
+        # Stop the servers with replicas
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.others_not_see_server(servers[1].ip_addr)
+        await manager.server_stop_gracefully(servers[2].server_id)
+        await manager.others_not_see_server(servers[2].ip_addr)
+
+        # This will cause the hint for host_ids[1] to be dropped
+        await manager.api.enable_injection(servers[0].ip_addr, 'drop_hint_for_host', one_shot=False, parameters={'hint_host_dst': host_ids[1]})
+
+        # This will attempt to write the hints for both replicas, but only the write for the hint for host_ids[2] will succeed
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ANY))
+
+        # Write another record, but this time disable dropping the hint. This is needed to get around the problem
+        # where waiting for the hint sync point times out when we only have a single hint which was dropped
+        # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+        await manager.api.disable_injection(servers[0].ip_addr, 'drop_hint_for_host')
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY))
+
+        await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        await manager.api.enable_injection(coord_serv.ip_addr, "stream_tablet_wait", one_shot=False)
+
+        alter_rf_fut = cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'dc1': ['r2']}}")
+
+        async def migration_reached_streaming():
+            stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='{ks}' ALLOW FILTERING")
+            logger.info(f"Current stages: {[row.stage for row in stages]}")
+            return set(["streaming"]) == set([row.stage for row in stages]) or None
+        await wait_for(migration_reached_streaming, time.time() + 60)
+
+        sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
+
+        # Complete hints handoff
+        await manager.api.disable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay")
+        assert await await_sync_point(manager.api.client, servers[0].ip_addr, sync_point, 30)
+
+        await manager.api.disable_injection(coord_serv.ip_addr, "stream_tablet_wait")
+
+        await alter_rf_fut
+
+        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hint_retransmission_keeps_column_mappings(manager: ManagerClient):
+    """
+    This test reproduces: https://github.com/scylladb/scylladb/issues/4122.
+
+    A commitlog segment encodes the schema - and with it the column mapping - only in the
+    *first* entry written for a given schema version, see `_known_schema_versions` in
+    db/commitlog/commitlog.cc. When sending a segment fails partway through, `hint_sender`
+    remembers the position of the first hint that failed and retries the segment from there
+    (`_last_not_complete_rp`). The entries it re-reads carry no column mapping of their own,
+    so the mapping learnt during the previous attempt must survive the retry in
+    `_last_schema_ver_to_column_mapping`. Before the fix that cache was dropped between
+    attempts, `get_column_mapping()` threw `no_column_mapping`, and the affected hints were
+    silently dropped and only accounted for in `scylla_hints_manager_discarded`.
+
+    Reproducing that requires the segment to be retransmitted from a position *past* the
+    entry holding the column mapping, i.e. some hints of the segment must be applied before
+    the rest fail. The test arranges exactly that:
+      1. node2 is stopped and hints for it accumulate on node1 while replay is paused,
+      2. node2 is restarted with hint application blocked on an error injection, so that we
+         decide which hints get applied,
+      3. the first hint of the segment - the one whose entry carries the column mapping - is
+         let through,
+      4. applying a hint is then made to fail on node2, which aborts the segment and makes
+         node1 record a resume position in the middle of it,
+      5. hints are let through again and the segment is retransmitted from that position.
+
+    Hint replay is paused while node2's injection is reconfigured. That does not stop a hint
+    that is already past the pause check, so the prefix let through in step 3 may be one hint
+    longer than intended, but the send concurrency of 1 keeps it at that.
+    """
+    # Enough hints for the segment to still hold unsent ones once the first ones are applied.
+    row_count = 200
+
+    # A single shard means a single hint_sender, so the segment we interrupt is the one that
+    # gets retransmitted.
+    cmdline = ["--smp=1", "--logger-log-level", "hints_manager=trace"]
+    config = {
+        # This test relies on the fact that hinted handoff limits the number
+        # of hints that can be sent at a time. Set it explicitly.
+        #
+        # We set it to 1 to avoid problems with mixed results: if we set
+        # concurrency to, say, 10, some of the sent hints could succeed,
+        # while others fail. If the first hint in the segment failed,
+        # then when we started retrying to send the hints, we'd read the
+        # segment from the very beginning. That would defeat the point.
+        "max_hinted_handoff_concurrency": 1,
+        # Make hints replayable quickly.
+        "error_injections_at_startup": ["decrease_hints_flush_period"]
+    }
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc")
+
+    table = "ks.tbl"
+    ks_name, cf_name = table.split(".")
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = "
+                        f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}")
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+    logger.info("Stopping node 2 so that every write stores a hint on node 1")
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.others_not_see_server(node2.ip_addr)
+
+    # Replay must not start before we are able to control which hints get applied.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+
+    logger.info(f"Writing {row_count} rows with CL=ONE")
+    stmt = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+    await gather_safely(*(cql.run_async(stmt, [i, i + 1]) for i in range(row_count)))
+
+    await wait_until_hint_writing_settled(manager, [node1])
+    written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+    assert written > 0
+
+    logger.info("Restarting node 2 with hint application blocked on an injection")
+    await manager.server_start(node2.server_id)
+    await manager.servers_see_each_other([node1, node2])
+    await manager.api.enable_injection(node2.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks_name, "cf_name": cf_name, "what": "wait"})
+
+    node1_log, node2_log = await gather_safely(*[
+        asyncio.create_task(manager.server_open_log(node1.server_id)),
+        asyncio.create_task(manager.server_open_log(node2.server_id))])
+    node2_mark = await node2_log.mark()
+
+    logger.info("Resuming hint replay")
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    # The first hint is the one that carries the column mapping.
+    logger.info("Waiting for the first hint to reach node 2")
+    await node2_log.wait_for("database_apply: wait", from_mark=node2_mark)
+
+    # Pause the sender again. The injection is checked once per hint, right before it's sent,
+    # so this does not stop the hints that are already past that check: the first one is
+    # blocked on node 2, and the second one may already be waiting for the send budget the
+    # first one holds. It does stop the third one: the budget is not released until the
+    # second hint has been sent, and by then this injection is enabled again.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+
+    node2_mark = await node2_log.mark()
+    logger.info("Letting the hint that carries the column mapping through")
+    await manager.api.disable_injection(node2.ip_addr, "database_apply")
+    await node2_log.wait_for("database_apply: done", from_mark=node2_mark)
+
+    # The first hint - the one whose entry carries the column mapping - has been sent by now.
+    # The second one may have been sent too, as described above, but nothing beyond it, so
+    # the segment still holds hints that have to be retransmitted.
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=1)
+    sent = await get_hint_metrics(manager.metrics, node1.ip_addr, "sent_total")
+    assert sent <= 2, f"More hints were sent than expected: {sent}"
+
+    # From now on applying a hint fails on node2, so the rest of the segment cannot be sent.
+    logger.info("Making the remaining hints fail on node 2")
+    await manager.api.enable_injection(node2.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks_name, "cf_name": cf_name, "what": "throw"})
+
+    node1_mark = await node1_log.mark()
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    # hint_sender logs this when it gives up on a segment and records where to resume it.
+    logger.info("Waiting for the segment to be aborted mid-way")
+    await node1_log.wait_for("Error while sending hints from", from_mark=node1_mark)
+
+    logger.info("Letting hints through again - the segment is retransmitted from the recorded position")
+    await manager.api.disable_injection(node2.ip_addr, "database_apply")
+
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=written)
+
+    discarded = await get_hint_metrics(manager.metrics, node1.ip_addr, "discarded")
+    assert discarded == 0, f"{discarded} hints were discarded while retransmitting the segment"
+
+    # The metric above is the direct regression check. Verify the data as well so that the
+    # test keeps its meaning if hints ever get lost without being accounted as discarded.
+    logger.info("Verifying that node 2 received all the rows")
+    await manager.server_stop_gracefully(node1.server_id)
+    cql = await manager.get_cql_exclusive(node2)
+    rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
+                                                consistency_level=ConsistencyLevel.ONE))
+    assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
+>>>>>>> e26fec5e79 (test/cluster/test_hints.py: Migrate dtest test_hintedhandoff_retransmit)
