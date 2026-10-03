@@ -4,20 +4,25 @@
 
 # Various utility functions which are useful for multiple tests
 
-import string
-import random
 import collections
+import json
+import random
 import re
 import ssl
+import string
 import time
-import requests
-import json
-import pytest
-from cassandra import InvalidRequest
 from contextlib import contextmanager
+from pathlib import Path
+from urllib.parse import urlparse
+
+import botocore
+import pytest
+import requests
+from alternator import Auth, Config as AlternatorConfig, RequestCompressionConfig, RetryConfig, TLS, TimeoutConfig, close_resource, create_resource
 from botocore import UNSIGNED
 from botocore.hooks import HierarchicalEmitter
-import boto3
+from botocore.validate import ParamValidationDecorator
+from cassandra import InvalidRequest
 
 from test.pylib.skip_types import skip_env
 
@@ -622,10 +627,64 @@ def new_role(cql, login=True, superuser=False):
     finally:
         cql.execute(f'DROP ROLE "{role}"')
 
+def alternator_config(url, verify=True, client_cert_file=None, client_key_file=None, request_compression=None):
+    try:
+        endpoint = urlparse(url)
+        host = endpoint.hostname
+        port = endpoint.port
+    except ValueError as error:
+        raise pytest.UsageError(f"invalid Alternator URL {url}: {error}") from error
+    if endpoint.scheme not in ('http', 'https') or host is None:
+        raise pytest.UsageError(f"Alternator URL must use http:// or https:// and include a host: {url}")
+    if (endpoint.username is not None or endpoint.password is not None
+            or endpoint.path not in ('', '/') or endpoint.params or endpoint.query or endpoint.fragment):
+        raise pytest.UsageError(f"Alternator URL must not include user info, a path, query, or fragment: {url}")
+    if port is None:
+        port = 443 if endpoint.scheme == 'https' else 80
+
+    tls = TLS.system_default()
+    if endpoint.scheme == 'https':
+        tls = TLS(
+            trust_system_ca_certs=verify,
+            trust_all_certificates=not verify,
+            verify_hostname=verify,
+            client_cert_path=Path(client_cert_file) if client_cert_file else None,
+            client_key_path=Path(client_key_file) if client_key_file else None,
+        )
+    return AlternatorConfig(
+        seed_hosts=[host],
+        port=port,
+        scheme=endpoint.scheme,
+        retries=RetryConfig(max_attempts=1),
+        timeouts=TimeoutConfig(connect_seconds=60, read_seconds=300),
+        tls=tls,
+        request_compression=(request_compression
+            if request_compression is not None else RequestCompressionConfig()),
+    )
+
+
+def configure_alternator_resource(resource):
+    # alternator-client owns BotoConfig and drops a caller-provided config.
+    # Preserve this suite's no-validation setting for this and derived clients,
+    # unwrapping only botocore's known validation decorator.
+    client = resource.meta.client
+    client_config = client._client_config.merge(botocore.client.Config(parameter_validation=False))
+    client._client_config = client_config
+    client.meta._client_config = client_config
+    serializer = client._serializer
+    if isinstance(serializer, ParamValidationDecorator):
+        client._serializer = serializer._serializer
+    return resource
+
+
+def create_alternator_resource(url, auth, verify=True, client_cert_file=None, client_key_file=None, request_compression=None):
+    config = alternator_config(url, verify, client_cert_file, client_key_file, request_compression)
+    return configure_alternator_resource(create_resource(config, auth=auth, verify=verify))
+
+
 # Create a new DynamoDB API resource (connection object) similar to the
 # existing "dynamodb" resource - but authenticating with the given role
-# and key.
-# This is a ScyllaDB-only feature.
+# and key. This is a ScyllaDB-only feature.
 @contextmanager
 def new_dynamodb(dynamodb, role, key):
     # Under mTLS, identity is determined solely by the client certificate
@@ -636,13 +695,9 @@ def new_dynamodb(dynamodb, role, key):
     if get_cert(dynamodb):
         skip_env("new_dynamodb() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
     url = dynamodb.meta.client._endpoint.host
-    config = dynamodb.meta.client._client_config
-    region_name = dynamodb.meta.client.meta.region_name
-    verify = not url.startswith('https')
-    ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
-        aws_access_key_id=role, aws_secret_access_key=key,
-        region_name=region_name, config=config)
+    verify = dynamodb.meta.client._endpoint.http_session._verify
+    ret = create_alternator_resource(url, Auth.static_credentials(role, key), verify)
     try:
         yield ret
     finally:
-        ret.meta.client.close()
+        close_resource(ret)

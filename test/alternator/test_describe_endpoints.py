@@ -28,6 +28,9 @@ def test_describe_endpoints(request, dynamodb, get_valid_alternator_role):
         prefix = "https://" if request.config.getoption('https') else "http://"
         verify = not request.config.getoption('https')
         url = prefix + address
+        # Keep this as a direct boto3 client. alternator-client would discover
+        # the cluster and could route this check to a different node, defeating
+        # the point of validating this exact advertised endpoint.
         if address.endswith('.amazonaws.com'):
             boto3.client('dynamodb',endpoint_url=url, verify=verify).describe_endpoints()
         elif request.config.getoption('mtls'):

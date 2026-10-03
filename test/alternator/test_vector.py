@@ -16,34 +16,17 @@ import time
 import json
 import struct
 import decimal
-from packaging.version import Version
 from decimal import Decimal
 from contextlib import contextmanager
 from functools import cache
 
 from botocore.exceptions import ClientError
 import boto3.dynamodb.types
-import botocore
 
 from test.pylib.skip_types import skip_env
 from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
 from .test_streams import wait_for_status_active, wait_for_active_stream, list_shards, fetch_more
 
-
-# Support for the new DynamoDB vector search API was added in Botocore 1.43.64
-# All tests in this file cannot run with older versions of the SDK, and will
-# be skipped in that case.
-# fixtures like table_vs that use the new botocore API support in their setup
-# need to explicitly depend on this fixture to ensure this fixture runs before
-# the other fixture's setup.
-@pytest.fixture(scope='module')
-def need_vector_search_in_botocore(dynamodb):
-    if (Version(botocore.__version__) < Version('1.43.64')):
-        skip_env("Botocore version 1.43.64 or above required to run this test")
-
-@pytest.fixture(scope='module', autouse=True)
-def all_tests_need_vector_search_in_botocore(need_vector_search_in_botocore):
-    pass
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -111,7 +94,7 @@ def needs_vector_store(table_vs):
 # active before yielding the table, so tests that use this fixture can
 # read from it immediately.
 @pytest.fixture(scope="module")
-def table_vs(dynamodb, need_vector_search_in_botocore):
+def table_vs(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
@@ -7803,6 +7786,13 @@ def dynamodb_with_alternator_extensions(new_dynamodb_session, dynamodb):
     resource = new_dynamodb_session()
     with add_alternator_extensions_to_client(resource.meta.client):
         yield resource
+
+def test_custom_service_models_are_isolated(dynamodb, dynamodb_with_float32vector,
+        dynamodb_with_alternator_extensions, new_dynamodb_session):
+    clean_resource = new_dynamodb_session()
+    resources = (dynamodb, dynamodb_with_float32vector, dynamodb_with_alternator_extensions, clean_resource)
+    shape_maps = [resource.meta.client.meta.service_model._shape_resolver._shape_map for resource in resources]
+    assert len({id(shape_map) for shape_map in shape_maps}) == len(shape_maps)
 
 # Test that a vector search without an explicit ProjectionExpression aims to
 # return as much of the items as it can:

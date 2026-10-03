@@ -14,9 +14,6 @@ import time
 import pytest
 from botocore.exceptions import ClientError
 
-from test.pylib.skip_types import skip_env
-from packaging.version import Version
-
 from test.alternator.util import multiset, create_test_table, get_table_arn, unique_table_name, random_string
 
 # Until August 2024, TagResource was a synchronous operation in DynamoDB -
@@ -134,13 +131,8 @@ PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv
 @pytest.fixture(scope="module")
 def test_table_tags(dynamodb):
     # The feature of creating a table already with tags was only added to
-    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
+    # DynamoDB in April 2019.
     # https://aws.amazon.com/about-aws/whats-new/2019/04/now-you-can-tag-amazon-dynamodb-tables-when-you-create-them/
-    # so older versions of the library cannot run this test.
-    import botocore
-    if (Version(botocore.__version__) < Version('1.12.136')):
-        skip_env("Botocore version 1.12.136 or above required to run this test")
-
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ],
@@ -213,11 +205,7 @@ def test_tag_resource_write_isolation_values(scylla_only, test_table):
 # is not created at all.
 def test_too_long_tags_from_creation(dynamodb):
     # The feature of creating a table already with tags was only added to
-    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
-    # so older versions of the library cannot run this test.
-    import botocore
-    if (Version(botocore.__version__) < Version('1.12.136')):
-        skip_env("Botocore version 1.12.136 or above required to run this test")
+    # DynamoDB in April 2019.
     name = unique_table_name()
     # Setting 100 tags is not allowed, the following table creation should fail:
     with pytest.raises(ClientError, match='ValidationException'):
@@ -238,11 +226,7 @@ def test_too_long_tags_from_creation(dynamodb):
 # was actually created (without the tag).
 def test_forbidden_tags_from_creation(scylla_only, dynamodb):
     # The feature of creating a table already with tags was only added to
-    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
-    # so older versions of the library cannot run this test.
-    import botocore
-    if (Version(botocore.__version__) < Version('1.12.136')):
-        skip_env("Botocore version 1.12.136 or above required to run this test")
+    # DynamoDB in April 2019.
     name = unique_table_name()
     # It is not allowed to set the system:write_isolation to "dog", so the
     # following table creation should fail:

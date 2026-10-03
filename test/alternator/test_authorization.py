@@ -12,7 +12,7 @@ import random
 from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_env
-from .util import get_signed_request
+from .util import get_signed_request, new_dynamodb
 
 # All the tests in this file are about SigV4 signature-based authentication
 # (wrong keys, expired/futuristic signatures, missing headers, header
@@ -29,26 +29,26 @@ def skip_if_mtls(request):
 
 # Test that trying to perform an operation signed with a wrong key
 # will not succeed
-def test_wrong_key_access(request, dynamodb):
+def test_wrong_key_access(dynamodb):
     print("Please make sure authorization is enforced in your Scylla installation: alternator_enforce_authorization: true")
     url = dynamodb.meta.client._endpoint.host
     with pytest.raises(ClientError, match='UnrecognizedClientException'):
         if url.endswith('.amazonaws.com'):
             boto3.client('dynamodb',endpoint_url=url, aws_access_key_id='wrong_id', aws_secret_access_key='x').describe_endpoints()
         else:
-            verify = not url.startswith('https')
-            boto3.client('dynamodb',endpoint_url=url, region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='x', verify=verify).describe_endpoints()
+            with new_dynamodb(dynamodb, 'whatever', 'x') as resource:
+                resource.meta.client.describe_endpoints()
 
 # A similar test, but this time the user is expected to exist in the database (for local tests)
-def test_wrong_password(request, dynamodb):
+def test_wrong_password(dynamodb):
     print("Please make sure authorization is enforced in your Scylla installation: alternator_enforce_authorization: true")
     url = dynamodb.meta.client._endpoint.host
     with pytest.raises(ClientError, match='UnrecognizedClientException'):
         if url.endswith('.amazonaws.com'):
             boto3.client('dynamodb',endpoint_url=url, aws_access_key_id='alternator', aws_secret_access_key='wrong_key').describe_endpoints()
         else:
-            verify = not url.startswith('https')
-            boto3.client('dynamodb',endpoint_url=url, region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='wrong_key', verify=verify).describe_endpoints()
+            with new_dynamodb(dynamodb, 'alternator', 'wrong_key') as resource:
+                resource.meta.client.describe_endpoints()
 
 # A test ensuring that expired signatures are not accepted
 def test_expired_signature(dynamodb, test_table):

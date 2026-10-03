@@ -9,7 +9,6 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.alternator.util import random_string
-from test.pylib.skip_types import skip_env
 
 
 # Test trivial support for the ReturnValues parameter in PutItem, UpdateItem
@@ -86,17 +85,9 @@ def test_put_item_returnvalues(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.put_item(Item={'p': p, 'a': 'hello'}, ReturnValues='none')
 
-def skip_if_returnvalues_on_condition_check_failure_not_supported():
-    import botocore
-    from packaging.version import Version
-    # This release added support for ReturnValuesOnConditionCheckFailure
-    if (Version(botocore.__version__) < Version('1.29.164')):
-        skip_env("Botocore version 1.29.164 or above required to run this test")
-
 # Testing ReturnValuesOnConditionCheckFailure feature which returns values only
 # on failed condition expression.
 def test_put_item_returnvalues_on_condition_check_failure(test_table_s):
-    skip_if_returnvalues_on_condition_check_failure_not_supported()
     p = random_string()
     # Failed conditional on non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
@@ -172,7 +163,6 @@ def test_delete_item_returnvalues(test_table_s):
 # Testing ReturnValuesOnConditionCheckFailure feature which returns values only
 # on failed condition expression.
 def test_delete_item_returnvalues_on_condition_check_failure(test_table_s):
-    skip_if_returnvalues_on_condition_check_failure_not_supported()
     p = random_string()
     # Delete of non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
@@ -563,7 +553,6 @@ def test_update_item_returnvalues_all_new_add_existing(test_table_s):
 # Testing ReturnValuesOnConditionCheckFailure feature which returns values only
 # on failed condition expression.
 def test_update_item_returnvalues_on_condition_check_failure(test_table_s):
-    skip_if_returnvalues_on_condition_check_failure_not_supported()
     p = random_string()
     # Modification of non existing item doesn't return values.
     with pytest.raises(test_table_s.meta.client.exceptions.ConditionalCheckFailedException) as err:
@@ -601,7 +590,6 @@ def test_update_item_returnvalues_on_condition_check_failure(test_table_s):
 
  # Checks if invalid ReturnValuesOnConditionCheckFailure value returns error.
 def test_validation_of_returnvalues_on_condition_check_failure(test_table_s):
-    skip_if_returnvalues_on_condition_check_failure_not_supported()
     p = random_string()
     invalid_options = ['DUMMY', 'UPDATED_OLD', 'ALL_NEW', 'UPDATED_NEW']
     for opt in invalid_options:

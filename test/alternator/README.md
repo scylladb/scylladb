@@ -1,14 +1,15 @@
 # Single-node functional tests for ScyllaDB's Alternator features
 
-These tests use AWS's Python library ("boto3") and the pytest framework
-to test Alternator's user-visible functionality ("black-box testing").
-By using an actual AWS library for the tests, the same tests can be run
-against *any* implementation of the DynamoDB API - both ScyllaDB Alternator
-and original DynamoDB. Most tests - except in rare cases - should pass on
-both, to ensure that Alternator is compatible with DynamoDB in most features.
+These tests use the pytest framework and clients based on AWS's Python library
+("boto3") to test Alternator's user-visible functionality ("black-box
+testing"). Local runs use `alternator-client`, which wraps boto3 with ScyllaDB
+node discovery and load balancing, while `--aws` runs use boto3 directly. The
+same tests can therefore run against both ScyllaDB Alternator and original
+DynamoDB. Most tests - except in rare cases - should pass on both, to ensure
+that Alternator is compatible with DynamoDB in most features.
 
-Both pytest and boto3 are easily available on Linux distributions, or via
-"pip install".
+Pytest, boto3, and alternator-client are all available from PyPI. The pinned
+test dependencies are managed in `test/pyproject.toml`.
 
 To run all tests against an already-running installation of Alternator
 listening on http://localhost:8000, just run `pytest` in this directory.

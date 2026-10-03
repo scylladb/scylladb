@@ -9,31 +9,24 @@
 # require the same fixture, it can be set up only once - while still allowing
 # the user to run individual tests and automatically set up the fixtures they need.
 
-import pytest
-import boto3
-import requests
 import re
+from functools import cache
+from unittest.mock import patch
+from urllib.parse import urlparse
+
+import boto3
+import botocore
+import pytest
+import requests
+from alternator import Auth, Helper, close_resource
 from botocore import UNSIGNED
 
-from test.alternator.util import create_test_table, is_aws, scylla_log
+from test.alternator.util import alternator_config, configure_alternator_resource, create_alternator_resource, create_test_table, is_aws, scylla_log
 from test.conftest import dynamic_scope
 from test.cqlpy.conftest import host  # add required fixtures
+from test.pylib.connect_options import add_host_option
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-from test.pylib.connect_options import add_host_option
-from urllib.parse import urlparse
-from functools import cache
-
-# Test that the Boto libraries are new enough. These tests want to test a
-# large variety of DynamoDB API features, and to do this we need a new-enough
-# version of the the Boto libraries (boto3 and botocore) so that they can
-# access all these API features.
-# In particular, the BillingMode feature was added in botocore 1.12.54.
-import botocore
-import sys
-from packaging.version import Version
-if (Version(botocore.__version__) < Version('1.12.54')):
-    pytest.exit("Your Boto library is too old. Please upgrade it,\ne.g. using:\n    sudo pip{} install --upgrade boto3".format(sys.version_info[0]))
 
 # We've been seeing Python crashing when shutting down after successfully
 # finishing Alternator tests, and couldn't figure out why (issue #17564).
@@ -41,7 +34,7 @@ if (Version(botocore.__version__) < Version('1.12.54')):
 import faulthandler
 faulthandler.enable(all_threads=True)
 
-# By default, tests run against a local Scylla installation on localhost:8080/.
+# By default, tests run against a local Scylla installation on localhost:8000/.
 # The "--aws" option can be used to run against Amazon DynamoDB in the us-east-1
 # region.
 def pytest_addoption(parser):
@@ -128,11 +121,16 @@ def get_valid_alternator_role():
 
     return _get_valid_alternator_role
 
-# "dynamodb" fixture: set up client object for communicating with the DynamoDB
-# API. Currently this chooses either Amazon's DynamoDB in the default region
-# or a local Alternator installation on http://localhost:8080 - depending on the
-# existence of the "--aws" option. In the future we should provide options
-# for choosing other Amazon regions or local installations.
+def _local_alternator_url(address):
+    host = str(address)
+    if ':' in host and not host.startswith('['):
+        host = f'[{host}]'
+    return f'http://{host}:8000'
+
+
+# "dynamodb" fixture: set up a resource for communicating with the DynamoDB
+# API. This uses boto3 for Amazon DynamoDB or alternator-client for a local
+# Alternator installation, depending on the "--aws" option.
 @pytest.fixture(scope=dynamic_scope())
 def dynamodb(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
@@ -150,12 +148,12 @@ def dynamodb(request, get_valid_alternator_role):
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
             # derive the endpoint from the host fixture when running against a managed cluster
-            local_url = f"http://{address}:8000"
+            local_url = _local_alternator_url(address)
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
-        # Disable verifying in order to be able to use self-signed TLS certificates
+        # --https selects the self-signed local test server. An explicit HTTPS
+        # --url without --https retains normal certificate verification.
         verify = not request.config.getoption('https')
-        extra_config = botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)
         if request.config.getoption('mtls'):
             # The --mtls/--https CLI options are validated together in
             # pytest_configure(), but local_url's scheme can still end up
@@ -170,29 +168,29 @@ def dynamodb(request, get_valid_alternator_role):
             # certificate is used for authentication, not SigV4 credentials.
             cert_file = request.config.getoption('client_cert_file')
             key_file = request.config.getoption('client_key_file')
-            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-                region_name='us-east-1',
-                config=boto_config.merge(extra_config.merge(botocore.client.Config(
-                    signature_version=UNSIGNED,
-                    client_cert=(cert_file, key_file)))))
+            res = create_alternator_resource(local_url, Auth.disabled(), verify, cert_file, key_file)
         else:
             user, secret = get_valid_alternator_role(local_url)
-            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-                region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
-                config=boto_config.merge(extra_config))
+            res = create_alternator_resource(local_url, Auth.static_credentials(user, secret), verify)
     yield res
-    res.meta.client.close()
+    if request.config.getoption('aws'):
+        res.meta.client.close()
+    else:
+        close_resource(res)
 
 @pytest.fixture(scope=dynamic_scope())
 def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
+    aws_resources = []
+    helpers = {}
+
     def _new_dynamodb_session(user='cassandra', password='secret_pass'):
-        ses = boto3.Session()
-        host = urlparse(dynamodb.meta.client._endpoint.host)
-        conf = botocore.client.Config(parameter_validation=False)
         if request.config.getoption('aws'):
-            return boto3.resource('dynamodb', config=conf)
-        conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
-        region_name = dynamodb.meta.client.meta.region_name
+            conf = botocore.client.Config(parameter_validation=False)
+            resource = boto3.Session().resource('dynamodb', config=conf)
+            aws_resources.append(resource)
+            return resource
+        url = dynamodb.meta.client._endpoint.host
+        verify = not request.config.getoption('https')
         if request.config.getoption('mtls'):
             # Under mTLS, the identity is determined by the client
             # certificate, not by the "user" parameter - there is no way to
@@ -205,19 +203,34 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
             # certificate is used for authentication, not SigV4 credentials.
             cert_file = request.config.getoption('client_cert_file')
             key_file = request.config.getoption('client_key_file')
-            return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'https',
-                region_name=region_name,
-                config=conf.merge(botocore.client.Config(
-                    signature_version=UNSIGNED,
-                    client_cert=(cert_file, key_file))))
-        user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
-        return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'https',
-            region_name=region_name, aws_access_key_id=user, aws_secret_access_key=secret,
-            config=conf)
-    return _new_dynamodb_session
+            auth = Auth.disabled()
+        else:
+            cert_file = None
+            key_file = None
+            user, secret = get_valid_alternator_role(url, role=user)
+            auth = Auth.static_credentials(user, secret)
+        helper_key = (auth, cert_file, key_file)
+        if helper_key not in helpers:
+            config = alternator_config(url, verify, cert_file, key_file)
+            helpers[helper_key] = Helper(config, auth=auth, verify=verify).start()
+        # alternator-client 2.0.0 creates resources through boto3's
+        # process-global default session. Use a fresh session here so tests
+        # which modify botocore service models cannot affect other resources.
+        session = boto3.Session()
+        with patch('alternator.client.boto3', session):
+            resource = helpers[helper_key].resource()
+        return configure_alternator_resource(resource)
+
+    yield _new_dynamodb_session
+    for resource in aws_resources:
+        resource.meta.client.close()
+    for helper in helpers.values():
+        helper.stop()
 
 @pytest.fixture(scope=dynamic_scope())
 def dynamodbstreams(request, get_valid_alternator_role):
+    # alternator-client wraps DynamoDB but not the separate DynamoDB Streams
+    # service, so Streams clients remain direct boto3 clients.
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
     # because boto3 checks them before we can get the server to check them.
@@ -233,7 +246,7 @@ def dynamodbstreams(request, get_valid_alternator_role):
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
             # derive the endpoint from the host fixture when running against a managed cluster
-            local_url = f"http://{address}:8000"
+            local_url = _local_alternator_url(address)
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
@@ -527,7 +540,7 @@ def cql(dynamodb):
     if is_aws(dynamodb):
         skip_env('Scylla-only CQL API not supported by AWS')
     url = dynamodb.meta.client._endpoint.host
-    host, = re.search(r'.*://([^:]*):', url).groups()
+    host = urlparse(url).hostname
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
