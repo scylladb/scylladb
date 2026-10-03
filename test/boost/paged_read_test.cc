@@ -611,6 +611,76 @@ SEASTAR_THREAD_TEST_CASE(test_page_without_partition_or_cursor_fails) {
     });
 }
 
+// Cases which catch defects of a page which stops inside a partition, before
+// the point which decides whether the partition yields a static-only row or a
+// DISTINCT row. With each defect, its case returns a wrong answer. Each comment
+// describes the defect.
+SEASTAR_THREAD_TEST_CASE(test_witnesses_of_undecided_partition_row) {
+    const std::vector<read_case> witnesses{
+        // Partition 4 has a live static cell, a live row 4, and a deleted row
+        // 2. Replica 0 stops its data page and its mutation page inside the
+        // partition, after row 2. The reconciled page returns a static-only row
+        // of the partition, though row 4 cancels it, and the next page returns
+        // row 4 too.
+        read_case{
+            placed_history{
+                {range_deletion{4, bound{0, true}, bound{6, true}, 16}, 0b10},
+                {regular_cell_write{4, 2, regular_column::v1, 2, 13, lifetime::permanent}, 0b1},
+                {regular_cell_write{4, 4, regular_column::v1, 5, 22, lifetime::permanent}, 0b1},
+                {static_cell_write{4, 4, 6, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 3, .page_size_in_bytes = 41},
+        },
+        // A single replica stops its data page on the tombstone limit, after the
+        // live static row and the deleted row 1 of partition 1. The coordinator
+        // accepts the data page, which holds a static-only row of the partition,
+        // though row 2 cancels it, and the next page returns row 2 too.
+        read_case{
+            on_replicas({
+                static_cell_write{1, 5, 1},
+                row_deletion{1, 1, 2},
+                row_marker_write{1, 2, 3},
+            }, 0b1),
+            select_query{},
+            read_options{.replica_count = 1, .tombstone_limit = 1},
+        },
+        // Replica 0 stops its mutation page in partition 4, after the deleted
+        // row 1 and before the live row 4, which decides the partition's
+        // DISTINCT row. A DISTINCT query has no clustering key, so the next page
+        // moves past the partition, and the partition is lost.
+        read_case{
+            placed_history{
+                {range_deletion{1, std::nullopt, bound{2, false}, 3}, 0b1},
+                {regular_cell_write{4, 1, regular_column::v1, std::nullopt, 1, lifetime::permanent}, 0b1},
+                {row_marker_write{4, 4, 2, lifetime::permanent}, 0b1},
+            },
+            select_query{.distinct = true, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 5, .page_size_in_bytes = 427},
+        },
+        // Only replica 0 holds partition 2: a live static cell, a row 2 whose
+        // only cell has expired, and a live row 4. The digests differ, and the
+        // reconciliation reads from replica 0 alone. Its mutation page stops
+        // on the byte limit inside the partition, after row 2. The page
+        // returns a static-only row of the partition, though row 4 cancels it,
+        // and the next page returns row 4 too.
+        read_case{
+            placed_history{
+                {regular_cell_write{2, 2, regular_column::v1, 2, 4, lifetime::expired}, 0b1},
+                {regular_cell_write{2, 4, regular_column::v1, 0, 6, lifetime::expiring}, 0b1},
+                {static_cell_write{2, 9, 5, lifetime::permanent}, 0b1},
+            },
+            select_query{.partitions = std::vector<int32_t>{1, 2}, .select_s = false, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .extra_replicas = 1, .page_size = 3, .page_size_in_bytes = 7, .schedule_seed = 408707876},
+        },
+    };
+    with_harness([&] (harness& hs) {
+        for (const auto& c : witnesses) {
+            run_and_check(hs, c);
+        }
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.

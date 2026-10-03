@@ -158,6 +158,12 @@ struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
     db::read_repair_decision read_repair_decision;
+    // Whether the page holds only rows which the data before its cursor
+    // decides. A coordinator with the READ_FRONTIERS cluster feature leaves
+    // out a static-only row of the cursor's partition, because a clustering
+    // row after the cursor may cancel it. See
+    // service::pager::paging_state::get_partition_row_pending().
+    bool rows_decided_before_cursor = false;
 
     storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
             replicas_per_token_range last_replicas = {},
