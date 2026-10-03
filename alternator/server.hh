@@ -84,8 +84,10 @@ class server : public peering_sharded_service<server> {
 
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
 
+public:
+    // Public so unit tests can exercise the threshold decision and both
+    // threaded parser paths directly.
     class json_parser {
-        static constexpr size_t yieldable_parsing_threshold = 16*KB;
         chunked_content _raw_document;
         rjson::value _parsed_document;
         std::exception_ptr _current_exception;
@@ -95,6 +97,8 @@ class server : public peering_sharded_service<server> {
         abort_source _as;
         future<> _run_parse_json_thread;
     public:
+        static constexpr size_t yieldable_parsing_threshold = 16*KB;
+
         json_parser();
         // Moving a chunked_content into parse() allows parse() to free each
         // chunk as soon as it is parsed, so when chunks are relatively small,
@@ -102,6 +106,8 @@ class server : public peering_sharded_service<server> {
         future<rjson::value> parse(chunked_content&& content);
         future<> stop();
     };
+
+private:
     json_parser _json_parser;
 
     // The server maintains a list of ongoing requests, that are being handled
@@ -153,4 +159,3 @@ private:
 };
 
 }
-
