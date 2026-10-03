@@ -798,9 +798,40 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
 future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
+    const bool tablets_changed = hint.tablets_hint.has_value();
     co_await topology_state_load(std::move(hint)); // reload new state
+    if (!tablets_changed) {
+        // A tablets change reloads the view building state, which recomputes this.
+        co_await update_built_views(co_await _sys_ks.local().get_view_build_status_map());
+    }
 
     _topology_state_machine.event.broadcast();
+}
+
+future<> storage_service::update_built_views(const db::system_keyspace::view_build_status_map& statuses) {
+    const auto& topology = get_token_metadata().get_topology();
+    std::unordered_set<table_id> built_views;
+    for (const view_ptr& view : _db.local().get_views()) {
+        auto view_statuses = statuses.find({view->ks_name(), view->cf_name()});
+        bool built = view_statuses != statuses.end();
+        // A joining node counts from the start. The tablets coordinator gives it
+        // status rows only when it turns normal, so a bootstrap keeps the
+        // tombstones of every tablets view until it completes.
+        topology.for_each_node([&] (const locator::node& node) {
+            if (!built || node.is_excluded()) {
+                return;
+            }
+            auto it = view_statuses->second.find(node.host_id());
+            built = it != view_statuses->second.end() && it->second == db::view::build_status::SUCCESS;
+        });
+        if (built) {
+            built_views.insert(view->id());
+        }
+    }
+    rtlogger.debug("views built on every node, tombstone gc not suspended: {}", built_views);
+    co_await _db.invoke_on_all([&built_views] (replica::database& db) {
+        db.get_compaction_manager().get_shared_tombstone_gc_state().set_built_views(built_views);
+    });
 }
 
 future<> storage_service::view_building_state_load() {
@@ -825,7 +856,9 @@ future<> storage_service::view_building_state_load() {
         views_per_base[base_id].push_back(view_id);
     }
 
-    auto status_map = co_await _sys_ks.local().get_view_build_status_map()
+    auto statuses = co_await _sys_ks.local().get_view_build_status_map();
+    co_await update_built_views(statuses);
+    auto status_map = statuses
         | std::views::filter([&] (const auto& e) { return filter_vnode_keyspace(e.first.first); })
         | std::views::transform([this] (const auto& e) {        // convert (ks_name, view_name) to table_id
             auto id = _db.local().find_schema(e.first.first, e.first.second)->id();
