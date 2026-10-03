@@ -45,9 +45,7 @@ value of the item. So without making further assumptions, Alternator would
 need to use the slower LWT for all writes - to correctly isolate concurrent
 writes. However, if Alternator is told that a certain workload does not have
 any read-modify-write operations, it can do all writes with the faster
-non-LWT write. Furthermore, if Alternator is told that a certain workload
-does have do both write-only and read-modify-write, but to *different* items,
-it could use LWT only for the read-modify-write operations.
+non-LWT write. Furthermore, if Alternator is told that a certain workload does have to do both write-only and read-modify-write operations, but to different items, it could use LWT only for the read-modify-write operations.
 
 Therefore, Alternator must be explicitly configured to tell it which of the
 above assumptions it may make on the write workload. This configuration is
