@@ -28,11 +28,11 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
-#include "service/topology_guard.hh"
 #include "utils/chain_abort_source.hh"
 #include "utils/exponential_backoff_retry.hh"
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/util/defer.hh>
 
 namespace service::strong_consistency {
 
@@ -40,26 +40,10 @@ using namespace locator;
 
 static logging::logger logger("sc_groups_manager");
 
-// How long a single attempt at a raft configuration change may take. It only needs
-// to be generous enough for a healthy quorum to commit the change; an attempt that
-// runs out of time is reported by sync_raft_group_config(), which then retries.
-//
-// Deliberately shorter than the budget the coordinator gives one RPC, so that a stuck
-// attempt is retried within that RPC instead of consuming all of it. That is also why
-// an attempt normally ends on this cap rather than on the abort converge_group_config()
-// raises when it gives up; the abort is what covers everything else - a stage that moved
-// on, and any later attempt of the same RPC, whose cap outlives the RPC's deadline.
-static constexpr auto config_sync_timeout = std::chrono::seconds(30);
-
-// How long sync_raft_group_config() keeps trying to converge when the coordinator
-// didn't say. The coordinator normally owns this budget: it passes the RPC deadline,
-// and a failed attempt costs it one retry of a single tablet's background action.
-static constexpr auto config_convergence_timeout = std::chrono::seconds(60);
-
-// How long the topology barrier waits for the raft server of a group this node just
-// left to be torn down. Purely local: the deletion was scheduled when the stage that
-// ended the membership was published, which this barrier has already synchronized
-// with, so all that's left is draining in-flight requests and stopping the server.
+// How long the tablet cleanup waits for the raft server of a group this node left to
+// be torn down. Purely local: the deletion was scheduled when the stage that ended the
+// membership was published, which the cleanup has already synchronized with, and no
+// request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
 static raft::server_id to_server_id(host_id host_id) {
@@ -111,10 +95,8 @@ static future<> wait_with_abort_source(condition_variable& cv, abort_source& as)
     });
 }
 
-// Test-only: emulate a leader that is not a tablet replica, as reported by a follower
-// that hasn't noticed yet that the leader it knows was removed from the raft group by a
-// tablet migration - current_leader() keeps naming it until the new leader contacts
-// the follower.
+// Test-only: emulate a named leader outside the serving set, as when a replica a tablet
+// migration demoted leads for one commit. The real window is too short to hit.
 static std::optional<raft::server_id> injected_stale_leader() {
     if (utils::get_local_injector().enter("sc_report_stale_leader")) {
         return raft::server_id{utils::UUID(0, 1)};
@@ -323,12 +305,6 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
 
         co_await std::move(state.leader_info_updater);
 
-        // Both background fibers hold the gate, so the wait above already drained
-        // them, but nothing may reference the state after it's erased below and this
-        // makes that explicit. Note that deletion is never queued behind a
-        // configuration change: abort_server() above is what terminates it.
-        co_await state.config_sync.get_future();
-
         _raft_gr.destroy_server(id);
         state.server = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -382,49 +358,20 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
-future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id) {
-    const auto timeout = lowres_clock::now() + std::chrono::minutes(5);
-
-    co_await wait_for_groups_to_start(timeout);
-
-    {
-        const auto it = _raft_groups.find(group_id);
-        if (it == _raft_groups.end()) {
-            throw std::runtime_error(format("No raft group {} for tablet {} on this host", group_id, tablet));
+future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id group_id) {
+    if (const auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
+        if (it->second.gate && !it->second.gate->is_closed()) {
+            on_internal_error(logger, format("cleanup_group({}-{}): the raft group is running and not being deleted",
+                    tablet, group_id));
         }
-        co_await it->second.server_control_op.get_future(timeout);
-    }
-
-    // The group may have been deleted while we waited - the migration was rolled back
-    // and this replica rolled away, or the table was dropped - so look it up again and
-    // hold the gate for the rest of the operation, or state.server would dangle. There
-    // is no scheduling point between the check and hold().
-    const auto it = _raft_groups.find(group_id);
-    if (it == _raft_groups.end() || !it->second.gate || it->second.gate->is_closed() || !it->second.server) {
-        throw std::runtime_error(format("Raft group {} for tablet {} is not running on this host", group_id, tablet));
-    }
-    auto& state = it->second;
-    auto holder = state.gate->hold();
-
-    topology_guard g(session_id);
-
-    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
-
-    abort_on_expiry aoe(timeout);
-    auto sub = utils::chain_abort_source(aoe.abort_source(), g.abort_source());
-    co_await state.server->read_barrier(&aoe.abort_source());
-}
-
-bool groups_manager::is_group_running(raft::group_id group_id) const {
-    return _raft_groups.contains(group_id);
-}
-
-future<> groups_manager::erase_raft_group_state(raft::group_id group_id) {
-    if (is_group_running(group_id)) {
-        // The caller is expected to have checked this already; failing here rather than
-        // erasing is what keeps a mistake from silently taking a live group's state away.
-        throw std::runtime_error(fmt::format(
-                "erase_raft_group_state({}): the raft group is still running on this shard", group_id));
+        logger.debug("cleanup_group({}-{}): waiting for the raft server to be torn down", tablet, group_id);
+        auto drained = co_await coroutine::as_future(it->second.server_control_op.get_future(
+                lowres_clock::now() + group_teardown_timeout));
+        if (drained.failed()) {
+            drained.ignore_ready_future();
+            co_await coroutine::return_exception(std::runtime_error(format(
+                    "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
+        }
     }
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
@@ -442,51 +389,17 @@ void groups_manager::init_messaging_service() {
         }
     );
     ser::groups_manager_rpc_verbs::register_wait_for_snapshot_transfer(&_ms,
-        [this] (raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID session_id) -> future<> {
-            if (_raft_gr.get_my_raft_id() != dst_id) {
-                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
-            }
-            co_await _mm.get_group0_barrier().trigger();
-
-            const auto dst_shard = [&]() -> shard_id {
-                auto& table = _db.find_column_family(tablet.table);
-                auto erm = table.get_effective_replication_map();
-                const auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(tablet.table);
-                const auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
-                if (!trinfo || !trinfo->pending_replica) {
-                    throw std::runtime_error(fmt::format("No pending replica for group {}", group_id));
-                }
-                if (trinfo->pending_replica->host != erm->get_token_metadata().get_my_id()) {
-                    throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not on this host", tablet, *trinfo->pending_replica));
-                }
-                return trinfo->pending_replica->shard;
-            }();
-
-            co_await container().invoke_on(dst_shard, [tablet, group_id, session_id] (groups_manager& gm) {
-                return gm.wait_for_snapshot_transfer(tablet, group_id, service::session_id(session_id));
-            });
+        [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet,
+                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage) {
+            return handle_migration_rpc("wait_for_snapshot_transfer", timeout, dst_id, tablet, group_id, shard, session,
+                    std::move(stage), &groups_manager::wait_for_snapshot_transfer);
         }
     );
     ser::groups_manager_rpc_verbs::register_sync_raft_group_config(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet,
-                raft::group_id group_id) -> future<> {
-            if (_raft_gr.get_my_raft_id() != dst_id) {
-                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
-            }
-            co_await _mm.get_group0_barrier().trigger();
-
-            // The coordinator owns the budget for one attempt. Falling back keeps the
-            // handler bounded even if the sender didn't set a deadline.
-            const auto deadline = timeout.value_or(lowres_clock::now() + config_convergence_timeout);
-
-            // Asked of every shard, and each one decides for itself whether it runs a
-            // raft server for this group, the way the topology barrier does. Normally
-            // one shard does; an intra-node migration is the exception, where the
-            // leaving and the pending replica are two shards of this host and both
-            // host the group.
-            co_await container().invoke_on_all([tablet, group_id, deadline] (groups_manager& gm) {
-                return gm.sync_raft_group_config(tablet, group_id, deadline);
-            });
+                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage) {
+            return handle_migration_rpc("sync_raft_group_config", timeout, dst_id, tablet, group_id, shard, session,
+                    std::move(stage), &groups_manager::sync_raft_group_config);
         }
     );
 }
@@ -595,90 +508,81 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     }
 }
 
-static raft::config_member_set to_voter_set(const locator::tablet_replica_set& replicas) {
-    raft::config_member_set members;
-    members.reserve(replicas.size());
-    for (const auto& r : replicas) {
-        members.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
-    }
-    return members;
-}
-
 // The raft group configuration implied by a tablet's replica set and the stage its
-// migration is in.
+// migration is in; see "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
 //
-// This is the single source of truth for the group's expected membership: both the
-// delta that drives a configuration change and the check that validates it are
-// derived from here, so the two cannot drift apart.
+// A replica leaves the group in two changes: it is demoted to a non-voter first, and
+// removed by a later stage, once no request can still be inside its raft server with
+// a view that lets it serve. The pending replica joins as a non-voter and is promoted
+// once it has caught up.
 static raft::config_member_set expected_raft_config(
         const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo) {
+    // The non-voter is inserted after the voters, so that an intra-node migration, where
+    // the leaving and the pending replica share a host, doesn't demote that host.
+    const auto config = [] (const locator::tablet_replica_set& voters,
+            const std::optional<locator::tablet_replica>& non_voter = std::nullopt) {
+        raft::config_member_set members;
+        members.reserve(voters.size() + 1);
+        for (const auto& r : voters) {
+            members.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+        }
+        if (non_voter) {
+            members.emplace(raft::server_address{to_server_id(non_voter->host), {}}, raft::is_voter::no);
+        }
+        return members;
+    };
+
     if (!trinfo) {
-        return to_voter_set(tinfo.replicas);
+        return config(tinfo.replicas);
     }
 
     switch (trinfo->stage) {
         case tablet_transition_stage::start_migration:
+        case tablet_transition_stage::sc_remove_pending:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return config(tinfo.replicas);
+
+        case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::sc_snapshot_transfer:
+        case tablet_transition_stage::sc_rollback:
+            return config(tinfo.replicas, trinfo->pending_replica);
+
+        case tablet_transition_stage::sc_become_voter:
+            return config(trinfo->next, get_leaving_replica(tinfo, *trinfo));
+
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return config(trinfo->next);
+
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:
         case tablet_transition_stage::rebuild_repair:
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
-        // The rollback path restores the old replica set.
-        case tablet_transition_stage::sc_rollback:
-        case tablet_transition_stage::cleanup_target:
-        case tablet_transition_stage::revert_migration:
-            return to_voter_set(tinfo.replicas);
-
-        case tablet_transition_stage::sc_add_nonvoter:
-        case tablet_transition_stage::sc_snapshot_transfer: {
-            auto members = to_voter_set(tinfo.replicas);
-            if (trinfo->pending_replica) {
-                // Inserted after the voters, so that an intra-node migration, where
-                // the pending replica shares a host with a current replica, doesn't
-                // demote that host to a non-voter.
-                members.emplace(raft::server_address{to_server_id(trinfo->pending_replica->host), {}},
-                        raft::is_voter::no);
-            }
-            return members;
-        }
-
-        case tablet_transition_stage::sc_become_voter:
-        case tablet_transition_stage::use_new:
-        case tablet_transition_stage::cleanup:
-        case tablet_transition_stage::end_migration:
-            return to_voter_set(trinfo->next);
+            break;
     }
-    on_internal_error(logger, format("expected_raft_config: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
-}
-
-// Is this replica expected to be a voter of the group, and can therefore attest to
-// the group's configuration?
-static bool is_expected_voter(const raft::config_member_set& expected, raft::server_id id) {
-    const auto it = expected.find(id);
-    return it != expected.end() && it->can_vote == raft::is_voter::yes;
+    on_internal_error(logger, format("expected_raft_config: unexpected transition stage {} of a strongly "
+            "consistent tablet", trinfo->stage));
 }
 
 // Should this node host a raft server for the tablet's group at the tablet's current
 // migration stage?
 //
-// This is a wider set than expected_raft_config(): a replica keeps hosting the group
-// while a configuration change that removes it is merely *intended*, and stops only
-// once the change has been *confirmed* by the barrier of the preceding transition.
-// The distinction matters in both directions:
+// A replica hosts the group while it is a member of any configuration the group may
+// have while a view of the stage is live. The pending replica also hosts from
+// start_migration on, so that it can be added.
 //
-//  - The leaving replica is still a member of the committed configuration during
-//    sc_become_voter, and its vote may be required to commit the change that removes
-//    it - with RF=2 the old configuration has no majority without it. It may also be
-//    the leader that has to drive its own removal.
-//  - The pending replica is in the same position during sc_rollback: the rollback
-//    removes it, and it may be the current leader, the only node able to drive that.
-//
-// Once the removal is confirmed - use_new for the leaving replica, cleanup_target for
-// the pending one - the replica stops hosting the group, so that its raft server is
-// torn down before the tablet cleanup of the same migration touches its storage.
-// Neither stage can be rolled back to a stage that would need the group again.
+// Hosting ends only with the publish of a stage: raft never tells a removed server
+// about its removal, and after a restart hosting is derived from the stage again. The
+// stage that ends it is published after two things: a drain of every request that
+// could still be inside the replica's server with a view that lets it serve, and the
+// sync that removed the replica from the configuration. For the leaving replica that
+// is cleanup, after use_new drained and removed it. For the pending one it is
+// cleanup_target, after sc_remove_pending did. So no request holds the server when it
+// is torn down, and the leader never replicates into a server that is gone.
 static bool hosts_raft_group(const locator::tablet_info& tinfo,
         const locator::tablet_transition_info* trinfo,
         const locator::tablet_replica& replica) {
@@ -693,22 +597,17 @@ static bool hosts_raft_group(const locator::tablet_info& tinfo,
         case tablet_transition_stage::sc_add_nonvoter:
         case tablet_transition_stage::sc_snapshot_transfer:
         case tablet_transition_stage::sc_become_voter:
-        // The rollback may be entered from sc_become_voter, where the pending replica
-        // can already be a voter and the leader.
+        case tablet_transition_stage::use_new:
         case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::sc_remove_pending:
             return locator::contains(tinfo.replicas, replica) || is_pending;
 
-        case tablet_transition_stage::use_new:
         case tablet_transition_stage::cleanup:
         case tablet_transition_stage::end_migration:
-            // The leaving replica has been removed from the configuration, and the
-            // transition into use_new observed it.
             return locator::contains(trinfo->next, replica);
 
         case tablet_transition_stage::cleanup_target:
         case tablet_transition_stage::revert_migration:
-            // The pending replica has been removed from the configuration, and the
-            // transition into cleanup_target observed it.
             return locator::contains(tinfo.replicas, replica);
 
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:
@@ -722,408 +621,256 @@ static bool hosts_raft_group(const locator::tablet_info& tinfo,
             static_cast<int>(trinfo->stage)));
 }
 
-// What separates a raft group's live configuration from the one its tablet's current
-// migration stage implies.
-struct config_sync_work {
+// What modify_config() has to be given to turn `current` into `expected`. A member whose
+// voting status differs is added again, with the expected status.
+struct config_delta {
     std::vector<raft::config_member> to_add;
     std::vector<raft::server_id> to_del;
-
-    // A configuration change is still in progress, i.e. the group is in a joint
-    // configuration. The delta can already be empty at that point, because it is
-    // computed against C_new, so this has to be checked separately before declaring
-    // the group converged.
-    bool change_in_progress = false;
-
-    // This replica is expected to be a voter of the group in the tablet's current
-    // stage, and can therefore attest to the group's configuration.
-    bool expected_voter = false;
-
-    bool has_delta() const {
-        return !to_add.empty() || !to_del.empty();
-    }
-
-    bool converged() const {
-        return !has_delta() && !change_in_progress;
-    }
 };
 
-// Diffs the configuration the tablet's stage implies against the group's live
-// configuration.
-//
-// Always derived from the state current at call time and never stored: a delta that
-// outlived the stage which implied it could drive the group towards a configuration
-// the topology coordinator has already abandoned.
-static config_sync_work assess_config_sync(const raft::server& server,
-        const locator::tablet_map& tmap, locator::tablet_id tid) {
-    const auto expected = expected_raft_config(tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid));
-    const auto config = server.get_configuration();
-
-    config_sync_work work;
-    work.change_in_progress = config.is_joint();
+static config_delta diff_config(const raft::config_member_set& expected, const raft::config_member_set& current) {
+    config_delta delta;
     for (const auto& member : expected) {
-        const auto it = config.current.find(member.addr.id);
-        if (it == config.current.end() || it->can_vote != member.can_vote) {
-            work.to_add.push_back(member);
+        const auto it = current.find(member.addr.id);
+        if (it == current.end() || it->can_vote != member.can_vote) {
+            delta.to_add.push_back(member);
         }
     }
-    for (const auto& member : config.current) {
+    for (const auto& member : current) {
         if (!expected.contains(member.addr.id)) {
-            work.to_del.push_back(member.addr.id);
+            delta.to_del.push_back(member.addr.id);
         }
     }
-    work.expected_voter = is_expected_voter(expected, server.id());
-    return work;
+    return delta;
 }
 
-future<> groups_manager::run_config_sync(raft_group_state& state, global_tablet_id tablet,
-        raft::group_id gid, config_sync_work work, gate::holder holder,
-        lw_shared_ptr<abort_source> as) {
-    logger.debug("run_config_sync({}-{}): to_add={}, to_del={}", tablet, gid, work.to_add, work.to_del);
+future<> groups_manager::handle_migration_rpc(const char* verb, rpc::opt_time_point timeout, raft::server_id dst_id,
+        global_tablet_id tablet, raft::group_id group_id, unsigned shard, service::session_id session,
+        sstring stage_name, migration_rpc_method method) {
+    if (_raft_gr.get_my_raft_id() != dst_id) {
+        throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+    }
+    // The coordinator owns the budget for one attempt.
+    if (!timeout) {
+        on_internal_error(logger, format("{}({}-{}): no timeout", verb, tablet, group_id));
+    }
+    if (shard >= this_smp_shard_count()) {
+        throw std::runtime_error(format("{}({}-{}): shard {} out of range", verb, tablet, group_id, shard));
+    }
+    const auto deadline = *timeout;
+    const auto stage = locator::tablet_transition_stage_from_string(stage_name);
 
-    // A single bounded attempt. It intentionally has no retry loop of its own: the
-    // component that decides whether a configuration change is still wanted is the
-    // topology coordinator, and converge_group_config() is what reports back to it.
-    abort_on_expiry aoe(lowres_clock::now() + config_sync_timeout);
-    // The timeout above is only a cap on how long an attempt nobody is watching may run.
-    // What normally ends it early is `as`, which converge_group_config() aborts when it
-    // stops waiting for this attempt - because the stage moved on, or because the budget
-    // the coordinator gave it ran out. Without that, a proposal the coordinator has
-    // already abandoned would keep retrying, and could still land a configuration
-    // belonging to a stage the migration has left.
-    //
-    // `as` is a shared pointer rather than a reference precisely because this attempt
-    // outlives the fiber that started it: the subscription below must not outlive the
-    // abort source it is registered on, and holding the pointer here guarantees it
-    // doesn't. The declaration order is what makes both ends safe - `aoe`, which the
-    // subscription aborts, is destroyed after it, and `as`, which it is registered on,
-    // is a parameter and so outlives every local.
-    auto sub = utils::chain_abort_source(aoe.abort_source(), *as);
-    try {
-        if (utils::get_local_injector().enter("sc_config_sync_fail")) {
-            throw std::runtime_error("sc_config_sync_fail injection");
-        }
-        co_await state.server->modify_config(std::move(work.to_add), std::move(work.to_del),
-                &aoe.abort_source());
-        logger.debug("run_config_sync({}-{}): applied, current config: {}",
-            tablet, gid, state.server->get_configuration().current);
-    } catch (const raft::stopped_error&) {
-        // The group is being deleted or the node is shutting down.
-        logger.debug("run_config_sync({}-{}): raft server stopped", tablet, gid);
-    } catch (const raft::request_aborted&) {
-        // Nobody is waiting for this attempt anymore, or it hit its own timeout. Not
-        // worth reporting at info level: whether the group still has to converge is
-        // decided by converge_group_config(), which knows the current stage.
-        logger.debug("run_config_sync({}-{}): attempt aborted: {}", tablet, gid, std::current_exception());
-    } catch (...) {
-        // Deliberately not propagated: nobody is waiting for this attempt to succeed.
-        // A configuration that stays behind is reported by converge_group_config(),
-        // which knows what the current stage expects and has a deadline to report by.
-        logger.info("run_config_sync({}-{}): attempt failed: {}", tablet, gid, std::current_exception());
-    }
-}
+    // This node may not have applied the stage the RPC was sent for yet: a strongly
+    // consistent migration runs no barrier at some of its stages. Catching up keeps the
+    // target shard from refusing an RPC that is current.
+    co_await _mm.get_group0_barrier().trigger();
 
-void groups_manager::maybe_schedule_config_sync(raft_group_state& state, global_tablet_id tablet,
-        raft::group_id gid, const locator::tablet_map& tmap) {
-    if (!state.config_sync.available()) {
-        // An attempt is already in flight. Nothing to do: whoever needs the group to
-        // converge drains it and reschedules.
-        return;
-    }
-    if (!state.server || !state.gate || state.gate->is_closed()) {
-        // The server hasn't finished starting, or the group is being deleted.
-        return;
-    }
-    if (!state.server->is_leader()) {
-        // Only the leader can change the configuration. Asking at execution time,
-        // rather than deriving it from the replica's role in the migration, is what
-        // lets the pending replica drive a rollback while it is still the leader,
-        // without it ever trying to drive a change it cannot make.
-        return;
-    }
-    const auto work = assess_config_sync(*state.server, tmap, tablet.tablet);
-    if (!work.has_delta() || work.change_in_progress) {
-        return;
-    }
-    // A fresh abort source per attempt, so that ending one attempt can never end the
-    // next. Whoever waits for this attempt keeps its own copy of the pointer.
-    state.config_sync_as = make_lw_shared<abort_source>();
-    state.config_sync = run_config_sync(state, tablet, gid, std::move(work), state.gate->hold(),
-            state.config_sync_as);
-}
+    // The explicit object parameter copies the captures into the coroutine frame.
+    co_await container().invoke_on(shard, [verb, tablet, group_id, session, stage, deadline, method]
+            (this auto, groups_manager& gm) -> future<> {
+        locator::tablet_metadata_guard guard(gm._db.find_column_family(tablet.table), tablet);
 
-future<> groups_manager::converge_group_config(global_tablet_id tablet, raft::group_id gid,
-        locator::tablet_metadata_guard& guard, lowres_clock::time_point deadline, abort_source& as) {
-    const auto expected_voter = is_expected_voter(
-            expected_raft_config(guard.get_tablet_map().get_tablet_info(tablet.tablet),
-                    guard.get_tablet_map().get_tablet_transition_info(tablet.tablet)),
-            _raft_gr.get_my_raft_id());
-
-    // Wait for a pending server start before looking at the group. Deliberately done
-    // without holding the gate: group deletion runs on the same chain and waits for
-    // the gate to drain, so holding it here would deadlock until the deadline.
-    {
-        const auto it = _raft_groups.find(gid);
-        if (it == _raft_groups.end()) {
-            if (!expected_voter) {
-                co_return;
+        // An RPC that arrives late was sent for an earlier stage, or for an earlier
+        // migration of the tablet, which the session identifies: a strongly consistent
+        // migration keeps one session from the stage after start_migration to its end.
+        // Acting on the stage found here instead could run a sync's change before that
+        // stage's barrier drained the requests the change puts at risk, or reach for a
+        // raft server this replica no longer hosts.
+        {
+            const auto& tmap = guard.get_tablet_map();
+            const auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+            if (!trinfo || trinfo->session_id != session || trinfo->stage != stage) {
+                const auto msg = fmt::format("{}({}-{}): sent for stage {} in session {}, but the tablet is {}",
+                        verb, tablet, group_id, stage, session,
+                        trinfo ? fmt::format("at stage {} in session {}", trinfo->stage, trinfo->session_id)
+                               : std::string("not in transition"));
+                logger.debug("{}", msg);
+                throw std::runtime_error(msg);
             }
-            throw std::runtime_error(format("converge_group_config({}-{}): raft group is not running", tablet, gid));
-        }
-        // A replica the current stage doesn't expect to be a voter of has nothing to
-        // attest to, and can only help if it happens to be the group's leader right
-        // now. Checked before waiting for the start: a replica joining the group
-        // bootstraps with an empty configuration and can't learn a leader until the
-        // group's leader adds it, so its start doesn't complete before that happens.
-        if (!expected_voter && !(it->second.server && it->second.server->is_leader())) {
-            co_return;
-        }
-        co_await it->second.server_control_op.get_future(deadline);
-    }
 
-    // The group may have been deleted while we waited, so look it up again and take
-    // the gate before touching state.server. There is no scheduling point between
-    // the check and hold(), so the group cannot go away underneath us afterwards.
-    const auto it = _raft_groups.find(gid);
-    if (it == _raft_groups.end() || !it->second.gate || it->second.gate->is_closed() || !it->second.server) {
-        throw std::runtime_error(format("converge_group_config({}-{}): raft group is not running", tablet, gid));
-    }
-    auto& state = it->second;
-    auto holder = state.gate->hold();
+            const auto this_replica = locator::tablet_replica {
+                .host = guard.get_token_metadata()->get_my_id(),
+                .shard = this_shard_id()
+            };
+            if (!hosts_raft_group(tmap.get_tablet_info(tablet.tablet), trinfo, this_replica)) {
+                // The coordinator sends these RPCs only to replicas that host the group at
+                // the stage.
+                on_internal_error(logger, format("{}({}-{}): replica {} doesn't host the group at stage {}",
+                        verb, tablet, group_id, this_replica, trinfo->stage));
+            }
+        }
+
+        // Ends the call at the coordinator's deadline or when the tablet's stage moves on,
+        // whichever comes first. The raft calls of `method` are aborted by it too.
+        abort_on_expiry aoe(deadline);
+        auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
+        const auto server = co_await gm.acquire_server(tablet.table, group_id, aoe.abort_source());
+
+        // Supersedes the migration RPC still running on the group, if any.
+        auto& state = server._state;
+        if (state.migration_rpc_as) {
+            state.migration_rpc_as->request_abort();
+        }
+        const auto rpc_as = make_lw_shared<abort_source>();
+        state.migration_rpc_as = rpc_as;
+        auto rpc_sub = utils::chain_abort_source(aoe.abort_source(), *rpc_as);
+        // Runs while `server` still holds the group's gate, so `state` is alive.
+        const auto uninstall = defer([&state, rpc_as] () noexcept {
+            if (state.migration_rpc_as == rpc_as) {
+                state.migration_rpc_as = nullptr;
+            }
+        });
+
+        co_await (gm.*method)(tablet, group_id, server, guard, aoe.abort_source());
+    });
+}
+
+future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::group_id gid, const raft_server& server,
+        locator::tablet_metadata_guard& guard, abort_source& as) {
+    // Taken from the guard's tablet map, which a later suspension may replace. Right for
+    // the whole call: a transition's replica sets don't change, and a change of stage
+    // aborts the call.
+    const auto expected_config = std::invoke([&] {
+        const auto& tmap = guard.get_tablet_map();
+        return expected_raft_config(tmap.get_tablet_info(tablet.tablet), tmap.get_tablet_transition_info(tablet.tablet));
+    });
 
     auto retry = exponential_backoff_retry(10ms, 1s);
-
     while (true) {
-        if (state.gate->is_closed()) {
-            // The table was dropped or the node is shutting down. Nothing can converge
-            // anymore, so fail now instead of spinning until the deadline.
-            throw std::runtime_error(format("converge_group_config({}-{}): raft group is being deleted", tablet, gid));
+        const auto config = server.server().get_configuration();
+        auto [to_add, to_del] = diff_config(expected_config, config.current);
+        // In a joint configuration the delta against C_new is already empty, but the
+        // change hasn't finished yet.
+        if (to_add.empty() && to_del.empty() && !config.is_joint()) {
+            break;
         }
 
-        // The configuration a stage implies is read from the guard on every pass and
-        // never captured: the guard stops refreshing the moment the tablet's stage
-        // changes, and aborts `as`, so this loop can neither miss a change the
-        // coordinator made nor drive the group towards a configuration it abandoned.
-        //
-        // Re-driving is coupled to this loop rather than to the next token metadata
-        // update, so that an attempt which failed on an otherwise quiet cluster is
-        // retried, and so that a replica which becomes the leader mid-attempt picks
-        // the change up without the coordinator having to send the RPC again.
-        maybe_schedule_config_sync(state, tablet, gid, guard.get_tablet_map());
+        // Checked right before a change is proposed, with no suspension in between, as
+        // modify_config() appends its entry before it first suspends: once the stage has
+        // moved on on this host, this call proposes nothing more.
+        if (as.abort_requested()) {
+            const auto msg = fmt::format("sync_raft_group_config({}-{}): raft configuration didn't converge before "
+                    "the deadline, the stage moved on, or a newer call superseded this one: missing to_add={}, "
+                    "to_del={}, current config: {}",
+                    tablet, gid, to_add, to_del, config);
+            logger.debug("{}", msg);
+            throw std::runtime_error(msg);
+        }
 
-        // The attempt this pass is about to wait for. Captured rather than read back
-        // afterwards, so that giving up ends the attempt we actually waited for and
-        // never one a concurrent invocation scheduled in the meantime.
-        auto attempt_as = state.config_sync_as;
-
-        // Drain the in-flight attempt, if any, including one started for an earlier
-        // stage, before looking at the configuration: an attempt that has already been
-        // proposed must not be able to land after we acknowledged convergence.
-        //
-        // Waited on with the abort source rather than the deadline alone, so that a
-        // stage change ends the wait when it happens instead of at the deadline.
-        auto drained = co_await coroutine::as_future(state.config_sync.get_future(as));
-        // The attempt itself never reports an error, so this wait can only fail by being
-        // given up on: the deadline `as` carries, or the caller aborting it.
-        const bool gave_up = drained.failed();
-        if (gave_up) {
-            drained.ignore_ready_future();
-            // Nothing wants that attempt anymore. Ending it here is what keeps an
-            // abandoned proposal from retrying for the rest of its own timeout, and from
-            // landing a configuration belonging to a stage the coordinator has left. The
-            // attempt still gets to finish on its own terms - it holds the gate, so the
-            // group's teardown waits for it either way.
-            if (attempt_as) {
-                attempt_as->request_abort();
+        // Only the errors below have known causes that resolve on their own, so only
+        // they are retried here. Anything else goes to the coordinator.
+        try {
+            if (server.server().is_leader()) {
+                // A joint configuration has to resolve before another change is proposed.
+                if (!config.is_joint()) {
+                    if (utils::get_local_injector().enter("sc_config_sync_fail")) {
+                        throw std::runtime_error("sc_config_sync_fail injection");
+                    }
+                    co_await server.server().modify_config(std::move(to_add), std::move(to_del), &as);
+                    continue;
+                }
             }
-        }
-
-        const auto work = assess_config_sync(*state.server, guard.get_tablet_map(), tablet.tablet);
-        if (!gave_up && work.converged()) {
-            co_return;
-        }
-
-        // Only the leader can repair the configuration. A replica the stage doesn't
-        // expect to be a voter has nothing to attest to either, so it is done. This is
-        // also what keeps a replica that raft never told about its own removal - raft
-        // deliberately stops replicating to a removed member - from holding up the
-        // barrier: the stage doesn't expect it, so it doesn't participate.
-        const bool is_leader = state.server->is_leader();
-        if (!is_leader && !work.expected_voter) {
-            co_return;
-        }
-
-        // The abort source covers the deadline as well, but it is also what the caller
-        // aborts, and checking it here is what keeps the retries below from spinning
-        // once every wait in the loop starts failing immediately.
-        if (gave_up || lowres_clock::now() >= deadline || as.abort_requested()) {
-            throw std::runtime_error(fmt::format("converge_group_config({}-{}): raft configuration "
-                    "didn't converge before the deadline or the barrier was aborted: missing "
-                    "to_add={}, to_del={}, change in progress={}, current config: {}",
-                    tablet, gid, work.to_add, work.to_del, work.change_in_progress,
-                    state.server->get_configuration().current));
-        }
-
-        if (!is_leader) {
-            // Our view of the configuration may just be behind the leader's. A read
-            // barrier is a bounded way to catch up, unlike waiting in the background
-            // for a notification which raft never sends to a removed member.
-            try {
-                co_await state.server->read_barrier(&as);
-            } catch (...) {
-                logger.debug("converge_group_config({}-{}): read barrier failed: {}",
-                    tablet, gid, std::current_exception());
-            }
+            // A follower waits for the leader's change to reach it, and checks again after
+            // the backoff below. A configuration takes effect once its entry is appended,
+            // so a read barrier isn't needed, and it would also wait for the state machine
+            // to apply the log, however far behind that is.
+        } catch (const raft::not_a_leader& e) {
+            // The leadership moved while the change was in flight.
+            logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
+        } catch (const raft::commit_status_unknown& e) {
+            // The leadership moved, and the change may or may not have landed; the next
+            // pass sees which.
+            logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
+        } catch (const raft::conf_change_in_progress& e) {
+            // Another change is still in flight on this server: a duplicate of this sync,
+            // or an earlier change whose final entry isn't committed yet.
+            logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
+        } catch (const raft::request_aborted&) {
+            // The deadline passed or the stage moved on; the next pass reports it.
         }
 
         try {
             co_await retry.retry(as);
         } catch (...) {
-            // The deadline fired, or the caller aborted; report it on the next pass.
+            // Aborted; reported on the next pass.
         }
     }
-}
 
-future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::group_id gid,
-        lowres_clock::time_point deadline) {
-    auto& table = _db.find_column_family(tablet.table);
-    locator::tablet_metadata_guard guard(table, tablet);
-
-    // Fence stale invocations. A trigger from a stage the coordinator has already left
-    // must not drive a configuration change, exactly like a stale streaming trigger
-    // must not stream; see the comment above do_tablet_operation(). Only these three
-    // stages change what expected_raft_config() implies - every other stage inherits
-    // the configuration one of them established - so the coordinator never asks for
-    // one outside them.
-    const auto* trinfo = guard.get_tablet_map().get_tablet_transition_info(tablet.tablet);
-    if (!trinfo) {
-        throw std::runtime_error(fmt::format(
-                "sync_raft_group_config({}-{}): the tablet is not in transition", tablet, gid));
-    }
-    switch (trinfo->stage) {
-        case tablet_transition_stage::sc_add_nonvoter:
-        case tablet_transition_stage::sc_become_voter:
-        case tablet_transition_stage::sc_rollback:
-            break;
-        default:
-            throw std::runtime_error(fmt::format(
-                    "sync_raft_group_config({}-{}): stage {} doesn't drive a raft configuration change",
-                    tablet, gid, trinfo->stage));
-    }
-
-    const auto this_replica = locator::tablet_replica {
-        .host = guard.get_token_metadata()->get_my_id(),
-        .shard = this_shard_id()
+    const auto is_expected_voter = [&expected_config] (raft::server_id id) {
+        const auto it = expected_config.find(id);
+        return it != expected_config.end() && it->can_vote == raft::is_voter::yes;
     };
-    if (!hosts_raft_group(guard.get_tablet_map().get_tablet_info(tablet.tablet), trinfo, this_replica)) {
-        // This shard runs no raft server for the group at this stage: the tablet has
-        // no replica here, or a replica this stage has already removed from the group.
-        // Nothing to converge.
-        co_return;
-    }
-
-    logger.debug("sync_raft_group_config({}-{}): converging at stage {}", tablet, gid, trinfo->stage);
-
-    // Bounded by the deadline the coordinator gave us, and ended early by the guard once
-    // the tablet's stage moves on. Both reach the raft proposal too: converge_group_config()
-    // aborts the attempt it was waiting for when it stops waiting, so an attempt is never
-    // left running for a stage that nobody is on anymore.
-    //
-    // Note what this does and doesn't fence. The guard bounds this handler, and the next
-    // stage's barrier waits for the guard to be destroyed, so no *decision* made here can
-    // be based on a stage the coordinator has left. It does not wait for the raft proposal
-    // itself, which is a background attempt holding the group's gate, not the guard. What
-    // keeps an aborted proposal from landing a configuration belonging to an abandoned
-    // stage is elsewhere, and each part is needed:
-    //
-    //  - converge_group_config() drains the in-flight attempt, including one started for
-    //    an earlier stage, before assessing the configuration, so a later stage on this
-    //    node never proposes on top of an earlier one still in flight.
-    //  - modify_config() runs only on the leader (forwarding is disabled), so two nodes
-    //    cannot propose changes for the same group at the same time; a stale call from a
-    //    node that lost leadership throws instead of committing.
-    //  - assess_config_sync() reports a joint configuration as a change in progress, and
-    //    neither converged() nor maybe_schedule_config_sync() acts on one, so a change
-    //    that did land is always resolved before the next one is derived.
-    //  - group teardown closes the gate and aborts the raft server, which turns an
-    //    in-flight attempt into raft::stopped_error, and the deletion chain awaits
-    //    config_sync before destroying the server. That is what keeps an attempt from
-    //    outliving the point where this replica tears its raft server down.
-    abort_on_expiry aoe(deadline);
-    auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
-    co_await converge_group_config(tablet, gid, guard, deadline, aoe.abort_source());
-}
-
-future<> groups_manager::drain_group_deletion(global_tablet_id tablet, raft::group_id gid,
-        lowres_clock::time_point deadline) {
-    const auto it = _raft_groups.find(gid);
-    if (it == _raft_groups.end()) {
-        co_return;
-    }
-
-    logger.debug("drain_group_deletion({}-{}): waiting for the raft server to be torn down", tablet, gid);
-    auto drained = co_await coroutine::as_future(it->second.server_control_op.get_future(deadline));
-    if (drained.failed()) {
-        drained.ignore_ready_future();
-        co_await coroutine::return_exception(std::runtime_error(format(
-                "drain_group_deletion({}-{}): the raft server was not torn down before the deadline", tablet, gid)));
-    }
-
-    // update() schedules the deletion as soon as the stage that ends this node's
-    // membership is published, and this barrier runs after that. A group that is still
-    // here once its control operations drained is therefore not being deleted at all.
-    if (_raft_groups.contains(gid)) {
-        co_await coroutine::return_exception(std::runtime_error(format(
-                "drain_group_deletion({}-{}): the raft group is still running although the tablet's "
-                "current stage doesn't place a replica on this node", tablet, gid)));
-    }
-}
-
-future<> groups_manager::local_topology_barrier(token_metadata_ptr tm, abort_source& as) {
-    if (!_features.strongly_consistent_tables) {
-        co_return;
-    }
-
-    const auto deadline = lowres_clock::now() + group_teardown_timeout;
-
-    const auto this_replica = locator::tablet_replica {
-        .host = tm->get_my_id(),
-        .shard = this_shard_id()
-    };
-
-    const auto& tablets = tm->tablets();
-    for (const auto& [table_id, _]: tablets.all_table_groups()) {
-        const auto& tablet_map = tablets.get_tablet_map(table_id);
-        if (!tablet_map.has_raft_info()) {
-            continue;
+    if (is_expected_voter(_raft_gr.get_my_raft_id())) {
+        // After a demotion - of the leaving replica at sc_become_voter, of the pending
+        // one at sc_rollback - this replica may still name the demoted leader. Waiting
+        // for a voter here, before the coordinator publishes the next stage, keeps the
+        // requests of that stage from finding a named leader outside their serving set.
+        // Only the expected voters serve at the next stage, so only they wait.
+        //
+        // One wait is not enough: raft hands leadership over only to a voter that holds
+        // the whole log, so until one does, the demoted leader keeps leading, and each of
+        // its messages - same term - makes this replica name it again. Every pass ends on
+        // a leader's message, and the loop ends once a voter wins an election: its higher
+        // term makes this replica reject the demoted leader's messages.
+        for (auto leader = server.server().current_leader(); !leader || !is_expected_voter(leader);
+                leader = server.server().current_leader()) {
+            logger.debug("sync_raft_group_config({}-{}): named leader {} is not a voter of {}, waiting",
+                    tablet, gid, leader, expected_config);
+            co_await server.server().wait_for_leader(&as, bool(leader));
         }
-        // Only a tablet in transition can need anything from this barrier: without a
-        // transition, hosts_raft_group() reduces to the same test as has_replica()
-        // below, so the teardown branch is unreachable.
-        for (const auto& [tid, trinfo]: tablet_map.transitions()) {
-            // A wider set than hosts_raft_group() below, so that a replica whose
-            // membership the current stage ended is still visited here, to wait for its
-            // raft server to be torn down.
-            if (!tablet_map.has_replica(tid, this_replica)) {
-                continue;
-            }
-            if (hosts_raft_group(tablet_map.get_tablet_info(tid), &trinfo, this_replica)) {
-                // Still a member. Whether the group's configuration matches what this
-                // stage implies is not this barrier's business - the coordinator drives
-                // and verifies that per tablet, through sync_raft_group_config().
-                continue;
-            }
-            // Checked between tablets rather than inside the wait: each wait is short
-            // and bounded by the deadline, and stopping here is what keeps a barrier
-            // nobody is waiting for anymore - the node is shutting down, or the
-            // topology command has been superseded - from walking the whole map.
-            as.check();
-            // The tablet cleanup of this migration is about to remove the tablet's
-            // storage on this node. Nothing may apply raft entries to it after that,
-            // so the raft server has to be gone before the barrier that precedes the
-            // cleanup completes.
-            co_await drain_group_deletion(global_tablet_id{table_id, tid},
-                    tablet_map.get_tablet_raft_info(tid).group_id, deadline);
-            co_await coroutine::maybe_yield();
+    }
+
+    // Test-only: hold the migration at this stage once this replica has converged.
+    co_await utils::get_local_injector().inject("sc_pause_after_config_sync", utils::wait_for_message(5min));
+}
+
+future<> groups_manager::wait_for_snapshot_transfer(global_tablet_id tablet, raft::group_id gid, const raft_server& server,
+        locator::tablet_metadata_guard& guard, abort_source& as) {
+    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
+    co_await server.server().read_barrier(&as);
+}
+
+void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
+        token_metadata_ptr tm) {
+    logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
+    state.gate = make_lw_shared<gate>();
+    // Still linked if the previous start hasn't finished yet.
+    if (!state.is_linked()) {
+        _starting_groups.push_back(state);
+    }
+    chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), g = state.gate] () mutable -> future<> {
+        co_await start_raft_group(tablet, id, std::move(tm));
+        state.server = &_raft_gr.get_server(id);
+        state.leader_info_updater = leader_info_updater(state, tablet, id);
+        co_await wait_for_first_leader(tablet, id, state, *g);
+
+        // If a restart is already queued behind us, the group isn't started yet; that
+        // start will unlink the state.
+        if (state.gate.get() == g.get()) {
+            _starting_groups.erase(_starting_groups.iterator_to(state));
+        }
+        logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
+    });
+}
+
+future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
+        gate& g) {
+    // Up to a minute, and not beyond a deletion queued for this incarnation: `g` is its
+    // gate, while state.gate may already be a later incarnation's open gate. The server
+    // can't be destroyed meanwhile: a deletion runs only after the start that calls this.
+    abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
+    while (auto holder = g.try_hold()) {
+        auto srv = raft_server(state, std::move(*holder));
+        auto res = srv.begin_mutate(aoe.abort_source());
+        auto* w = get_if<raft_server::need_wait_for_leader>(&res);
+        if (!w) {
+            co_return;
+        }
+        auto f = co_await coroutine::as_future(std::move(w->future));
+        if (f.failed()) {
+            logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}",
+                    tablet, id, f.get_exception());
+            co_return;
         }
     }
 }
@@ -1146,8 +893,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         .host = new_tm->get_my_id(),
         .shard = this_shard_id()
     };
-    _leader_cache.begin_sweep();
+
     const auto& tablets = new_tm->tablets();
+
+    _leader_cache.begin_sweep();
     for (const auto& [table_id, _]: tablets.all_table_groups()) {
         const auto& tablet_map = tablets.get_tablet_map(table_id);
         if (!tablet_map.has_raft_info()) {
@@ -1158,71 +907,26 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             const auto tablet = global_tablet_id{table_id, tid};
 
             _leader_cache.mark_seen(id);
+
             if (!hosts_raft_group(tablet_map.get_tablet_info(tid), tablet_map.get_tablet_transition_info(tid), this_replica)) {
                 // Either the tablet has no replica on this node, or a migration has
                 // ended this node's membership in the group. Leaving has_tablet false
                 // schedules the deletion of the raft server below.
                 continue;
             }
+
             auto& state = _raft_groups[id];
             state.has_tablet = true;
-
-            // Don't start the raft server if it is already (started or starting) and not stopping.
-            if (state.gate && !state.gate->is_closed()) {
-                continue;
+            // Start the server, unless it is started or starting already and not being
+            // deleted.
+            if (!state.gate || state.gate->is_closed()) {
+                schedule_raft_group_start(tablet, id, state, new_tm);
             }
-
-            logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
-            state.gate = make_lw_shared<gate>();
-            // Still linked if the previous start hasn't finished yet.
-            if (!state.is_linked()) {
-                _starting_groups.push_back(state);
-            }
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
-                co_await start_raft_group(tablet, id, std::move(new_tm));
-                state.server = &_raft_gr.get_server(id);
-                state.leader_info_updater = leader_info_updater(state, tablet, id);
-
-                // We want to make sure the server is ready to serve requests before
-                // we report it as started in wait_for_groups_to_start().
-                //
-                // The server can't be destroyed under us: a deletion runs only
-                // after this operation. Probing `g`, the gate of this
-                // incarnation, just stops the wait once a deletion is queued;
-                // state.gate may already be a later incarnation's open gate.
-                abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
-                while (true) {
-                    auto holder = g->try_hold();
-                    if (!holder) {
-                        break;
-                    }
-                    auto srv = raft_server(state, std::move(*holder));
-                    auto res = srv.begin_mutate(aoe.abort_source());
-                    if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        auto f = co_await coroutine::as_future(std::move(w->future));
-                        if (f.failed()) {
-                            logger.warn("update(): waiting for leader timed out for tablet {}, "
-                                "group id {}: {}", tablet, id, f.get_exception());
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                // If a restart is already queued behind us, the group isn't
-                // started yet; that start will unlink the state.
-                if (state.gate.get() == g.get()) {
-                    _starting_groups.erase(_starting_groups.iterator_to(state));
-                }
-
-                logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
-            });
         }
     }
+    _leader_cache.end_sweep();
 
     schedule_raft_groups_deletion(false);
-    _leader_cache.end_sweep();
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
@@ -1246,8 +950,9 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     //
     // Node shutdown also closes gates (groups_manager::stop() closes every gate
     // regardless of table existence), but it cannot race with us either: the
-    // strongly consistent coordinator, the only caller of acquire_server, is
-    // destroyed before groups_manager::stop() runs.
+    // strongly consistent coordinator is destroyed before groups_manager::stop()
+    // runs, and the RPC handlers that call this are unregistered on every shard
+    // before it; see uninit_messaging_service().
     if (!_db.column_family_exists(table_id)) {
         return make_exception_future<raft_server>(
             replica::no_such_column_family(table_id));
@@ -1320,8 +1025,6 @@ future<> groups_manager::stepdown_leaders() {
 }
 
 future<> groups_manager::stop() {
-    co_await uninit_messaging_service();
-
     if (!_started) {
         co_return;
     }

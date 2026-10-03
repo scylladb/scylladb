@@ -367,6 +367,7 @@ enum class tablet_transition_stage {
     use_new,
     cleanup,
     sc_rollback,
+    sc_remove_pending,
     cleanup_target,
     revert_migration,
     end_migration,

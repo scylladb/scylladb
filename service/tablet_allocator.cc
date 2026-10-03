@@ -1032,6 +1032,8 @@ private:
                 return false;
             case tablet_transition_stage::sc_rollback:
                 return false;
+            case tablet_transition_stage::sc_remove_pending:
+                return false;
             case tablet_transition_stage::cleanup_target:
                 return false;
             case tablet_transition_stage::revert_migration:
@@ -2878,7 +2880,9 @@ public:
         for (auto&& [table, table_plan] : table_sizing_plan.tables) {
             auto& tmap = _tm->tablets().get_tablet_map(table);
 
-            if (!table_plan.avg_tablet_size) {
+            // A strongly consistent tablet can't be split or merged yet: that would need
+            // its raft group split or merged too.
+            if (!table_plan.avg_tablet_size || tmap.has_raft_info()) {
                 continue;
             }
 
@@ -3541,6 +3545,24 @@ public:
         co_return plan;
     }
 
+    bool is_strongly_consistent(table_id table) const {
+        return _tm->tablets().get_tablet_map(table).has_raft_info();
+    }
+
+    // Strongly consistent tablets don't migrate between the shards of a node yet: the
+    // raft server of a tablet replica is identified by its host, so both shards would run
+    // it. Dropping them from the candidates keeps them in the shards' load, which the
+    // other tablets are balanced around.
+    void drop_strongly_consistent_candidates(shard_load& shard) {
+        std::erase_if(shard.candidates, [this] (const auto& entry) {
+            return is_strongly_consistent(entry.first);
+        });
+        std::erase_if(shard.candidates_all_tables, [this] (const migration_tablet_set& tablets) {
+            return is_strongly_consistent(tablets.table());
+        });
+    }
+
+    // Changes the candidates of `nodes`, which no later plan looks at.
     future<migration_plan> make_intranode_plan(node_load_map& nodes, const std::unordered_set<host_id>& skip_nodes) {
         migration_plan plan;
 
@@ -3550,6 +3572,9 @@ public:
                 continue;
             }
 
+            for (auto& shard : node_load.shards) {
+                drop_strongly_consistent_candidates(shard);
+            }
             plan.merge(co_await make_node_plan(nodes, host, node_load));
         }
 
