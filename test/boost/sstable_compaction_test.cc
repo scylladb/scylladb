@@ -2913,7 +2913,7 @@ void sstable_run_based_compaction_fn(test_env& env) {
             closed_sstables_tracker++;
         }));
 
-        testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstable->generation(), old_sstable.use_count());
+        testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstable->generation(), old_sstable->use_count());
     };
 
     auto do_compaction = [&] (size_t expected_input, size_t expected_output) mutable -> std::vector<shared_sstable> {
@@ -5747,7 +5747,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
             const dht::token_range_vector empty_owned_ranges;
             for (auto&& sst : ssts) {
                 t->add_sstable_and_update_cache(sst, offstrategy).get();
-                testlog.info("run id {}, refcount = {}", sst->run_identifier(), sst.use_count());
+                testlog.info("run id {}, refcount = {}", sst->run_identifier(), sst->use_count());
                 observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
                     auto sstables = t->get_sstables();
                     auto input_sstable_count = std::count_if(sstables->begin(), sstables->end(), [&] (const shared_sstable& sst) {

@@ -71,7 +71,6 @@
 #include "db/data_listeners.hh"
 
 #include "data_dictionary/user_types_metadata.hh"
-#include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/memory_diagnostics.hh>
 #include <seastar/util/closeable.hh>
