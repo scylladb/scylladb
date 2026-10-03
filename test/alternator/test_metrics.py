@@ -323,6 +323,26 @@ def test_table_scan_operations(test_table_s, metrics):
         test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
             ExpressionAttributeValues={':p': 'dog'})
 
+def test_import_table_operations(dynamodb, metrics):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    try:
+        with check_increases_operation(metrics, ['ImportTable']):
+            client.import_table(
+                S3BucketSource={'S3Bucket': 'my-bucket'},
+                InputFormat='DYNAMODB_JSON',
+                TableCreationParameters={
+                    'TableName': table_name,
+                    'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                    'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
+                    'BillingMode': 'PAY_PER_REQUEST'})
+    finally:
+        # ImportTable creates no table yet, but will once imports work.
+        try:
+            client.delete_table(TableName=table_name)
+        except ClientError:
+            pass
+
 def test_export_table_operations(test_table_s, metrics):
     table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
     with check_increases_operation(metrics, ['ExportTableToPointInTime']):
