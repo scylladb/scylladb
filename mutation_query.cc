@@ -10,6 +10,7 @@
 
 #include "mutation_query.hh"
 #include "schema/schema_registry.hh"
+#include "utils/on_internal_error.hh"
 
 #include <boost/range/algorithm/equal.hpp>
 
@@ -34,6 +35,31 @@ reconcilable_result::reconcilable_result(uint64_t row_count, utils::chunked_vect
     : reconcilable_result(static_cast<uint32_t>(row_count), std::move(p), short_read, static_cast<uint32_t>(row_count >> 32), std::move(memory_tracker))
 { }
 
+reconcilable_result::reconcilable_result(uint32_t row_count_low_bits, utils::chunked_vector<partition> p, query::short_read short_read,
+                                         uint32_t row_count_high_bits, std::optional<full_position> wire_position, std::vector<partition_skip> skips)
+    : reconcilable_result(row_count_low_bits, std::move(p), short_read, row_count_high_bits)
+{
+    _stop = std::move(wire_position);
+    _skips = std::move(skips);
+}
+
+void reconcilable_result::set_frontier(const schema& s, query::read_frontier frontier, std::span<const full_position> skips) {
+    _stop = std::move(frontier.stop);
+    _has_frontier = true;
+    _skips.clear();
+    _skips.reserve(skips.size());
+    uint32_t i = 0;
+    for (const auto& skip : skips) {
+        while (i < _partitions.size() && !_partitions[i].mut().key().equal(s, skip.partition)) {
+            ++i;
+        }
+        if (i == _partitions.size()) {
+            utils::on_internal_error(fmt::format("reconcilable_result::set_frontier(): the result has no partition of the skip {}", skip.position));
+        }
+        _skips.push_back(partition_skip{i, skip.position});
+    }
+}
+
 const utils::chunked_vector<partition>& reconcilable_result::partitions() const {
     return _partitions;
 }
@@ -49,11 +75,22 @@ reconcilable_result::operator==(const reconcilable_result& other) const {
 
 void
 reconcilable_result::merge_disjoint(schema_ptr schema, const reconcilable_result& other) {
+    const auto offset = static_cast<uint32_t>(_partitions.size());
+    for (const auto& skip : other._skips) {
+        _skips.push_back(partition_skip{offset + skip.partition, skip.position});
+    }
     std::copy(other._partitions.begin(), other._partitions.end(), std::back_inserter(_partitions));
     _short_read = _short_read || other._short_read;
     uint64_t row_count = this->row_count() + other.row_count();
     _row_count_low_bits = static_cast<uint32_t>(row_count);
     _row_count_high_bits = static_cast<uint32_t>(row_count >> 32);
+    if (_has_frontier && other._has_frontier && !_stop) {
+        _stop = other._stop;
+    } else {
+        _stop.reset();
+        _has_frontier = false;
+        _skips.clear();
+    }
 }
 
 auto fmt::formatter<reconcilable_result::printer>::format(
@@ -64,6 +101,12 @@ auto fmt::formatter<reconcilable_result::printer>::format(
                          "{{rows={}, short_read={}, ",
                          pr.self.row_count(),
                          pr.self.is_short_read());
+    if (pr.self.frontier()) {
+        out = fmt::format_to(out, "frontier={{{}}}, ", query::read_frontier::printer{*pr.schema, *pr.self.frontier()});
+    }
+    for (const auto& skip : pr.self.skips()) {
+        out = fmt::format_to(out, "skip of partition {} at {}, ", skip.partition, skip.position);
+    }
     bool first = true;
     for (const partition& p : pr.self.partitions()) {
         if (!first) {

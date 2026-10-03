@@ -198,6 +198,13 @@ public:
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    // Gates what the coordinator relies on in the replies of replicas:
+    // - the frontier of each reply, query::read_frontier, which states how far
+    //   the replica read. Older replicas do not send it;
+    // - query::digest_algorithm::xxHash_without_empty_partitions. Digests are
+    //   only comparable between replicas which use the same algorithm, so the
+    //   whole cluster must support it.
+    gms::feature read_frontiers { *this, "READ_FRONTIERS"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

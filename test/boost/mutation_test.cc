@@ -44,6 +44,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "replica/cell_locking.hh"
+#include "replica/querier.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
@@ -3695,9 +3696,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
         auto close_reader = deferred_close(reader);
 
         while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
-            auto c = consumer{permit, res_mut, max_rows};
-            compaction_state->start_new_page(1, max_partitions, query_time, reader.peek().get()->position().region(), c);
-            reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
+            replica::consume_page(reader, compaction_state, s->full_slice(), consumer{permit, res_mut, max_rows}, 1, max_partitions, query_time).get();
         }
 
         BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
@@ -3711,9 +3710,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
         auto close_reader = deferred_close(reader);
 
         while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
-            auto c = consumer{permit, res_mut, 2};
-            compaction_state->start_new_page(max_rows, max_partitions, query_time, reader.peek().get()->position().region(), c);
-            reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
+            replica::consume_page(reader, compaction_state, s->full_slice(), consumer{permit, res_mut, 2}, max_rows, max_partitions, query_time).get();
         }
 
         BOOST_REQUIRE_EQUAL(res_mut, ref_mut);
@@ -3762,11 +3759,10 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     }
 }
 
-// Reproduces the underflow of compaction_stats::dead_partitions() on pages
-// which continue a partition started on a previous page: such pages don't see
-// a partition-start fragment, so total_partitions is not incremented, while
-// live_partitions is (from the first emitted row), resulting in
-// dead_partitions() == total_partitions - live_partitions underflowing.
+// Checks compaction_stats::dead_partitions() on pages which continue a
+// partition started on a previous page. Such a page must count the partition
+// in total_partitions, as it does in live_partitions once it emits a row, or
+// dead_partitions() (== total_partitions - live_partitions) underflows.
 SEASTAR_THREAD_TEST_CASE(test_compactor_partition_stats_of_partition_spanning_many_pages) {
     simple_schema ss;
     auto pk = ss.make_pkey();
@@ -3813,26 +3809,26 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_partition_stats_of_partition_spanning_ma
     unsigned pages = 0;
     unsigned pages_with_rows = 0;
     while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
-        noop_compacted_fragments_consumer c;
-        compaction_state->start_new_page(rows_per_page, max_partitions, query_time, reader.peek().get()->position().region(), c);
-        reader.consume(compact_for_query<noop_compacted_fragments_consumer>(compaction_state, c)).get();
+        replica::consume_page(reader, compaction_state, s->full_slice(), noop_compacted_fragments_consumer(), rows_per_page, max_partitions, query_time).get();
 
         const auto& stats = compaction_state->stats();
         testlog.info("page {}: {} partition(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead)", pages,
                 stats.total_partitions, stats.live_partitions, stats.dead_partitions(),
                 stats.clustering_rows.total(), stats.clustering_rows.live, stats.clustering_rows.dead);
 
+        // A partition can never be live without being counted in the total.
+        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
+
         // The partition is live on every page it has rows on, be it the page
         // it was started on or a page continuing it.
         if (stats.clustering_rows.total()) {
             BOOST_REQUIRE_EQUAL(stats.live_partitions, 1);
             BOOST_REQUIRE_EQUAL(stats.total_partitions, 1);
+            BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 0);
             ++pages_with_rows;
+        } else {
+            BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 1);
         }
-        // A partition can never be live without being counted in the total.
-        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
-        BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 0);
-
         ++pages;
     }
 
@@ -4611,10 +4607,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_live_partition_accounting_paged
 
     while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
         page p;
-        page_consumer c{p, rows_per_page};
-
-        compaction_state->start_new_page(max_rows, max_partitions, query_time, reader.peek().get()->position().region(), c);
-        reader.consume(compact_for_query<page_consumer>(compaction_state, c)).get();
+        replica::consume_page(reader, compaction_state, s->full_slice(), page_consumer{p, rows_per_page}, max_rows, max_partitions, query_time).get();
 
         const auto& stats = compaction_state->stats();
         testlog.info("page {}: {} partition(s) ({} live, {} dead), {} row(s) consumed from {} live partition(s)", pages,

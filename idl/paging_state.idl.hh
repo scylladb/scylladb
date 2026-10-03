@@ -49,6 +49,7 @@ class paging_state {
     partition_region get_partition_region() [[version 5.1]] = partition_region::clustered;
     // The plan that produced this state, disengaged when none was recorded.
     std::optional<std::variant<service::pager::primary_index_plan, service::pager::index_plan>> get_query_plan() [[version 2026.4]] = std::nullopt;
+    bool get_partition_row_pending() [[version 2026.4]] = false;
 };
 }
 }

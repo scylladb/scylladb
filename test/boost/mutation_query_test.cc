@@ -87,7 +87,7 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
     auto querier = replica::querier(source, s, std::move(permit), range, slice, {}, tombstone_gc_state::for_tests());
     auto close_querier = deferred_close(querier);
     auto rrb = reconcilable_result_builder(*s, slice, make_accounter());
-    return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
+    return querier.consume_page(std::move(rrb), slice, row_limit, partition_limit, query_time).get();
 }
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
@@ -541,7 +541,7 @@ static void data_query(schema_ptr s, reader_permit permit, const mutation_source
     auto querier = replica::querier(source, s, std::move(permit), range, slice, {}, tombstone_gc_state::no_gc());
     auto close_querier = deferred_close(querier);
     auto qrb = query_result_builder(*s, builder);
-    querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+    querier.consume_page(std::move(qrb), slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
@@ -563,6 +563,53 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     data_query(s, semaphore.make_permit(), source, query::full_partition_range, slice, result_and_digest_builder);
 
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
+}
+
+// A query which selects no static column. One replica holds a live static
+// cell and a dead row of a partition, so its page has the partition's
+// static-only row. The other replica holds only the dead row, so its page has
+// no row. The xxHash digests of the two pages match: both cover only the
+// partition's key, because the query selects no static cell, and xxHash
+// covers the key of a partition which the result omits. The digests of
+// xxHash_without_empty_partitions differ, and the digest of the page without
+// a row equals the digest of an empty page.
+SEASTAR_THREAD_TEST_CASE(test_digest_omits_empty_partitions) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto s = make_schema();
+    auto now = gc_clock::now();
+    auto pk = partition_key::from_single_value(*s, "key1");
+    auto ck = clustering_key::from_single_value(*s, "A");
+
+    mutation dead_row(s, pk);
+    dead_row.partition().apply_delete(*s, ck, tombstone(api::timestamp_type(2), now));
+    mutation with_static_cell = dead_row;
+    with_static_cell.set_static_cell("s1", data_value(bytes("s1:v")), api::timestamp_type(1));
+
+    auto slice = partition_slice_builder(*s).with_no_static_columns().with_regular_column("v1").build();
+    auto digest = [&] (utils::chunked_vector<mutation> ms, query::digest_algorithm algo) {
+        query::result_memory_limiter l(std::numeric_limits<ssize_t>::max());
+        query::result::builder builder(slice, query::result_options{query::result_request::result_and_digest, algo},
+                l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::no).get(),
+                query::max_tombstones);
+        data_query(s, semaphore.make_permit(), make_source(std::move(ms)), query::full_partition_range, slice, builder);
+        auto result = builder.build();
+        result.ensure_counts();
+        return std::pair(*result.digest(), *result.row_count());
+    };
+
+    const auto [xx_static, xx_static_rows] = digest({with_static_cell}, query::digest_algorithm::xxHash);
+    const auto [xx_dead, xx_dead_rows] = digest({dead_row}, query::digest_algorithm::xxHash);
+    BOOST_REQUIRE_EQUAL(xx_static_rows, 1);
+    BOOST_REQUIRE_EQUAL(xx_dead_rows, 0);
+    BOOST_REQUIRE(xx_static == xx_dead);
+
+    const auto [with_static, with_static_rows] = digest({with_static_cell}, query::digest_algorithm::xxHash_without_empty_partitions);
+    const auto [without_static, without_static_rows] = digest({dead_row}, query::digest_algorithm::xxHash_without_empty_partitions);
+    const auto [empty, empty_rows] = digest({}, query::digest_algorithm::xxHash_without_empty_partitions);
+    BOOST_REQUIRE_EQUAL(with_static_rows, 1);
+    BOOST_REQUIRE_EQUAL(without_static_rows, 0);
+    BOOST_REQUIRE(with_static != without_static);
+    BOOST_REQUIRE(without_static == empty);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
