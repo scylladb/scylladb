@@ -670,11 +670,26 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         prev_released = get_released_nodes(_topology_state_machine._topology, get_token_metadata());
     }
 
-    std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
+    using scope = topology_change_hint::scope;
+    scope reload_kind = hint.topology_hint ? hint.topology_hint->reload_scope : scope::full;
 
-    // read topology state from disk and recreate token_metadata from it
-    rtlogger.debug("topology_state_load: loading topology state");
-    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
+    if (reload_kind == scope::full) {
+        std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
+
+        // read topology state from disk and recreate token_metadata from it
+        rtlogger.debug("topology_state_load: loading topology state");
+        _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
+    } else if (reload_kind == scope::versions_only) {
+        if (hint.topology_hint->version) {
+            _topology_state_machine._topology.version = *hint.topology_hint->version;
+        }
+        if (hint.topology_hint->fence_version) {
+            _topology_state_machine._topology.fence_version = *hint.topology_hint->fence_version;
+        }
+    }
+    // scope::tablets_only: nothing to patch in `topology` itself; tablet-dependent
+    // state (left_nodes_rs, paused_requests) is still refreshed below via
+    // update_tablet_dependent_state(), same as the other two kinds.
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
@@ -733,8 +748,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }, topology.tstate);
         tmptr->set_read_new(read_new);
 
-        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::move(prev_normal), std::move(prev_released));
-
         std::optional<locator::tablet_metadata> tablets;
         if (hint.tablets_hint) {
             // We want to update the tablet metadata incrementally, so copy it
@@ -747,15 +760,12 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
         tmptr->set_tablets(std::move(*tablets));
 
-        if (_feature_service.parallel_tablet_draining) {
-            for (auto&& [node, req]: topology.requests) {
-                if (req == topology_request::leave || req == topology_request::remove) {
-                    if (tmptr->tablets().has_replica_on(locator::host_id(node.uuid()))) {
-                        topology.paused_requests.emplace(node, req);
-                    }
-                }
-            }
-        }
+        // Narrow left_nodes_rs/excluded_tablet_nodes before sync_raft_topology_nodes()
+        // reads them, so a node that lost its last replica this reload is released now,
+        // not deferred to the next group0 command.
+        topology.update_tablet_dependent_state(tmptr->tablets(), _feature_service.parallel_tablet_draining);
+
+        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::move(prev_normal), std::move(prev_released));
 
         rtlogger.debug("topology_state_load: replicating token metadata to all cores");
         co_await replicate_to_all_cores(std::move(tmptr));
