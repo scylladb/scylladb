@@ -234,4 +234,28 @@ SEASTAR_TEST_CASE(test_group_by_null_clustering) {
     });
 }
 
+// A grouped query with LIMIT should stop reading once LIMIT groups are
+// complete. Each page is one read of the table on its replica.
+// Regression test for SCYLLADB-4585.
+SEASTAR_TEST_CASE(test_group_by_limit_stops_reading) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key(p, c))");
+        for (int c = 0; c < 10; ++c) {
+            cquery_nofail(e, format("insert into t (p, c) values (1, {})", c));
+        }
+        auto get_read_count = [&] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return db.find_column_family("ks", "t").get_stats().reads.hist.count;
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+        const auto reads_before = get_read_count();
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+        auto msg = cquery_nofail(e, "select count(*) from t where p = 1 group by c limit 1", std::move(qo));
+        assert_that(msg).is_rows().with_rows({{L(1), I(0)}});
+        // Group 0 is complete once the second page starts group 1.
+        BOOST_CHECK_EQUAL(get_read_count() - reads_before, 2);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
