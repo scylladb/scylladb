@@ -337,8 +337,18 @@ public:
         return _size == 0;
     }
 
+    // On an empty stream, allocates one exact-size chunk (capped at max_chunk_size()).
+    // No-op once a chunk exists.
     void reserve(size_t size) {
-        // FIXME: implement
+        if (_current || !size) {
+            return;
+        }
+        auto data_size = std::min<size_t>(size, max_chunk_size());
+        auto space = malloc(data_size + sizeof(chunk));
+        if (!space) {
+            throw std::bad_alloc();
+        }
+        _current = new (space) chunk(&_begin, data_size, 0);
     }
 
     void append(const bytes_ostream& o) {
