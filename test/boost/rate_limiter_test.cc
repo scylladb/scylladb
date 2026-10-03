@@ -16,6 +16,7 @@
 #include <seastar/testing/test_case.hh>
 
 #include "db/rate_limiter.hh"
+#include "utils/rate_limiter.hh"
 
 using namespace seastar;
 using test_rate_limiter = db::generic_rate_limiter<seastar::manual_clock>;
@@ -127,4 +128,26 @@ SEASTAR_TEST_CASE(test_rate_limiter_account_operation) {
         co_await coroutine::maybe_yield();
     }
     BOOST_REQUIRE(encountered_rejection);
+}
+
+// utils::rate_limiter::reserve() fails with semaphore_timed_out when the budget
+// does not admit the request by the timeout, and completes once the budget
+// refills otherwise.
+SEASTAR_TEST_CASE(test_replay_rate_limiter_reserve_timeout) {
+    using namespace std::chrono_literals;
+    utils::rate_limiter limiter(2);
+
+    // The budget is empty until the first one second refill, so a 100ms
+    // timeout expires first.
+    BOOST_REQUIRE_THROW(co_await limiter.reserve(1, lowres_clock::now() + 100ms), semaphore_timed_out);
+    // The same holds for a request larger than one second's budget, which
+    // is served in several waits, each of them bounded by the timeout.
+    BOOST_REQUIRE_THROW(co_await limiter.reserve(5, lowres_clock::now() + 100ms), semaphore_timed_out);
+
+    // A timeout past the refill lets the request through.
+    co_await limiter.reserve(1, lowres_clock::now() + 10s);
+
+    // A disabled limiter never waits.
+    utils::rate_limiter unlimited(0);
+    co_await unlimited.reserve(1, lowres_clock::now());
 }
