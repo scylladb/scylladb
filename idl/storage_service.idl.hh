@@ -87,13 +87,24 @@ struct tablet_operation_repair_result {
     gc_clock::time_point repair_time;
 };
 
+enum class tablet_repair_flush_mode : uint8_t {
+    flush,
+    skip,
+    supplied,
+};
+
+struct tablet_repair_flush_info {
+    service::tablet_repair_flush_mode mode;
+    std::optional<gc_clock::time_point> time;
+};
+
 verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, service::raft_topology_cmd) -> service::raft_topology_cmd_result;
 verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_snapshot_pull_params) -> service::raft_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
-verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]]) -> service::tablet_operation_repair_result;
+verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]], service::tablet_repair_flush_info flush [[version 2026.4]]) -> service::tablet_operation_repair_result;
 verb [[]] estimate_sstable_volume(table_id table) -> uint64_t;
 verb [[]] sample_sstables(table_id table, uint64_t chunk_size, uint64_t n_chunks) -> utils::chunked_vector<temporary_buffer<char>>;
 

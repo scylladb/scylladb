@@ -27,6 +27,7 @@
 #include "service/storage_proxy.hh"
 #include "system_keyspace.hh"
 #include "utils/rate_limiter.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "utils/murmur_hash.hh"
 #include "db_clock.hh"
@@ -168,6 +169,7 @@ future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_
     return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
+        co_await utils::get_local_injector().inject("batchlog_replay_wait", utils::wait_for_message(std::chrono::minutes(5)));
 
         auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);
