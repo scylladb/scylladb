@@ -357,6 +357,7 @@ add_scylla_test(combined_tests
     cdc_test.cc
     cluster_config_manager_test.cc
     column_mapping_test.cc
+    commitlog_cleanup_record_gc_test.cc
     commitlog_cleanup_test.cc
     commitlog_raft_replay_test.cc
     commitlog_test.cc
