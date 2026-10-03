@@ -13,6 +13,8 @@ import subprocess
 import uuid
 from typing import Callable
 
+from test.pylib.container_accounting import register_container_pid
+
 logger = logging.getLogger("DockerizedServer")
 
 # Number of times we retry launching the container when the host port forward
@@ -34,6 +36,18 @@ class _PortInUseError(RuntimeError):
     random port, so it is worth a handful of attempts before giving up.
     See https://github.com/containers/podman/issues/10205
     """
+
+
+async def register_container(exe, name: str) -> None:
+    """Charge a container to the xdist worker that started it; the controller's go uncharged."""
+    try:
+        inspect = await asyncio.create_subprocess_exec(exe, "inspect", "--format", "{{.State.Pid}}", name,
+                                                       stdout=asyncio.subprocess.PIPE,
+                                                       stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await inspect.communicate()
+        register_container_pid(int(out.decode().strip()))
+    except (OSError, ValueError):
+        pass            # accounting is best effort; a test must not fail over it
 
 
 class DockerizedServer:
@@ -204,6 +218,7 @@ class DockerizedServer:
             proc.wait()
             raise RuntimeError("Could not query port from container")
         self.proc = proc
+        await register_container(exe, name)
 
     async def stop(self):
         """Stops docker image"""
