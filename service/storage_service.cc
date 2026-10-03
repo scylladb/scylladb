@@ -1625,7 +1625,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
     co_await utils::get_local_injector().inject("sleep_before_start_gossiping", std::chrono::milliseconds{500});
 
-    co_await _gossiper.start_gossiping(new_generation, app_states);
+    co_await _gossiper.start_gossiping(new_generation, app_states, gms::gossiper::joining(!restarting_normal_node));
 
     utils::get_local_injector().inject("stop_after_starting_gossiping",
         [] { std::raise(SIGSTOP); });
