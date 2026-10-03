@@ -329,13 +329,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
                 ctx_ptr->on_hint_send_success(rp);
-                auto new_bound = ctx_ptr->get_replayed_bound();
-                // Segments from other shards are replayed first and are considered to be "before" replay position 0.
-                // Update the sent upper bound only if it is a local segment.
-                if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
-                    _sent_upper_bound_rp = new_bound;
-                    notify_replay_waiters();
-                }
+                advance_sent_upper_bound(*ctx_ptr);
             } else {
                 ctx_ptr->on_hint_send_failure(rp);
             }
@@ -345,6 +339,64 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
         manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
+}
+
+void hint_sender::advance_sent_upper_bound(const send_one_file_ctx& ctx) noexcept {
+    auto new_bound = ctx.get_replayed_bound();
+    // Segments from other shards are replayed first and are considered to be "before" replay position 0.
+    // Update the sent upper bound only if it is a local segment.
+    if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
+        _sent_upper_bound_rp = new_bound;
+        notify_replay_waiters();
+    }
+}
+
+bool hint_sender::discard_in_effect() const noexcept {
+    // A drain discards the hints under the bound, a plain stop leaves them for the next start.
+    return _discard_bound_rp && !(stopping() && !draining());
+}
+
+bool hint_sender::under_discard_bound(db::replay_position rp) const noexcept {
+    if (!discard_in_effect()) {
+        return false;
+    }
+    // Foreign segments count as older than any local position.
+    return rp.shard_id() != this_shard_id() || rp <= *_discard_bound_rp;
+}
+
+bool hint_sender::discards_pending() const noexcept {
+    return discard_in_effect() && (!_foreign_segments_to_replay.empty() || _sent_upper_bound_rp <= *_discard_bound_rp);
+}
+
+bool hint_sender::set_discard_bound(db::replay_position rp) noexcept {
+    // The default position is what a sync point holds for an endpoint it does not cover.
+    if (rp != db::replay_position{} && rp.shard_id() != this_shard_id()) {
+        manager_logger.debug("hint_sender[{}]:set_discard_bound: Position {} is not from this shard", end_point_key(), rp);
+        return false;
+    }
+    if (_foreign_segments_to_replay.empty() && rp < _sent_upper_bound_rp) {
+        manager_logger.debug("hint_sender[{}]:set_discard_bound: No hints to discard up to {} (sent up to {})",
+                end_point_key(), rp, _sent_upper_bound_rp);
+        return false;
+    }
+    if (_discard_bound_rp && rp <= *_discard_bound_rp) {
+        return false;
+    }
+    manager_logger.debug("hint_sender[{}]:set_discard_bound: Discarding hints up to {}", end_point_key(), rp);
+    _discard_bound_rp = rp;
+    // Flush and walk the segments on the next iteration.
+    _next_flush_tp = clock::now();
+    _next_send_retry_tp = clock::now();
+    return true;
+}
+
+void hint_sender::clear_discard_bound_maybe() noexcept {
+    // Kept while the segment holding the bound may still be reread, since a reread must discard the hints under it again.
+    if (_discard_bound_rp && _foreign_segments_to_replay.empty() && *_discard_bound_rp < _sent_upper_bound_rp) {
+        manager_logger.info("hint_sender[{}]:clear_discard_bound_maybe: Discarded {} hints up to {}", end_point_key(), _discarded_under_bound, *_discard_bound_rp);
+        _discard_bound_rp.reset();
+        _discarded_under_bound = 0;
+    }
 }
 
 void hint_sender::notify_replay_waiters() noexcept {
@@ -454,6 +506,7 @@ db::replay_position hint_sender::send_one_file_ctx::get_replayed_bound() const n
 void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
+    clear_discard_bound_maybe();
 }
 
 // runs in a seastar::async context
@@ -470,6 +523,21 @@ bool hint_sender::send_one_file(const sstring& fname) {
             auto& rp = buf_rp.position;
 
             while (true) {
+                if (under_discard_bound(rp)) {
+                    ctx_ptr->on_hint_send_success(rp);
+                    if (rp > _last_counted_discarded_rp) {
+                        _last_counted_discarded_rp = rp;
+                        ++shard_stats().discarded_on_failed_replay;
+                        ++_discarded_under_bound;
+                    }
+                    advance_sent_upper_bound(*ctx_ptr);
+                    co_await flush_maybe();
+                    co_return;
+                }
+                if (discard_in_effect()) {
+                    ctx_ptr->reached_hint_above_discard_bound = true;
+                }
+
                 // Check that we can still send the next hint. Don't try to send it if the destination host
                 // is DOWN or if we have already failed to send some of the previous hints.
                 if (!draining() && ctx_ptr->segment_replay_failed) {
@@ -543,6 +611,23 @@ bool hint_sender::send_one_file(const sstring& fname) {
         // the last hint that was successfully sent (last_succeeded_rp).
         _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
         manager_logger.debug("hint_sender[{}]:send_one_file: Error while sending hints from {}, last RP is {}", _ep_key, fname, _last_not_complete_rp);
+        if (discard_in_effect() && ctx_ptr->reached_hint_above_discard_bound) {
+            // The discard bound need not be a hint position: after a restart it is the boot-time marker of the
+            // endpoint manager, above every hint on disk. Every hint under it has been discarded, so its waiters
+            // may be released even though no hint at that position was ever handled. The bound may have been set
+            // in the middle of this pass, after a hint under it was already sent and failed. Such a hint is
+            // retried by the next pass, so keep the sent position on it: the retry discards it, and only then
+            // may the waiters be released.
+            auto past_bound = *_discard_bound_rp;
+            past_bound.pos++;
+            if (ctx_ptr->first_failed_rp) {
+                past_bound = std::min(past_bound, *ctx_ptr->first_failed_rp);
+            }
+            if (_sent_upper_bound_rp < past_bound) {
+                _sent_upper_bound_rp = past_bound;
+                notify_replay_waiters();
+            }
+        }
         return false;
     }
 
@@ -554,6 +639,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
+    _last_counted_discarded_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
     manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
     return true;
@@ -593,7 +679,8 @@ void hint_sender::send_hints_maybe() noexcept {
                 break;
             }
             const sstring* seg_name = name_of_current_segment();
-            if (!seg_name || !replay_allowed() || !can_send()) {
+            // Hints under the discard bound are discarded also while the destination is DOWN.
+            if (!seg_name || !replay_allowed() || (!can_send() && !discards_pending())) {
                 break;
             }
             if (!send_one_file(*seg_name)) {
@@ -603,6 +690,7 @@ void hint_sender::send_hints_maybe() noexcept {
             ++replayed_segments_count;
 
             notify_replay_waiters();
+            clear_discard_bound_maybe();
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
