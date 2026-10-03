@@ -116,6 +116,9 @@ stream_id::stream_id(bytes b)
 {
     // this is not a very solid check. Id:s previous to GA/versioned id:s
     // have fully random bits in low qword, so this could go either way...
+    if (_value.size() < 2 * sizeof(int64_t)) {
+        throw std::invalid_argument("Malformed CDC stream id");
+    }
     if (version() > version_1) {
         throw std::invalid_argument("Unknown CDC stream id version");
     }
