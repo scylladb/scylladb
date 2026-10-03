@@ -516,3 +516,35 @@ BOOST_AUTO_TEST_CASE(test_reserve_untouched_to_managed_bytes) {
     buf.reserve(100);
     BOOST_REQUIRE(std::move(buf).to_managed_bytes().empty());
 }
+// Deserializing a bytes field into a bytes_ostream must yield one chunk.
+BOOST_AUTO_TEST_CASE(test_deserialize_bytes_ostream_single_chunk) {
+    for (size_t n : {size_t(600), size_t(5000), size_t(100000)}) {
+        auto data = tests::random::get_bytes(n);
+
+        bytes_ostream out;
+        ser::serialize(out, bytes_view(data));
+
+        // Simple input stream.
+        {
+            auto lin = bytes_ostream(out);
+            auto in = ser::as_input_stream(lin.linearize());
+            auto res = ser::deserialize(in, std::type_identity<bytes_ostream>());
+            BOOST_REQUIRE(res.is_linearized());
+            BOOST_REQUIRE_EQUAL(bytes(res.view()), data);
+        }
+
+        // Fragmented input stream: build a many-fragment source.
+        {
+            bytes_ostream frag(64);
+            bytes all(out.linearize());
+            for (size_t off = 0; off < all.size(); off += 64) {
+                frag.write(bytes_view(all).substr(off, 64));
+            }
+            BOOST_REQUIRE(!frag.is_linearized());
+            auto in = ser::as_input_stream(frag);
+            auto res = ser::deserialize(in, std::type_identity<bytes_ostream>());
+            BOOST_REQUIRE(res.is_linearized());
+            BOOST_REQUIRE_EQUAL(bytes(res.view()), data);
+        }
+    }
+}
