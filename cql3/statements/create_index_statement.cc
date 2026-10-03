@@ -329,6 +329,9 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(db.extensions());
     _view_properties.apply_to_builder(view_prop_defs::op_type::create, builder, exts, db, keyspace(), is_colocated);
 
+    // Index view inherits the base table's aggregated-metrics setting.
+    builder.set_aggregated_metrics_override(schema->aggregated_metrics_override());
+
     return view_ptr{builder.build()};
 }
 
