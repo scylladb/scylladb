@@ -32,6 +32,8 @@
 
 namespace db {
 
+namespace sc = service::strong_consistency;
+
 static seastar::logger logger("raft_commitlog_replay");
 
 namespace {
@@ -221,9 +223,15 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // only be deleted after the memtables are flushed. Therefore, the data will either
             // be persisted to SSTables or, in case of a crash, still be available in the old commitlog.
             if (entry->idx <= commit_idx && std::holds_alternative<raft::command>(entry->data)) {
-                auto mut = service::strong_consistency::detail::deserialize_to_frozen_mutation(entry);
-                auto schema = co_await schemas.resolve_and_upgrade(mut);
-                co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                auto cmd = sc::detail::deserialize_raft_command(entry);
+                if (auto* write = std::get_if<sc::write_mutation>(&cmd.change)) {
+                    auto schema = co_await schemas.resolve_and_upgrade(write->mutation);
+                    co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                } else if (auto* marker = std::get_if<sc::resize_marker>(&cmd.change)) {
+                    logger.debug("group {}: replaying the {} marker", group_id, marker->kind);
+                    auto m = sc::make_resize_marker_mutation(group_id, this_shard_id(), *marker);
+                    co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+                }
                 ++applied;
             }
 

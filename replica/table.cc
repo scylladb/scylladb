@@ -5016,11 +5016,17 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     _stats.writes.mark(lc);
 }
 
-api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
-    return std::ranges::max(storage_group_for_id(tid.value()).compaction_groups_immediate()
-        | std::views::transform([](const compaction_group_ptr& cg_ptr) {
-            return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
-        }));
+std::optional<api::timestamp_type> table::get_max_timestamp_for_token_range(dht::token_range range) const {
+    const auto sgs = storage_groups_for_token_range(std::move(range));
+    if (sgs.empty()) {
+        return std::nullopt;
+    }
+    return std::ranges::max(sgs | std::views::transform([](const storage_group_ptr& sg) {
+        return std::ranges::max(sg->compaction_groups_immediate()
+            | std::views::transform([](const compaction_group_ptr& cg_ptr) {
+                return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
+            }));
+    }));
 }
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
