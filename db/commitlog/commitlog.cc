@@ -429,7 +429,7 @@ public:
         return _request_controller.waiters();
     }
 
-    future<> begin_flush() {
+    future<> begin_os_flush() {
         ++totals.pending_flushes;
         if (totals.pending_flushes >= cfg.max_active_flushes) {
             ++totals.flush_limit_exceeded;
@@ -437,7 +437,7 @@ public:
         }
         return _flush_semaphore.wait();
     }
-    void end_flush() noexcept {
+    void end_os_flush() noexcept {
         _flush_semaphore.signal();
         --totals.pending_flushes;
     }
@@ -755,7 +755,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     named_file _file;
 
     uint64_t _file_pos = 0;
-    uint64_t _flush_pos = 0;
+    uint64_t _os_flush_pos = 0;
     uint64_t _waste = 0;
 
     size_t _alignment;
@@ -809,15 +809,15 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
         return used + sector_overhead(used);
     }
 
-    future<> begin_flush() {
+    future<> begin_os_flush() {
         // This is maintaining the semantica of only using the write-lock
         // as a gate for flushing, i.e. once we've begun a flush for position X
         // we are ok with writes to positions > X
-        return _segment_manager->begin_flush();
+        return _segment_manager->begin_os_flush();
     }
 
-    void end_flush() {
-        _segment_manager->end_flush();
+    void end_os_flush() {
+        _segment_manager->end_os_flush();
         if (can_delete()) {
             // #25709 - do this early if possible
             _extended_segments.clear();
@@ -956,7 +956,7 @@ public:
         }
     
         co_await _pending_ops.close();
-        co_await _file.truncate(_flush_pos);
+        co_await _file.truncate(_os_flush_pos);
         co_await _file.close();
 
         if (p) {
@@ -973,12 +973,12 @@ public:
         return cycle(true);
     }
     // See class comment for info
-    future<sseg_ptr> flush() {
+    future<sseg_ptr> os_flush() {
         auto me = shared_from_this();
         SCYLLA_ASSERT(me.use_count() > 1);
         uint64_t pos = _file_pos;
 
-        clogger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
+        clogger.trace("Syncing {} {} -> {}", *this, _os_flush_pos, pos);
 
         // Only run the flush when all write ops at lower rp:s
         // have completed.
@@ -987,7 +987,7 @@ public:
         // Run like this to ensure flush ordering, and making flushes "waitable"
         co_await _pending_ops.run_with_ordered_post_op(rp, [] {}, [&] {
             SCYLLA_ASSERT(_pending_ops.has_operation(rp));
-            return do_flush(pos);
+            return do_os_flush(pos);
         });
         co_return me;
     }
@@ -1011,7 +1011,7 @@ public:
     future<sseg_ptr> close() {
         auto closing = !std::exchange(_closed, true);
         auto s = co_await sync();
-        co_await flush();
+        co_await os_flush();
         co_await terminate();
         if (closing) {
             // only update this if we are the closers.
@@ -1020,16 +1020,16 @@ public:
         }
         co_return s;
     }
-    future<sseg_ptr> do_flush(uint64_t pos) {
+    future<sseg_ptr> do_os_flush(uint64_t pos) {
         auto me = shared_from_this();
-        co_await begin_flush();
+        co_await begin_os_flush();
 
         auto finally = defer([&] () noexcept {
-            end_flush();
+            end_os_flush();
         });
 
-        if (pos <= _flush_pos) {
-            clogger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
+        if (pos <= _os_flush_pos) {
+            clogger.trace("{} already synced! ({} < {})", *this, pos, _os_flush_pos);
             co_return me;
         }
 
@@ -1037,9 +1037,9 @@ public:
             co_await _file.flush();
             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
             // we fast-fail the whole commit.
-            _flush_pos = std::max(pos, _flush_pos);
+            _os_flush_pos = std::max(pos, _os_flush_pos);
             ++_segment_manager->totals.flush_count;
-            clogger.trace("{} synced to {}", *this, _flush_pos);
+            clogger.trace("{} synced to {}", *this, _os_flush_pos);
         } catch (...) {
             clogger.error("Failed to flush commits to disk: {:t}", std::current_exception());
             throw;
@@ -1102,7 +1102,7 @@ public:
 
         if (_buffer.empty() && !termination) {
             if (flush_after) {
-                co_await flush();
+                co_await os_flush();
             }
             co_return me;
         }
@@ -1242,7 +1242,7 @@ public:
         }, [&]() -> future<> {
             SCYLLA_ASSERT(_pending_ops.has_operation(rp));
             if (flush_after) {
-                co_await do_flush(top);
+                co_await do_os_flush(top);
             }
         });
         co_return me;
@@ -1270,11 +1270,11 @@ public:
                 replay_position rp(_desc.id, position_type(fp));
                 co_await _pending_ops.wait_for_pending(rp, timeout);
                 
-                SCYLLA_ASSERT(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
-                if (_flush_pos <= fp) {
+                SCYLLA_ASSERT(_segment_manager->cfg.mode != sync_mode::BATCH || _os_flush_pos > fp);
+                if (_os_flush_pos <= fp) {
                     // previous op we were waiting for was not sync one, so it did not flush
                     // force flush here
-                    co_await do_flush(fp);
+                    co_await do_os_flush(fp);
                 }
             } else {
                 // It is ok to leave the sync behind on timeout because there will be at most one
@@ -1463,9 +1463,9 @@ public:
 
     void reset_file_position(size_t file_pos) {
         clogger.trace("{}: set file position to {}", fmt::streamed(*this), file_pos);
-        assert(_flush_pos >= file_pos);
+        assert(_os_flush_pos >= file_pos);
         _file_pos = file_pos;
-        _flush_pos = file_pos;
+        _os_flush_pos = file_pos;
         _buffer = {};
         _closed = false;
     }
@@ -1511,7 +1511,7 @@ public:
         return !is_still_allocating() && is_clean();
     }
     bool is_flushed() const noexcept {
-        return position() <= _flush_pos;
+        return position() <= _os_flush_pos;
     }
     bool can_delete() const noexcept {
         return is_unused() && is_flushed();
@@ -2708,7 +2708,7 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 future<> db::commitlog::segment_manager::sync_all_segments() {
     clogger.debug("Issuing sync for all segments");
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_os_flush()->discard_unused())
     auto def_copy = _segments;
     co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->sync();
@@ -2719,7 +2719,7 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
 future<> db::commitlog::segment_manager::shutdown_all_segments() {
     clogger.debug("Issuing shutdown for all segments");
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_os_flush()->discard_unused())
     auto def_copy = _segments;
     co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->shutdown();
@@ -2989,7 +2989,7 @@ future<> db::commitlog::segment_manager::clear() {
 void db::commitlog::segment_manager::sync() {
     auto f = std::exchange(_background_sync, make_ready_future<>());
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_os_flush()->discard_unused())
     auto def_copy = _segments;
     _background_sync = parallel_for_each(def_copy, [](sseg_ptr s) {
         return s->sync().discard_result();
