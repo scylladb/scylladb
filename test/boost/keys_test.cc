@@ -194,3 +194,58 @@ BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string_composite_partition_key) {
     BOOST_REQUIRE_THROW(partition_key::from_nodetool_style_string(s2, "value1:value2:extra"), std::invalid_argument);
     BOOST_REQUIRE_THROW(partition_key::from_nodetool_style_string(s2, "value1"), std::invalid_argument);
 }
+
+// Golden-fixture oracle test: bytes captured from #31376's hand-written keys/keys_serializer.hh
+// (branch keys-serializer-no-double-explode, commit 2c1ee45), which implements the identical wire
+// format by hand. Asserts the range_of<T>-generated serializer here produces byte-identical output,
+// and that reserialize() (deserializing back through the read-side range_of<T> codegen) reconstructs
+// an identical representation.
+BOOST_AUTO_TEST_CASE(test_range_of_serializer_matches_oracle) {
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(partition_key(std::vector<bytes>({}))),
+        from_hex("0800000000000000"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(partition_key(std::vector<bytes>({bytes("a")}))),
+        from_hex("0d000000010000000100000061"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(partition_key(std::vector<bytes>({bytes("a"), bytes("bb"), bytes("ccc")}))),
+        from_hex("1a00000003000000010000006102000000626203000000636363"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(partition_key(std::vector<bytes>({bytes("a"), bytes("bb"), bytes("ccc"), bytes("dddd"), bytes("eeeee")}))),
+        from_hex("2b000000050000000100000061020000006262030000006363630400000064646464050000006565656565"));
+    {
+        // 65535-byte compound-key cap rules out a genuinely multi-fragment managed_bytes here (the
+        // standard allocator used by this plain boost test doesn't fragment below its 128KB
+        // preferred_max_contiguous_allocation() anyway) — checked structurally instead of a giant literal.
+        bytes big(bytes::initialized_later(), 60000);
+        std::fill(big.begin(), big.end(), int8_t('X'));
+        auto buf = ser::serialize_to_buffer<bytes>(partition_key(std::vector<bytes>({big})));
+        BOOST_REQUIRE_EQUAL(buf.size(), size_t(8 + 4 + 60000));
+        BOOST_REQUIRE_EQUAL(buf, from_hex("6cea00000100000060ea0000") + big);
+    }
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(clustering_key_prefix(std::vector<bytes>({}))),
+        from_hex("0800000000000000"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(clustering_key_prefix(std::vector<bytes>({bytes("x")}))),
+        from_hex("0d000000010000000100000078"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(clustering_key_prefix(std::vector<bytes>({bytes("x"), bytes("yy"), bytes("zzz")}))),
+        from_hex("1a000000030000000100000078020000007979030000007a7a7a"));
+    BOOST_REQUIRE_EQUAL(ser::serialize_to_buffer<bytes>(clustering_key_prefix(std::vector<bytes>({bytes("x"), bytes("yy"), bytes("zzz"), bytes("wwww"), bytes("vvvvv")}))),
+        from_hex("2b000000050000000100000078020000007979030000007a7a7a0400000077777777050000007676767676"));
+
+    // A zero-length component alongside non-empty ones (e.g. an empty CQL text/blob value) — no golden
+    // hex here, checked via round-trip instead, exercising fragment_range()/safe_serialize_as_uint32()
+    // over a genuinely empty managed_bytes_view.
+    for (auto&& components : {std::vector<bytes>{bytes(), bytes("a")}, std::vector<bytes>{bytes("a"), bytes(), bytes("b")}}) {
+        partition_key pk(components);
+        BOOST_REQUIRE(reserialize(pk).representation() == pk.representation());
+        clustering_key_prefix ck(components);
+        BOOST_REQUIRE(reserialize(ck).representation() == ck.representation());
+    }
+
+    // Round-trip every golden case above too, so the read side (idl-compiler.py's range_of<T>
+    // deserialization branch) is exercised directly by this test, not just transitively elsewhere.
+    for (auto&& components : {std::vector<bytes>{}, std::vector<bytes>{bytes("a")},
+            std::vector<bytes>{bytes("a"), bytes("bb"), bytes("ccc")},
+            std::vector<bytes>{bytes("a"), bytes("bb"), bytes("ccc"), bytes("dddd"), bytes("eeeee")}}) {
+        partition_key pk(components);
+        BOOST_REQUIRE(reserialize(pk).representation() == pk.representation());
+        clustering_key_prefix ck(components);
+        BOOST_REQUIRE(reserialize(ck).representation() == ck.representation());
+    }
+}
