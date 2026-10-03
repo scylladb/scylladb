@@ -4104,6 +4104,22 @@ future<> db::commitlog::delete_segments(std::vector<sstring> files) const {
     return _segment_manager->delete_segments(std::move(files));
 }
 
+future<> db::commitlog::rename_segment(sstring from, sstring to, const db::extensions* exts) {
+    const auto file_exts = exts ? exts->commitlog_file_extensions() : std::vector<commitlog_file_extension*>{};
+
+    for (auto* ext : file_exts) {
+        co_await ext->before_rename(from, to);
+    }
+
+    co_await rename_file(from, to);
+
+    // The rename must be persisted before the extensions drop the files kept for the old name.
+    co_await sync_directory(std::filesystem::path(std::string_view(to)).parent_path().native());
+    for (auto* ext : file_exts) {
+        co_await ext->after_rename(from, to);
+    }
+}
+
 db::rp_handle::rp_handle() noexcept
 {}
 

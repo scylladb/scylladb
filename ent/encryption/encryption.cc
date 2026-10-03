@@ -1049,6 +1049,25 @@ public:
             return b ? remove_file(cfg_file) : make_ready_future();
         });
     }
+    // The options file is looked up next to the segment, so it must follow the segment.
+    // Without it, the segment is read as if it were unencrypted.
+    future<> before_rename(const sstring& from, const sstring& to) override {
+        const auto from_cfg_file = config_name(from);
+        if (!co_await file_exists(from_cfg_file)) {
+            co_return;
+        }
+        const auto to_cfg_file = config_name(to);
+        // A leftover of an interrupted rename. Remove it so that it doesn't fail the link.
+        if (co_await file_exists(to_cfg_file)) {
+            co_await remove_file(to_cfg_file);
+        }
+        // Hard-link instead of copying: the new name either refers to the complete file or doesn't exist.
+        co_await link_file(from_cfg_file, to_cfg_file);
+        co_await sync_directory(bfs::path(to_cfg_file).parent_path().string());
+    }
+    future<> after_rename(const sstring& from, const sstring& to) override {
+        co_await before_delete(from);
+    }
 };
 
 future<seastar::shared_ptr<encryption_context>> register_extensions(const db::config&, std::unique_ptr<encryption_config> cfg_in, db::extensions& exts, const ::service_set& services) {

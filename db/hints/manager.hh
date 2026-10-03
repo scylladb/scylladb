@@ -56,7 +56,9 @@ public:
     static directory_initializer make_dummy() noexcept {
         return {nullptr};
     }
-    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
+    /// \param extensions The extensions whose commitlog file extensions must follow segments moved
+    ///                   during rebalancing. Must outlive the initializer.
+    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions);
 
     future<> ensure_created_and_verified();
     future<> ensure_rebalanced();
