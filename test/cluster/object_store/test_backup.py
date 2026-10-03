@@ -875,6 +875,58 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
     await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
 
 
+@pytest.mark.parametrize("topology", [topo(rf = 2, nodes = 8, racks = 2, dcs = 2)])
+async def test_restore_tablets_completions_do_not_collide(build_mode: str, manager: ScyllaClusterManager,
+                                                          s3_storage, topology, scale_timeout):
+    '''Restore requests completing in the same balancer pass must all be removed from
+    ongoing_restore_requests.
+
+    check_restore_completions() re-adds every request still listed there, so a removal that
+    does not stick leaves the migration plan permanently non-empty: the coordinator
+    re-completes the same requests on every pass and quiescing the topology never
+    converges. Restoring enough tables at once is what puts two completions into a single
+    pass; the stock one- and two-table cases never do.
+
+    The invariant is in the topology coordinator and has nothing to do with the storage
+    backend, so this runs on s3 only.
+    '''
+    num_tables = 8
+    body_error: Exception | None = None
+    try:
+        await asyncio.wait_for(
+            do_test_restore_tablets(build_mode, manager, s3_storage, topology, num_tables, 2),
+            timeout=scale_timeout(300))
+    except Exception as e:
+        # Checked below before being re-raised: with the removals colliding the restore
+        # never converges, and the invariant names the cause better than the timeout does.
+        body_error = e
+
+    servers = await manager.running_servers()
+
+    # Only meaningful if the balancer really did complete more than one restore in a single
+    # pass, so establish that before trusting the invariant check that follows.
+    collided = []
+    for server in servers:
+        log = await manager.server_open_log(server.server_id)
+        collided += await log.grep(r"restore completed for: \[[^\]]+,[^\]]+\]")
+    assert collided, (
+        f"no balancer pass completed more than one restore, so the collision this test covers "
+        f"was never exercised; raise num_tables (currently {num_tables})")
+
+    # The defect itself: a completed request left behind in the set. Everything else -- the
+    # plan never emptying, quiesce never converging -- follows from it.
+    cql = manager.get_cql()
+    rows = await cql.run_async(
+        "SELECT ongoing_restore_requests FROM system.topology WHERE key = 'topology'")
+    leftover = rows[0].ongoing_restore_requests if rows else None
+    assert not leftover, (
+        f"{len(leftover)} restore request(s) still listed in ongoing_restore_requests after every "
+        f"restore finished, so their removal did not stick: {leftover}")
+
+    if body_error is not None:
+        raise body_error
+
+
 async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False):
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
