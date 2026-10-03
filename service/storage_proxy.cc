@@ -5950,7 +5950,11 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         co_return std::move(result).as_failure();
     }
 
-    co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas), repair_decision);
+    coordinator_query_result qr(std::move(result).value(), std::move(used_replicas), repair_decision);
+    // The executors decide by frontiers if the command asks for them. See
+    // do_query().
+    qr.rows_decided_before_cursor = cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>();
+    co_return qr;
 }
 
 bool storage_proxy::is_worth_merging_for_range_query(
@@ -6253,7 +6257,10 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         merger(std::move(r));
     }
 
-    co_return coordinator_query_result(merger.get(), std::move(used_replicas));
+    coordinator_query_result qr(merger.get(), std::move(used_replicas));
+    // See query_singular().
+    qr.rows_decided_before_cursor = cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>();
+    co_return qr;
 }
 
 future<storage_proxy::coordinator_query_result>

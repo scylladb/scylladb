@@ -17,6 +17,7 @@
 #include "service/storage_proxy.hh"
 #include "utils/result_combinators.hh"
 #include "db/view/delete_ghost_rows_visitor.hh"
+#include "mutation/mutation_compactor.hh"
 
 #include <fmt/ranges.h>
 
@@ -60,6 +61,7 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr query_schema,
                 , _cmd(std::move(cmd))
                 , _ranges(std::move(ranges))
                 , _cas_shard(std::move(cas_shard))
+                , _always_return_static_content(_cmd->slice.options.contains<query::partition_slice::option::always_return_static_content>())
 {
     if (query_function_override) {
         _query_function = std::move(query_function_override);
@@ -95,6 +97,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
         _last_replicas = state->get_last_replicas();
         _query_read_repair_decision = state->get_query_read_repair_decision();
         _rows_fetched_for_last_partition = state->get_rows_fetched_for_last_partition();
+        _partition_row_pending = state->get_partition_row_pending();
     }
 
     _cmd->is_first_page = query::is_first_page(!_query_uuid);
@@ -151,16 +154,13 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
             qlogger.trace("Result ranges {}", ranges);
         };
 
-        // last ck can be empty depending on whether we
-        // deserialized state or not. This case means "last page ended on
-        // something-not-bound-by-clustering" (i.e. a static row, alone)
-        const bool has_ck = _has_clustering_keys && _last_pos.region() == partition_region::clustered;
+        const bool continue_partition = continues_cursor_partition();
 
-        // If we have no clustering keys, it should mean we only have one row
-        // per PK. Thus we can just bypass the last one.
-        modify_ranges(_ranges, lo, has_ck, dht::ring_position_comparator(*_query_schema));
+        // Keep the cursor's partition in the ranges only if the page
+        // continues it.
+        modify_ranges(_ranges, lo, continue_partition, dht::ring_position_comparator(*_query_schema));
 
-        if (has_ck) {
+        if (continue_partition) {
             query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
             position_in_partition next_pos = _last_pos;
             if (_last_pos.has_key()) {
@@ -169,6 +169,18 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
             query::trim_clustering_row_ranges_to(*_query_schema, row_ranges, next_pos);
 
             _cmd->slice.set_range(*_query_schema, *_last_pkey, row_ranges);
+        }
+
+        // The rest of a pending partition has a clustering range which does
+        // not select the whole partition. The replicas return a static-only
+        // row of such a partition only if the command asks for static
+        // content. Without a restriction on the clustering key, every other
+        // partition of the command returns its static-only row anyway.
+        if (_always_return_static_content
+                || (continue_partition && _partition_row_pending && !has_ck_selector(_cmd->slice.default_row_ranges()))) {
+            _cmd->slice.options.set<query::partition_slice::option::always_return_static_content>();
+        } else {
+            _cmd->slice.options.remove<query::partition_slice::option::always_return_static_content>();
         }
     }
 
@@ -212,7 +224,7 @@ future<result<>> query_pager::fetch_page_result(cql3::selection::result_set_buil
         _query_read_repair_decision = qr.read_repair_decision;
         return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable -> result<> {
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_query_schema, *_selection),
-                          std::move(qr.query_result), page_size, now);
+                          std::move(qr.query_result), qr.rows_decided_before_cursor, page_size, now);
             return bo::success();
         });
     }));
@@ -246,7 +258,7 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
     return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) -> future<result<cql3::result_generator>> {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
-        handle_result(noop_visitor(), qr.query_result, page_size, now);
+        handle_result(noop_visitor(), qr.query_result, qr.rows_decided_before_cursor, page_size, now);
         return make_ready_future<result<cql3::result_generator>>(cql3::result_generator(_query_schema, std::move(qr.query_result), _cmd, _selection, stats));
     }));
 }
@@ -273,10 +285,10 @@ public:
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             _stats.rows_read_total += *qr.query_result->row_count();
-            return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
+            return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), decided = qr.rows_decided_before_cursor, page_size, now] () mutable -> result<> {
                 handle_result(cql3::selection::result_set_builder::visitor(builder, *_query_schema, *_selection,
                             cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions, _options, _max, _query_schema, _per_partition_limit, _last_pkey, _rows_fetched_for_last_partition)),
-                            std::move(query_result), page_size, now);
+                            std::move(query_result), decided, page_size, now);
                 return bo::success();
             });
         }));
@@ -331,10 +343,10 @@ public:
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
-            return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
+            return seastar::async([this, query_result = std::move(qr.query_result), decided = qr.rows_decided_before_cursor, page_size, now] () mutable -> result<> {
                 std::exception_ptr ex;
                 handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_query_schema), _timeout_duration, _concurrency, ex},
-                        std::move(query_result), page_size, now);
+                        std::move(query_result), decided, page_size, now);
                 if (ex) {
                     std::rethrow_exception(ex);
                 }
@@ -389,6 +401,7 @@ requires query::ResultVisitor<Visitor>
 void query_pager::handle_result(
         Visitor&& visitor,
         const foreign_ptr<lw_shared_ptr<query::result>>& results,
+        bool rows_decided_before_cursor,
         uint32_t page_size, gc_clock::time_point now) {
 
     auto update_slice = [&] (const partition_key& last_pkey) {
@@ -402,6 +415,8 @@ void query_pager::handle_result(
 
     auto view = query::result_view(*results);
 
+    // The partition of the previous cursor, if the page continued it.
+    const auto page_start_pkey = continues_cursor_partition() ? _last_pkey : std::nullopt;
     _last_pos = position_in_partition::for_partition_start();
     uint64_t replica_row_count, row_count;
     if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
@@ -440,6 +455,21 @@ void query_pager::handle_result(
             _last_pkey = std::move(last_pos.partition);
             _last_pos = std::move(last_pos.position);
         }
+
+        // The row of the cursor's partition is pending if the page decided
+        // its rows before the cursor, the cursor lies inside the partition,
+        // before the end of its clustering rows, and no page returned a row
+        // of the partition. A page holds the partition only if the partition
+        // returned a row.
+        bool pending = false;
+        if (rows_decided_before_cursor && _last_pkey && _last_pos.region() == partition_region::clustered
+                && !_last_pos.is_after_all_clustered_rows(*_query_schema)) {
+            const auto last = view.last_partition();
+            const bool returned_now = last && last->key && last->key->equal(*_query_schema, *_last_pkey);
+            const bool returned_before = page_start_pkey && page_start_pkey->equal(*_query_schema, *_last_pkey) && !_partition_row_pending;
+            pending = !returned_now && !returned_before;
+        }
+        _partition_row_pending = pending;
     }
 
     qlogger.debug("Fetched {} rows (kept {}), max_remain={} {}", replica_row_count, row_count, _max, _exhausted ? "(exh)" : "");
@@ -453,7 +483,7 @@ void query_pager::handle_result(
 }
 
 lw_shared_ptr<const paging_state> query_pager::state(std::optional<query_plan> plan) const {
-    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition, std::move(plan));
+    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition, std::move(plan), _partition_row_pending);
 }
 
 }
