@@ -16,8 +16,8 @@
 #include <seastar/core/sstring.hh>
 
 #include "dht/token.hh"
-#include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/small_mutation.hh"
 #include "schema/schema.hh"
 #include "service/topology_state_machine.hh"
 #include "mutation/timestamp.hh"
@@ -85,7 +85,7 @@ public:
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_node_mutation_builder& set(const char* cell, const std::set<sstring>& value);
 
-    canonical_mutation build();
+    small_mutation build();
 };
 
 class topology_mutation_builder
@@ -148,7 +148,7 @@ public:
     topology_mutation_builder& start_restore_request(const utils::UUID& req_id);
     topology_mutation_builder& finish_restore_request(const std::unordered_set<utils::UUID>& current, const utils::UUID& req_id);
     topology_node_mutation_builder& with_node(raft::server_id);
-    canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
+    small_mutation build() { return small_mutation{std::move(_m)}; }
 };
 
 class topology_request_tracking_mutation_builder :
@@ -182,7 +182,7 @@ public:
     topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
 
-    canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
+    small_mutation build() { return small_mutation{std::move(_m)}; }
 };
 
 extern template class topology_mutation_builder_base<topology_mutation_builder>;

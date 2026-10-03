@@ -112,11 +112,17 @@ class raft_group0_client {
 
     maintenance_mode_enabled _maintenance_mode;
 
-    template <typename Command>
-    void validate_change(const Command& change) {}
-    template<typename Command>
-    requires std::same_as<Command, topology_change> || std::same_as<Command, mixed_change>
-    void validate_change(const Command& change);
+    // Assembles the command envelope around an already validated change.
+    group0_command make_command(group0_change change, group0_guard& guard, std::string_view description);
+
+    // Validates the update, serializes it into `change` and wraps it in a command.
+    future<group0_command> prepare_command(group0_change change, group0_update_collector&& updates,
+            group0_guard& guard, std::string_view description);
+    future<group0_command> prepare_command(group0_change change, group0_update_collector&& updates,
+            std::string_view description);
+
+    // Validates the update and serializes it into `change`.
+    future<> validate_and_collect(group0_change& change, group0_update_collector& updates);
 
 public:
     raft_group0_client(service::raft_group_registry&, gms::gossiper&,
@@ -148,12 +154,23 @@ public:
     // and add_entry would again forward to shard 0.
     future<group0_guard> start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
+    // Builds a group0 command out of the collected update. Validates the
+    // update before serializing it, which is cheaper than deserializing the
+    // command to validate it. This is the only way to produce a command, so
+    // that no producer can skip validation.
+    template<typename Command>
+    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change>
+            || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
+    future<group0_command> prepare_command(group0_update_collector&& updates, group0_guard& guard, std::string_view description) {
+        return prepare_command(group0_change{Command{}}, std::move(updates), guard, description);
+    }
+
+    // Same, for a command which is applied unconditionally, without a guard.
     template<typename Command>
     requires std::same_as<Command, write_mutations>
-    group0_command prepare_command(Command change, std::string_view description);
-    template<typename Command>
-    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
-    group0_command prepare_command(Command change, group0_guard& guard, std::string_view description);
+    future<group0_command> prepare_command(group0_update_collector&& updates, std::string_view description) {
+        return prepare_command(group0_change{Command{}}, std::move(updates), description);
+    }
     // Checks maximum allowed serialized command size, server rejects bigger commands with command_is_too_big_error exception
     size_t max_command_size() const;
 

@@ -2446,14 +2446,13 @@ void do_cdc_gc_test(cql_test_env& e, const cdc_gc_test_config& cfg) {
             auto ts = guard.write_timestamp();
 
             auto muts = fn(ts).get();
-            utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+            ::service::group0_update_collector updates;
+            for (auto& m : muts) {
+                updates.add(std::move(m)).get();
+            }
 
-            auto group0_cmd = group0_client.prepare_command(
-                ::service::write_mutations{
-                    .mutations{std::move(cmuts)},
-                },
-                guard,
-                "test_cdc_gc_mutations");
+            auto group0_cmd = group0_client.prepare_command<::service::write_mutations>(
+                    std::move(updates), guard, "test_cdc_gc_mutations").get();
             try {
                 group0_client.add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{}).get();
             } catch (::service::group0_concurrent_modification&) {

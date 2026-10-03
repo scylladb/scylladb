@@ -287,16 +287,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
     };
 }
 
-template<typename Command>
-requires std::same_as<Command, topology_change> || std::same_as<Command, mixed_change>
-void raft_group0_client::validate_change(const Command& change) {
-    replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
-}
-
-template<typename Command>
-requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
-group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
-    validate_change(change);
+group0_command raft_group0_client::make_command(group0_change change, group0_guard& guard, std::string_view description) {
     group0_command group0_cmd {
         .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
@@ -314,13 +305,27 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
     return group0_cmd;
 }
 
-template<typename Command>
-requires std::same_as<Command, write_mutations>
-group0_command raft_group0_client::prepare_command(Command change, std::string_view description) {
-    validate_change(change);
+future<> raft_group0_client::validate_and_collect(group0_change& change, group0_update_collector& updates) {
+    auto tm = _token_metadata.get();
+    co_await updates.for_each_mutation([&tm] (const mutation& m) {
+        replica::validate_tablet_metadata_change(tm->tablets(), m);
+    });
+    auto mutations = co_await updates.collect();
+    std::visit([&mutations] (auto& c) { c.mutations = std::move(mutations); }, change);
+}
+
+future<group0_command> raft_group0_client::prepare_command(group0_change change, group0_update_collector&& updates,
+        group0_guard& guard, std::string_view description) {
+    co_await validate_and_collect(change, updates);
+    co_return make_command(std::move(change), guard, description);
+}
+
+future<group0_command> raft_group0_client::prepare_command(group0_change change, group0_update_collector&& updates,
+        std::string_view description) {
+    co_await validate_and_collect(change, updates);
     const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
 
-    group0_command group0_cmd {
+    co_return group0_command {
         .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
             new_group0_state_id, _history_gc_duration, description)},
@@ -331,8 +336,6 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
         .creator_addr{_sys_ks.local_db().get_token_metadata().get_topology().my_address()},
         .creator_id{_raft_gr.group0().id()}
     };
-
-    return group0_cmd;
 }
 
 raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, gms::gossiper& gossiper,
@@ -356,14 +359,6 @@ future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source
     return get_units(_read_apply_mutex, 1, as);
 }
 
-template void raft_group0_client::validate_change(const topology_change& change);
-template void raft_group0_client::validate_change(const mixed_change& change);
-
-template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
-template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
-template group0_command raft_group0_client::prepare_command(write_mutations change, group0_guard& guard, std::string_view description);
-template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
-template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
 future<> raft_group0_client::send_group0_read_barrier_to_live_members() {
     auto my_id = _raft_gr.get_my_raft_id();
@@ -435,25 +430,6 @@ void group0_batch::add_generator(generator_func f, std::string_view description)
     }
 }
 
-static future<> add_write_mutations_entry(
-        ::service::raft_group0_client& group0_client,
-        std::string_view description,
-        utils::chunked_vector<canonical_mutation> muts,
-        ::service::group0_guard group0_guard,
-        seastar::abort_source& as,
-        std::optional<::service::raft_timeout> timeout) {
-    logger.trace("add_write_mutations_entry: {} mutations with description {}",
-            muts.size(), description);
-    auto group0_cmd = group0_client.prepare_command(
-        ::service::write_mutations{
-            .mutations{std::move(muts)},
-        },
-        group0_guard,
-        description
-    );
-    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
-}
-
 future<> group0_batch::materialize_mutations() {
     auto t = _guard->write_timestamp();
     for (auto& generator : _generators) {
@@ -465,27 +441,35 @@ future<> group0_batch::materialize_mutations() {
 }
 
 future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
-    if (_muts.size() == 0 && _generators.size() == 0) {
+    if (_muts.empty() && _generators.empty()) {
         co_return;
     }
     if (!_guard) {
         on_internal_error(logger, "group0_batch: trying to announce without guard");
     }
     auto description = fmt::to_string(fmt::join(_descriptions, "; "));
-    // common case, don't bother with generators as we would have only 1-2 mutations,
-    // when producer expects substantial number or size of mutations it should use generator
-    if (_generators.size() == 0) {
-        utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    // raft doesn't support streaming, so the generators are drained into the collector,
+    // which merges and bounds the mutations as they come.
+    group0_update_collector updates;
+    for (auto& m : _muts) {
+        co_await updates.add(std::move(m));
     }
-    // raft doesn't support streaming so we need to materialize all mutations in memory
-    co_await materialize_mutations();
-    if (_muts.empty()) {
+    _muts.clear();
+    auto t = _guard->write_timestamp();
+    for (auto& generator : _generators) {
+        auto g = generator(t);
+        while (auto mut = co_await g()) {
+            co_await updates.add(std::move(*mut));
+        }
+    }
+    _generators.clear();
+    if (updates.empty()) {
         co_return;
     }
-    utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-    _muts.clear();
-    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    logger.trace("group0_batch::commit: description {}", description);
+    auto group0_cmd = co_await group0_client.prepare_command<::service::write_mutations>(
+            std::move(updates), *_guard, description);
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(*_guard), as, timeout);
 }
 
 future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {

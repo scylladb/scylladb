@@ -217,6 +217,7 @@ static future<> test_basic_operations(app_template& app) {
                 }
                 collected = collector.collect().get();
             });
+            unfrozen_muts.clear();
 
             size_t collected_size = 0;
             size_t max_piece_size = 0;
@@ -230,13 +231,19 @@ static future<> test_basic_operations(app_template& app) {
                          max_mutation_size / MiB, double(collected_size) / MiB, collected.size(),
                          double(max_piece_size) / MiB, time_to_collect.count() * 1000);
 
+            // The command is built out of a collector, so refill one for the apply measurement.
+            service::group0_update_collector to_apply(max_mutation_size);
+            for (const auto& cm : muts) {
+                to_apply.add(to_mutation_gently(cm, tablets_schema).get()).get();
+            }
+
             auto& group0_client = e.get_raft_group0_client();
             seastar::abort_source as;
             try {
                 auto time_to_apply = duration_in_seconds([&] {
                     auto guard = group0_client.start_operation(as).get();
-                    auto cmd = group0_client.prepare_command(
-                            service::topology_change{.mutations{std::move(collected)}}, guard, "Apply whole tablet metadata");
+                    auto cmd = group0_client.prepare_command<service::topology_change>(
+                            std::move(to_apply), guard, "Apply whole tablet metadata").get();
                     group0_client.add_entry(std::move(cmd), std::move(guard), as).get();
                 });
                 testlog.info("Applied whole tablet metadata to group0 in {:.6f} [ms]", time_to_apply.count() * 1000);
