@@ -280,10 +280,6 @@ storage_service::storage_service(abort_source& abort_source,
 
 storage_service::~storage_service() = default;
 
-node_ops::task_manager_module& storage_service::get_node_ops_module() noexcept {
-    return *_node_ops_module;
-}
-
 auth::cache& storage_service::auth_cache() noexcept {
     return _auth_cache;
 }
@@ -4997,6 +4993,75 @@ future<> storage_service::local_topology_barrier() {
     });
 }
 
+future<> storage_service::do_streaming_operation(std::optional<shared_future<>>& result,
+        streaming::stream_reason reason,
+        tasks::task_info parent_info,
+        noncopyable_function<future<>()> action,
+        reset_streaming_result reset_result) {
+    // If no operation was previously started - start it now
+    // If previous operation still running - wait for it and return its result
+    // If previous operation completed successfully - return immediately
+    // If previous operation failed - restart it
+    std::exception_ptr ex;
+    if (!result || result->failed()) {
+        if (result) {
+            rtlogger.info("retry streaming after previous attempt failed with {}", result->get_future().get_exception());
+        } else {
+            rtlogger.info("start streaming");
+        }
+        // Publish the future before creating the task, which preempts: a request resent
+        // in the meantime has to join this operation rather than start a second one.
+        // The result follows the action, so that a request which comes once the streaming
+        // is done does not restart it even if the task was failed by an abort which
+        // landed after the action had finished.
+        promise<> p;
+        bool action_started = false;
+        result = p.get_future();
+        try {
+            tasks::task_manager::task_builder task_builder{_node_ops_module, node_ops::streaming_task_type(reason)};
+            task_builder.set_scope("node")
+                        .set_is_internal(tasks::is_internal::no)
+                        .set_parent_info(parent_info);
+            auto task = co_await std::move(task_builder).build([&p, &action_started, action = std::move(action)] (tasks::task_manager::task::impl&) {
+                action_started = true;
+                return futurize_invoke(action).then_wrapped([&p] (future<> f) {
+                    if (f.failed()) {
+                        auto ex = f.get_exception();
+                        p.set_exception(ex);
+                        return make_exception_future<>(std::move(ex));
+                    }
+                    p.set_value();
+                    return make_ready_future<>();
+                });
+            });
+            co_await task->done();
+        } catch (...) {
+            ex = std::current_exception();
+            if (!action_started) {
+                // The task finished without running the action, e.g. because it was
+                // aborted before it started, so nothing else will resolve the result.
+                p.set_exception(ex);
+            }
+        }
+    } else {
+        rtlogger.debug("already streaming");
+        co_await result.value().get_future();
+    }
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+    if (reset_result && result && result->available() && !result->failed()) {
+        // The operation may be requested again and then it has to stream once more, so a
+        // successful result must not be kept. Only a request which waited for the streaming
+        // successfully resets it, and never a result of an operation which still runs, so
+        // at worst a newer, already finished operation is streamed once more. A result kept
+        // because the task failed once the streaming was done is dropped by the next
+        // request, which joins it and returns without streaming.
+        result.reset();
+    }
+    rtlogger.info("streaming completed");
+}
+
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
     raft_topology_cmd_result result;
     rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);
@@ -5123,8 +5188,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
-                                auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                        parent_info.get_id(), streaming::stream_reason::bootstrap, _bootstrap_result, [this, &rs, session] (this auto) -> future<> {
+                                co_await do_streaming_operation(_bootstrap_result, streaming::stream_reason::bootstrap, parent_info,
+                                        [this, &rs, session] (this auto) -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                         co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
@@ -5137,15 +5202,14 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                             _db.local().get_non_local_strategy_keyspaces_erms());
                                     }
                                 });
-                                co_await task->done();
                             }
                             // Bootstrap did not complete yet, but streaming did
                             utils::get_local_injector().inject("stop_after_streaming",
                                 [] { std::raise(SIGSTOP); });
                         } else {
                             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-                            auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                    parent_info.get_id(), streaming::stream_reason::replace, _bootstrap_result, [this, &rs, &id, replaced_id, session] (this auto) -> future<> {
+                            co_await do_streaming_operation(_bootstrap_result, streaming::stream_reason::replace, parent_info,
+                                    [this, &rs, &id, replaced_id, session] (this auto) -> future<> {
                                 if (!_topology_state_machine._topology.req_param.contains(id)) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
                                 }
@@ -5165,7 +5229,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                         _db.local().get_non_local_strategy_keyspaces_erms(), locator::host_id{replaced_id.uuid()});
                                 }
                             });
-                            co_await task->done();
                         }
                         co_await _db.invoke_on_all([] (replica::database& db) {
                             for (auto& cf : db.get_non_system_column_families()) {
@@ -5177,13 +5240,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     break;
                     case node_state::decommissioning: {
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
-                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.get_id(), streaming::stream_reason::decommission, _decommission_result, [this] (this auto) -> future<> {
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
+                        co_await do_streaming_operation(_decommission_result, streaming::stream_reason::decommission, parent_info,
+                                [this] (this auto) -> future<> {
+                            co_await utils::get_local_injector().inject("decommission_streaming_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_done_wait", utils::wait_for_message(5min));
+                            co_await utils::get_local_injector().inject("decommission_streaming_done_wait", utils::wait_for_message(5min));
                         });
-                        co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
                     break;
@@ -5198,8 +5260,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto id = it->first;
                         rtlogger.debug("streaming to remove node {}", id);
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{it->second.request_id});
-                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.get_id(), streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) -> future<> {
+                        co_await do_streaming_operation(_remove_result[id], streaming::stream_reason::removenode, parent_info,
+                                [this, id = locator::host_id{id.uuid()}, session] (this auto) -> future<> {
                             auto as = make_shared<abort_source>();
                             auto sub = utils::chain_abort_source(*as, _abort_source);
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
@@ -5212,7 +5274,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 co_await removenode_with_stream(id, session, as);
                             }
                         });
-                        co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
                     break;
@@ -5220,8 +5281,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[id]).source_dc;
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
-                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.get_id(), streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc, session] (this auto) -> future<> {
+                        co_await do_streaming_operation(_rebuild_result, streaming::stream_reason::rebuild, parent_info,
+                                [this, &source_dc, session] (this auto) -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
@@ -5256,9 +5317,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     std::rethrow_exception(std::move(ep));
                                 }
                             }
-                        });
-                        co_await task->done();
-                        _rebuild_result.reset();
+                        }, reset_streaming_result::yes);
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
                     break;
