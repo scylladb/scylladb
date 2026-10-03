@@ -85,6 +85,12 @@ protected:
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint64_t _rows_fetched_for_last_partition = 0;
+    // See paging_state::get_partition_row_pending().
+    bool _partition_row_pending = false;
+    // Whether the query itself asks for static content of partitions
+    // without rows. A page which continues a pending partition asks for it
+    // too.
+    const bool _always_return_static_content;
     stats _stats;
 
     query_function _query_function;
@@ -160,10 +166,29 @@ protected:
     future<result<service::storage_proxy_coordinator_query_result>>
     do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout);
 
+    // Whether the next page continues the partition of the cursor after the
+    // cursor, rather than starting after the partition. That holds when:
+    // - The cursor lies in the clustering rows. The pager places a cursor
+    //   elsewhere only when the partition is done: after a static-only row,
+    //   or at the end of the partition. A page which must continue a
+    //   partition from its first clustering row gets a cursor before all
+    //   clustering rows, so that cursor lies in the clustering rows too.
+    // - The partition may have rows after the cursor. If the query's rows
+    //   have no clustering keys, a partition has at most one row, and the
+    //   page returned it, unless the row is pending, see
+    //   paging_state::get_partition_row_pending().
+    bool continues_cursor_partition() const {
+        return _last_pkey && _last_pos.region() == partition_region::clustered
+                && (_has_clustering_keys || _partition_row_pending);
+    }
+
+    // `rows_decided_before_cursor` is the field of
+    // storage_proxy_coordinator_query_result of this name.
     template<typename Visitor>
     requires query::ResultVisitor<Visitor>
     void handle_result(Visitor&& visitor,
                       const foreign_ptr<lw_shared_ptr<query::result>>& results,
+                      bool rows_decided_before_cursor,
                       uint32_t page_size, gc_clock::time_point now);
 
     virtual uint64_t max_rows_to_fetch(uint32_t page_size) {

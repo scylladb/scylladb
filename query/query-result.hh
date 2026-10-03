@@ -475,6 +475,11 @@ public:
 
     void ensure_counts();
 
+    // Removes the last partition, and counts the partitions and rows which
+    // remain. The digest, if any, still covers the removed partition. The
+    // result must have a partition.
+    void drop_last_partition();
+
     // The position of the last fragment which the replica consumed, if the
     // result holds one. A result holds a frontier instead if the command asked
     // for one; calling this then is an internal error.

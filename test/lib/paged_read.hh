@@ -57,7 +57,9 @@ class cql_test_env;
 // prepare_mutation_read() and resolve_mutation_page() without
 // read_frontiers. It merges the results of several ranges with
 // query::result_merger, like storage_proxy::query_singular() and
-// storage_proxy::query_partition_key_range().
+// storage_proxy::query_partition_key_range(). Like them, it tells the pager
+// that the page decided its rows before its cursor when read_frontiers is
+// enabled.
 //
 // Each replica holds the mutations of its part of the history. It reads its
 // pages with the production page driver, replica::read_data_page() and

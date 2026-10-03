@@ -297,8 +297,9 @@ std::string describe(const schema& s, const dht::partition_range& range) {
 // A readable summary of a paging state, for traces and error messages. It
 // omits the query id and the replicas, which the harness does not vary.
 std::string describe(const schema& s, const service::pager::paging_state& state) {
-    return fmt::format("{}, {}, remaining {}, rows fetched for the partition {}", describe(s, state.get_partition_key()),
-            describe(s, state.get_position_in_partition()), state.get_remaining(), state.get_rows_fetched_for_last_partition());
+    return fmt::format("{}, {}, remaining {}, rows fetched for the partition {}{}", describe(s, state.get_partition_key()),
+            describe(s, state.get_position_in_partition()), state.get_remaining(), state.get_rows_fetched_for_last_partition(),
+            state.get_partition_row_pending() ? ", row of the partition pending" : "");
 }
 
 std::string_view describe(query::short_read sr) {
@@ -994,7 +995,7 @@ class coordinator {
             check_limits(*cmd, *accepted->result);
             return std::move(accepted->result);
         }
-        trace("  digests differ");
+        trace("  digests differ, or the data reply is not enough");
         // The schedule chooses the targets of the reconciliation:
         // 0. All replicas, like abstract_read_executor::reconcile().
         // 1. The replicas which replied before the decision, like a
@@ -1024,7 +1025,9 @@ class coordinator {
         result->ensure_counts();
         trace("result: {} partitions, {} rows, {}, cursor {}", *result->partition_count(), *result->row_count(), describe(result->is_short_read()),
                 describe(s, result->last_position()));
-        return service::storage_proxy_coordinator_query_result(std::move(result));
+        service::storage_proxy_coordinator_query_result qr(std::move(result));
+        qr.rows_decided_before_cursor = _opts.read_frontiers;
+        return qr;
     }
 
     // Like storage_proxy::do_query(), query_singular() and

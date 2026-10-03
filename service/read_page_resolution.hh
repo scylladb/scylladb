@@ -257,11 +257,18 @@ using digest_page_decision = std::variant<accepted_digest_page, digest_page_mism
 //   matching digests mean that the data reply has no row at or after E.
 //   Replies which arrived later do not count, because their digests may
 //   differ. If no reply stopped, the page is the
-//   data reply. If the data reply reached its row or partition limit, the
-//   page's cursor is E. Otherwise, if the command allows short reads, the
-//   page is short and its cursor is E. Otherwise the page may not end
-//   there, and the decision is a mismatch, so that the coordinator
-//   reconciles.
+//   data reply, without a cursor. If E lies inside a partition, before the end of its
+//   clustering rows, and the data reply ends with a static-only row of that
+//   partition, a clustering row after E may cancel the static-only row. If
+//   the command allows short reads and asks for partition keys, the page is
+//   the data reply without that row, it is short, and its cursor is E.
+//   Otherwise the decision is a mismatch. Otherwise, if the data reply reached its
+//   row or partition limit, the page's cursor is E. Otherwise, if the
+//   command allows short reads, the page is short and its cursor is E.
+//   Otherwise the page may not end there, and the decision is a mismatch,
+//   so that the coordinator reconciles.
+//   A cursor before the static row becomes a cursor before the clustering
+//   rows.
 // - Otherwise, if `empty_replica_pages` is true, the decision lowers the
 //   page's last position to replies.min_position(). That covers replies
 //   which arrived after the consistency level was reached. If a reply has no
@@ -357,7 +364,11 @@ future<mutation_page_resolution> resolve_mutation_page(schema_ptr schema, const 
 // the merge, is incomplete, and E moves back to it.
 //
 // The reconciliation then converts the data of all rounds to the client's
-// page, within the client's limits. The page ends:
+// page, within the client's limits. A static-only row depends on the whole
+// partition, so the conversion leaves out a partition which E cuts before
+// the end of its clustering rows, if the partition has no live clustering
+// row before E. The pager then continues the partition, see
+// service::pager::paging_state::get_partition_row_pending(). The page ends:
 // - where the conversion stopped, if the limits stopped it;
 // - at the end of the range, if E is at the end;
 // - short at E, if the command allows short reads.

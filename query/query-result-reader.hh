@@ -183,6 +183,28 @@ public:
         return std::make_tuple(ps.size(), rows);
     }
 
+    struct partition_summary {
+        // nullopt if the command did not ask for partition keys.
+        std::optional<partition_key> key;
+        // The number of clustering rows. A partition without clustering rows
+        // holds a static-only row.
+        uint64_t row_count;
+    };
+    // The last partition, or nullopt if the result has no partition.
+    std::optional<partition_summary> last_partition() const {
+        auto ps = _v.partitions();
+        if (ps.empty()) {
+            return std::nullopt;
+        }
+        auto pit = ps.begin();
+        auto pnext = pit;
+        while (++pnext != ps.end()) {
+            pit = pnext;
+        }
+        auto p = *pit;
+        return partition_summary{p.key(), p.rows().size()};
+    }
+
     // The position of the last row of the last partition. The result must
     // have a partition.
     full_position calculate_last_position() const {

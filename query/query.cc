@@ -306,6 +306,31 @@ void result::ensure_counts() {
     }
 }
 
+void result::drop_last_partition() {
+    bytes_ostream w;
+    auto partitions = ser::writer_of_query_result<bytes_ostream>(w).start_partitions();
+    uint64_t row_count = 0;
+    uint32_t partition_count = 0;
+    auto pvs = ser::query_result_view{ser::as_input_stream(_w)}.partitions();
+    if (pvs.empty()) {
+        on_internal_error(qlogger, "result::drop_last_partition(): the result has no partition");
+    }
+    const size_t kept = pvs.size() - 1;
+    for (auto&& pv : pvs) {
+        if (partition_count == kept) {
+            break;
+        }
+        // A partition without rows holds a static-only row.
+        row_count += std::max(pv.rows().size(), size_t(1));
+        ++partition_count;
+        partitions.add(pv);
+    }
+    std::move(partitions).end_partitions().end_query_result();
+    _w = std::move(w);
+    _partition_count = partition_count;
+    set_row_count(row_count);
+}
+
 bool read_frontier::equal(const schema& s, const read_frontier& other) const {
     const auto same = [&s] (const full_position& a, const full_position& b) {
         return full_position::cmp(s, a, b) == 0;
