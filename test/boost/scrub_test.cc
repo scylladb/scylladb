@@ -1523,4 +1523,37 @@ SEASTAR_TEST_CASE(test_scrub_validates_statistics_digest) {
     return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Statistics); });
 }
 
+// Validate mode bypasses the regular compaction machinery, so it has to fill
+// in the result consumed by compaction_manager::update_history() by itself.
+SEASTAR_TEST_CASE(test_scrub_validate_mode_compaction_result) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto mut = mutation(s, ss.make_pkey());
+        mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+        table->add_sstable_and_update_cache(sst).get();
+        const auto size = sst->bytes_on_disk();
+
+        auto desc = compaction::compaction_descriptor({sst});
+        desc.options = compaction::compaction_type_options::make_scrub(compaction::compaction_type_options::scrub::mode::validate);
+        auto res = compact_sstables(env, std::move(desc), table, [&] { return env.make_sstable(s); }).get();
+
+        BOOST_REQUIRE_EQUAL(res.shard_id, this_shard_id());
+        BOOST_REQUIRE(res.type == compaction::compaction_type::Scrub);
+        BOOST_REQUIRE_EQUAL(res.sstables_in.size(), 1);
+        BOOST_REQUIRE(res.sstables_in[0].generation == sst->generation());
+        BOOST_REQUIRE_EQUAL(res.sstables_in[0].size, size);
+        BOOST_REQUIRE(res.sstables_out.empty());
+        BOOST_REQUIRE_EQUAL(res.stats.start_size, size);
+        BOOST_REQUIRE_EQUAL(res.stats.end_size, 0);
+        BOOST_REQUIRE_EQUAL(res.stats.validation_errors, 0);
+        BOOST_REQUIRE(res.stats.started_at.time_since_epoch().count() > 0);
+        BOOST_REQUIRE(res.stats.started_at <= res.stats.ended_at);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
