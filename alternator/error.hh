@@ -44,6 +44,9 @@ public:
     static api_error invalid_export_time(std::string msg) {
         return api_error("InvalidExportTimeException", std::move(msg));
     }
+    static api_error export_not_found(std::string msg) {
+        return api_error("ExportNotFoundException", std::move(msg));
+    }
     static api_error validation(std::string msg) {
         return api_error("ValidationException", std::move(msg));
     }
