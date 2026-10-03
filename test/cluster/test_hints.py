@@ -238,6 +238,56 @@ async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
         # For dropping the keyspace
         await manager.server_start(node2.server_id)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_counter_update_overloaded_by_stalled_hints_flush(manager: ScyllaClusterManager):
+    """
+    Reproduces SCYLLADB-4381. We stall flush_current_hints() while it holds the endpoint's file
+    update mutex, so hints stay in flight until the coordinator rejects counter updates with
+    "Too many in flight hints". The coordinator is the counter leader, and we verify that it
+    didn't apply the rejected updates.
+    """
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period", "decrease_max_size_of_hints_in_progress"]}
+    coordinator = await manager.server_add(config=config, property_file={"dc": "dc1", "rack": "rack1"})
+    others = [await manager.server_add(property_file={"dc": "dc1", "rack": f"rack{i}"}) for i in (2, 3)]
+
+    cql = await manager.get_cql_exclusive(coordinator)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c counter)")
+        update = SimpleStatement(f"UPDATE {table} SET c = c + 1 WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+
+        for s in others:
+            await manager.server_stop_gracefully(s.server_id)
+            await manager.server_not_sees_other_server(coordinator.ip_addr, s.ip_addr)
+
+        # The first update creates the hints stores that flush_current_hints() flushes.
+        await cql.run_async(update)
+        acknowledged = 1
+
+        await manager.api.enable_injection(coordinator.ip_addr, "hints_flush_stall_under_lock", one_shot=True)
+        await manager.api.wait_for_injection_enter(coordinator.ip_addr, "hints_flush_stall_under_lock")
+
+        for _ in range(100):
+            try:
+                await cql.run_async(update)
+                acknowledged += 1
+            except NoHostAvailable as e:
+                for err in e.errors.values():
+                    assert err.summary == "Coordinator node overloaded" and re.match(r"Too many in flight hints: \d+", err.message)
+                break
+        else:
+            pytest.fail(f"The coordinator was not overloaded after {acknowledged} updates while the hints flush was stalled")
+
+        read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+        [row] = await cql.run_async(read)
+
+        await manager.api.message_injection(coordinator.ip_addr, "hints_flush_stall_under_lock")
+        # For dropping the keyspace
+        for s in others:
+            await manager.server_start(s.server_id)
+
+        assert row.c == acknowledged, f"counter is {row.c} after {acknowledged} acknowledged updates and a rejected one"
+
 async def test_sync_point(manager: ScyllaClusterManager):
     """
     We want to verify that the sync point API is compliant with its design.

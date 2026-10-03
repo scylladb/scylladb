@@ -3750,6 +3750,14 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen
     const auto& rs = s->table().get_effective_replication_map()->get_replication_strategy();
 
     return run_fenceable_write(rs, fence, caller, [this, erm, s, &fm, timeout, trace_state] (this auto) -> future<mutation> {
+        // As for other writes, we check the in-flight hints limit before applying the update.
+        const auto token = fm.token(*s);
+        if (cannot_hint(erm->get_natural_replicas(token), db::write_type::COUNTER)
+                || cannot_hint(erm->get_pending_replicas(token), db::write_type::COUNTER)) {
+            get_stats().writes_failed_due_to_too_many_in_flight_hints++;
+            throw overloaded_exception(_hints_manager.size_of_hints_in_progress());
+        }
+
         // lock the reading shards in sorted order.
         // usually there is only a single read shard, which is the current shard. we need to lock the
         // counter on this shard to protect the counter's read-modify-write operation against concurrent updates.
@@ -3830,7 +3838,8 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     auto all = natural_endpoints;
     std::ranges::copy(pending_endpoints, std::back_inserter(all));
 
-    if (cannot_hint(all, type)) {
+    // The counter leader checks the limit before applying the update.
+    if (type != db::write_type::COUNTER && cannot_hint(all, type)) {
         get_stats().writes_failed_due_to_too_many_in_flight_hints++;
         // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
         // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
