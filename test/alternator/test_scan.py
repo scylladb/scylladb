@@ -511,3 +511,20 @@ def test_scan_exclusivestartkey_spurious_column(filled_test_table):
     with pytest.raises(ClientError, match='ValidationException.*starting key'):
         # 'x' is not part of the key, so this should cause an error
         test_table.scan(ExclusiveStartKey={'p': p, 'c': 'hi', 'x': 3})
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Here we check this
+# for Scan.
+# Reproduces SCYLLADB-4683.
+def test_scan_table_name_arn(filled_test_table):
+    test_table, items = filled_test_table
+    client = test_table.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    got_items = []
+    # The small page size splits the scan into several pages, so the ARN is
+    # also used in each continuation request.
+    for page in client.get_paginator('scan').paginate(TableName=arn,
+            ConsistentRead=True, PaginationConfig={'PageSize': 50}):
+        got_items += page['Items']
+    assert multiset(items) == multiset(got_items)
