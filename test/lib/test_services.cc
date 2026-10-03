@@ -309,11 +309,8 @@ void test_env::maybe_start_compaction_manager(bool enable) {
 
 future<> test_env::stop() {
     if (_impl->cmgr) {
-        if (_impl->cmgr->get_compaction_manager().is_running()) {
-            co_await _impl->cmgr->get_compaction_manager().stop();
-        } else {
-            co_await _impl->cmgr->get_compaction_manager().get_task_manager_module().stop();
-        }
+        // Handles a manager which was never enabled, or which the test already stopped, too.
+        co_await _impl->cmgr->get_compaction_manager().stop();
     }
     co_await _impl->mgr.close();
     _impl->mgr.unplug_sstables_registry();

@@ -6,7 +6,7 @@
 import logging
 import asyncio
 
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -85,3 +85,47 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaCluster
         # should have no truncation records now
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM system.truncated where table_uuid={table_id}', consistency_level=ConsistencyLevel.ONE))
         assert row[0].count == 0
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
+    """Drop a keyspace while the node is shutting down.
+
+    The compaction manager closes the gates of its compaction states as soon
+    as the node is asked to stop, while the group0 state machine still applies
+    the drop, truncating the keyspace's tables one after the other. Disabling
+    the compaction of a table whose gate is closed must be reported as an
+    abort: the raft applier stops the raft instance on any other error.
+
+    Reproducer for SCYLLADB-4647.
+    """
+    server = await manager.server_add(cmdline=['--logger-log-level', 'compaction_manager=debug'])
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    for table in ("t1", "t2"):
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY)")
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    # Hold the truncate of the first table, with its compaction disabled, until
+    # the compaction manager closed the gate of the other table. The truncate of
+    # the other table then finds its gate closed. The tables are truncated in
+    # table id order, which needn't be the order they were created in, so wait
+    # for the gates of both tables.
+    await manager.api.enable_injection(server.ip_addr, "truncate_compaction_disabled_wait", one_shot=True)
+    drop = cql.run_async(f"DROP KEYSPACE {ks}")
+    await log.wait_for("truncate_compaction_disabled_wait: waiting for message", from_mark=mark)
+
+    stop = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+    await log.wait_for(f"compaction_manager - Closing compaction state gate of {ks}.t1 ",
+                       f"compaction_manager - Closing compaction state gate of {ks}.t2 ", from_mark=mark)
+    await manager.api.message_injection(server.ip_addr, "truncate_compaction_disabled_wait")
+    await stop
+    # The drop is not completed by the stopped node, the driver reports an error.
+    with pytest.raises(Exception):
+        await drop
+
+    assert await log.grep("applier fiber stopped because state machine was aborted", from_mark=mark)
+    assert not await log.grep("applier fiber stopped because of the error", from_mark=mark)

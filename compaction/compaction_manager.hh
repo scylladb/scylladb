@@ -180,6 +180,10 @@ private:
     // Return nullopt if compaction cannot be started
     std::optional<gate::holder> start_compaction(compaction_group_view& t);
 
+    // Holds the gate of a table's compaction state.
+    // Throws abort_requested_exception if the gate was closed because the manager is stopping.
+    gate::holder hold_compaction_state_gate(compaction_state& cs);
+
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
@@ -594,6 +598,10 @@ protected:
     // and the compaction manager allows proceeding.
     inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
     void setup_new_compaction(sstables::run_id output_run_id = sstables::run_id::create_null_id());
+
+    gate::holder hold_compaction_state_gate() {
+        return _cm.hold_compaction_state_gate(_compaction_state);
+    }
     void finish_compaction(state finish_state = state::done) noexcept;
 
     // Compaction manager stop itself if it finds an storage I/O error which results in
