@@ -805,21 +805,19 @@ read_options random_options(read_options opts) {
 // without read_frontiers, the coordinator runs the pre-READ_FRONTIERS code,
 // whose defects stay.
 //
-// A useful campaign takes long, so the test runs only when the environment
-// variable SCYLLA_PAGED_READ_CAMPAIGN is set. Its value is the number of
-// histories. The test reports each failure with a shrunk case, and logs the
-// number of failures of each kind. When the environment variable
-// SCYLLA_PAGED_READ_STOP_AT_FAILURE is set, the test stops after its first
-// failure. When the environment variable SCYLLA_PAGED_READ_VIOLATION is set,
-// a run fails only if one of its violations contains the variable's value.
-// This keeps a campaign on one kind of defect while the code has others.
+// The test draws default_history_count histories. A useful campaign takes
+// longer, so the environment variable SCYLLA_PAGED_READ_CAMPAIGN can set
+// another number of histories. The test reports each failure with a shrunk
+// case, and logs the number of failures of each kind. When the environment
+// variable SCYLLA_PAGED_READ_STOP_AT_FAILURE is set, the test stops after
+// its first failure. When the environment variable SCYLLA_PAGED_READ_VIOLATION
+// is set, a run fails only if one of its violations contains the variable's
+// value. This keeps a campaign on one kind of defect while the code has
+// others.
 SEASTAR_THREAD_TEST_CASE(test_general) {
+    constexpr int default_history_count = 100;
     const char* histories = std::getenv("SCYLLA_PAGED_READ_CAMPAIGN");
-    if (!histories) {
-        testlog.info("The general test runs only when SCYLLA_PAGED_READ_CAMPAIGN sets the number of histories");
-        return;
-    }
-    const int history_count = std::stoi(histories);
+    const int history_count = histories ? std::stoi(histories) : default_history_count;
     const bool stop_at_failure = std::getenv("SCYLLA_PAGED_READ_STOP_AT_FAILURE");
     const char* violation_filter = std::getenv("SCYLLA_PAGED_READ_VIOLATION");
     with_harness([history_count, stop_at_failure, violation_filter] (harness& hs) {
