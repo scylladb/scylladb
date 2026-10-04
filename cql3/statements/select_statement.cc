@@ -494,20 +494,18 @@ select_statement::do_execute(query_processor& qp,
     std::optional<locator::tablet_routing_info_v2> tablet_info_v2 = {};
 
     auto&& table = _schema->table();
-    if (_may_use_token_aware_routing && table.uses_tablets()
-            && key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
+    if (_may_use_token_aware_routing && key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
         token = key_ranges[0].start()->value().as_decorated_key().token();
-        auto erm = table.get_effective_replication_map();
 
         if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
             // We only return routing information for EXECUTE requests.
             // They will carry a tablet version block; QUERY reqeuests
             // will not.
             if (options.get_tablet_version_block().has_value()) {
-                tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
+                tablet_info_v2 = table.tablet_routing_info_v2_for(token, *options.get_tablet_version_block());
             }
         } else if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-            tablet_info = erm->check_locality(token, state.get_client_state().get_original_shard());
+            tablet_info = table.tablet_routing_info_for(token, state.get_client_state().get_original_shard());
         }
     }
 

@@ -324,20 +324,19 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     auto&& table = s->table();
 
-    if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
-        auto erm = table.get_effective_replication_map();
+    if (keys_size_one && _may_use_token_aware_routing) {
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
             // We only return routing information for EXECUTE requests.
             // They will carry a tablet version block; QUERY reqeuests
             // will not.
             if (options.get_tablet_version_block().has_value()) {
-                auto tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
+                auto tablet_info_v2 = table.tablet_routing_info_v2_for(token, *options.get_tablet_version_block());
                 if (tablet_info_v2) {
                     result->add_tablet_info_v2(std::move(*tablet_info_v2));
                 }
             }
         } else if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-            auto tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
+            auto tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
             if (tablet_info.has_value()) {
                 result->add_tablet_info(std::move(*tablet_info));
             }
@@ -469,9 +468,8 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     std::optional<locator::tablet_routing_info> tablet_info;
 
     auto&& table = s->table();
-    if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-        auto erm = table.get_effective_replication_map();
-        tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
+    if (_may_use_token_aware_routing && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+        tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
     }
 
     return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),

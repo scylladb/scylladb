@@ -1191,7 +1191,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
         return db.map_reduce(adder<bool>(), [] (replica::database& db) {
             for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
+                auto& ks = *pair.second;
                 if (ks.incremental_backups_enabled()) {
                     return true;
                 }
@@ -1209,7 +1209,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
             // Change both KS and CF, so they are in sync
             for (auto& pair: db.get_keyspaces()) {
-                auto& ks = pair.second;
+                auto& ks = *pair.second;
                 ks.set_incremental_backups(value);
             }
 

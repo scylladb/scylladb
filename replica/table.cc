@@ -982,6 +982,31 @@ bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
 }
 
+static bool may_publish_tablet_routing_info(const table& t) {
+    if (!t.uses_tablets()) {
+        return false;
+    }
+    // A table stored in tablets under a keyspace still replicating by vnodes is mid-migration.
+    // The migration can still be rolled back, and routing info handed out now would outlive
+    // the rollback in the driver's cache. A dropped table has no keyspace, and nothing to route to.
+    auto ks = t.as_data_dictionary().keyspace();
+    return ks && ks->uses_tablets();
+}
+
+std::optional<locator::tablet_routing_info> table::tablet_routing_info_for(dht::token token, unsigned original_shard) const {
+    if (!may_publish_tablet_routing_info(*this)) {
+        return std::nullopt;
+    }
+    return _erm->check_locality(token, original_shard);
+}
+
+std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for(dht::token token, locator::tablet_version_block block) const {
+    if (!may_publish_tablet_routing_info(*this)) {
+        return std::nullopt;
+    }
+    return _erm->check_tablet_version(token, block);
+}
+
 storage_group::storage_group(compaction_group_ptr cg)
         : _main_cg(cg)
         , _async_gate(format("[storage_group {}.{} {}]", cg->schema()->ks_name(), cg->schema()->cf_name(), cg->group_id()))
@@ -3489,8 +3514,9 @@ void storage_group::clear_logstor_segments() {
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
         logstor::logstor* logstor, sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
-        locator::effective_replication_map_ptr erm)
+        locator::effective_replication_map_ptr erm, const keyspace* ks)
     : _schema(std::move(schema))
+    , _keyspace(ks)
     , _config(std::move(config))
     , _erm(std::move(erm))
     , _storage_opts(std::move(sopts))
