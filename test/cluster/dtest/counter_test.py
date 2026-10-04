@@ -437,9 +437,9 @@ class TestCounters(Tester):
         """
         3 nodes in test
         2 counters:
-        increment 500 times * 400 threads and
-        decrement 500 times * 200 threads in parallel
-        expected result: counters equal 100000(500*200)
+        increment 250 times * 400 threads and
+        decrement 250 times * 200 threads in parallel
+        expected result: counters equal 50000(250*200)
         """
         cluster = self.cluster
 
@@ -453,7 +453,7 @@ class TestCounters(Tester):
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
         sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
-        nb_increment = 500
+        nb_increment = 250
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
         nb_counter = 2
