@@ -32,6 +32,13 @@ from tools.misc import ImmutableMapping
 logger = logging.getLogger(__name__)
 
 
+def execute_all(session, statements):
+    # Generator mode drops each result as it arrives; list mode keeps them all
+    # alive, and the GC rescanning them costs a third of the client's CPU.
+    for _ in execute_concurrent(session, statements, concurrency=100, raise_on_first_error=True, results_generator=True):
+        pass
+
+
 class NoCounterMutationRetryPolicy(RetryPolicy):
     """Disable retries on WriteTimeout to prevent double-applying counter updates.
 
@@ -408,7 +415,7 @@ class TestCounters(Tester):
 
         with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
             futures = [
-                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                executor.submit(execute_all, sessions[i], per_session_stmts[i])
                 for i in range(len(sessions))
                 if per_session_stmts[i]
             ]
@@ -477,7 +484,7 @@ class TestCounters(Tester):
 
         with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
             futures = [
-                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                executor.submit(execute_all, sessions[i], per_session_stmts[i])
                 for i in range(len(sessions))
                 if per_session_stmts[i]
             ]
