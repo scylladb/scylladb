@@ -50,7 +50,7 @@ import time
 from datetime import datetime
 import bisect
 from bisect import bisect_left
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -311,6 +311,10 @@ TARGET_KP = 0.006          # the CPU target moves this share of the CPUs per poi
 TARGET_KI = 0.0006         # ...and, integrated, this share per point and second it stays off
 DEPTH = 1                  # tests a worker may hold queued behind the one it runs
 SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more (see _depth)
+JOIN_SETUP_FRACTION = 0.1  # a long module is shared only if its setup is at most this much of a test
+RATE_WINDOW = 300.0        # seconds of finished tests the measured work rate is taken over
+RATE_MIN_TESTS = 20        # finished tests needed before the measured rate replaces the prediction
+CHAIN_FRACTION = 0.5       # a module whose rest takes this share of the run's time left goes on despite pressure
 K_SIGMA = 0.5              # standard deviations of cores added to a test's booking
 DEFAULT_COST = (2.0, 2 * GB)   # cores, memory of a test with no profile and no static hint
 METRICS_SECONDS = 2.0      # how often --gather-metrics samples the scheduler
@@ -467,6 +471,7 @@ class CostModel:
             setup = self.files.setdefault(fkey, {"setup_cores": 0.0, "n": 0})
             extra_cores = max(0.0, cores - (entry.get("cores") or 0.0)) if cores is not None else 0.0
             setup["setup_cores"] = _ema(setup["setup_cores"], extra_cores, setup["n"])
+            setup["setup_wall"] = _ema(setup.get("setup_wall"), max(0.0, wall - entry["wall"]), setup["n"])
             setup["n"] += 1
             self._learn_mem(entry, mem, fkey)
             return
@@ -723,6 +728,45 @@ def read_psi(kind: str, path: Path | None = None, line_kind: str = "some") -> fl
     return 0.0
 
 
+class DoneWindow:
+    """The tests that finished in the last `window` seconds, with the
+    sums the measured work rate needs kept up to date as they come and
+    go: asked on every pick, it must not walk the tests."""
+
+    def __init__(self, window: float):
+        self.window = window
+        self._done: deque[tuple[float, float, float]] = deque()     # (ended, predicted wall, actual wall)
+        # (ended, started), started rising: its head is the earliest start
+        # among the tests still in the window
+        self._starts: deque[tuple[float, float]] = deque()
+        self.predicted = 0.0
+        self.actual = 0.0
+
+    def add(self, ended: float, predicted: float, actual: float) -> None:
+        self._done.append((ended, predicted, actual))
+        self.predicted += predicted
+        self.actual += actual
+        started = ended - actual
+        while self._starts and self._starts[-1][1] >= started:
+            self._starts.pop()
+        self._starts.append((ended, started))
+
+    def trim(self, now: float) -> None:
+        while self._done and now - self._done[0][0] > self.window:
+            _, predicted, actual = self._done.popleft()
+            self.predicted -= predicted
+            self.actual -= actual
+        while self._starts and now - self._starts[0][0] > self.window:
+            self._starts.popleft()
+        if not self._done:
+            self.predicted = self.actual = 0.0
+
+    def earliest_start(self) -> float:
+        return self._starts[0][1]
+
+    def __len__(self) -> int:
+        return len(self._done)
+
 
 class CgroupReader:
     """Reads live CPU (cores) and memory (bytes) of a worker's cgroup
@@ -971,6 +1015,16 @@ class DynamicScheduling:
         # what it measured (see _waits_for_first_run).
         self._keys: dict[int, str] = {}
         self._modules: dict[int, str] = {}
+        # file -> wall times of this run's tests that were the first of
+        # their module on a worker, and of the others: their difference
+        # is what setting the module up costs (see _setup_wall)
+        self._first_walls: dict[str, list[float]] = defaultdict(list)
+        self._rest_walls: dict[str, list[float]] = defaultdict(list)
+        # Finished tests over the last RATE_WINDOW, and per file the sums
+        # of actual and predicted wall, for the measured work rate and
+        # slowdown (see _time_left).
+        self._done_log = DoneWindow(RATE_WINDOW)
+        self._file_walls: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
         self._first_run: dict[str, int] = {}            # key -> the index measuring it for the others
         self._first_run_done: set[str] = set()
         self._target_t: float | None = None          # when the CPU target last moved
@@ -1103,6 +1157,11 @@ class DynamicScheduling:
         if committed is not None and started is not None:
             now = self.now()
             self._recent_done.append((started, now, self._predict_running(item_index, now - committed)))
+            predicted, actual = self._costs_for(item_index).wall, now - started
+            self._done_log.add(now, predicted, actual)
+            walls = self._file_walls[self._profile_file_of(item_index)]
+            walls[0] += actual
+            walls[1] += predicted
         self._mem_at_commit.pop(item_index, None)
         self._mem_track.pop(item_index, None)
         if self._scout.get(self._profile_file_of(item_index)) == item_index:
@@ -1427,13 +1486,17 @@ class DynamicScheduling:
         # test ran 1.35-1.6x slower, and the run got less done than
         # with fewer tests running.  Without cuts the limit is as
         # before.
-        # A worker going on with its module, its last test just over,
-        # replaces that test and adds nothing: pressure limits what
-        # the run adds, not that.  Held back, the next test of a
-        # serial module waited up to 74 seconds at a time and the
-        # module, 10 minutes of tests, ended a release run at 18.
+        # A worker going on with a long module, its last test just
+        # over, replaces that test and adds nothing: pressure limits
+        # what the run adds, not that.  Held back, the next test of a
+        # scylla_gdb module, 10 minutes of tests on one worker, waited
+        # up to 74 seconds at a time and the module ended a release
+        # run at 18.  Only a module long next to the rest of the run:
+        # let every module go on and pressure no longer holds anything
+        # back, since most tests are some module's next one, and a
+        # debug run spent 5 more CPU-hours on contention.
         full_target = self.cpu_target_frac * self.ncpus
-        continuing = self._continues_module(node, idx)
+        continuing = self._continues_module(node, idx) and self._long_chain(idx)
         target = full_target if continuing else self.cpu_target
         headroom_limit = max(float(self.ncpus), full_target) * min(1.0, target / full_target)
         if self._estimate_now(now) + req > headroom_limit:
@@ -1973,12 +2036,6 @@ class DynamicScheduling:
         """
         if not self.pending_set:
             return None
-        # Longest test first, globally.  Ordering by a file's *total*
-        # remaining work put a 139-second test in a small file at the
-        # back of the queue, so it started when the machine had
-        # drained and then ran alone.  So the modules are ordered by
-        # their longest pending test.
-        by_remaining = sorted(self.files, key=lambda f: -self._module_max[f])
         # The test we are holding capacity for gets first refusal:
         # everyone else has been admitted against a budget that
         # already excludes it, so when it fits, it goes now.
@@ -2001,12 +2058,34 @@ class DynamicScheduling:
         # ten times the test itself.  Otherwise take a module no other
         # worker is in, so a module is split between workers only
         # once nothing else is left.
+        # A pick runs on every finished test, so the common case, a worker
+        # going on with its module, must not look at the other modules at
+        # all: ordering all of them on every pick made the controller the
+        # bottleneck of a release run's sub-second tests.
         current = self.node_file.get(node)
         if current in self.files and not self._waits_for_first_run(self.files[current][0]):
             files = [current]
         else:
-            taken = {self.node_file.get(n) for n in self.node2pending if n is not node and not n.shutting_down}
-            files = sorted(by_remaining, key=lambda f: f in taken)
+            # Longest test first, globally.  Ordering by a file's *total*
+            # remaining work put a 139-second test in a small file at the
+            # back of the queue, so it started when the machine had
+            # drained and then ran alone.  So the modules are ordered by
+            # their longest pending test.
+            # A module whose remaining tests together take longer than the
+            # rest of the run needs per worker is ordered by that total: it
+            # runs on one worker, so it has to start early.
+            budget = self._time_left()
+            slow = self._run_slowdown()
+
+            def order(f: str) -> float:
+                chain = self.file_remaining[f] * self._slowdown(f.split("#", 1)[0], slow)
+                return -max(self._module_max[f], chain if chain > budget else 0.0)
+            by_remaining = sorted(self.files, key=order)
+            taken = Counter(self.node_file.get(n) for n in self.node2pending if n is not node and not n.shutting_down)
+            chains = [f for f in by_remaining if taken[f] and self._joinable(f, taken[f], budget, slow)]
+            files = chains + sorted((f for f in by_remaining if f not in chains), key=lambda f: taken[f] > 0)
+            if chains:
+                self.stats["chain_joins_offered"] += 1
         head = None
         chosen = None
         smallest = None            # where to park when nothing fits right now
@@ -2146,6 +2225,82 @@ class DynamicScheduling:
         held = self._held(node) if idx is None else idx
         return (held is not None and not self._committed(node)
                 and self._last_file_done.get(node) == self._file_of(held))
+
+    def _long_chain(self, idx: int) -> bool:
+        """Whether what is left of a test's module, this test included,
+        takes at least CHAIN_FRACTION of the run's time left."""
+        module = self._file_of(idx)
+        fkey = self._profile_file_of(idx)
+        rest = (self.file_remaining.get(module, 0.0) + self._costs_for(idx).wall) * self._slowdown(fkey, self._run_slowdown())
+        return rest >= CHAIN_FRACTION * self._time_left()
+
+    def _setup_wall(self, fkey: str) -> float | None:
+        """Seconds it takes to set a module of this file up, as measured:
+        in this run, its first test on a worker against its others; else
+        from the profile.  None until measured."""
+        first, rest = self._first_walls.get(fkey), self._rest_walls.get(fkey)
+        if first and rest:
+            return max(0.0, statistics.mean(first) - statistics.median(rest))
+        setup = self.model.files.get(fkey)
+        return setup.get("setup_wall") if setup else None
+
+    def _time_left(self) -> float:
+        """How long the work still queued will take at the speed the run
+        actually goes.
+
+        Predicted walls are uncontended runtimes, and a loaded machine
+        runs every test slower, unevenly: in a release run each storage
+        test took 1.5-3 times its prediction.  So once enough tests have
+        finished, divide the predicted work left by the predicted work
+        the run got through per second lately; until then, by the
+        concurrency the run is allowed.
+        """
+        now = self.now()
+        self._done_log.trim(now)
+        if len(self._done_log) >= RATE_MIN_TESTS:
+            span = now - self._done_log.earliest_start()
+            rate = self._done_log.predicted / max(span, 60.0)
+            if rate > 0:
+                return self.total_remaining / rate
+        return self.total_remaining / self._parallel()
+
+    def _run_slowdown(self) -> float:
+        """Actual over predicted wall of the run's recently finished tests."""
+        self._done_log.trim(self.now())
+        predicted = self._done_log.predicted
+        return max(1.0, self._done_log.actual / predicted) if predicted > 0 else 1.0
+
+    def _slowdown(self, fkey: str, run_slowdown: float) -> float:
+        """Actual over predicted wall of this file's finished tests, or the
+        run's while none of the file's has finished."""
+        actual, predicted = self._file_walls.get(fkey, (0.0, 0.0))
+        return max(1.0, actual / predicted) if predicted > 0 else run_slowdown
+
+    def _joinable(self, file: str, workers_in: int, budget: float, run_slowdown: float) -> bool:
+        """Whether another worker should take tests of a module that a
+        worker is already in.
+
+        Module affinity keeps a module on one worker, so its tests run
+        one after another.  When what is left of it is longer than the
+        rest of the run needs per worker, that chain decides when the
+        run ends: test/cluster/storage, three runs of it under --repeat
+        3, each 22 minutes of a 23-minute release run on one worker.
+        Sharing it costs every joining worker one setup of the module,
+        which is cheap for tests that build their own cluster anyway and
+        ten times a test for cqlpy, so it is shared only once its setup
+        has been measured, and is small next to its tests.  Tests still
+        start in collection order, as under plain xdist.
+        """
+        lst = self.files.get(file)
+        if not lst:
+            return False
+        walls = [self._costs_for(i).wall for i in lst]
+        fkey = self._profile_file_of(lst[0])
+        if sum(walls) * self._slowdown(fkey, run_slowdown) / max(1, workers_in) <= max(TAIL_SECONDS, budget):
+            return False
+        setup = self._setup_wall(fkey)
+        return setup is not None and setup <= JOIN_SETUP_FRACTION * statistics.median(walls)
+
     def _depth(self, node: WorkerController) -> int:
         """Tests a worker may hold queued behind the one it runs.
 
@@ -2292,6 +2447,9 @@ class DynamicScheduling:
     def learn(self, sample: dict[str, Any]) -> None:
         """In-run learning from a finished test's measured cost."""
         self.model.learn(sample)
+        if sample.get("wall"):
+            walls = self._first_walls if sample.get("first_in_file") else self._rest_walls
+            walls[file_of_key(sample["key"])].append(float(sample["wall"]))
         # Everything not started yet, held tests included: a repeat
         # parked on a worker behind its first copy must start on what
         # that copy has just measured.  Only this file's costs:
