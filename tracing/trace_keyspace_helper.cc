@@ -18,7 +18,6 @@
 #include "types/map.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
-#include "utils/class_registrator.hh"
 #include "service/storage_proxy.hh"
 
 namespace tracing {
@@ -473,8 +472,5 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
 std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_session_state() const {
     return std::make_unique<trace_keyspace_backend_sesssion_state>();
 }
-
-using registry_default = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
-static registry_default registrator_default("trace_keyspace_helper");
 
 }
