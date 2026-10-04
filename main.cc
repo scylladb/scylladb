@@ -2145,23 +2145,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
-            checkpoint(stop_signal, "loading tablet metadata");
-            try {
-                ss.local().update_tablet_metadata({}).get();
-            } catch (...) {
-                if (!cfg->maintenance_mode()) {
-                    throw;
-                }
-                startlog.error("Failed to load tablet metadata (ignoring due to maintenance mode): {:t}", std::current_exception());
-            }
-
-            // We do not support tablet re-sharding yet, see https://github.com/scylladb/scylladb/issues/16739.
-            // To avoid undefined behaviour due to violated assumptions, that
-            // each tablet has a valid shard replica, we check this assumption here, and refuse startup if violated.
-            if (!locator::check_tablet_replica_shards(ss.local().get_token_metadata_ptr()->tablets(), host_id).get()) {
-                throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
-            }
-
             checkpoint(stop_signal, "starting CDC Generation Management service");
             cdc::generation_service::config cdc_config;
             cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
@@ -2210,6 +2193,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // are loaded. The in-memory state machine is enabled later, after
                 // all its dependencies are initialized.
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+            }
+
+            checkpoint(stop_signal, "loading tablet metadata");
+            try {
+                ss.local().update_tablet_metadata({}).get();
+            } catch (...) {
+                if (!cfg->maintenance_mode()) {
+                    throw;
+                }
+                startlog.error("Failed to load tablet metadata (ignoring due to maintenance mode): {:t}", std::current_exception());
+            }
+
+            // We do not support tablet re-sharding yet, see https://github.com/scylladb/scylladb/issues/16739.
+            // To avoid undefined behaviour due to violated assumptions, that
+            // each tablet has a valid shard replica, we check this assumption here, and refuse startup if violated.
+            if (!locator::check_tablet_replica_shards(ss.local().get_token_metadata_ptr()->tablets(), host_id).get()) {
+                throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
             }
 
             checkpoint(stop_signal, "loading non-system sstables");
