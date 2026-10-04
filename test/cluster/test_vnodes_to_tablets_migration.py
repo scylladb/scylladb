@@ -19,7 +19,7 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace, reconnect_driver, ensure_group0_leader_on
+from test.cluster.util import new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -2083,3 +2083,97 @@ async def test_replace_rollback_during_migration(manager: ScyllaClusterManager):
                 f"Tablet at {row.last_token}: expected stage=None, got {row.stage}"
             assert row.transition is None, \
                 f"Tablet at {row.last_token}: expected transition=None, got {row.transition}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replace_rollback_coordinator_failover(manager: ScyllaClusterManager):
+    """Verify that a new coordinator resumes an interrupted replace rollback.
+
+    A replace rollback first commits the left_token_ring transition state, and
+    then reverts the replace transitions of migrating tablets, possibly in
+    multiple commands. If the coordinator fails over in between, the new
+    coordinator must finish the revert and complete the rollback.
+    """
+    num_shards = 2
+    num_tokens = 16
+    one_table_per_command = 'topology_coordinator/generate_vnodes_to_tablets_replace_updates/one_table_per_command'
+    pause = 'topology_coordinator/replace_rollback/pause_after_tablet_batch'
+
+    cfg = {'num_tokens': num_tokens}
+    cmdline = ['--smp', str(num_shards)]
+
+    logger.info("Starting a 3-node cluster (one rack per node)")
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=property_files)
+    s0, s1, s2 = servers
+
+    logger.info(f"Pinning raft group0 leader on s0 ({s0.server_id})")
+    await ensure_group0_leader_on(manager, s0)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        table_names = ['t1', 't2']
+        for table_name in table_names:
+            await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        s1_host_id = str(await manager.get_host_id(s1.server_id))
+        s2_host_id = await manager.get_host_id(s2.server_id)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(s0.ip_addr, ks)
+
+        logger.info(f"Enabling injections {one_table_per_command!r} and {pause!r} on s0")
+        await manager.api.enable_injection(s0.ip_addr, one_table_per_command, one_shot=False)
+        await manager.api.enable_injection(s0.ip_addr, pause, one_shot=True)
+
+        logger.info(f"Stopping s1 ({s1.server_id}) to replace it")
+        await manager.server_stop(s1.server_id, convict=True)
+
+        # Fail streaming only once. The old coordinator rolls back, and the new
+        # coordinator must finish that rollback instead of streaming again.
+        logger.info("Starting replacement of dead node s1 with a one-shot streaming failure (expected to fail)")
+        replace_cfg = ReplaceConfig(replaced_id=s1.server_id, reuse_ip_addr=False, use_host_id=True)
+        replace_task = asyncio.create_task(manager.server_add(replace_cfg,
+                cmdline=cmdline,
+                property_file=s1.property_file(),
+                config={**cfg, 'error_injections_at_startup': [{'name': 'stream_ranges_fail', 'one_shot': True}]},
+                expected_error="Replace failed. See earlier errors"))
+
+        logger.info("Waiting for s0 to pause after the first tablet batch of the rollback")
+        await manager.api.wait_for_injection_enter(s0.ip_addr, pause)
+
+        logger.info(f"Moving group0 leadership, and thus the topology coordinator, from s0 to s2 ({s2.server_id})")
+        await trigger_stepdown(manager, s0, target_host_id=s2_host_id)
+        await manager.api.message_injection(s0.ip_addr, pause)
+
+        await replace_task
+
+        logger.info("Verifying that the request reports the original failure")
+        await read_barrier(manager.api, s2.ip_addr)
+        cql = manager.get_cql()
+        host = cql.cluster.metadata.get_host(s2.ip_addr)
+        rows = await cql.run_async("SELECT error FROM system.topology_requests", host=host)
+        errors = [row.error for row in rows if row.error]
+        assert any("Rolled back: Failed stream ranges" in e for e in errors), \
+            f"Expected the original streaming failure in topology request errors, got {errors}"
+
+        logger.info("Verifying that the tablet maps are clean after the rollback")
+        for table_name in table_names:
+            table_id = await manager.get_table_or_view_id(ks, table_name)
+            tablet_rows = await cql.run_async(
+                f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+                host=host)
+            assert tablet_rows, f"No tablet rows found for {ks}.{table_name} after rollback"
+            for row in tablet_rows:
+                replica_hosts = {str(h) for h, _ in row.replicas}
+                assert s1_host_id in replica_hosts, \
+                    f"Tablet at {row.last_token} in {table_name}: dead node {s1_host_id} should still be in replicas after rollback, got {replica_hosts}"
+                assert row.new_replicas is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected new_replicas=None after rollback, got {row.new_replicas}"
+                assert row.stage is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected stage=None after rollback, got {row.stage}"
+                assert row.transition is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected transition=None after rollback, got {row.transition}"

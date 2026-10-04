@@ -760,6 +760,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     take_guard(std::move(node)),
                     std::move(updates),
                     fmt::format("replace: apply replacement transitions to migrating tablet maps ({})", replace_tablets_phase_name(phase)));
+            if (phase == replace_tablets_phase::rollback) {
+                co_await utils::get_local_injector().inject("topology_coordinator/replace_rollback/pause_after_tablet_batch",
+                        utils::wait_for_message(std::chrono::minutes(5), &_as));
+            }
             node = retake_node(co_await start_operation(), node_id);
 
             if (!has_more) {
