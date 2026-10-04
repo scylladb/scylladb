@@ -245,6 +245,11 @@ static std::unordered_map<intended_storage_mode, sstring> intended_storage_mode_
     {intended_storage_mode::tablets, "tablets"},
 };
 
+static std::unordered_map<vnodes_to_tablets_direction, sstring> vnodes_to_tablets_direction_to_name_map = {
+    {vnodes_to_tablets_direction::forward, "forward"},
+    {vnodes_to_tablets_direction::rollback, "rollback"},
+};
+
 intended_storage_mode intended_storage_mode_from_string(const sstring& s) {
     for (auto&& e : intended_storage_mode_to_name_map) {
         if (e.second == s) {
@@ -252,6 +257,23 @@ intended_storage_mode intended_storage_mode_from_string(const sstring& s) {
         }
     }
     throw std::runtime_error(fmt::format("cannot map name {} to intended_storage_mode", s));
+}
+
+vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology& topo,
+        std::optional<raft::server_id> ignore) {
+    // See the comment on the declaration: only "nodetool migrate-to-tablets
+    // downgrade" writes an explicit vnodes, so one is enough to tell us a
+    // rollback is under way. Nodes the operator has not reached yet are unset,
+    // which on its own still means forward.
+    for (const auto& [server_id, rs] : topo.normal_nodes) {
+        if (ignore == server_id) {
+            continue;
+        }
+        if (rs.storage_mode == intended_storage_mode::vnodes) {
+            return vnodes_to_tablets_direction::rollback;
+        }
+    }
+    return vnodes_to_tablets_direction::forward;
 }
 
 future<> topology_state_machine::await_not_busy() {
@@ -421,6 +443,11 @@ auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status sta
 auto fmt::formatter<service::intended_storage_mode>::format(service::intended_storage_mode mode,
                                                      fmt::format_context& ctx) const -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", service::intended_storage_mode_to_name_map[mode]);
+}
+
+auto fmt::formatter<service::vnodes_to_tablets_direction>::format(service::vnodes_to_tablets_direction dir,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", service::vnodes_to_tablets_direction_to_name_map[dir]);
 }
 
 auto fmt::formatter<service::topology::transition_state>::format(service::topology::transition_state s,

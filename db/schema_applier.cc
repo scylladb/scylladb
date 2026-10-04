@@ -951,7 +951,7 @@ future<> schema_applier::update_tablets() {
         slogger.info("Tablet metadata changed");
         pending_schema_getter getter{*this};
         _token_metadata_change = co_await _ss.local().prepare_token_metadata_change(
-                _pending_token_metadata.local(), getter);
+                _pending_token_metadata.local(), getter, _intended_storage_mode);
     }
 }
 
@@ -969,6 +969,9 @@ future<> schema_applier::load_mutable_token_metadata() {
 
 future<> schema_applier::update() {
     _after = co_await get_schema_persisted_state();
+    // Read on shard 0, where the topology state lives, and used by
+    // commit_tables_and_views() on every shard.
+    _intended_storage_mode = _ss.local().get_my_intended_storage_mode();
     co_await load_mutable_token_metadata();
     co_await merge_keyspaces();
     co_await merge_types();
@@ -999,19 +1002,26 @@ void schema_applier::commit_tables_and_views() {
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
     }
 
+    // _intended_storage_mode lets a table created in a keyspace under vnodes-to-tablets
+    // migration come up on a tablet effective replication map right away, instead of
+    // waiting for the restart that database::parse_system_tables() would otherwise need
+    // to notice its tablet map.
     for (auto& schema : cdc.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes,
+                _pending_token_metadata.local(), _intended_storage_mode);
     }
 
     for (auto& schema : tables.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes,
+                _pending_token_metadata.local(), _intended_storage_mode);
     }
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes,
+                _pending_token_metadata.local(), _intended_storage_mode);
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());

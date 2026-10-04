@@ -2127,7 +2127,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             std::move(loaded_endpoints), start_hm, new_generation);
 }
 
-future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter) {
+future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter, std::optional<intended_storage_mode> node_storage_mode) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     std::exception_ptr ex;
     token_metadata_change change;
@@ -2197,16 +2197,35 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                     const locator::abstract_replication_strategy *old_rs = ss.get_database().column_family_exists(id)
                             ? &ss.get_database().find_column_family(id).get_effective_replication_map()->get_replication_strategy()
                             : nullptr;
-                    if (old_rs && old_rs->uses_tablets()) {
-                        // The table is under vnodes-to-tablets migration:
-                        // the keyspace uses vnodes, but the table uses a tablet-based ERM.
+                    // Non-null iff the table is under vnodes-to-tablets migration: the
+                    // keyspace uses vnodes, but the table uses a tablet-based ERM.
+                    auto old_tablet_rs = old_rs ? old_rs->maybe_as_tablet_aware() : nullptr;
+                    // A table created by this very schema change has no ERM to take the
+                    // flavour from, so apply the same condition database::add_column_family()
+                    // does when it builds one: a table takes part in the migration if it has
+                    // a tablet map and this node has been told to move to tablets. Without
+                    // this the table is handed the keyspace's vnode ERM here, right after
+                    // being constructed with a tablet one - which leaves it routing by vnode
+                    // while its storage groups are per-tablet.
+                    bool new_table_under_migration = !old_rs
+                            && node_storage_mode == intended_storage_mode::tablets
+                            && tmptr->tablets().has_tablet_map(id);
+                    if (old_tablet_rs || new_table_under_migration) {
                         // Preserve the tablet flavor of the ERM.
                         // The ERM flavor is a node-local setting that expresses
                         // the node's storage organization, which can change only
                         // on startup after resharding (while the node is offline).
                         // It is determined on startup by the distributed loader.
-                        auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
-                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
+                        // A table that does not exist yet has no tablet-aware strategy to
+                        // copy these from; 0 initial tablets means "auto", the same value
+                        // database::add_column_family() uses for a migrating table.
+                        std::optional<unsigned> initial_tablets = 0;
+                        std::optional<data_dictionary::consistency_config_option> consistency;
+                        if (old_tablet_rs) {
+                            initial_tablets = old_tablet_rs->get_initial_tablets();
+                            consistency = old_tablet_rs->get_consistency();
+                        }
+                        locator::replication_strategy_params params(rs->get_config_options(), initial_tablets, consistency);
                         auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
                         auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
                         auto pt_rs = tablet_rs->maybe_as_per_table();
@@ -4465,6 +4484,130 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
     }
 }
 
+void storage_service::on_before_create_column_family(const data_dictionary::keyspace_metadata& ksm, const schema& s,
+        utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    allocate_tablets_for_new_tables_under_migration(ksm, {s.shared_from_this()}, muts, ts);
+}
+
+void storage_service::on_before_create_column_families(const data_dictionary::keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms,
+        utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    allocate_tablets_for_new_tables_under_migration(ksm, cfms, muts, ts);
+}
+
+void storage_service::allocate_tablets_for_new_tables_under_migration(const data_dictionary::keyspace_metadata& ksm,
+        const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    // The notifier calls us from within a seastar thread, so blocking is allowed here.
+    if (!_feature_service.vnodes_to_tablets_migrations) {
+        return;
+    }
+
+    // This callback does not assume the keyspace exists in the database yet (see
+    // migration_listener::on_before_create_column_family), so decide from `ksm`:
+    // a keyspace uses tablets iff it has an initial tablet count.
+    if (ksm.initial_tablets().has_value()) {
+        // The tablet allocator handles new tables in a tablets keyspace.
+        return;
+    }
+
+    auto tmptr = get_token_metadata_ptr();
+    const auto& tablet_metadata = tmptr->tablets();
+
+    // A vnode keyspace holding tablet maps is one that is mid-migration. Note the
+    // existing tables are consulted, not the new ones - the new ones never have a map.
+    // This also settles the keyspace's existence: a keyspace created by this very
+    // statement has no table with a tablet map, so find_keyspace() below is reached
+    // only for one that is already in the database.
+    //
+    // Base tables only, matching get_tablets_migration_status(). A keyspace that was
+    // rolled back before the drop loop in the topology coordinator learned to clear
+    // view maps can still carry an orphaned one, and that must not be read as a
+    // migration nobody started.
+    bool migrating = std::ranges::any_of(ksm.tables(), [&] (const schema_ptr& existing) {
+        return tablet_metadata.has_tablet_map(existing->id());
+    });
+    if (!migrating) {
+        return;
+    }
+
+    // Everything above is shard-safe. The migration direction is not: only shard 0
+    // tracks the topology state. storage_service is registered as a migration_listener
+    // on shard 0's notifier alone (see main.cc), and the notifier is per-shard, so this
+    // callback is only ever entered there. Every caller also takes a group0 guard
+    // first, and raft_group0_client::start_operation() refuses to run off shard 0.
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, fmt::format(
+            "cannot create a table in migrating keyspace {} on a non zero shard", ksm.name()));
+    }
+
+    if (get_vnodes_to_tablets_direction(_topology_state_machine._topology) == vnodes_to_tablets_direction::rollback) {
+        // The keyspace is heading back to vnodes, so a new table is born on vnodes
+        // and is already in its final shape. Giving it a tablet map here would only
+        // make every node reshard it forward and then straight back again.
+        slogger.debug("Keyspace {} is rolling back to vnodes; new table(s) will use vnodes", ksm.name());
+        return;
+    }
+
+    // Lets a test reach a state this code cannot otherwise produce: a table with no
+    // tablet map in a keyspace that is migrating *forward*. In the field that comes from
+    // a CREATE TABLE coordinated by a node without this code, or from decommissioning
+    // the node that was holding a rollback open. set_node_intended_storage_mode() is
+    // what repairs it, and this is the only way to test that it does.
+    if (utils::get_local_injector().enter("skip_tablet_map_for_new_table")) {
+        slogger.warn("skip_tablet_map_for_new_table injection: leaving new table(s) in {} without a tablet map",
+                     ksm.name());
+        return;
+    }
+
+    append_tablet_maps_for_unmapped_tables(ksm.name(), cfms, ts, [&] (mutation m) -> future<> {
+        muts.emplace_back(std::move(m));
+        return make_ready_future<>();
+    }).get();
+}
+
+future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(sstring ks_name,
+        std::vector<schema_ptr> cfms, api::timestamp_type ts,
+        std::function<future<>(mutation)> add_mutation) {
+    const auto& tablet_metadata = get_token_metadata().tablets();
+
+    auto unmapped = cfms | std::views::filter([&] (const schema_ptr& cfm) {
+        return !tablet_metadata.has_tablet_map(cfm->id());
+    }) | std::ranges::to<std::vector<schema_ptr>>();
+    if (unmapped.empty()) {
+        co_return 0;
+    }
+
+    // Build the map the same way prepare_for_tablets_migration() would have, had the
+    // tables been there when the migration started: one tablet per vnode range,
+    // inheriting each vnode's replicas. That keeps a table's tablet-based and
+    // vnode-based replica sets identical, which is what lets nodes on either side of
+    // the migration route to it consistently - and it gives the table a vnode layout
+    // to roll back to.
+    //
+    // No pow2 pre-split target is set: the tables are empty, so there is no data whose
+    // layout needs to converge, and the tablet balancer sizes them from real load once
+    // the migration is finalized. The map depends on nothing but the ERM and that
+    // target, so one map serves every table here, as it does in
+    // prepare_for_tablets_migration().
+    //
+    // Views and CDC log tables are treated the same way - a standalone map rather than
+    // one co-located with the base table. That matches prepare_for_tablets_migration(),
+    // which walks cf_meta_data() and so gives the views already in the keyspace
+    // standalone maps too; making views co-located during a migration belongs to
+    // SCYLLADB-731/SCYLLADB-732, not here.
+    auto erm = _db.local().find_keyspace(ks_name).get_static_effective_replication_map();
+    auto tmap = co_await build_tablet_map_for_migration(erm, 0);
+
+    for (const auto& cfm : unmapped) {
+        slogger.info("Built a {}-tablet map for {}.{}, which had none but takes part in the "
+                     "vnodes-to-tablets migration of keyspace '{}'",
+                     tmap.tablet_count(), cfm->ks_name(), cfm->cf_name(), ks_name);
+        co_await replica::tablet_map_to_mutations(tmap, cfm->id(), cfm->ks_name(), cfm->cf_name(), ts,
+                _feature_service, add_mutation);
+    }
+
+    co_return unmapped.size();
+}
+
 future<> storage_service::set_node_intended_storage_mode(intended_storage_mode mode) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -4481,7 +4624,12 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
         // prepare_for_tablets_migration() has been called for at least one
         // keyspace. prepare_for_tablets_migration() will fail if
         // intended_storage_mode is already set for any node.
-        const auto& tablet_metadata = get_token_metadata().tablets();
+        //
+        // Hold the token metadata rather than borrowing it: the backfill below reads it
+        // after suspending, and on a retry it reads it again after the previous
+        // iteration suspended.
+        auto tmptr = get_token_metadata_ptr();
+        const auto& tablet_metadata = tmptr->tablets();
         bool has_any_migrating_table = false;
         for (const auto& ks : _db.local().get_non_system_keyspaces()) {
             auto& keyspace = _db.local().find_keyspace(ks);
@@ -4512,16 +4660,64 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
             throw std::runtime_error(::format("Node {} is not in the normal state (current state: {})", raft_server.id(), rs.state));
         }
 
-        if (rs.storage_mode == mode) {
-            slogger.info("Node {} already has intended storage mode set to {}, skipping", raft_server.id(), mode);
+        group0_update_collector updates;
+
+        // Going forward is the point at which every migrating table must have a tablet
+        // map: the nodes reshard onto it when they restart, and finalization refuses to
+        // run without it. A table can be missing one - it was created while a rollback
+        // was under way, so it was deliberately born on vnodes (see
+        // allocate_tablets_for_new_tables_under_migration), and the operator has since
+        // changed their mind. Give it one now rather than leaving the keyspace
+        // impossible to finalize in either direction.
+        //
+        // This runs before the "already in that mode" check below, because the node that
+        // needs to be upgraded to trigger the repair may already be upgraded: the table
+        // can just as well have been created through a node that predates this code, and
+        // then there is no mode left to change anywhere.
+        //
+        // The direction is asked for as it will be once this node's own change lands, or
+        // re-upgrading the one node that was holding the rollback open would read as a
+        // rollback and skip the very repair it is there to do.
+        bool going_forward = mode == intended_storage_mode::tablets
+                && get_vnodes_to_tablets_direction(_topology_state_machine._topology, raft_server.id())
+                        == vnodes_to_tablets_direction::forward;
+        size_t backfilled = 0;
+        if (going_forward) {
+            for (const auto& ks_name : _db.local().get_non_system_keyspaces()) {
+                auto& ks = _db.local().find_keyspace(ks_name);
+                if (ks.uses_tablets()) {
+                    continue;
+                }
+                // Base tables only, as everywhere else that decides whether a keyspace is
+                // migrating: a map left behind on a view must not start a migration.
+                bool ks_migrating = std::ranges::any_of(ks.metadata()->tables(), [&] (const schema_ptr& s) {
+                    return tablet_metadata.has_tablet_map(s->id());
+                });
+                if (!ks_migrating) {
+                    continue;
+                }
+                auto cfms = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>();
+                backfilled += co_await append_tablet_maps_for_unmapped_tables(ks_name, cfms, guard.write_timestamp(),
+                        [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+            }
+        }
+
+        if (rs.storage_mode == mode && !backfilled) {
+            slogger.info("Node {} already has intended storage mode set to {} and every migrating table has a tablet map, skipping",
+                         raft_server.id(), mode);
             co_return;
         }
 
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
-               .set("intended_storage_mode", mode);
+        if (rs.storage_mode != mode) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.with_node(raft_server.id())
+                   .set("intended_storage_mode", mode);
+            updates.emplace_back(canonical_mutation(builder.build()));
+        }
 
-        topology_change change{{builder.build()}};
+        topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
             ::format("set intended storage mode for node {} to {}", raft_server.id(), mode));
 
@@ -4537,6 +4733,23 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
     slogger.info("Successfully set intended storage mode for node {} to {}", raft_server.id(), mode);
 }
 
+std::optional<intended_storage_mode> storage_service::get_my_intended_storage_mode() const {
+    // Only shard 0 loads the topology state (see topology_state_load()).
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, "cannot access the intended storage mode on non zero shard");
+    }
+
+    // normal_nodes only, to match distributed_loader::init_non_system_keyspaces(), which
+    // decides the same thing at boot. A node that has moved on to transition_nodes is
+    // leaving, and must not pick a different ERM flavour here than it would on restart.
+    const auto& normal_nodes = _topology_state_machine._topology.normal_nodes;
+    auto it = normal_nodes.find(raft::server_id{get_token_metadata().get_my_id().uuid()});
+    if (it == normal_nodes.end()) {
+        return std::nullopt;
+    }
+    return it->second.storage_mode;
+}
+
 storage_service::migration_status storage_service::get_tablets_migration_status(const sstring& ks_name) {
     auto& db = _db.local();
     auto& ks = db.find_keyspace(ks_name);
@@ -4550,8 +4763,11 @@ storage_service::migration_status storage_service::get_tablets_migration_status(
 
     auto tables = ks.metadata()->tables();
 
-    // Check whether all tables have tablet maps (i.e. migration was started).
-    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
+    // Check whether the migration was started. Any table with a tablet map is
+    // enough: a table created after a rollback began is born on vnodes and never
+    // gets one, and reporting such a keyspace as plain 'vnodes' would hide an
+    // operation that is still very much in progress.
+    bool has_tablet_maps = std::ranges::any_of(tables, [&] (const auto& schema) {
         return tablet_metadata.has_tablet_map(schema->id());
     });
 
@@ -4583,9 +4799,24 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
 
     // Pick one table and query system.tablet_sizes to find which nodes
     // report tablet sizes (i.e. have loaded tablet-based ERMs).
+    //
+    // It has to be a table that actually has a tablet map: a table created after a
+    // rollback started has none, and no node will ever report a size for it, so
+    // sampling it would make every node look like it is already back on vnodes.
+    // tables() is built from an unordered map, so which one comes first is arbitrary.
     auto& ks = _db.local().find_keyspace(ks_name);
     auto tables = ks.metadata()->tables();
-    auto sample_table_id = tables.front()->id();
+    const auto& tablet_metadata = get_token_metadata().tablets();
+    auto sample = std::ranges::find_if(tables, [&] (const auto& schema) {
+        return tablet_metadata.has_tablet_map(schema->id());
+    });
+    if (sample == tables.end()) {
+        // get_tablets_migration_status() above reported migrating_to_tablets, which
+        // means some table has a map, and nothing suspends in between.
+        on_internal_error(slogger, fmt::format(
+            "Keyspace '{}' is migrating to tablets but none of its tables has a tablet map", ks_name));
+    }
+    auto sample_table_id = (*sample)->id();
 
     // FIXME: system.tablet_sizes might return stale data (load stats in the topology coordinator are cached).
     auto rs = co_await _qp.execute_internal(
@@ -4695,16 +4926,40 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+        // The topology coordinator checks this too; failing here saves the operator a
+        // topology request that could only be rejected.
+        if (!std::ranges::any_of(tables, [&] (const schema_ptr& s) { return tablet_metadata.has_tablet_map(s->id()); })) {
+            throw std::runtime_error(fmt::format(
+                "No table in keyspace '{}' has a tablet map; there is no migration to finalize", ks_name));
+        }
+
+        // Rolling back drops whatever tablet maps exist, so a table created after the
+        // rollback started - which is born on vnodes and has no map - must not hold it
+        // up. Going forward, every table does need one, or it would be left behind on
+        // vnodes in a keyspace that has switched to tablets.
+        //
+        // Decide the direction the way the topology coordinator will, not with the more
+        // permissive get_vnodes_to_tablets_direction(): only a cluster where every node
+        // is set to tablets finalizes forward. With every node unset the coordinator
+        // rolls back, and with a mix it refuses and says why, so neither may be
+        // turned away here for a missing tablet map.
+        bool forward = std::ranges::all_of(_topology_state_machine._topology.normal_nodes, [] (const auto& e) {
+            return e.second.storage_mode == intended_storage_mode::tablets;
+        });
+        if (forward) {
+            for (const auto& schema : tables) {
+                if (!tablet_metadata.has_tablet_map(schema->id())) {
+                    throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
+                        "all tables in keyspace '{}' must be prepared for migration before finalizing. "
+                        "Run 'nodetool migrate-to-tablets upgrade' on any node to build one for it, "
+                        "then restart every node that is in tablets mode",
+                        ks_name, schema->cf_name(), ks_name));
+                }
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
-                     tables.size(), ks_name);
+        slogger.info("Submitting finalization request for keyspace '{}' with {} table(s)",
+                     ks_name, tables.size());
 
         request_id = guard.new_group0_state_id();
 

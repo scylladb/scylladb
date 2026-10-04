@@ -111,6 +111,12 @@ enum class intended_storage_mode : uint16_t {
     tablets,
 };
 
+// The direction an in-progress vnodes-to-tablets migration is heading in.
+enum class vnodes_to_tablets_direction : uint16_t {
+    forward,  // vnodes -> tablets
+    rollback, // tablets -> vnodes
+};
+
 struct replica_state {
     node_state state;
     seastar::sstring datacenter;
@@ -369,6 +375,33 @@ topology_request topology_request_from_string(const sstring& s);
 global_topology_request global_topology_request_from_string(const sstring&);
 cleanup_status cleanup_status_from_string(const sstring& s);
 intended_storage_mode intended_storage_mode_from_string(const sstring& s);
+
+// Tells which way an in-progress vnodes-to-tablets migration is heading.
+//
+// A node's intended_storage_mode is unset until the operator runs
+// "nodetool migrate-to-tablets upgrade" or "downgrade" on it, and
+// prepare_for_tablets_migration() refuses to start a migration while any node
+// has one set. So right after "migrate-to-tablets start", and all the way up to
+// the first upgrade, every node is unset - which is a forward migration that
+// has not moved yet, not a rollback. An explicit vnodes is written by the
+// downgrade command alone and cleared again at finalization, which makes it an
+// unambiguous marker of a rollback in progress, from the very first node the
+// operator downgrades.
+//
+// Note this is deliberately more permissive than the check finalization makes:
+// finalization additionally requires all nodes to agree on the mode, and must
+// keep doing so. The two therefore agree whenever any node has been set at all;
+// they differ only when none has, which finalization reads as a rollback (there
+// is nothing to roll forward) and this reads as a forward migration that has not
+// started moving (there is still something to create tablet maps for).
+//
+// `ignore` leaves one node's recorded mode out of the answer. Use it to ask what the
+// direction will be once a pending change to that node's own mode is applied - an
+// operator abandoning a rollback sets the last explicit vnodes back to tablets, and
+// the decision that goes into that same group0 command has to see the state it is
+// creating, not the one it is leaving.
+vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology&,
+        std::optional<raft::server_id> ignore = std::nullopt);
 }
 
 template <> struct fmt::formatter<service::cleanup_status> {
@@ -379,6 +412,11 @@ template <> struct fmt::formatter<service::cleanup_status> {
 template <> struct fmt::formatter<service::intended_storage_mode> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(service::intended_storage_mode mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<service::vnodes_to_tablets_direction> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(service::vnodes_to_tablets_direction dir, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<string_view> {
