@@ -1020,38 +1020,39 @@ def test_file_affinity_and_longest_first(tmp_path):
     assert col[nodes[1].sent[1]].startswith("a.py")
 
 
-def test_pressure_guard_shrinks_target(tmp_path, monkeypatch):
-    import test.pylib.dynamic_scheduler as bs
-    col = [f"a.py::t{i}.dev.1" for i in range(4)]
-    monkeypatch.setattr(bs, "read_psi", lambda kind, path=None, line_kind="some": 50.0 if kind == "cpu" else 0.0)
-    sched, nodes = make_sched(tmp_path, col, {n: (0.5, 1e8, 1.0) for n in col}, nodes=2, ncpus=4,
-                              psi_cpu_limit=20.0)
-    assert sched.stats["pressure_cuts"] == 1
-    assert sched.cpu_target == pytest.approx(0.9 * 4 * 0.9)
-    # pressure gates only the over-commit band: 4 x 0.5 cores fit within 4 CPUs and all start
-    assert len(committed(sched)) == 2 and sched.stats["forced"] == 0   # 2 workers, one running test each
-
-
-def test_target_recovers_after_pressure(tmp_path, monkeypatch):
+def test_the_target_follows_pressure_as_a_pi_controller(tmp_path, monkeypatch):
+    """The CPU target is the full one plus TARGET_KP of the CPUs per point of
+    pressure below the limit, plus that error integrated at TARGET_KI: a lasting
+    overload cuts it more and more, down to its floor and no further, and once
+    the pressure is gone it climbs back to the full target and stops there."""
     import test.pylib.dynamic_scheduler as bs
     col = [f"a.py::t{i}.dev.1" for i in range(4)]
     clock = {"t": 1000.0}
-    psi = {"cpu": 50.0}
+    psi = {"cpu": 30.0}
     monkeypatch.setattr(bs, "read_psi", lambda kind, path=None, line_kind="some": psi["cpu"] if kind == "cpu" else 0.0)
     model = make_model(tmp_path, 4, {profile_key(n): (0.5, 1e8, 1.0) for n in col})
-    sched = new_sched(FakeConfig(tmp_path, 1), psi_cpu_limit=20.0, model=model, ncpus=4,
-                             mem_total=20 * GB, cgroup_tests=NO_CGROUP, now=lambda: clock["t"])
-    node = FakeNode("gw0")
-    sched.add_node(node); sched.add_node_collection(node, col); sched.schedule()
-    cut = sched.cpu_target
-    assert cut == pytest.approx(3.6 * 0.9)
+    sched = new_sched(FakeConfig(tmp_path, 1), psi_cpu_limit=20.0, model=model, ncpus=8,
+                      mem_total=20 * GB, cgroup_tests=NO_CGROUP, now=lambda: clock["t"])
+    full = sched.cpu_target
+    assert sched._pressure_guard()
+    assert sched.cpu_target == pytest.approx(full - bs.TARGET_KP * 8 * 10), "the first reading: proportional only"
+    clock["t"] += 4
+    sched._pressure_guard()
+    assert sched.cpu_target == pytest.approx(full - bs.TARGET_KP * 8 * 10 - bs.TARGET_KI * 8 * 10 * 4)
+    assert sched.stats["pressure_cuts"] == 1
+    for _ in range(600):
+        clock["t"] += 1
+        sched._pressure_guard()
+    assert sched.cpu_target == pytest.approx(sched.cpu_target_floor), "never below the floor"
+    psi["cpu"] = 20.0
+    clock["t"] += 1
+    sched._pressure_guard()
+    assert sched.cpu_target == pytest.approx(sched.cpu_target_floor), "the integral did not wind up past the floor"
     psi["cpu"] = 0.0
-    sched.check_schedule()
-    assert sched.cpu_target == cut                  # cooldown not over yet
-    clock["t"] += 11
-    sched.check_schedule()
-    assert sched.cpu_target == pytest.approx(min(3.6, cut + 0.08))
-
+    for _ in range(600):
+        clock["t"] += 1
+        assert not sched._pressure_guard()
+    assert sched.cpu_target == pytest.approx(full), "back to the full target, not past it"
 
 def test_a_test_is_predicted_at_its_average_parallelism(tmp_path):
     """One number per test: CPU-seconds over wall time, and nothing once it is well past its wall."""
@@ -1581,3 +1582,34 @@ def test_a_worker_holds_one_more_test_when_its_tests_are_short(tmp_path):
     for col, wall, held in ((short, 0.2, 3), (long_, 5.0, 2)):
         sched, nodes = make_sched(tmp_path / str(wall), col, {n: (0.1, 1e8, wall) for n in col}, nodes=1, ncpus=8)
         assert len(nodes[0].sent) == held, (wall, nodes[0].sent)
+
+
+def test_pressure_cuts_lower_the_limit_below_the_core_count_too(tmp_path):
+    """With the target cut by pressure, a test that fits the core count but
+    not the cut limit waits, even with bookings well under the core count."""
+    col = ["a.py::running.dev.1", "a.py::next.dev.1"]
+    sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 60.0) for n in col}, nodes=1, ncpus=16)
+    full = sched.cpu_target
+    sched.measured_load = 7.0
+    assert sched._fits(1, nodes[0], pressure=False), "7 + 2 cores fit 16"
+    sched.cpu_target = full / 2                          # cut to its floor: the limit is 8
+    assert not sched._fits(1, nodes[0], pressure=False), "7 + 2 cores do not fit 8"
+    assert sched.stats["rejected_no_headroom"] == 1
+
+
+def test_pressure_does_not_hold_back_a_worker_going_on_with_its_module(tmp_path):
+    """With the target cut by pressure, the next test of a worker's module still
+    starts (it replaces the one that just ended); a new module's test waits."""
+    col = ["a.py::first.dev.1", "a.py::next.dev.1", "b.py::other.dev.1"]
+    sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 60.0) for n in col}, nodes=1, ncpus=16)
+    node = nodes[0]
+    # a.py's first test is over; the worker holds a.py's next one, not yet admitted
+    sched.committed_at.clear()
+    sched.node2pending[node] = [1]
+    sched._last_file_done[node] = sched._file_of(0)
+    assert sched._continues_module(node) and not sched._continues_module(node, 2)
+    sched.measured_load = 7.0
+    sched.cpu_target = sched.cpu_target_frac * 16 / 2      # cut to its floor: the limit is 8 cores
+    assert sched._fits(1, node, pressure=True), "a.py's next test goes on"
+    assert not sched._fits(2, node, pressure=True), "b.py would add a module"
+    assert sched.stats["admitted_past_pressure"] == 1
