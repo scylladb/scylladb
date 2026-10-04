@@ -6,12 +6,16 @@
 
 import logging
 import os
+import shutil
+import subprocess
+import time
 from contextlib import suppress
 from functools import cache
 
 from botocore.exceptions import BotoCoreError
 from botocore.exceptions import ClientError as AwsClientError
 from docker.errors import APIError, DockerException, NotFound
+from filelock import FileLock
 
 import docker
 from tools.keystore import KeyStore
@@ -34,12 +38,61 @@ def running_in_podman():
     return os.getenv("container") == "podman"
 
 
+def _podman_docker_host() -> str | None:
+    """The Docker API served by rootless podman, started here when it is not running yet.
+
+    A host without a Docker daemon (CI's test.py stage runs in a podman container) still
+    has podman, which test.pylib's DockerizedService uses through its command line.
+    `podman system service` serves the Docker API on a socket, so the docker client below
+    works unchanged; the service is shared by all test processes of the user and exits
+    after ten idle minutes.
+
+    Its containers run without SELinux labels, as a Docker daemon's usually do: the tests
+    bind-mount files from the source tree (cassandra-stress profiles, the local-kms seed),
+    which a labelled container cannot read on an enforcing host, and relabelling them
+    (`:z`) would change the tree's own files.
+    """
+    podman = shutil.which("podman")
+    if podman is None:
+        return None
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    socket_path = os.path.join(runtime_dir, f"scylla-dtest-podman-{os.getuid()}.sock")
+    url = f"unix://{socket_path}"
+    conf_path = os.path.join(runtime_dir, f"scylla-dtest-podman-{os.getuid()}.conf")
+
+    def serving() -> bool:
+        try:
+            docker.DockerClient(base_url=url, timeout=10).ping()
+        except DockerException:
+            return False
+        return True
+
+    with FileLock(f"{socket_path}.lock"):
+        if not serving():
+            LOGGER.info("no Docker daemon reachable; starting the podman Docker API service on %s", url)
+            with open(conf_path, "w") as conf:
+                conf.write("[containers]\nlabel = false\n")
+            subprocess.Popen([podman, "system", "service", "--time=600", url],
+                             env={**os.environ, "CONTAINERS_CONF_OVERRIDE": conf_path},
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            deadline = time.monotonic() + 60
+            while not serving():
+                if time.monotonic() > deadline:
+                    raise DockerException(f"podman Docker API service did not come up on {url}")
+                time.sleep(0.5)
+    return url
+
+
 @retrying(num_attempts=10, sleep_time=1, allowed_exceptions=DockerException)
 def get_docker_client(timeout=360):
     """
     Get a Docker client that is cached per-process.
     This is necessary because pytest-xdist forks processes and a cached
     Docker client from the parent process may not work correctly in child processes.
+
+    Without a reachable Docker daemon the client talks to podman's Docker API instead,
+    and DOCKER_HOST is set so that any later docker.from_env() in this process does too.
 
     :param timeout: timeout in seconds for each Docker API call made with this client;
         the default is larger than docker-py's 60s, which is too short on some builders
@@ -48,7 +101,13 @@ def get_docker_client(timeout=360):
     if key in _docker_clients:
         return _docker_clients[key]
 
-    client = docker.from_env(timeout=timeout)
+    try:
+        client = docker.from_env(timeout=timeout)
+    except DockerException:
+        if (host := _podman_docker_host()) is None:
+            raise
+        os.environ["DOCKER_HOST"] = host
+        client = docker.DockerClient(base_url=host, timeout=timeout)
     LOGGER.info("docker client version: %s (pid=%d, timeout=%ds)", client.version(), key[0], timeout)
     try:
         creds = KeyStore().get_docker_hub_credentials()
