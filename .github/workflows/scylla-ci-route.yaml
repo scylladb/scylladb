@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: read
       statuses: write # publish Jenkins CI status updates on the PR commit
-      issues: write # remove the stale 'conflicts' label and post contributor comments
+      issues: write # remove the stale 'conflicts' label
     env:
       JENKINS_URL: "https://jenkins.scylladb.com"
 
@@ -87,6 +87,19 @@ jobs:
               delay=$((delay * 2))
               attempt=$((attempt + 1))
             done
+          }
+
+          # Reply on a PR as scylladbbot (needs BOT_TOKEN in the step env).
+          # Usage: post_bot_reply <repo> <pr-number> <body>
+          post_bot_reply() {
+            # Without a token gh fails with an auth error that has no HTTP code,
+            # which gh_api_retry would retry as transient
+            if [ -z "$BOT_TOKEN" ]; then
+              echo "::warning::No bot token, not posting reply on $1#$2"
+              return 0
+            fi
+            GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$1/issues/$2/comments" -f body="$3" --silent \
+              || echo "::warning::Failed to post reply on $1#$2"
           }
           RETRY_EOF
           echo "BASH_ENV=$HELPERS_FILE" >> "$GITHUB_ENV"
@@ -138,7 +151,7 @@ jobs:
           # Reply as scylladbbot rather than github-actions[bot]. Its own
           # comments are excluded by the job-level 'if', so the command list
           # in this reply cannot re-trigger the workflow.
-          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          BOT_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
           PR_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           ACTOR: ${{ github.event.comment.user.login }}
@@ -154,8 +167,7 @@ jobs:
           | `@scylladbbot help` | Show this message. |
           HELP_EOF
           )
-          gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" -f body="@${ACTOR} ${BODY}" --silent \
-            || echo "::warning::Failed to post help reply on PR #$PR_NUMBER"
+          post_bot_reply "$PR_REPO" "$PR_NUMBER" "@${ACTOR} ${BODY}"
 
       - name: Resolve PR context
         if: github.event_name != 'issue_comment' || steps.comment-check.outputs.valid == 'true'
@@ -178,8 +190,9 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_COMMAND: ${{ steps.comment-check.outputs.command }}
           COMMENT_ACTOR: ${{ github.event.comment.user.login }}
-          # Replies to @scylladbbot commands are posted as scylladbbot
-          BOT_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          # Replies to @scylladbbot commands are posted as scylladbbot; only
+          # comment events reply, so don't expose the token to other events
+          BOT_TOKEN: ${{ github.event_name == 'issue_comment' && secrets.AUTO_BACKPORT_TOKEN || '' }}
           # Manual dispatch context
           DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           DISPATCH_TARGET_REPO: ${{ github.event.inputs.target_repo }}
@@ -219,8 +232,8 @@ jobs:
           # the commenter at 'trigger-ci' instead of silently doing nothing.
           if [ "$EVENT_NAME" = "issue_comment" ] && [ "$COMMENT_COMMAND" = "trigger-thin-ci" ] && [ "$PR_DRAFT" != "true" ]; then
             echo "::warning::PR #$PR_NUMBER is not a draft; ignoring '@scylladbbot trigger-thin-ci'"
-            GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
-              -f body="@${COMMENT_ACTOR} this PR is not a draft, so \`trigger-thin-ci\` does not apply. Use \`@scylladbbot trigger-ci\` to run full CI." --silent || true
+            post_bot_reply "$PR_REPO" "$PR_NUMBER" \
+              "@${COMMENT_ACTOR} this PR is not a draft, so \`trigger-thin-ci\` does not apply. Use \`@scylladbbot trigger-ci\` to run full CI."
             echo "should_continue=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -235,8 +248,8 @@ jobs:
             else
               echo "::warning::PR #$PR_NUMBER is a draft, skipping CI trigger"
               if [ "$EVENT_NAME" = "issue_comment" ]; then
-                GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
-                  -f body="@${COMMENT_ACTOR} this PR is a draft, so full CI was not triggered. Use \`@scylladbbot trigger-thin-ci\` for a thin CI run, or mark the PR ready for review." --silent || true
+                post_bot_reply "$PR_REPO" "$PR_NUMBER" \
+                  "@${COMMENT_ACTOR} this PR is a draft, so full CI was not triggered. Use \`@scylladbbot trigger-thin-ci\` for a thin CI run, or mark the PR ready for review."
               fi
               echo "should_continue=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -344,21 +357,36 @@ jobs:
           PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
           PR_URL: ${{ steps.resolve-pr.outputs.pr_url }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_COMMAND: ${{ steps.comment-check.outputs.command }}
+          COMMENT_ACTOR: ${{ github.event.comment.user.login }}
+          # Replies to @scylladbbot commands are posted as scylladbbot; only
+          # comment events reply, so don't expose the token to other events
+          BOT_TOKEN: ${{ github.event_name == 'issue_comment' && secrets.AUTO_BACKPORT_TOKEN || '' }}
         run: |
           echo "Fetching PR #$PR_NUMBER details..."
           PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
           MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
+          # true only once GitHub confirmed the PR has no merge conflicts
+          MERGEABLE=$(echo "$PR_JSON" | jq -r '.mergeable')
 
-          # GitHub computes mergeability asynchronously and reports "unknown"
-          # while it does; poll a few times so we don't treat a still-pending
-          # computation as a real conflict.
+          # GitHub computes mergeability asynchronously and reports "mergeable"
+          # as null while it does; poll a few times so we don't act on a
+          # still-pending computation. The decision below is based on "mergeable"
+          # (mergeable_state can still read "unknown" once it is known, so don't
+          # wait on that). Right after a push GitHub recomputes it, and if it is
+          # still null when we give up, a 'conflicts' label blocks CI, so allow it
+          # some time. A closed/merged PR keeps "mergeable" null for good, so don't
+          # wait on it.
           POLL_ATTEMPTS=0
-          while [ "$MERGEABLE_STATE" = "unknown" ] && [ "$POLL_ATTEMPTS" -lt 5 ]; do
+          POLL_MAX=10
+          while [ "$MERGEABLE" = "null" ] && [ "$(echo "$PR_JSON" | jq -r '.state')" = "open" ] && [ "$POLL_ATTEMPTS" -lt "$POLL_MAX" ]; do
             POLL_ATTEMPTS=$((POLL_ATTEMPTS + 1))
-            echo "Mergeable state is unknown, waiting for GitHub to compute it (attempt $POLL_ATTEMPTS/5)..."
+            echo "Mergeability is not computed yet (mergeable=$MERGEABLE, mergeable_state=$MERGEABLE_STATE), waiting for GitHub (attempt $POLL_ATTEMPTS/$POLL_MAX)..."
             sleep 2
             PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
             MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
+            MERGEABLE=$(echo "$PR_JSON" | jq -r '.mergeable')
           done
 
           LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
@@ -390,28 +418,145 @@ jobs:
           done
           PYTEST_EXTRA_OPTIONS=$(echo "$PYTEST_EXTRA_OPTIONS" | sed 's/^ //')
 
-          # Check conflict state
-          if [ "$MERGEABLE_STATE" = "dirty" ]; then
-            HAS_CONFLICTS=true
-            echo "::warning::CI will not be triggered since $PR_URL has conflicts"
-          elif [ "$MERGEABLE_STATE" = "unknown" ]; then
-            # GitHub still hasn't finished computing mergeability after polling;
-            # don't block CI on it (that would require a manual push/comment to
-            # unstick once GitHub resolves it) -- fall back to the label state.
-            echo "::warning::GitHub did not determine mergeability for $PR_URL yet; falling back to the 'conflicts' label state"
-          elif [ "$MERGEABLE_STATE" = "clean" ] && [ "$HAS_CONFLICTS" = "true" ]; then
-            # The 'conflicts' label is stale: nothing removes it once applied,
-            # so a PR that resolved its conflicts (e.g. via a force-push) stayed blocked from
-            # CI forever. GitHub now reports it as cleanly mergeable, so trust that over the
-            # label and clean it up.
-            echo "PR is mergeable again, removing stale 'conflicts' label"
-            if gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/conflicts" --silent; then
-              HAS_CONFLICTS=false
+          # Check conflict state. "mergeable" is GitHub's answer to "does this PR have
+          # merge conflicts?": false means conflicts (normally mergeable_state "dirty",
+          # also for draft PRs), true means none, null means not computed yet.
+          # Check it before mergeable_state, which can still read "unknown" while
+          # "mergeable" is already known.
+          # BLOCK_REASON says why CI is blocked, for the reply to a comment command.
+          BLOCK_REASON=""
+          # Who added the 'conflicts' label decides whether GitHub's answer can clear
+          # it. conflict_reminder.yaml (as github-actions[bot]) adds it only when
+          # "mergeable" is false, so that label goes stale once the conflicts are
+          # resolved. Anyone else may mean something GitHub can't see: the backport
+          # automation (scylladbbot) adds it when a cherry-pick conflicted and the PR
+          # was opened with the conflict markers committed, which GitHub reports as
+          # mergeable, and a person may add it by hand. Those labels are cleared by a
+          # person (make-pr-ready-for-review.yaml then marks the PR ready, and
+          # mergify.yml drafts mergify backports while it is set), so they keep
+          # blocking CI whatever GitHub reports.
+          # LABELER is empty when the label is absent, the lookup failed
+          # (LABELER_LOOKUP_FAILED=true) or no event records who added it.
+          LABELER=""
+          LABELER_LOOKUP_FAILED=false
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            # The step's shell has no pipefail, so don't pipe the call into sort.
+            # The events API doesn't guarantee chronological order, so pick the
+            # latest by created_at (ISO 8601 UTC, so it sorts as text).
+            if LABELERS=$(gh_api_retry --paginate "repos/$PR_REPO/issues/$PR_NUMBER/events?per_page=100" \
+                --jq '.[] | select(.event == "labeled" and .label.name == "conflicts") | [.created_at, .actor.login] | @tsv'); then
+              LABELER=$(printf '%s\n' "$LABELERS" | sort -s -k1,1 | tail -n 1 | cut -f2)
             else
-              echo "::warning::Failed to remove stale 'conflicts' label from $PR_URL; CI will not be triggered"
+              LABELER_LOOKUP_FAILED=true
+              echo "::warning::Failed to look up who added the 'conflicts' label to $PR_URL"
             fi
-          elif [ "$HAS_CONFLICTS" = "true" ]; then
-            echo "::warning::CI will not be triggered since $PR_URL has conflicts"
+          fi
+          KEEP_LABEL=false
+          if [ -n "$LABELER" ] && [ "$LABELER" != "github-actions[bot]" ]; then
+            KEEP_LABEL=true
+          fi
+          if [ "$MERGEABLE_STATE" = "dirty" ] || [ "$MERGEABLE" = "false" ]; then
+            BLOCK_REASON=conflicts
+            echo "::warning::CI will not be triggered since $PR_URL has conflicts (mergeable=$MERGEABLE, mergeable_state=$MERGEABLE_STATE)"
+            HAS_CONFLICTS=true
+          elif [ "$KEEP_LABEL" = "true" ]; then
+            BLOCK_REASON=kept-label
+            echo "::warning::CI will not be triggered since $PR_URL has the 'conflicts' label added by $LABELER; remove it once the conflicts are resolved"
+          elif [ "$MERGEABLE" = "true" ]; then
+            # A 'conflicts' label here is stale: nothing removes it once applied, so a
+            # PR that resolved its conflicts (e.g. via a force-push) stayed blocked from
+            # CI forever. "mergeable" is true for any conflict-free PR -- not only for
+            # mergeable_state "clean", but also e.g. "unstable" (a non-passing commit
+            # status, which a PR that CI refuses to run on typically has) or "blocked"
+            # (missing approvals) -- so trust GitHub over the label and clean it up.
+            # Labels that GitHub's answer can't clear are handled above.
+            # Removing the label with GITHUB_TOKEN doesn't trigger other workflows, so
+            # it doesn't mark a draft PR ready for review.
+            if [ "$HAS_CONFLICTS" = "true" ] && [ -z "$LABELER" ]; then
+              # Don't remove a label without knowing who added it. A failed lookup
+              # may succeed on retry; a missing labeling event won't come back.
+              if [ "$LABELER_LOOKUP_FAILED" = "true" ]; then
+                BLOCK_REASON=labeler-lookup-failed
+                echo "::warning::CI will not be triggered since $PR_URL has the 'conflicts' label and looking up who added it failed"
+              else
+                BLOCK_REASON=unknown-labeler
+                echo "::warning::CI will not be triggered since $PR_URL has the 'conflicts' label and no event records who added it"
+              fi
+            elif [ "$HAS_CONFLICTS" = "true" ]; then
+              echo "PR has no merge conflicts (mergeable_state=$MERGEABLE_STATE), removing stale 'conflicts' label"
+              if DELETE_ERR=$(gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/conflicts" --silent 2>&1); then
+                HAS_CONFLICTS=false
+              elif printf '%s' "$DELETE_ERR" | grep -q 'HTTP 404' \
+                && CURRENT_LABELS=$(gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/labels?per_page=100" --jq '.[].name') \
+                && ! printf '%s\n' "$CURRENT_LABELS" | grep -qx 'conflicts'; then
+                # A 404 can also mean a wrong repo/PR or no access, so only treat it as
+                # success once a re-read confirms the label is gone (removed by a
+                # concurrent run or manually)
+                echo "'conflicts' label is already gone from $PR_URL"
+                HAS_CONFLICTS=false
+              else
+                BLOCK_REASON=remove-failed
+                # DELETE_ERR also holds the retry messages; a ::warning:: shows only
+                # one line, so report the final error there and the full text below it.
+                echo "::warning::Failed to remove stale 'conflicts' label from $PR_URL; CI will not be triggered: $(printf '%s' "$DELETE_ERR" | tail -n 1)"
+                printf '%s\n' "$DELETE_ERR"
+              fi
+            fi
+          else
+            # GitHub still hasn't computed mergeability after polling; don't block CI
+            # on that alone (it would need a manual push/comment to unstick once GitHub
+            # resolves it) -- fall back to the 'conflicts' label state.
+            echo "::warning::GitHub did not determine mergeability for $PR_URL yet (mergeable=$MERGEABLE, mergeable_state=$MERGEABLE_STATE); falling back to the 'conflicts' label state"
+            if [ "$HAS_CONFLICTS" = "true" ]; then
+              BLOCK_REASON=undetermined
+              echo "::warning::CI will not be triggered since $PR_URL has the 'conflicts' label"
+            fi
+          fi
+
+          # Don't refuse an explicit '@scylladbbot trigger-ci'/'trigger-thin-ci' silently.
+          # Other events (push, ready_for_review, reopened, workflow_dispatch) are
+          # intentionally silent beyond the log warnings above: there is no command to
+          # answer, and a PR with real conflicts would get a comment on every push.
+          if [ "$HAS_CONFLICTS" = "true" ] && [ "$EVENT_NAME" = "issue_comment" ]; then
+            RETRY_HINT="comment \`@scylladbbot ${COMMENT_COMMAND}\` again"
+            case "$BLOCK_REASON" in
+              conflicts)
+                # Thin CI runs only on draft PRs, which get no CI on push, so the
+                # commenter has to ask again explicitly. A push doesn't start CI
+                # automatically for an external contributor either (see "Check
+                # trusted contributor"), so don't promise it unconditionally.
+                if [ "$KEEP_LABEL" = "true" ]; then
+                  # A push alone won't unblock it: the label stays until removed
+                  AFTER_PUSH="then remove the 'conflicts' label, which re-runs CI routing; if CI still does not start, comment \`@scylladbbot trigger-ci\`"
+                elif [ "$COMMENT_COMMAND" = "trigger-thin-ci" ]; then
+                  AFTER_PUSH="then $RETRY_HINT"
+                else
+                  AFTER_PUSH="CI will start on the next push for trusted contributors; otherwise $RETRY_HINT"
+                fi
+                REPLY="CI was not triggered because this PR has merge conflicts with the base branch. Please rebase and resolve them; ${AFTER_PUSH}."
+                ;;
+              kept-label)
+                # Removing the label re-runs this workflow (the 'unlabeled' trigger) and
+                # make-pr-ready-for-review.yaml marks a draft PR ready, so CI starts
+                # on its own for a trusted author; asking for a comment as well would
+                # start CI twice. After that the PR is no longer a draft, so point at
+                # 'trigger-ci' rather than the original command.
+                REPLY="CI was not triggered because this PR carries the 'conflicts' label, added by ${LABELER} (only a label added for merge conflicts reported by GitHub is removed automatically). Once the conflicts are resolved, remove the label, which re-runs CI routing (and marks a draft PR ready for review); if CI still does not start, comment \`@scylladbbot trigger-ci\`."
+                ;;
+              labeler-lookup-failed)
+                REPLY="CI was not triggered: GitHub reports no merge conflicts, but looking up who added the 'conflicts' label failed, so it was not removed (see the workflow log). Please ${RETRY_HINT} to retry, or remove the label if the conflicts are resolved."
+                ;;
+              unknown-labeler)
+                REPLY="CI was not triggered: GitHub reports no merge conflicts, but no event records who added the 'conflicts' label, so it was not removed automatically (it may have been added for a reason GitHub cannot see, such as committed conflict markers). If that reason no longer applies, remove the label, which re-runs CI routing (and marks a draft PR ready for review); if CI still does not start, comment \`@scylladbbot trigger-ci\`."
+                ;;
+              remove-failed)
+                REPLY="CI was not triggered: GitHub reports no merge conflicts, but the stale 'conflicts' label could not be cleared (see the workflow log). Please ${RETRY_HINT} to retry, or remove the label if the conflicts are resolved."
+                ;;
+              *)
+                REPLY="CI was not triggered: GitHub has not determined whether this PR is mergeable yet, and it carries the 'conflicts' label. Please ${RETRY_HINT} in a few minutes."
+                ;;
+            esac
+            post_bot_reply "$PR_REPO" "$PR_NUMBER" "@${COMMENT_ACTOR} ${REPLY}"
           fi
 
           echo "has_conflicts=$HAS_CONFLICTS" >> "$GITHUB_OUTPUT"
