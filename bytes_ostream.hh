@@ -13,6 +13,7 @@
 #include "utils/managed_bytes.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
+#include <algorithm>
 #include <bit>
 #include <concepts>
 #include <ranges>
@@ -427,26 +428,26 @@ public:
     }
 
     bool operator==(const bytes_ostream& other) const {
+        if (_size != other._size) {
+            return false;
+        }
         auto as = fragments().begin();
-        auto as_end = fragments().end();
         auto bs = other.fragments().begin();
-        auto bs_end = other.fragments().end();
-
-        auto a = *as++;
-        auto b = *bs++;
-        while (!a.empty() || !b.empty()) {
+        bytes_view a, b;
+        for (size_type left = _size; left;) {
+            if (a.empty()) {
+                a = *as++;
+            }
+            if (b.empty()) {
+                b = *bs++;
+            }
             auto now = std::min(a.size(), b.size());
-            if (!std::equal(a.begin(), a.begin() + now, b.begin(), b.begin() + now)) {
+            if (!std::equal(a.begin(), a.begin() + now, b.begin())) {
                 return false;
             }
             a.remove_prefix(now);
-            if (a.empty() && as != as_end) {
-                a = *as++;
-            }
             b.remove_prefix(now);
-            if (b.empty() && bs != bs_end) {
-                b = *bs++;
-            }
+            left -= now;
         }
         return true;
     }
