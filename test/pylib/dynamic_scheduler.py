@@ -75,8 +75,9 @@ GB = 1e9
 PROFILE_FILENAME = "profile.json"
 SAMPLES_GLOB = "dynamic_samples_*.jsonl"
 
-# Minimum spacing between two consecutive PSI-triggered budget cuts.
-PRESSURE_COOLDOWN = 10.0
+# Longest gap one move of the CPU target covers: a pass that comes late does
+# not swing the target in one jump.
+TARGET_MAX_STEP = 10.0
 EMA_ALPHA = 0.3
 MEM_DECAY = 0.7
 # A run whose cgroup waited for a CPU more than this share of its wall
@@ -306,6 +307,8 @@ CPU_OVERCOMMIT = 1.5       # CPU bookings never exceed this many times the CPUs
 BURST = 0.05               # bookings grow by at most this share of the CPUs a second
 PSI_CPU_LIMIT = 25.0       # tests' CPU "some avg10" % above which admission pauses, target shrinks
 PSI_MEM_LIMIT = 5.0        # machine memory "some avg10" % above which admission pauses
+TARGET_KP = 0.006          # the CPU target moves this share of the CPUs per point of pressure off the limit...
+TARGET_KI = 0.0006         # ...and, integrated, this share per point and second it stays off
 DEPTH = 1                  # tests a worker may hold queued behind the one it runs
 SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more (see _depth)
 K_SIGMA = 0.5              # standard deviations of cores added to a test's booking
@@ -720,6 +723,7 @@ def read_psi(kind: str, path: Path | None = None, line_kind: str = "some") -> fl
     return 0.0
 
 
+
 class CgroupReader:
     """Reads live CPU (cores) and memory (bytes) of a worker's cgroup
     from the controller."""
@@ -969,7 +973,9 @@ class DynamicScheduling:
         self._modules: dict[int, str] = {}
         self._first_run: dict[str, int] = {}            # key -> the index measuring it for the others
         self._first_run_done: set[str] = set()
-        self._last_pressure_cut = -math.inf
+        self._target_t: float | None = None          # when the CPU target last moved
+        self._target_i = 0.0                         # the integral part of the CPU target, in cores (<= 0)
+        self._pressured = False
         self._last_retire = -math.inf
         self._psi = (0.0, 0.0)
         self.stats = defaultdict(int)
@@ -1415,7 +1421,21 @@ class DynamicScheduling:
         # request to over-subscribe -- to keep more work runnable than
         # there are cores, so none ever idles waiting for the next
         # test to be admitted -- and then the target is the limit.
-        headroom_limit = max(float(self.ncpus), self.cpu_target)
+        # Pressure cuts scale the limit down with the target: in the
+        # heavy phases of a debug run the tests' CPU pressure sat at
+        # 40-60% while bookings stayed under the core count, every
+        # test ran 1.35-1.6x slower, and the run got less done than
+        # with fewer tests running.  Without cuts the limit is as
+        # before.
+        # A worker going on with its module, its last test just over,
+        # replaces that test and adds nothing: pressure limits what
+        # the run adds, not that.  Held back, the next test of a
+        # serial module waited up to 74 seconds at a time and the
+        # module, 10 minutes of tests, ended a release run at 18.
+        full_target = self.cpu_target_frac * self.ncpus
+        continuing = self._continues_module(node, idx)
+        target = full_target if continuing else self.cpu_target
+        headroom_limit = max(float(self.ncpus), full_target) * min(1.0, target / full_target)
         if self._estimate_now(now) + req > headroom_limit:
             self.stats["rejected_no_headroom"] += 1
             return False
@@ -1424,12 +1444,14 @@ class DynamicScheduling:
             # no CPU pressure, and with evidence of real slack;
             # recently admitted tests count at full weight so one
             # stale reading cannot admit a wave.
-            if pressure:
+            if pressure and not continuing:
                 self.stats["rejected_pressure"] += 1
                 return False
-            if self._estimate_now(now) + req > self.cpu_target:
+            if self._estimate_now(now) + req > target:
                 self.stats["rejected_cpu_band"] += 1
                 return False
+        if continuing and target > self.cpu_target:
+            self.stats["admitted_past_pressure"] += 1
         return True
 
     def _hold_reservation(self, idx: int | None) -> tuple[float, float]:
@@ -1874,35 +1896,58 @@ class DynamicScheduling:
         return True
 
     def _pressure_guard(self) -> bool:
-        # CPU pressure of the tests' own cgroup tree when available:
-        # on a pinned or shared machine the system-wide file also
-        # counts stalls on other cores and of other processes.  Memory
-        # pressure is machine-wide by nature.
-        psi_cpu = read_psi("cpu", self.live.base) if self.live.base is not None and (self.live.base / "cpu.pressure").exists() else read_psi("cpu")
+        """Set the CPU target from the pressure: a PI controller.
+
+        The error is how far the tests' CPU pressure, the kernel's
+        avg10, is below the limit (negative above it).  The target
+        is the full target, plus TARGET_KP of the CPUs per point of
+        error, plus the error integrated over time at TARGET_KI.  The
+        integral holds the cut a lasting overload needs, and only the
+        target's floor bounds it, so it never winds up beyond what the
+        target can do.  Memory pressure counts in the error too, scaled
+        to the CPU limit, since a test held back is one not taking
+        memory either.
+
+        Acting on two seconds of pressure, all or nothing at 2.5% of the
+        CPUs per second, the target chased its own effect, which shows a
+        few seconds later: in a debug run it swung by 6-11 cores every
+        half minute, the load and the pressure after it, and the pool
+        grew and drained with every swing.  Measured against a model of
+        that run, the PI target moves a fifth as much, gets a surge of
+        heavy tests back under the limit sooner, and gives up no load.
+        On avg10 it does as well as on a plain ten-second mean of the
+        stall time: avg10's tail after a burst held a controller that
+        cut hard and grew back slowly down for a minute, but the
+        integral grows back by itself.
+
+        CPU pressure of the tests' own cgroup tree when available: on a
+        pinned or shared machine the system-wide file also counts stalls
+        on other cores and of other processes.  Memory pressure is
+        machine-wide by nature.  Not the run queue: it was tried as a
+        second signal and carried nothing PSI does not.
+        """
+        cpu_path = self.live.base if self.live.base is not None and (self.live.base / "cpu.pressure").exists() else None
+        psi_cpu = read_psi("cpu", cpu_path)
         psi_mem = read_psi("memory")
         self._psi = (psi_cpu, psi_mem)
         now = self.now()
-        # Not the run queue: it was tried as a second signal and
-        # carried nothing PSI does not.  PSI sat at 2% whether the
-        # queue read 8 or 28, and the queue is over the core count a
-        # quarter of the time on a busy box simply because it counts
-        # the tasks on the CPUs as well.
-        if psi_cpu <= self.psi_cpu_limit and psi_mem <= self.psi_mem_limit:
-            # Calm again: grow the target back slowly towards the
-            # configured one (additive-increase /
-            # multiplicative-decrease, like TCP).
-            full = self.cpu_target_frac * self.ncpus
-            if self.cpu_target < full and now - self._last_pressure_cut >= PRESSURE_COOLDOWN:
-                self.cpu_target = min(full, self.cpu_target + 0.02 * self.ncpus)
-            return False
-        if now - self._last_pressure_cut >= PRESSURE_COOLDOWN:
-            old = self.cpu_target
-            self.cpu_target = max(self.cpu_target_floor, self.cpu_target * 0.9)
-            self._last_pressure_cut = now
-            self.stats["pressure_cuts"] += 1
-            self.log(f"pressure: psi cpu={psi_cpu:.1f}% mem={psi_mem:.1f}%; "
-                      f"cpu target {old:.1f} -> {self.cpu_target:.1f}")
-        return True
+        pressured = psi_cpu > self.psi_cpu_limit or psi_mem > self.psi_mem_limit
+        dt = 0.0 if self._target_t is None else min(TARGET_MAX_STEP, max(0.0, now - self._target_t))
+        self._target_t = now
+        error = min(self.psi_cpu_limit - psi_cpu,
+                    (self.psi_mem_limit - psi_mem) * self.psi_cpu_limit / max(self.psi_mem_limit, 1e-9))
+        full = self.cpu_target_frac * self.ncpus
+        lowest = self.cpu_target_floor - full
+        self._target_i = min(0.0, max(lowest, self._target_i + TARGET_KI * self.ncpus * error * dt))
+        old = self.cpu_target
+        self.cpu_target = min(full, max(self.cpu_target_floor, full + TARGET_KP * self.ncpus * error + self._target_i))
+        if pressured != self._pressured:
+            if pressured:
+                self.stats["pressure_cuts"] += 1
+            self.log(f"pressure: psi cpu={psi_cpu:.1f}% mem={psi_mem:.1f}%; cpu target "
+                      f"{old:.1f} -> {self.cpu_target:.1f}")
+            self._pressured = pressured
+        return pressured
 
     # -- selection ---------------------------------------------------
 
