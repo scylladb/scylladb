@@ -9,6 +9,10 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   jira-sync:
     uses: scylladb/github-automation/.github/workflows/main_pr_events_jira_sync.yml@main
