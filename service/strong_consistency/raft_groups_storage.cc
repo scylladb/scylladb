@@ -12,6 +12,7 @@
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
 #include "utils/log.hh"
+#include "utils/error_injection.hh"
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
@@ -65,6 +66,11 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // Models a commit_idx write that never reached the disk: persisting it is optional
+    // (see raft::server_impl::process_fsm_output), and a restarted server re-learns it.
+    if (utils::get_local_injector().enter("sc_skip_store_commit_idx")) {
+        return make_ready_future<>();
+    }
     return execute_with_linearization_point([this, idx] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
