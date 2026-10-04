@@ -420,3 +420,74 @@ BOOST_AUTO_TEST_CASE(test_write_managed_bytes_view) {
     buf2.write(source_bytes_view);
     BOOST_REQUIRE(std::move(buf2).to_managed_bytes() == source_bytes);
 }
+
+BOOST_AUTO_TEST_CASE(test_equality_empty) {
+    bytes_ostream empty1, empty2;
+    BOOST_REQUIRE(empty1 == empty2);
+
+    bytes_ostream full;
+    full.write(bytes("abc"));
+    BOOST_REQUIRE(!(empty1 == full));
+    BOOST_REQUIRE(!(full == empty1));
+
+    bytes_ostream cleared;
+    cleared.write(bytes("xyz"));
+    cleared.clear();
+    BOOST_REQUIRE(!(cleared == full));
+    BOOST_REQUIRE(!(full == cleared));
+    BOOST_REQUIRE(cleared == empty1);
+    BOOST_REQUIRE(empty1 == cleared);
+
+    // Same content, different fragment boundaries.
+    bytes_ostream a(4), b(16);
+    bytes data("0123456789abcdefghijklmnopqrstuvwxyz");
+    for (size_t i = 0; i < data.size(); i += 3) {
+        a.write(bytes_view(data).substr(i, 3));
+    }
+    for (size_t i = 0; i < data.size(); i += 10) {
+        b.write(bytes_view(data).substr(i, 10));
+    }
+    BOOST_REQUIRE(a == b);
+    BOOST_REQUIRE(b == a);
+
+    bytes_ostream c;
+    bytes other = data;
+    other[data.size() - 1] ^= 1;
+    c.write(other);
+    BOOST_REQUIRE(!(a == c));
+    BOOST_REQUIRE(!(c == a));
+}
+
+BOOST_AUTO_TEST_CASE(test_equality_after_retract_and_remove_suffix) {
+    bytes data("0123456789abcdefghijklmnopqrstuvwxyz");
+    bytes_view head = bytes_view(data).substr(0, 12);
+
+    bytes_ostream expected(16);
+    expected.write(head);
+
+    bytes_ostream a(4);
+    for (size_t i = 0; i < 12; i += 3) {
+        a.write(bytes_view(data).substr(i, 3));
+    }
+    auto pos = a.pos();
+    for (size_t i = 12; i < data.size(); i += 3) {
+        a.write(bytes_view(data).substr(i, 3));
+    }
+    a.retract(pos);
+    BOOST_REQUIRE(a == expected);
+    BOOST_REQUIRE(expected == a);
+    a.write(bytes("x"));
+    BOOST_REQUIRE(!(a == expected));
+    BOOST_REQUIRE(!(expected == a));
+
+    bytes_ostream b(8);
+    for (size_t i = 0; i < data.size(); i += 5) {
+        b.write(bytes_view(data).substr(i, 5));
+    }
+    b.remove_suffix(data.size() - head.size());
+    BOOST_REQUIRE(b == expected);
+    BOOST_REQUIRE(expected == b);
+    b.remove_suffix(head.size());
+    BOOST_REQUIRE(b == bytes_ostream());
+    BOOST_REQUIRE(bytes_ostream() == b);
+}
