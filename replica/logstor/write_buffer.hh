@@ -179,7 +179,7 @@ public:
 
     const char* data() const noexcept { return _buffer.get(); }
 
-    // The bytes written to the buffer so far, which after seal() is the whole buffer to write out.
+    // The bytes written to the buffer so far, which after seal() is the whole chunk.
     size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
 
     size_t buffer_size() const noexcept { return _buffer_size; }
@@ -221,7 +221,8 @@ public:
     template <log_record_writer_concept Writer>
     append_result append(const Writer& writer);
 
-    size_t sealed_size(size_t alignment) const noexcept;
+    // The size of the chunk that sealing the buffer at `alignment` would produce.
+    size_t chunk_size(size_t alignment) const noexcept;
 
     // How many segments of this kind `record_count` records of `record_bytes` bytes take.
     static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
@@ -244,7 +245,12 @@ public:
         return chunk_headers_size(_segment_kind);
     }
 
+    // Completes the chunk: pads it to `alignment` and writes its headers. `table` is set for
+    // segment_kind::full.
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
+
+    // The chunk the buffer was sealed into, which is what is written to a segment.
+    bytes_view chunk() const;
 
 private:
 
@@ -302,7 +308,6 @@ public:
     future<> close();
     bool is_closed() const noexcept;
 
-    const char* data() const noexcept { return _raw.data(); }
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
 
     size_t buffer_size() const noexcept { return _raw.buffer_size(); }
@@ -316,13 +321,15 @@ public:
     size_t record_bytes() const noexcept { return _raw.record_bytes(); }
     size_t record_count() const noexcept { return _raw.record_count(); }
 
-    size_t sealed_size(size_t alignment) const noexcept {
-        return _raw.sealed_size(alignment);
+    size_t chunk_size(size_t alignment) const noexcept {
+        return _raw.chunk_size(alignment);
     }
 
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment) {
         _raw.seal(segment_seq, table, alignment);
     }
+
+    bytes_view chunk() const { return _raw.chunk(); }
 
     // Write a record to the buffer.
     // Returns a future that will be resolved with the record location once flushed and a gate holder

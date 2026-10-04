@@ -1519,10 +1519,10 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     write_source source = write_source::normal_write;
     auto holder = _async_gate.hold();
     auto write_op = _writes_phaser.start();
-    const auto sealed_size = wb.sealed_size(block_alignment);
+    const auto chunk_size = wb.chunk_size(block_alignment);
 
-    if (sealed_size > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
+    if (chunk_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
     }
 
     while (true) {
@@ -1535,7 +1535,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         auto seg_holder = seg->hold();
         auto seg_ref = seg->ref();
 
-        auto reservation = co_await seg->reserve(sealed_size);
+        auto reservation = co_await seg->reserve(chunk_size);
         if (!reservation) {
             if (_active_segment == seg) {
                 co_await request_segment_switch();
@@ -1554,8 +1554,8 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
-        bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
-        auto append_result = co_await coroutine::as_future(seg->write_reserved(std::move(*reservation), data));
+        const auto chunk = wb.chunk();
+        auto append_result = co_await coroutine::as_future(seg->write_reserved(std::move(*reservation), chunk));
         if (append_result.failed()) {
             auto ex = append_result.get_exception();
             ++_stats.write_failures;
@@ -1564,7 +1564,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         }
         auto pos = append_result.get();
 
-        _stats.bytes_written[static_cast<size_t>(source)] += data.size();
+        _stats.bytes_written[static_cast<size_t>(source)] += chunk.size();
         _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
 
         // complete all buffered writes with their individual locations and wait
@@ -1589,19 +1589,19 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 }
 
 future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source) {
-    const auto sealed_size = wb.sealed_size(block_alignment);
+    const auto chunk_size = wb.chunk_size(block_alignment);
 
-    if (sealed_size > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
+    if (chunk_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
     }
 
     auto seg = co_await get_segment(source);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
     wb.seal(seg->seq_num(), cg.table_id(), block_alignment);
-    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
+    const auto chunk = wb.chunk();
 
-    auto append_result = co_await coroutine::as_future(seg->append(data));
+    auto append_result = co_await coroutine::as_future(seg->append(chunk));
     if (append_result.failed()) {
         auto ex = append_result.get_exception();
         ++_stats.write_failures;
@@ -1610,7 +1610,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     }
     auto pos = append_result.get();
 
-    _stats.bytes_written[static_cast<size_t>(source)] += data.size();
+    _stats.bytes_written[static_cast<size_t>(source)] += chunk.size();
     _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
 
     // The records are on disk and the index already points into this segment, so if adding it to

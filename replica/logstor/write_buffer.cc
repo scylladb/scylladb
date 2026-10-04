@@ -102,7 +102,7 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     };
 }
 
-size_t raw_write_buffer::sealed_size(size_t alignment) const noexcept {
+size_t raw_write_buffer::chunk_size(size_t alignment) const noexcept {
     return align_up(serialized_size(), alignment);
 }
 
@@ -123,6 +123,13 @@ void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id
     pad_to_alignment(alignment);
     write_header(segment_seq, table);
     _sealed = true;
+}
+
+bytes_view raw_write_buffer::chunk() const {
+    if (!_sealed) {
+        on_internal_error(logstor_logger, "Write buffer has no chunk before it is sealed");
+    }
+    return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
 }
 
 void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
