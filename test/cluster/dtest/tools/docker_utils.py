@@ -173,7 +173,13 @@ def container_reload(container):
 
 @retrying(num_attempts=5, sleep_time=1, allowed_exceptions=APIError)
 def container_remove(container, **kwargs):
-    """Remove a container with retries on transient Docker API errors; an already-gone container counts as removed."""
+    """Remove a container with retries on transient Docker API errors; an already-gone container counts as removed.
+
+    The container's anonymous volumes go with it (v=True) unless the caller says otherwise:
+    images such as minio's declare a VOLUME, and without v=True every test that ran one
+    left a volume behind on the host.
+    """
+    kwargs.setdefault("v", True)
     with suppress(NotFound):
         container.remove(**kwargs)
 
