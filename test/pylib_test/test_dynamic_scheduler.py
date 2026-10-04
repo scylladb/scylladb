@@ -1597,19 +1597,94 @@ def test_pressure_cuts_lower_the_limit_below_the_core_count_too(tmp_path):
     assert sched.stats["rejected_no_headroom"] == 1
 
 
-def test_pressure_does_not_hold_back_a_worker_going_on_with_its_module(tmp_path):
+def test_pressure_does_not_hold_back_a_worker_going_on_with_a_long_module(tmp_path):
     """With the target cut by pressure, the next test of a worker's module still
-    starts (it replaces the one that just ended); a new module's test waits."""
-    col = ["a.py::first.dev.1", "a.py::next.dev.1", "b.py::other.dev.1"]
+    starts when the rest of that module is long next to the rest of the run (it
+    replaces the test that just ended); a short module's next test waits, and so
+    does a new module's."""
+    col = ["a.py::first.dev.1"] + [f"a.py::t{i}.dev.1" for i in range(10)] + ["b.py::b0.dev.1", "b.py::b1.dev.1"]
     sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 60.0) for n in col}, nodes=1, ncpus=16)
     node = nodes[0]
-    # a.py's first test is over; the worker holds a.py's next one, not yet admitted
     sched.committed_at.clear()
-    sched.node2pending[node] = [1]
-    sched._last_file_done[node] = sched._file_of(0)
-    assert sched._continues_module(node) and not sched._continues_module(node, 2)
     sched.measured_load = 7.0
     sched.cpu_target = sched.cpu_target_frac * 16 / 2      # cut to its floor: the limit is 8 cores
+    sched.total_remaining = 16 * 15 * 60.0               # the rest of the run: 15 minutes
+    # a.py's first test is over; the worker holds a.py's next one, not yet admitted: about
+    # ten minutes of a.py are left
+    sched.node2pending[node] = [1]
+    sched._last_file_done[node] = sched._file_of(0)
+    assert sched._continues_module(node) and not sched._continues_module(node, 11)
     assert sched._fits(1, node, pressure=True), "a.py's next test goes on"
-    assert not sched._fits(2, node, pressure=True), "b.py would add a module"
+    assert not sched._fits(11, node, pressure=True), "b.py would add a module"
     assert sched.stats["admitted_past_pressure"] == 1
+    # b.py's first test is over and its last one is held: one minute, not long
+    sched.node2pending[node] = [12]
+    sched._last_file_done[node] = sched._file_of(11)
+    assert sched._continues_module(node)
+    assert not sched._fits(12, node, pressure=True), "a short module waits like the rest"
+
+
+def _chain_sched(tmp_path, first_wall=None, rest_wall=None):
+    """One long module (8 x 100 s) worked by gw0, plus a short one; gw1 comes free.
+
+    Two CPUs: what is left of the run needs 300 s per CPU, so no single test is
+    on the critical path (that rule would hand it to any worker), but the
+    module, 600 s on one worker, is."""
+    col = [f"s.py::t{i}.dev.1" for i in range(8)] + ["q.py::short.dev.1"]
+    costs = {n: (0.5, 1e8, 100.0) for n in col[:8]}
+    costs["q.py::short.dev.1"] = (0.5, 1e8, 1.0)
+    sched, nodes = make_sched(tmp_path, col, costs, nodes=1, ncpus=2)
+    if first_wall is not None:
+        sched.learn({"key": "dev|s.py::t0", "wall": first_wall, "usage_sec": 1.0, "memory_peak": 1e8, "first_in_file": True})
+        sched.learn({"key": "dev|s.py::t1", "wall": rest_wall, "usage_sec": 1.0, "memory_peak": 1e8, "first_in_file": False})
+    late = FakeNode("gw1")
+    sched.add_node(late); sched.add_node_collection(late, col)
+    sched.check_schedule()
+    return sched, nodes[0], late, col
+
+
+def test_a_long_module_with_cheap_setup_is_shared(tmp_path):
+    """A chain longer than the rest of the run, whose setup is measured and small, takes a second worker."""
+    sched, first, late, col = _chain_sched(tmp_path, first_wall=104.0, rest_wall=100.0)
+    assert late.sent and all(col[i].startswith("s.py") for i in late.sent), [col[i] for i in late.sent]
+    assert sched.stats["chain_joins_offered"] >= 1
+
+
+def test_a_long_module_is_not_shared_before_its_setup_is_measured(tmp_path):
+    sched, first, late, col = _chain_sched(tmp_path)
+    assert [col[i] for i in late.sent][:1] == ["q.py::short.dev.1"], "it takes the untouched module instead"
+
+
+def test_a_long_module_with_expensive_setup_is_not_shared(tmp_path):
+    sched, first, late, col = _chain_sched(tmp_path, first_wall=150.0, rest_wall=100.0)
+    assert [col[i] for i in late.sent][:1] == ["q.py::short.dev.1"]
+
+
+def test_time_left_follows_the_measured_work_rate(tmp_path):
+    """Once enough tests have finished, the rest of the run is timed at the rate
+    predicted work actually got done, not at the allowed concurrency."""
+    col = [f"a.py::t{i}.dev.1" for i in range(4)]
+    clock = {"t": 1000.0}
+    sched, nodes = make_sched(tmp_path, col, {n: (0.5, 1e8, 10.0) for n in col}, nodes=1, ncpus=8,
+                              now=lambda: clock["t"])
+    sched.total_remaining = 800.0
+    assert sched._time_left() == pytest.approx(800.0 / 8), "too few finished tests: the concurrency"
+    # 20 tests of 10 predicted seconds each, run 30 s each, ending 900-995: the first started at
+    # 870, so 200 predicted seconds got done in 130 s
+    for i in range(20):
+        sched._done_log.add(1000.0 - 100 + 5 * i, 10.0, 30.0)
+    assert sched._time_left() == pytest.approx(800.0 / (200.0 / 130.0))
+    assert sched._run_slowdown() == pytest.approx(3.0)
+
+
+def test_a_module_that_runs_slower_than_predicted_becomes_a_chain(tmp_path):
+    col = [f"s.py::t{i}.dev.1" for i in range(4)]
+    sched, nodes = make_sched(tmp_path, col, {n: (0.5, 1e8, 100.0) for n in col}, nodes=1, ncpus=2)
+    module = sched._file_of(2)
+    sched._first_walls["dev|s.py"] = [101.0]
+    sched._rest_walls["dev|s.py"] = [100.0]                # setup 1 s: cheap
+    remaining = sum(sched._costs_for(i).wall for i in sched.files[module])
+    budget = remaining * 1.5                                 # predicted, it is not the longest chain
+    assert not sched._joinable(module, 1, budget, 1.0)
+    sched._file_walls["dev|s.py"] = [600.0, 200.0]           # its tests took 3x their prediction
+    assert sched._joinable(module, 1, budget, 1.0)
