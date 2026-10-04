@@ -11,7 +11,6 @@
 #include "locator/ec2_multi_region_snitch.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
-#include "utils/class_registrator.hh"
 
 static constexpr const char* PUBLIC_IP_QUERY_REQ  = "/latest/meta-data/public-ipv4";
 static constexpr const char* PRIVATE_IP_QUERY_REQ = "/latest/meta-data/local-ipv4";
@@ -87,9 +86,5 @@ gms::application_state_map ec2_multi_region_snitch::get_app_states() const {
         {gms::application_state::INTERNAL_IP, gms::versioned_value::internal_ip(_local_private_address)},
     };
 }
-
-using registry_default = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const snitch_config&>;
-static registry_default registrator_default("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
-static registry_default registrator_default_short_name("Ec2MultiRegionSnitch");
 
 } // namespace locator
