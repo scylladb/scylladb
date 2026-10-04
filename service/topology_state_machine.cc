@@ -276,7 +276,8 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks,
-        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry) {
+        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry,
+        std::optional<lowres_clock::time_point> deadline) {
     if (this_shard_id() != 0) {
         on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
     }
@@ -296,10 +297,22 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
             tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
         }
+        // Checked after reading the state, so that a request done by the deadline is reported as done.
+        if (deadline && lowres_clock::now() >= *deadline) {
+            throw seastar::timed_out_error{};
+        }
         if (c == reload_count) {
             // wait only if the state was not reloaded while we were preempted
             tsmlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
-            co_await event.when();
+            if (deadline) {
+                try {
+                    co_await event.when(*deadline);
+                } catch (const seastar::condition_variable_timed_out&) {
+                    // Read the state once more before giving up.
+                }
+            } else {
+                co_await event.when();
+            }
         }
     }
 
