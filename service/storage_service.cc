@@ -3168,13 +3168,14 @@ future<> storage_service::reset_cleanup_needed() {
     }
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
+                                                                     std::optional<lowres_clock::time_point> deadline) {
     // Lets a test delay the caller between submitting the request and its first
     // read of system.topology_requests.
     co_await utils::get_local_injector().inject("topology_request_pause_before_wait",
             utils::wait_for_message(std::chrono::minutes(5)));
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
-            _group0->client(), _group0_as, id, require_entry);
+            _group0->client(), _group0_as, id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
