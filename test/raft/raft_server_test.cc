@@ -1497,3 +1497,83 @@ SEASTAR_THREAD_TEST_CASE(test_apply_waiter_dropped_when_a_replaced_snapshot_cove
 
     BOOST_CHECK_THROW(orphan.get(), raft::commit_status_unknown);
 }
+
+// A follower bounds its in-memory raft log at max_log_size +
+// snapshot_trailing_size and reports when it is full, so a node whose state
+// machine is slow stops absorbing entries into memory. The bound is what holds
+// it: such a follower applies nothing, so it never snapshots and never
+// truncates, and the reply path does not slow the leader down - io_fiber
+// publishes to the applier mailbox without blocking.
+SEASTAR_THREAD_TEST_CASE(test_follower_log_is_bounded_when_apply_is_slow) {
+    const size_t command_size = sizeof(size_t);
+    const size_t max_log_size = 10 * command_size;
+    const size_t snapshot_trailing_size = command_size;
+    // The bound enforced by the follower, see fsm_config::max_follower_log_size.
+    const size_t bound = max_log_size + snapshot_trailing_size;
+
+    test_case test_config {
+        .nodes = 3,
+        .config = std::vector<raft::server::configuration>(3,
+            raft::server::configuration {
+                .snapshot_threshold = 5,
+                .snapshot_threshold_log_size = 5 * command_size,
+                .snapshot_trailing = 1,
+                .snapshot_trailing_size = snapshot_trailing_size,
+                .max_log_size = max_log_size,
+                // Keep add_entry on the node we call it on, so the test drives
+                // the leader directly.
+                .enable_forwarding = false,
+                .max_command_size = command_size,
+            })
+    };
+    // Must exceed the number of entries added below, or the state machine's
+    // done promise fires early.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    const auto slow_id = to_raft_id(1);
+    auto& slow = cluster.get_server(1);
+
+    // Hold node 1's applier fiber inside apply(). Nodes 0 and 2 are a majority,
+    // so the cluster keeps committing and node 0 keeps replicating to node 1.
+    delay_apply = slow_id;
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    // Enough entries that an unbounded log would grow well past the bound.
+    cluster.add_entries(199, 0).get();
+
+    BOOST_TEST_MESSAGE(fmt::format("slow follower log memory usage: {} (bound {})",
+            slow.log_memory_usage(), bound));
+    // The bound holds whether or not the escape hatch in fsm::append_entries()
+    // is open; here it is closed, the follower having committed entries it has
+    // not applied, so can_shrink_log() holds and it refuses at the limit.
+    BOOST_CHECK_LE(slow.log_memory_usage(), bound);
+    // Entries reached the follower. Its log may be empty: a follower that falls
+    // far enough behind for the leader to truncate past its next_idx is repaired
+    // by a snapshot transfer, which drops its log.
+    BOOST_CHECK_GT(slow.log_last_idx_term().first, raft::index_t{0});
+
+    // The leader stays within its own limit.
+    BOOST_CHECK_LE(cluster.get_server(0).log_memory_usage(), max_log_size);
+
+    // Released, the follower drains its log, snapshots, reports room and catches
+    // up.
+    apply_release.signal();
+    cluster.wait_log_all().get();
+    slow.read_barrier(nullptr).get();
+    BOOST_CHECK_LE(slow.log_memory_usage(), bound);
+}
