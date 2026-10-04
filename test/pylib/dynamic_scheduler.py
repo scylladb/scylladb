@@ -307,6 +307,7 @@ BURST = 0.05               # bookings grow by at most this share of the CPUs a s
 PSI_CPU_LIMIT = 25.0       # tests' CPU "some avg10" % above which admission pauses, target shrinks
 PSI_MEM_LIMIT = 5.0        # machine memory "some avg10" % above which admission pauses
 DEPTH = 1                  # tests a worker may hold queued behind the one it runs
+SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more (see _depth)
 K_SIGMA = 0.5              # standard deviations of cores added to a test's booking
 DEFAULT_COST = (2.0, 2 * GB)   # cores, memory of a test with no profile and no static hint
 METRICS_SECONDS = 2.0      # how often --gather-metrics samples the scheduler
@@ -727,6 +728,7 @@ class CgroupReader:
         self.base = cgroup_tests
         self._last: dict[str, tuple[float, float]] = {}   # worker -> (monotonic, usage_sec)
         self._cores: dict[str, float] = {}
+        self._window: dict[str, tuple[float, float]] = {}  # path key -> (from, to) of its last rate()
         # worker -> cgroups of the containers it started
         # (test/pylib/container_accounting.py)
         self._containers: dict[str, list[Path]] = {}
@@ -769,8 +771,13 @@ class CgroupReader:
         dt = now - prev[0]
         if dt >= 0.5:
             self._cores[key] = max(0.0, (usage - prev[1]) / dt)
+            self._window[key] = (prev[0], now)
             self._last[key] = (now, usage)
         return self._cores.get(key)
+
+    def window(self, path: Path) -> tuple[float, float] | None:
+        """The monotonic interval the last rate() of this cgroup averages."""
+        return self._window.get(f"path:{path}")
 
     @staticmethod
     def _read_usage_path(path: Path) -> float | None:
@@ -887,6 +894,9 @@ class DynamicScheduling:
         self.psi_cpu_limit = float(psi_cpu_limit)
         self.psi_mem_limit = float(psi_mem_limit)
         self.measured_load = 0.0       # test-attributable cores, smoothed
+        self._measured_raw: float | None = None    # the tests' cgroup over its last window, unsmoothed
+        self._services_raw = 0.0                   # the services' cgroup, likewise
+        self._recent_done: list[tuple[float, float, float]] = []   # (started, ended, cores) of finished tests
         # Reservations: acquired when a test is admitted (committed),
         # released on completion or worker loss.  Invariant:
         # sum(res_cpu) <= ncpus * cpu_overcommit at every point after
@@ -1082,8 +1092,11 @@ class DynamicScheduling:
         queued = self.node2pending.get(node)
         if queued is not None and item_index in queued:
             queued.remove(item_index)
-        self.committed_at.pop(item_index, None)
-        self._started_at.pop(item_index, None)
+        committed = self.committed_at.pop(item_index, None)
+        started = self._started_at.pop(item_index, None)
+        if committed is not None and started is not None:
+            now = self.now()
+            self._recent_done.append((started, now, self._predict_running(item_index, now - committed)))
         self._mem_at_commit.pop(item_index, None)
         self._mem_track.pop(item_index, None)
         if self._scout.get(self._profile_file_of(item_index)) == item_index:
@@ -1210,7 +1223,7 @@ class DynamicScheduling:
                     continue
                 if phase == "prime" and self.node2pending[node]:
                     continue
-                limit = 1 if phase == "prime" else self.depth + 1
+                limit = 1 if phase == "prime" else self._depth(node) + 1
                 while len(self.node2pending[node]) < limit:
                     held = self._held(node)
                     if held is not None and self._waits_for_first_run(held):
@@ -1704,10 +1717,12 @@ class DynamicScheduling:
             tests_rate = self.live.rate(self.live.base)
             if tests_rate is not None:
                 cores = tests_rate
+            self._measured_raw = tests_rate
             if self._services_path is not None:
                 svc = self.live.rate(self._services_path)
                 if svc is not None:
                     cores = (cores or 0.0) + svc
+                    self._services_raw = svc
             self._set_mem_stall(read_psi("memory", self.live.base, "full"))
         if cores is None:
             # no cgroup data (unit tests, foreign environment): fall
@@ -1743,10 +1758,34 @@ class DynamicScheduling:
         return max(0.0, 1.0 - (now - started) / window)
 
     def _estimate_now(self, now: float) -> float:
-        """Measured load plus the not-yet-visible part of what was
-        just admitted."""
-        inflight = sum(self._inflight_pred(now, i) * self._ramp_weight(now, i) for i in self._inflight(now))
-        return self.measured_load + inflight
+        """The load the running tests put on the machine now.
+
+        The measurement averages the tests' cgroup over its last
+        window, so it lags in both directions: a test started during or
+        after the window is only partly in it, or not at all, and a test
+        that ended inside the window is in it although it no longer
+        runs.  Correct both against that window.  Charging every new
+        test in full for a fixed time instead counted a sub-second test
+        twice, once in the measurement and once on top: at thirty
+        starts a second that was seven to thirteen threads of load
+        that did not exist, and the machine sat at 70% while admission
+        refused tests.
+        """
+        window = self.live.window(self.live.base) if self.live.base is not None else None
+        if window is None or self._measured_raw is None or window[1] <= window[0]:
+            inflight = sum(self._inflight_pred(now, i) * self._ramp_weight(now, i) for i in self._inflight(now))
+            return self.measured_load + inflight
+        w0, w1 = window
+        span = w1 - w0
+        seen = lambda a, b: min(1.0, max(0.0, (min(b, w1) - max(a, w0)) / span))
+        estimate = self._measured_raw + self._services_raw
+        for idx, started in self._started_at.items():
+            if idx in self.committed_at:
+                estimate += self._inflight_pred(now, idx) * (1.0 - seen(started, w1))
+        self._recent_done = [d for d in self._recent_done if d[1] > w0]
+        for started, ended, cores in self._recent_done:
+            estimate -= cores * seen(started, ended)
+        return max(0.0, estimate)
 
     def _available(self) -> float:
         """What the machine has available for tests (MemAvailable);
@@ -2062,6 +2101,21 @@ class DynamicScheduling:
         held = self._held(node) if idx is None else idx
         return (held is not None and not self._committed(node)
                 and self._last_file_done.get(node) == self._file_of(held))
+    def _depth(self, node: WorkerController) -> int:
+        """Tests a worker may hold queued behind the one it runs.
+
+        A worker starts the test it holds only once it has been sent
+        the next one, so between two tests it waits for a round trip
+        through the controller.  For sub-second tests that wait is a
+        large part of the worker's time: 165 ms between tests at the
+        median, against 1-2 ms under plain xdist, which sends tests
+        in batches.  So a worker whose queued tests are all expected to
+        be short holds one more, and runs them back to back.
+        """
+        queued = self.node2pending.get(node) or []
+        if queued and all(self._costs_for(i).wall < SHORT_SECONDS for i in queued):
+            return self.depth + 1
+        return self.depth
 
     def _held(self, node: WorkerController) -> int | None:
         queued = self.node2pending.get(node) or []
