@@ -124,7 +124,10 @@ def test_system_clients(scylla_only, dynamodb):
     clients = full_scan(clients)
     assert len(clients) > 0
     for client in clients:
-        if 'Boto3' in client['driver_name']:
+        # Not all clients have a driver_name. For example, a CQL
+        # connection only gets one after its STARTUP message, so a CQL
+        # connection which some other client is just opening won't have it.
+        if 'Boto3' in client.get('driver_name', ''):
             success = True
             # Verify that some other fields that we expect to appear in
             # Alternator's system.clients entry do appear. For most of
