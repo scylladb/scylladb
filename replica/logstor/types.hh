@@ -31,7 +31,7 @@ struct segment_position {
 };
 
 // Where a record frame lives. `size` is its frame size: the record frame header, the record header
-// and the value, without the padding that follows the frame inside a buffer. It is what
+// and the value, without the padding that follows the frame inside a chunk. It is what
 // segment_manager::read() reads and what the space accounting counts.
 struct record_location {
     log_segment_id segment;

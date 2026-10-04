@@ -200,9 +200,9 @@
 //   and most of what the test appears to cost; by 100 it is 0.03 and nothing at all. `polls/op` well
 //   under 0.1 means the number being read is the operation.
 //
-// - Measure a write at more than one concurrency. Sealing a buffer, reserving room for it in a
-//   segment, submitting its IO and handing its records to the separator are per buffer, and the
-//   records in the buffer divide them. The same write costs 31.5k instructions and writes eight
+// - Measure a write at more than one concurrency. Sealing a buffer into a chunk, reserving room
+//   for the chunk in a segment, submitting its IO and handing its records to the separator are per
+//   chunk, and the records in the chunk divide them. The same write costs 31.5k instructions and writes eight
 //   times its record's bytes at a concurrency of one, 15.1k at sixteen, and 14.4k from sixty-four
 //   up, where it is flat. A number taken at one concurrency describes that concurrency only, and
 //   the low end is the latency-bound case a workload actually cares about.

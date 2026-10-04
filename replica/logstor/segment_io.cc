@@ -96,7 +96,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
         }
         auto ch = ser::deserialize_from_buffer(chunk_header_buf, std::type_identity<ondisk::chunk_header>{});
 
-        // if the buffer is invalid then skip the rest of the segment - buffer writes are sequential and serialized.
+        // if the chunk is invalid then skip the rest of the segment - chunk writes are sequential and serialized.
         if (!ondisk::validate_chunk_header(ch)) {
             break;
         }
@@ -129,13 +129,13 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
         while (current_position < records_end_position) {
             const auto record_offset = current_position;
-            // What is left of this buffer's records. The stream spans the whole segment and is not
-            // bounded per buffer, so each size is checked against this before its bytes are read;
-            // otherwise a short tail or a record claiming more than the buffer holds would consume
-            // the next buffer's bytes. The loop condition keeps this at 1 or more, so the
+            // What is left of this chunk's records. The stream spans the whole segment and is not
+            // bounded per chunk, so each size is checked against this before its bytes are read;
+            // otherwise a short tail or a record claiming more than the chunk holds would consume
+            // the next chunk's bytes. The loop condition keeps this at 1 or more, so the
             // subtraction below cannot wrap.
-            const size_t buffer_bytes_left = records_end_position - current_position;
-            if (buffer_bytes_left < min_frame_size) {
+            const size_t chunk_bytes_left = records_end_position - current_position;
+            if (chunk_bytes_left < min_frame_size) {
                 break;
             }
             auto frame_header_buf = co_await in.read_exactly(ondisk::record_frame_header_size);
@@ -144,7 +144,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
                 break;
             }
             auto frame_header = ser::deserialize_from_buffer(frame_header_buf, std::type_identity<ondisk::record_frame_header>{});
-            if (!ondisk::validate_record_frame_header(frame_header) || size_t(frame_header.key_size) + frame_header.value_size > buffer_bytes_left - min_frame_size) {
+            if (!ondisk::validate_record_frame_header(frame_header) || size_t(frame_header.key_size) + frame_header.value_size > chunk_bytes_left - min_frame_size) {
                 // invalid record size
                 break;
             }
@@ -194,12 +194,12 @@ future<> scan_segment(seastar::input_stream<char>& in,
         }
 
         if (seg_info.kind == segment_kind::full) {
-            // A segment of this kind has only a single buffer
+            // A segment of this kind has only a single chunk
             break;
         }
 
         if (current_position < records_end_position) {
-            // skip remaining buffer data
+            // skip remaining chunk data
             auto bytes_to_skip = records_end_position - current_position;
             co_await in.skip(bytes_to_skip);
             current_position += bytes_to_skip;

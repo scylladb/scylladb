@@ -220,13 +220,13 @@ future<record_location_with_holder> write_buffer::write(Writer writer, write_tar
 
     return _written.get_shared_future().then(
             [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
-            (segment_position buffer_position) mutable {
-        return std::make_tuple(locate_record(buffer_position, frame_offset, frame_size), std::move(op));
+            (segment_position chunk_position) mutable {
+        return std::make_tuple(locate_record(chunk_position, frame_offset, frame_size), std::move(op));
     });
 }
 
-future<> write_buffer::complete_writes(segment_position buffer_position) {
-    _written.set_value(buffer_position);
+future<> write_buffer::complete_writes(segment_position chunk_position) {
+    _written.set_value(chunk_position);
     co_await close();
 }
 

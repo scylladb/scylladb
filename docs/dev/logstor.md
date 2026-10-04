@@ -31,11 +31,11 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 
 The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata. On disk a record is stored as a **record frame**, described under [Record Frames](#record-frames) below, which is also the unit the index points at.
 
-The `segment_manager` receives new writes via a `write_buffer` and writes them sequentially to the active segment with 4k-block alignment.
+The `segment_manager` receives new writes via a `write_buffer`, and appends each buffer to the active segment as a 4k-block-aligned chunk (see [Segments](#segments)).
 
 #### Write Buffer
 
-The `write_buffer` manages a buffer of log records and handles the serialization of the records including headers and alignment. It can be used to write multiple records to the buffer and then write the buffer to the segment manager.
+The `write_buffer` manages a buffer of log records and handles the serialization of the records including headers and alignment. It can be used to write multiple records to the buffer, then seal it into a chunk and write the chunk to a segment through the segment manager.
 
 The `buffered_writer` manages multiple write buffers for user writes, an active buffer and multiple flushing ones, to batch writes and manage backpressure.
 
@@ -45,7 +45,7 @@ The `buffered_writer` manages multiple write buffers for user writes, an active 
 1. Application writes mutation to logstor
 2. Mutation is converted to a log record
 3. Record is written to write buffer
-4. The buffer is switched and written to the active segment.
+4. The buffer is switched, sealed into a chunk, and the chunk is appended to the active segment.
 5. Index is updated with new record locations
 6. Old record locations (for overwrites) are marked as free
 
@@ -286,4 +286,4 @@ The `record_location` stored in the index for each record points to the start of
 - `offset`: byte offset from the start of the segment to the `record_frame_header`.
 - `size`: the `frame_size`, that is `record_frame_header` + `record_header` + `record_value`, without the padding that follows the frame. Reading exactly these bytes at this offset yields the whole record, which is what `segment_manager::read()` does.
 
-Where a sealed buffer itself landed is a `segment_position` instead: the segment and the offset, with no size. Each record location is derived from it by adding the record's frame offset within the buffer. The two are separate types so that a buffer position cannot be read as a record location.
+Where a chunk itself landed is a `segment_position` instead: the segment and the offset, with no size. Each record location is derived from it by adding the record's frame offset within the chunk. The two are separate types so that a chunk position cannot be read as a record location.

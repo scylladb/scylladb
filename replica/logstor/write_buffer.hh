@@ -103,13 +103,13 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
 
 using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
-// Where a record whose frame sits at `frame_offset` of a buffer ends up, once that buffer has been
-// written to a segment at `buffer_position`. A buffer learns where it was written once, and the
-// location of every record in it follows from that.
-inline record_location locate_record(segment_position buffer_position, size_t frame_offset, size_t frame_size) noexcept {
+// Where a record whose frame sits at `frame_offset` of a chunk ends up, once that chunk has been
+// written to a segment at `chunk_position`. A buffer learns where its chunk was written once, and
+// the location of every record in it follows from that.
+inline record_location locate_record(segment_position chunk_position, size_t frame_offset, size_t frame_size) noexcept {
     return record_location {
-        .segment = buffer_position.segment,
-        .offset = static_cast<uint32_t>(buffer_position.offset + frame_offset),
+        .segment = chunk_position.segment,
+        .offset = static_cast<uint32_t>(chunk_position.offset + frame_offset),
         .size = static_cast<uint32_t>(frame_size),
     };
 }
@@ -118,18 +118,18 @@ struct buffered_write_result {
     future<record_location_with_holder> persisted;
 };
 
-// Serializes one in-memory logstor buffer.
+// Builds one chunk in memory.
 //
 // Callers append log records one by one and then seal the buffer with a target
-// segment sequence number before writing the resulting bytes out. The serialized
-// layout is:
+// segment sequence number, which completes the chunk, before writing it out. The
+// chunk's layout is:
 //   chunk_header
 //   (segment_header)?                 // for segment_kind::full only
 //   record_frame_header + record_header (fixed fields + partition key) + record value
 //   ...
 //   zero padding to the requested final alignment
 //
-// Each record frame is padded to record_alignment. For full buffers,
+// Each record frame is padded to record_alignment. For a full segment's chunk,
 // the segment header stores the owning table and the min/max token range of the
 // appended records. This type is serialization-only and is used directly by tests
 // and internally by write_buffer.
@@ -270,13 +270,13 @@ public:
         log_record_writer writer;
         // Where the record's frame sits in the buffer, rather than a future of where it ended up:
         // the separator only ever looks at these once the buffer has been written, so a record can
-        // be located from the buffer's own position instead of waiting for one of its own.
+        // be located from the position of the chunk instead of waiting for one of its own.
         size_t frame_offset;
         size_t frame_size;
         write_target target;
 
-        record_location location(segment_position buffer_position) const noexcept {
-            return locate_record(buffer_position, frame_offset, frame_size);
+        record_location location(segment_position chunk_position) const noexcept {
+            return locate_record(chunk_position, frame_offset, frame_size);
         }
     };
 
@@ -331,8 +331,8 @@ public:
     template <log_record_writer_concept Writer>
     future<record_location_with_holder> write(Writer writer, write_target target = {});
 
-    // Complete all tracked writes with their locations when the buffer is flushed to buffer_position
-    future<> complete_writes(segment_position buffer_position);
+    // Complete all tracked writes with their locations once the buffer's chunk is written at chunk_position
+    future<> complete_writes(segment_position chunk_position);
     future<> abort_writes(std::exception_ptr);
 
 private:

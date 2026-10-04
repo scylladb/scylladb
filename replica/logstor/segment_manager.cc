@@ -924,9 +924,9 @@ public:
 
 struct separator_task {
     std::vector<write_buffer::record_in_buffer> records;
-    // Where the buffer holding the records was written, which is what the records' own locations are
+    // Where the chunk holding the records was written, which is what the records' own locations are
     // relative to.
-    segment_position buffer_position{};
+    segment_position chunk_position{};
     segment_ref seg_ref;
     segment_sequence seq_num{};
     utils::phased_barrier::operation write_op;
@@ -1135,7 +1135,7 @@ private:
     }
     future<> run_separator_fiber();
 
-    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_position buffer_position, segment_ref, segment_sequence);
+    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_position chunk_position, segment_ref, segment_sequence);
 
     future<std::optional<segment_info>> read_segment_info(log_segment_id);
 
@@ -1143,7 +1143,7 @@ private:
     // contents.
     //
     // `segment_id` selects the on-disk segment to read.
-    // `on_segment_info` is invoked once per buffer with the decoded segment info.
+    // `on_segment_info` is invoked once per chunk with the decoded segment info.
     // `on_record_header` is called with the record header of each record and returns
     // whether the record value should be read and passed to `on_record`, or skipped.
     // `on_record` is invoked only for records whose value was requested.
@@ -1506,7 +1506,7 @@ future<> segment_manager_impl::run_separator_fiber() {
         });
 
         try {
-            co_await write_to_separator(task.records, task.buffer_position, std::move(task.seg_ref), task.seq_num);
+            co_await write_to_separator(task.records, task.chunk_position, std::move(task.seg_ref), task.seq_num);
             write_to_separator_failed.cancel();
         } catch (...) {
             ++_stats.separator_task_failures;
@@ -1576,7 +1576,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
             co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
                 return _separator_task_queue.push_eventually(separator_task{
                     .records = std::move(records),
-                    .buffer_position = pos,
+                    .chunk_position = pos,
                     .seg_ref = seg_ref,
                     .seq_num = seq_num,
                     .write_op = std::move(write_op),
@@ -2470,7 +2470,7 @@ void separator_index_update::operator()(record_location new_location, seastar::g
     index->update_record_location(key, prev_location, new_location);
 }
 
-future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_position buffer_position,
+future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_position chunk_position,
         segment_ref seg_ref, segment_sequence segment_seq_num) {
     static constexpr size_t separator_group_write_concurrency = 4;
 
@@ -2496,12 +2496,12 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
     }
 
     co_await seastar::max_concurrent_for_each(groups, separator_group_write_concurrency,
-            [buffer_position, seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
+            [chunk_position, seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
         for (auto* record : group.records) {
             separator_index_update update {
                 .index = &group.cg->logstor_index(),
                 .key = record->writer.record().header.index_key(),
-                .prev_location = record->location(buffer_position),
+                .prev_location = record->location(chunk_position),
             };
 
             co_await group.cg->write_to_separator(std::move(record->writer), seg_ref, segment_seq_num, std::move(update));
