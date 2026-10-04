@@ -26,7 +26,7 @@ namespace ondisk {
 static constexpr size_t block_alignment = 4096;
 static constexpr size_t record_alignment = 8;
 static constexpr uint8_t current_version = 1;
-static constexpr uint32_t buffer_header_magic = 0x4c475342;
+static constexpr uint32_t chunk_header_magic = 0x4c475342;
 
 // The on-disk header types below all have a fixed serialized size. Their encoding lives in the
 // ser::serializer<> specializations at the bottom of this file, where each specialization declares
@@ -50,7 +50,12 @@ static constexpr uint32_t buffer_header_magic = 0x4c475342;
 // at the bottom of the file if the size is needed elsewhere, and add a check_serialized_size() call
 // for the type to that test with a value whose fields are all distinct and non-zero.
 
-struct buffer_header {
+// A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
+// a multiple of it. A chunk is this header, the segment_header in a full segment, and the record
+// frames. Chunks are appended to a mixed segment one at a time; a full segment is a single chunk.
+// A write buffer builds a chunk in memory and seals it - pads it and fills in its header - before
+// it is written.
+struct chunk_header {
     uint32_t magic;
     segment_kind kind;
     uint8_t version;
@@ -61,7 +66,7 @@ struct buffer_header {
 
     uint32_t calculate_crc() const;
 
-    bool operator==(const buffer_header& other) const noexcept = default;
+    bool operator==(const chunk_header& other) const noexcept = default;
 };
 
 struct segment_header {
@@ -86,7 +91,7 @@ struct record_frame_header {
 // validation::max_key_size), so a larger key_size can only come from corruption.
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
-bool validate_header(const buffer_header& bh);
+bool validate_chunk_header(const chunk_header& ch);
 
 inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
     // A record always carries an encoded value, so a zero value_size cannot come from a record
@@ -106,7 +111,7 @@ inline bool validate_record_frame_header(const record_frame_header& frame_header
 namespace ser {
 
 template <>
-struct serializer<replica::logstor::ondisk::buffer_header> {
+struct serializer<replica::logstor::ondisk::chunk_header> {
     static constexpr size_t serialized_size =
         sizeof(uint32_t)            // magic
         + sizeof(uint8_t)           // kind
@@ -117,7 +122,7 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
         + sizeof(uint32_t);         // crc
 
     template <typename Output>
-    static void write(Output& out, const replica::logstor::ondisk::buffer_header& h) {
+    static void write(Output& out, const replica::logstor::ondisk::chunk_header& h) {
         serializer<uint32_t>::write(out, h.magic);
         serializer<uint8_t>::write(out, static_cast<uint8_t>(h.kind));
         serializer<uint8_t>::write(out, h.version);
@@ -128,8 +133,8 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
     }
 
     template <typename Input>
-    static replica::logstor::ondisk::buffer_header read(Input& in) {
-        replica::logstor::ondisk::buffer_header h;
+    static replica::logstor::ondisk::chunk_header read(Input& in) {
+        replica::logstor::ondisk::chunk_header h;
         h.magic = serializer<uint32_t>::read(in);
         h.kind = static_cast<replica::logstor::segment_kind>(serializer<uint8_t>::read(in));
         h.version = serializer<uint8_t>::read(in);
@@ -215,11 +220,11 @@ namespace replica::logstor::ondisk {
 
 // The on-disk sizes are aliases of the serializers above, so that each size is stated
 // next to the code that writes it.
-static constexpr size_t buffer_header_size = ser::serializer<buffer_header>::serialized_size;
+static constexpr size_t chunk_header_size = ser::serializer<chunk_header>::serialized_size;
 static constexpr size_t segment_header_size = ser::serializer<segment_header>::serialized_size;
 static constexpr size_t record_frame_header_size = ser::serializer<record_frame_header>::serialized_size;
 
-static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
+static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
 static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
 // The record header is the token, the timestamp and the table id as four little-endian 64-bit

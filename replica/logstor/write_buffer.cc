@@ -43,11 +43,11 @@ raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
 
 void raw_write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
-    _header_stream = _stream.write_substream(ondisk::buffer_header_size);
+    _header_stream = _stream.write_substream(ondisk::chunk_header_size);
     if (with_segment_header()) {
         _segment_header_stream = _stream.write_substream(ondisk::segment_header_size);
     }
-    _buffer_header = {};
+    _chunk_header = {};
     _record_bytes = 0;
     _record_count = 0;
     _min_token = std::nullopt;
@@ -62,7 +62,7 @@ bool raw_write_buffer::can_fit(size_t record_size) const noexcept {
 }
 
 bool raw_write_buffer::has_data() const noexcept {
-    return serialized_size() > buffer_headers_size();
+    return serialized_size() > chunk_headers_size();
 }
 
 template <log_record_writer_concept Writer>
@@ -119,22 +119,22 @@ void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id
     if (_sealed) {
         throw std::runtime_error("Cannot seal write buffer more than once");
     }
-    _buffer_header.records_size = static_cast<uint32_t>(serialized_size() - buffer_headers_size());
+    _chunk_header.records_size = static_cast<uint32_t>(serialized_size() - chunk_headers_size());
     pad_to_alignment(alignment);
     write_header(segment_seq, table);
     _sealed = true;
 }
 
 void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
-    _buffer_header.magic = ondisk::buffer_header_magic;
-    _buffer_header.kind = _segment_kind;
-    _buffer_header.version = ondisk::current_version;
-    _buffer_header.reserved = 0;
-    _buffer_header.segment_seq = segment_seq;
+    _chunk_header.magic = ondisk::chunk_header_magic;
+    _chunk_header.kind = _segment_kind;
+    _chunk_header.version = ondisk::current_version;
+    _chunk_header.reserved = 0;
+    _chunk_header.segment_seq = segment_seq;
 
-    _buffer_header.crc = _buffer_header.calculate_crc();
+    _chunk_header.crc = _chunk_header.calculate_crc();
 
-    ser::serialize<ondisk::buffer_header>(_header_stream, _buffer_header);
+    ser::serialize<ondisk::chunk_header>(_header_stream, _chunk_header);
 
     if (_segment_kind == segment_kind::full) {
         ondisk::segment_header seg_hdr {
@@ -152,7 +152,7 @@ size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t 
         return 0;
     }
 
-    const size_t fixed_overhead = buffer_headers_size(kind);
+    const size_t fixed_overhead = chunk_headers_size(kind);
 
     if (segment_size <= fixed_overhead) {
         return 1;

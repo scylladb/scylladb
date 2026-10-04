@@ -172,49 +172,49 @@ Files are pre-formatted (zero-filled) before use.
 
 Each segment is a contiguous fixed-size region within a file (default 128KB). A segment is identified by a `log_segment_id` (a 32-bit integer index), which maps to a file and offset within that file.
 
-A segment contains one or more **buffers** written sequentially. Each buffer is 4KB-block-aligned. A segment has one of two kinds:
+A segment contains one or more **chunks** written sequentially. A chunk is the unit written to a segment: it starts at a 4KB block boundary and is padded to a multiple of 4KB. A chunk is built in memory by a write buffer (see [Write Buffer](#write-buffer)); "buffer" always refers to that memory, and "chunk" to what it writes to disk. A segment has one of two kinds:
 
-- **mixed**: written by normal user writes; may contain records from multiple tables and compaction groups. Contains multiple buffers.
-- **full**: written by compaction or the separator; contains records from a single table and token range. Contains exactly one buffer.
+- **mixed**: written by normal user writes; may contain records from multiple tables and compaction groups. Contains one or more chunks, appended one at a time.
+- **full**: written by compaction or the separator; contains records from a single table and token range. Contains exactly one chunk.
 
-### Buffer Layout
+### Chunk Layout
 
-A buffer within a segment has the following layout:
+A chunk within a segment has the following layout:
 
 ```
-buffer_header
+chunk_header
 (segment_header)?       -- present only when kind == full
 record_frame_1
 record_frame_2
 ...
 record_frame_n
-zero_padding            -- to align the entire buffer to block_alignment (4096 bytes)
+zero_padding            -- to align the entire chunk to block_alignment (4096 bytes)
 ```
 
-buffer_header, segment_header, and record frames are aligned by `record_alignment` (8 bytes).
+chunk_header, segment_header, and record frames are aligned by `record_alignment` (8 bytes).
 
 All integer fields in the structures below are serialized little-endian, including the two
 64-bit halves of a UUID.
 
-#### Buffer Header
+#### Chunk Header
 
-A serialized form of `ondisk::buffer_header`.
+A serialized form of `ondisk::chunk_header`.
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
-| 0      | 4    | `magic`     | `0x4C475342` ("LGSB"). Used to detect valid buffers during recovery. |
+| 0      | 4    | `magic`     | `0x4C475342`. Used to detect valid chunks during recovery. |
 | 4      | 1    | `kind`      | Segment kind: `0` = mixed, `1` = full. |
-| 5      | 1    | `version`   | Version of the write buffer format. |
+| 5      | 1    | `version`   | Version of the chunk format. |
 | 6      | 2    | `reserved`  | Reserved for future use. Currently written as zero and included in the CRC. |
 | 8      | 8    | `segment_seq` | Monotonic segment sequence number used during recovery and segment ordering checks. |
 | 16     | 4    | `records_size` | Size in bytes of the record frames following the header(s), their padding included. |
-| 20     | 4    | `crc`       | CRC32 of all preceding buffer header fields. Used for validating the header. |
+| 20     | 4    | `crc`       | CRC32 of all preceding chunk header fields. Used for validating the header. |
 
-The buffer header is 24 bytes long, which keeps it aligned to `record_alignment` (8 bytes).
+The chunk header is 24 bytes long, which keeps it aligned to `record_alignment` (8 bytes).
 
 #### Segment Header (full segments only)
 
-Immediately follows the buffer header when `kind == full`.
+Immediately follows the chunk header when `kind == full`.
 
 A serialized form of `ondisk::segment_header`.
 
@@ -226,7 +226,7 @@ A serialized form of `ondisk::segment_header`.
 
 #### Record Frames
 
-Each record within the buffer is stored as a record frame:
+Each record within the chunk is stored as a record frame:
 
 ```
 record_frame_header  (8 bytes)
@@ -244,7 +244,7 @@ them are otherwise easy to confuse:
 | `value_size`   | The serialized `record_value`. Stored in the frame header. |
 | `record_size`  | `header_size + value_size`, the record without its frame header. This is what `max_record_size()` bounds. |
 | `frame_size`   | `record_frame_header_size + record_size`, the frame without its padding. This is what `record_location::size` holds. |
-| `records_size` | All the frames of one buffer, their padding included. Stored in the buffer header. |
+| `records_size` | All the frames of one chunk, their padding included. Stored in the chunk header. |
 | `record_bytes` | The frame sizes of a set of records summed, their padding excluded. What a `segment_descriptor` and the `live_record_bytes` metric count. |
 
 **Record Frame Header** (`ondisk::record_frame_header`):

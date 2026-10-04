@@ -69,9 +69,9 @@ future<> scan_segment(seastar::input_stream<char>& in,
         record_header_consumer on_record_header,
         log_record_consumer on_record);
 
-// Rewrites the initial streamed logstor buffer header to the local segment sequence and
+// Rewrites the initial streamed logstor chunk header to the local segment sequence and
 // forwards subsequent bytes unchanged. This preserves the current branch's streaming
-// behavior, which only rewrites the first streamed buffer header.
+// behavior, which only rewrites the first streamed chunk header.
 class streamed_segment_rewriter {
     log_segment_id _target_segment;
     segment_sequence _target_seq;
@@ -80,9 +80,9 @@ class streamed_segment_rewriter {
     std::optional<size_t> _initial_header_size;
     bool _header_rewritten = false;
 
-    ondisk::buffer_header read_buffer_header() const;
+    ondisk::chunk_header read_chunk_header() const;
     void maybe_parse_initial_header();
-    void rewrite_buffer_header();
+    void rewrite_chunk_header();
     future<> flush_pending_data();
 
 public:

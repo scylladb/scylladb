@@ -18,16 +18,16 @@ namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
 
-segment_info make_segment_info(const ondisk::buffer_header& bh, std::optional<ondisk::segment_header> sh) {
+segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ondisk::segment_header> sh) {
     segment_info seg_info {
-        .kind = bh.kind,
-        .segment_seq = bh.segment_seq,
+        .kind = ch.kind,
+        .segment_seq = ch.segment_seq,
     };
 
-    switch (bh.kind) {
+    switch (ch.kind) {
     case segment_kind::full:
         if (!sh) {
-            throw std::runtime_error("Full segment buffer header without segment header");
+            throw std::runtime_error("Full segment chunk header without segment header");
         }
         seg_info.v = segment_info::full {
             .table = sh->table,
@@ -43,18 +43,18 @@ segment_info make_segment_info(const ondisk::buffer_header& bh, std::optional<on
 }
 
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
-    auto bh_buf = co_await in.read_exactly(ondisk::buffer_header_size);
-    if (bh_buf.size() < ondisk::buffer_header_size) {
+    auto ch_buf = co_await in.read_exactly(ondisk::chunk_header_size);
+    if (ch_buf.size() < ondisk::chunk_header_size) {
         co_return std::nullopt;
     }
-    auto bh = ser::deserialize_from_buffer(bh_buf, std::type_identity<ondisk::buffer_header>{});
+    auto ch = ser::deserialize_from_buffer(ch_buf, std::type_identity<ondisk::chunk_header>{});
 
-    if (!ondisk::validate_header(bh)) {
+    if (!ondisk::validate_chunk_header(ch)) {
         co_return std::nullopt;
     }
 
     std::optional<ondisk::segment_header> sh;
-    if (bh.kind == segment_kind::full) {
+    if (ch.kind == segment_kind::full) {
         auto sh_buf = co_await in.read_exactly(ondisk::segment_header_size);
         if (sh_buf.size() < ondisk::segment_header_size) {
             co_return std::nullopt;
@@ -62,7 +62,7 @@ future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char
         sh = ser::deserialize_from_buffer(sh_buf, std::type_identity<ondisk::segment_header>{});
     }
 
-    co_return make_segment_info(bh, sh);
+    co_return make_segment_info(ch, sh);
 }
 
 future<> scan_segment(seastar::input_stream<char>& in,
@@ -88,27 +88,27 @@ future<> scan_segment(seastar::input_stream<char>& in,
             break;
         }
 
-        // read buffer header
-        auto buffer_header_buf = co_await in.read_exactly(ondisk::buffer_header_size);
-        current_position += ondisk::buffer_header_size;
-        if (buffer_header_buf.size() < ondisk::buffer_header_size) {
+        // read chunk header
+        auto chunk_header_buf = co_await in.read_exactly(ondisk::chunk_header_size);
+        current_position += ondisk::chunk_header_size;
+        if (chunk_header_buf.size() < ondisk::chunk_header_size) {
             break;
         }
-        auto bh = ser::deserialize_from_buffer(buffer_header_buf, std::type_identity<ondisk::buffer_header>{});
+        auto ch = ser::deserialize_from_buffer(chunk_header_buf, std::type_identity<ondisk::chunk_header>{});
 
         // if the buffer is invalid then skip the rest of the segment - buffer writes are sequential and serialized.
-        if (!ondisk::validate_header(bh)) {
+        if (!ondisk::validate_chunk_header(ch)) {
             break;
         }
 
         if (!segment_seq) {
-            segment_seq = bh.segment_seq;
-        } else if (bh.segment_seq != *segment_seq) {
+            segment_seq = ch.segment_seq;
+        } else if (ch.segment_seq != *segment_seq) {
             break;
         }
 
         std::optional<ondisk::segment_header> sh;
-        if (bh.kind == segment_kind::full) {
+        if (ch.kind == segment_kind::full) {
             // read segment header
             auto segment_header_buf = co_await in.read_exactly(ondisk::segment_header_size);
             current_position += ondisk::segment_header_size;
@@ -118,12 +118,12 @@ future<> scan_segment(seastar::input_stream<char>& in,
             sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<ondisk::segment_header>{});
         }
 
-        auto seg_info = make_segment_info(bh, sh);
+        auto seg_info = make_segment_info(ch, sh);
         co_await on_segment_info(seg_info);
 
         // TODO crc, torn writes
 
-        const auto records_end_position = current_position + bh.records_size;
+        const auto records_end_position = current_position + ch.records_size;
         // The smallest record frame: a record_frame_header and a record_header with an empty key.
         constexpr size_t min_frame_size = ondisk::record_frame_header_size + ondisk::record_header_fixed_size;
 
@@ -226,38 +226,38 @@ streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segme
     , _on_buffer(std::move(on_buffer)) {
 }
 
-ondisk::buffer_header streamed_segment_rewriter::read_buffer_header() const {
-    simple_memory_input_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
-    return ser::deserialize(bh_stream, std::type_identity<ondisk::buffer_header>{});
+ondisk::chunk_header streamed_segment_rewriter::read_chunk_header() const {
+    simple_memory_input_stream ch_stream(_pending_data.data(), ondisk::chunk_header_size);
+    return ser::deserialize(ch_stream, std::type_identity<ondisk::chunk_header>{});
 }
 
 void streamed_segment_rewriter::maybe_parse_initial_header() {
-    if (_initial_header_size || _pending_data.size() < ondisk::buffer_header_size) {
+    if (_initial_header_size || _pending_data.size() < ondisk::chunk_header_size) {
         return;
     }
 
-    auto bh = read_buffer_header();
-    if (!ondisk::validate_header(bh)) {
-        throw std::runtime_error("Invalid streamed logstor buffer header");
+    auto ch = read_chunk_header();
+    if (!ondisk::validate_chunk_header(ch)) {
+        throw std::runtime_error("Invalid streamed logstor chunk header");
     }
 
-    size_t header_size = ondisk::buffer_header_size;
-    if (bh.kind == segment_kind::full) {
+    size_t header_size = ondisk::chunk_header_size;
+    if (ch.kind == segment_kind::full) {
         header_size += ondisk::segment_header_size;
     }
     _initial_header_size = header_size;
 }
 
-void streamed_segment_rewriter::rewrite_buffer_header() {
-    auto bh = read_buffer_header();
+void streamed_segment_rewriter::rewrite_chunk_header() {
+    auto ch = read_chunk_header();
 
-    logstor_logger.trace("Rewriting buffer header for segment {} seq {} with seq {}", _target_segment, bh.segment_seq, _target_seq);
+    logstor_logger.trace("Rewriting chunk header for segment {} seq {} with seq {}", _target_segment, ch.segment_seq, _target_seq);
 
-    bh.segment_seq = _target_seq;
-    bh.crc = bh.calculate_crc();
+    ch.segment_seq = _target_seq;
+    ch.crc = ch.calculate_crc();
 
-    simple_memory_output_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
-    ser::serialize<ondisk::buffer_header>(bh_stream, bh);
+    simple_memory_output_stream ch_stream(_pending_data.data(), ondisk::chunk_header_size);
+    ser::serialize<ondisk::chunk_header>(ch_stream, ch);
 }
 
 future<> streamed_segment_rewriter::flush_pending_data() {
@@ -282,7 +282,7 @@ future<> streamed_segment_rewriter::put(std::span<temporary_buffer<char>> data) 
         _pending_data.insert(_pending_data.end(), buf.get(), buf.get() + buf.size());
         maybe_parse_initial_header();
         if (_initial_header_size && _pending_data.size() >= *_initial_header_size) {
-            rewrite_buffer_header();
+            rewrite_chunk_header();
             _header_rewritten = true;
             co_await flush_pending_data();
         }

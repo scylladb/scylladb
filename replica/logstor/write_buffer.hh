@@ -123,7 +123,7 @@ struct buffered_write_result {
 // Callers append log records one by one and then seal the buffer with a target
 // segment sequence number before writing the resulting bytes out. The serialized
 // layout is:
-//   buffer_header
+//   chunk_header
 //   (segment_header)?                 // for segment_kind::full only
 //   record_frame_header + record_header (fixed fields + partition key) + record value
 //   ...
@@ -153,7 +153,7 @@ private:
     aligned_buffer_type _buffer;
     segment_kind _segment_kind;
     ostream _stream;
-    ondisk::buffer_header _buffer_header;
+    ondisk::chunk_header _chunk_header;
     ostream _header_stream;
     ostream _segment_header_stream;
 
@@ -197,7 +197,7 @@ public:
     // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
     // records, so a record can fit a buffer of one kind and not of the other.
     static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = buffer_headers_size(kind) + ondisk::record_frame_header_size;
+        const size_t overhead = chunk_headers_size(kind) + ondisk::record_frame_header_size;
         return buffer_size > overhead ? buffer_size - overhead : 0;
     }
 
@@ -230,18 +230,18 @@ public:
         return _segment_kind == segment_kind::full;
     }
 
-    // What a buffer of this kind carries ahead of its records: the buffer header, and the
+    // What a chunk of this kind carries ahead of its records: the chunk header, and the
     // segment header too for a full segment.
-    static constexpr size_t buffer_headers_size(segment_kind kind) noexcept {
-        size_t s = ondisk::buffer_header_size;
+    static constexpr size_t chunk_headers_size(segment_kind kind) noexcept {
+        size_t s = ondisk::chunk_header_size;
         if (kind == segment_kind::full) {
             s += ondisk::segment_header_size;
         }
         return s;
     }
 
-    size_t buffer_headers_size() const noexcept {
-        return buffer_headers_size(_segment_kind);
+    size_t chunk_headers_size() const noexcept {
+        return chunk_headers_size(_segment_kind);
     }
 
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
