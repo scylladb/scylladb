@@ -10,7 +10,6 @@
 #include "dht/token.hh"
 #include "schema/schema.hh"
 #include "sstables/key.hh"
-#include "utils/class_registrator.hh"
 #include "cdc/generation.hh"
 #include "keys/keys.hh"
 
@@ -47,8 +46,9 @@ cdc_partitioner::get_token(const schema& s, partition_key_view key) const {
     return to_token(exploded_key[0]);
 }
 
-using registry = class_registrator<dht::i_partitioner, cdc_partitioner>;
-static registry registrator(cdc::cdc_partitioner::classname);
-static registry registrator_short_name("CDCPartitioner");
+void register_cdc_partitioner() {
+    dht::register_partitioner(cdc_partitioner::classname, [] { return std::make_unique<cdc_partitioner>(); });
+    dht::register_partitioner("CDCPartitioner", [] { return std::make_unique<cdc_partitioner>(); });
+}
 
 }

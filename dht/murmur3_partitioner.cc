@@ -9,7 +9,6 @@
 #include "murmur3_partitioner.hh"
 #include "utils/murmur_hash.hh"
 #include "sstables/key.hh"
-#include "utils/class_registrator.hh"
 
 namespace dht {
 
@@ -49,10 +48,6 @@ murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
     utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
     return get_token(hash[0]);
 }
-
-using registry = class_registrator<i_partitioner, murmur3_partitioner>;
-static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
-static registry registrator_short_name("Murmur3Partitioner");
 
 }
 

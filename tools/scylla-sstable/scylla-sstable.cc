@@ -27,6 +27,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/query_result_printer.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/large_data_handler.hh"
@@ -3398,6 +3399,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
+        smp::invoke_on_all([] { cdc::register_cdc_partitioner(); }).get();
+
         // The sstables to work on can be named one by one, or by the directory
         // holding them. Tell which it is before anything looks at the arguments.
         std::optional<sstring> sstable_directory;
