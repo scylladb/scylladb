@@ -1556,3 +1556,28 @@ def test_a_modules_tests_run_in_collection_order(tmp_path):
         for idx in [i for i in nodes[0].sent if i in sched.committed_at]:
             sched.mark_test_complete(nodes[0], idx)
     assert [col[i] for i in nodes[0].sent] == col
+
+
+def test_the_load_estimate_counts_each_test_for_the_part_the_measurement_missed(tmp_path):
+    """The measurement averages a window: a test started in it is partly in it,
+    one started after it not at all, and one that ended in it is in it although
+    it no longer runs."""
+    col = [f"a.py::t{i}.dev.1" for i in range(3)]
+    sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 60.0) for n in col}, nodes=1, ncpus=16,
+                              max_workers=0)
+    sched.live._window[f"path:{NO_CGROUP}"] = (10.0, 12.0)
+    sched._measured_raw, sched._services_raw = 4.0, 0.0
+    sched.committed_at = {0: 11.0, 1: 13.0}
+    sched._started_at = {0: 11.0, 1: 13.0}            # half of its run in the window, and none of it
+    sched._recent_done = [(9.5, 11.0, 2.0),           # half of the window, and over
+                          (8.0, 9.0, 2.0)]            # before the window: in nothing
+    assert sched._estimate_now(13.5) == pytest.approx(4.0 + 1.0 + 2.0 - 1.0)
+    assert len(sched._recent_done) == 1, "what ended before the window is forgotten"
+
+
+def test_a_worker_holds_one_more_test_when_its_tests_are_short(tmp_path):
+    short = [f"a.py::s{i}.dev.1" for i in range(6)]
+    long_ = [f"b.py::l{i}.dev.1" for i in range(6)]
+    for col, wall, held in ((short, 0.2, 3), (long_, 5.0, 2)):
+        sched, nodes = make_sched(tmp_path / str(wall), col, {n: (0.1, 1e8, wall) for n in col}, nodes=1, ncpus=8)
+        assert len(nodes[0].sent) == held, (wall, nodes[0].sent)
