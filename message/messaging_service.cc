@@ -512,9 +512,6 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
 {
     _rpc->set_logger(&rpc_logger);
 
-    // this initialization should be done before any handler registration
-    // this is because register_handler calls to: scheduling_group_for_verb
-    // which in turn relies on _connection_index_for_tenant to be initialized.
     _connection_index_for_tenant.reserve(_scheduling_config.statement_tenants.size());
     for (unsigned i = 0; i <  _scheduling_config.statement_tenants.size(); ++i) {
         auto& tenant_cfg = _scheduling_config.statement_tenants[i];
@@ -934,16 +931,6 @@ messaging_service::initial_scheduling_info() const {
         _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     return sched_infos;
 };
-
-scheduling_group
-messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
-    // We are not using get_rpc_client_idx() because it figures out the client
-    // index based on the current scheduling group, which is relevant when
-    // selecting the right client for sending a message, but is not relevant
-    // when registering handlers.
-    const auto idx = s_rpc_client_idx_table[static_cast<size_t>(verb)];
-    return _scheduling_info_for_connection_index[idx].sched_group;
-}
 
 future<scheduling_group>
 messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const {
