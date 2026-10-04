@@ -340,6 +340,14 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // The value of log_is_full() report_log_full() last reported to a leader.
+    // Its log lines mark the transitions.
+    bool _log_full_reported = false;
+    // Pace the two lines report_log_full() logs, one per direction of the
+    // transition: a follower whose state machine stays slow crosses the limit
+    // once per snapshot cycle.
+    seastar::logger::rate_limit _log_full_rate_limit{std::chrono::seconds(10)};
+    seastar::logger::rate_limit _log_has_room_rate_limit{std::chrono::seconds(10)};
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -471,6 +479,15 @@ private:
     // Replicate entries to a follower. If there are no entries to send
     // and allow_empty is true, send a heartbeat.
     void replicate_to(follower_progress& progress, bool allow_empty);
+    // Send an empty append_entries request to a follower which reported a full
+    // log, bypassing follower_progress::can_send_to(). Sends no entries, so it
+    // cannot grow the follower's log; it refreshes follower_progress::log_full
+    // and carries leader_commit_idx so that the follower can drain what it
+    // already has.
+    void send_throttled_heartbeat(follower_progress& progress);
+    // Return log_is_full(), logging whenever the answer changes since the last
+    // time we reported it to a leader. Used to fill in append_reply::log_full.
+    bool report_log_full();
     void replicate();
     void append_entries(server_id from, append_request&& append_request);
 
@@ -745,7 +762,8 @@ public:
     }
 
     // True if we will refuse further entries from a leader until a snapshot
-    // shrinks the log. Always false if the limit is disabled.
+    // shrinks the log. Reported to the leader in every append_reply, so it can
+    // stop replicating to us. Always false if the limit is disabled.
     //
     // Requires can_shrink_log(): while we cannot shrink we let one entry
     // through per request, so the flag would promise a refusal we do not make.
@@ -756,6 +774,13 @@ public:
         return _config.max_follower_log_size != 0 &&
                _log.memory_usage() >= _config.max_follower_log_size &&
                can_shrink_log();
+    }
+
+    // Number of followers which reported a full log, i.e. which we are not
+    // currently replicating to. Leader only.
+    size_t throttled_followers() const {
+        return std::ranges::count_if(leader_state().tracker,
+                [] (const auto& p) { return p.second.log_full; });
     }
 
     server_id id() const { return _my_id; }
