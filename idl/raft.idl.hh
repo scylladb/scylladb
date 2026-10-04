@@ -59,6 +59,7 @@ struct append_reply {
     // leadership transfer). A plain bool with a default rather than an optional:
     // "not sent" and "clock unhealthy" mean the same thing to every consumer.
     bool clock_ok [[version 2026.3]] = false;
+    bool log_full [[version 2026.4]] = false;
 };
 
 struct append_request {
