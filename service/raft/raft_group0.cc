@@ -979,6 +979,8 @@ void raft_group0::register_server_metrics(raft::server_id my_id, const raft::ser
              sm::description("size of in-memory part of the log"), {id}),
         sm::make_gauge("log_memory_usage", [sample] { return sample->get().log_memory_usage; },
              sm::description("memory usage of in-memory part of the log in bytes"), {id}),
+        sm::make_gauge("log_full", [sample] { return uint64_t(sample->get().log_full); },
+             sm::description("1 if the in-memory log reached max_follower_log_size, so entries from a leader are being refused"), {id}),
         sm::make_gauge("log_last_index", [sample] { return sample->get().last_idx.value(); },
              sm::description("index of the last log entry"), {id}),
         sm::make_gauge("log_last_term", [sample] { return sample->get().last_term.value(); },

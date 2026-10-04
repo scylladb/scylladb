@@ -891,6 +891,9 @@ struct server_status {
     size_t in_memory_log_size = 0;
     // Bytes used by the in-memory part of the log.
     size_t log_memory_usage = 0;
+    // The in-memory log reached max_follower_log_size, so entries from a
+    // leader are being refused.
+    bool log_full = false;
     index_t last_idx;
     term_t last_term;
     index_t commit_idx;

@@ -32,6 +32,7 @@ table_metrics::sample table_metrics::sweep() const {
         result.leaders += status.is_leader;
         result.in_memory_log_size += status.in_memory_log_size;
         result.log_memory_usage += status.log_memory_usage;
+        result.full_logs += status.log_full;
         result.uncommitted_entries += entries_between(status.commit_idx, status.last_idx);
         result.unapplied_entries += entries_between(status.applied_idx, status.commit_idx);
         result.log_limiter_waiters += status.log_limiter_waiters;
@@ -76,6 +77,8 @@ void table_metrics::register_table_gauges(const raft_metrics_options& options) {
             sm::description("Number of entries in the in-memory part of the raft logs of the table"), labels).aggregate(aggregate),
         sm::make_gauge("log_memory_usage", [this] { return _sample.get().log_memory_usage; },
             sm::description("Bytes used by the in-memory part of the raft logs of the table"), labels).aggregate(aggregate),
+        sm::make_gauge("full_logs", [this] { return _sample.get().full_logs; },
+            sm::description("Number of raft logs of the table which reached max_follower_log_size, so entries from a leader are being refused"), labels).aggregate(aggregate),
         sm::make_gauge("uncommitted_entries", [this] { return _sample.get().uncommitted_entries; },
             sm::description("Number of raft log entries of the table not committed yet"), labels).aggregate(aggregate),
         sm::make_gauge("unapplied_entries", [this] { return _sample.get().unapplied_entries; },
