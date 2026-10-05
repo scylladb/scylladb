@@ -184,6 +184,9 @@ private:
     // Throws abort_requested_exception if the manager is stopped.
     gate::holder hold_compaction_state_gate(compaction_state& cs);
 
+    // Closes the gate of a table's compaction state, if not closed yet, and waits for its holders to leave.
+    future<> close_compaction_state_gate(compaction_state& cs);
+
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
