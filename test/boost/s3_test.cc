@@ -618,6 +618,201 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file_short_body_s3) {
     client_readable_file_short_body(make_s3_client);
 }
 
+// SCYLLADB-4786: a 206 carrying the right number of bytes from the wrong offset
+// passes every length check, so it has to be refused by the range its
+// Content-Range names - and, as the AWS SDK does, a 206 naming no range at all.
+// Minio answers the range it is asked for, so the injections rewrite the Range
+// header on the way out, and the client still takes the reply as the range it
+// meant to ask for; s3_client_no_content_range stands in for a reply without
+// the header.
+static void require_misplaced_range_error(const std::exception& e) {
+    BOOST_REQUIRE_MESSAGE(std::string(e.what()).contains("was answered with"), fmt::format("unexpected error: {}", e.what()));
+    if (auto io = dynamic_cast<const storage_io_error*>(&e)) {
+        BOOST_REQUIRE_EQUAL(io->code().value(), EIO);
+    }
+}
+
+static void require_misplaced_read_fails(std::string_view what, std::function<sstring()> read) {
+    try {
+        auto got = read();
+        BOOST_FAIL(fmt::format("{} returned \"{}\" instead of failing", what, got));
+    } catch (const storage_io_error& e) {
+        require_misplaced_range_error(e);
+    }
+}
+
+void client_readable_file_misplaced_range(const client_maker_function& client_maker, std::string_view injection) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testmisplacedrangeobject");
+
+    temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
+    cln->put_object(name, std::move(data)).get();
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+    BOOST_REQUIRE_EQUAL(f.size().get(), 16);
+
+    utils::get_local_injector().enable(injection);
+    auto disable = seastar::defer([injection] () noexcept { utils::get_local_injector().disable(injection); });
+
+    char buffer[16];
+    require_misplaced_read_fails("buffer read of 7 bytes at offset 4", [&] {
+        auto sz = f.dma_read(4, buffer, 7).get();
+        return sstring(buffer, sz);
+    });
+    require_misplaced_read_fails("iovec read of 9 bytes at offset 3", [&] {
+        std::vector<iovec> iovs;
+        iovs.push_back({buffer, 4});
+        iovs.push_back({buffer + 4, 5});
+        auto sz = f.dma_read(3, std::move(iovs)).get();
+        return sstring(buffer, sz);
+    });
+    require_misplaced_read_fails("bulk read of 8 bytes at offset 5", [&] {
+        return to_sstring(f.dma_read_bulk<char>(5, 8).get());
+    });
+}
+
+// Reads the source to the end, checking every byte against what the range holds.
+// A reply that answered a different range has to fail the read before any of its
+// bytes reach the caller. The chunked source hands on the client's aws_exception
+// where the plain one maps it to storage_io_error, so either is taken.
+static void require_misplaced_stream_fails(input_stream<char>& in, std::string_view object, s3::range r) {
+    const auto expected = object.substr(r.offset(), r.length());
+    size_t pos = 0;
+    try {
+        while (true) {
+            auto buf = in.read().get();
+            if (buf.empty()) {
+                break;
+            }
+            auto delivered = std::string_view(buf.get(), buf.size());
+            if (delivered != expected.substr(pos, buf.size())) {
+                BOOST_FAIL(fmt::format("delivered {} bytes for offset {} of the object that {}", buf.size(), r.offset() + pos,
+                        delivered == object.substr(pos, buf.size()) ? fmt::format("are the ones at offset {}", pos) : std::string("are not from it")));
+            }
+            pos += buf.size();
+        }
+    } catch (const std::exception& e) {
+        require_misplaced_range_error(e);
+        return;
+    }
+    if (pos < expected.size()) {
+        BOOST_FAIL(fmt::format("the read ended after {} of the {} bytes the range holds", pos, expected.size()));
+    }
+    BOOST_FAIL(fmt::format("the read completed with all {} bytes, so the injection never took effect", pos));
+}
+
+// The download sources are the paths sstable reads take (chunked) and the
+// sstables loader takes (plain). Neither checks the length of a reply, so on
+// top of a misplaced range they have to refuse a 200 with the whole object and a
+// 206 that ends before the range asked for. Only the first request is altered:
+// the chunked source asks again for whatever a short reply left out, and a
+// rewrite applied to every request would only end in an unsatisfiable range.
+// The object spans several socket buffers: a source hands each one on as it
+// arrives, so a reply it rejects only once the body is in has already done the
+// damage.
+void download_source_misplaced_range(const client_maker_function& client_maker, bool is_chunked, std::string_view injection) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testmisplacedrangesource");
+
+    constexpr size_t object_size = 256 * 1024;
+    sstring object = uninitialized_string(object_size);
+    for (size_t i = 0; i < object_size; ++i) {
+        object[i] = char(i % 251);
+    }
+    cln->put_object(name, temporary_buffer<char>(object.data(), object.size())).get();
+
+    utils::get_local_injector().enable(injection, true); // one shot
+    auto disable = seastar::defer([injection] () noexcept { utils::get_local_injector().disable(injection); });
+
+    const auto r = s3::range{4, object_size / 2};
+    auto in = is_chunked ? input_stream<char>(cln->make_chunked_download_source(name, r)) : input_stream<char>(cln->make_download_source(name, r));
+    auto close = seastar::deferred_close(in);
+    require_misplaced_stream_fails(in, object, r);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_misplaced_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    client_readable_file_misplaced_range(make_s3_client, "s3_client_misplaced_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_no_content_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    client_readable_file_misplaced_range(make_s3_client, "s3_client_no_content_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_download_source_misplaced_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, false, "s3_client_misplaced_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_download_source_whole_object_reply_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, false, "s3_client_dropped_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_download_source_shortened_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, false, "s3_client_shortened_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_download_source_no_content_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, false, "s3_client_no_content_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_source_misplaced_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, true, "s3_client_misplaced_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_source_whole_object_reply_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, true, "s3_client_dropped_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_source_shortened_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, true, "s3_client_shortened_range");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_source_no_content_range_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    download_source_misplaced_range(make_s3_client, true, "s3_client_no_content_range");
+}
+
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file_s3) {
     client_readable_file(make_s3_client);
 }

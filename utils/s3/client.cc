@@ -808,6 +808,24 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+// A ranged GET has to be answered by a 206 whose Content-Range names the range
+// asked for; only its end may fall short, where the object ends (SCYLLADB-4786).
+static void verify_reply_range(std::string_view object_name, const range& asked, const http::reply& rep) {
+    auto header = rep.get_header("Content-Range");
+    auto answered = rep._status == http::reply::status_type::partial_content ? utils::http::parse_content_range(header) : std::nullopt;
+    utils::get_local_injector().inject("s3_client_no_content_range", [&answered] {
+        answered.reset();
+    });
+    // An open-ended range asks for everything to the end of the object.
+    const auto asked_last = asked.length() == maximum_object_size ? std::numeric_limits<uint64_t>::max() : asked.offset() + asked.length() - 1;
+    if (!answered || answered->first != asked.offset()
+            || (answered->last != asked_last
+                && (answered->last > asked_last || answered->total != answered->last + 1))) {
+        throw storage_io_error(EIO, format("Read of object {} for {} was answered with {} and Content-Range \"{}\"",
+                object_name, asked.to_header_string(), int(rep._status), header));
+    }
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, range download_range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
@@ -817,6 +835,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         }
         s3l.trace("GET {} contiguous range='{}'", object_name, download_range);
         req._headers["Range"] = download_range.to_header_string();
+        utils::get_local_injector().inject("s3_client_misplaced_range", [&req, &download_range] {
+            // A server answering another range than the one asked for (SCYLLADB-4786).
+            req._headers["Range"] = range{0, download_range.length()}.to_header_string();
+        });
         expected = http::reply::status_type::partial_content;
     } else {
         s3l.trace("GET {} contiguous", object_name);
@@ -824,7 +846,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
-    co_await make_request(std::move(req), [&off, &ret, &object_name] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await make_request(std::move(req), [&off, &ret, &object_name, &download_range] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        if (download_range != s3::full_range) {
+            verify_reply_range(object_name, download_range, rep);
+        }
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
         off = 0;
@@ -1632,6 +1657,16 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 auto req = http::request::make("GET", _client->_host, _object_name);
                 if (!discover_size) {
                     req._headers["Range"] = current_range.to_header_string();
+                    // A server answering another range than the one asked for (SCYLLADB-4786).
+                    utils::get_local_injector().inject("s3_client_misplaced_range", [&req, &current_range] {
+                        req._headers["Range"] = range{0, current_range.length()}.to_header_string();
+                    });
+                    utils::get_local_injector().inject("s3_client_shortened_range", [&req, &current_range] {
+                        req._headers["Range"] = range{current_range.offset(), current_range.length() / 2}.to_header_string();
+                    });
+                    utils::get_local_injector().inject("s3_client_dropped_range", [&req] {
+                        req._headers.erase("Range");
+                    });
                 }
 
                 if (discover_size) {
@@ -1641,11 +1676,14 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length(), asked = current_range](
                         group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
+                        }
+                        if (!discover_size) {
+                            verify_reply_range(_object_name, asked, reply);
                         }
                         gc.prefetch_bytes += pf_length;
                         if (discover_size) {
@@ -1813,16 +1851,29 @@ auto client::download_source::request_body() -> future<external_body> {
         // make an empty object unreadable: no byte range is satisfiable when the
         // object is zero-length (RFC 7233), so the server answers 416.
         req._headers["Range"] = _range.to_header_string();
+        // A server answering another range than the one asked for (SCYLLADB-4786).
+        utils::get_local_injector().inject("s3_client_misplaced_range", [&req, this] {
+            req._headers["Range"] = range{0, _range.length()}.to_header_string();
+        });
+        utils::get_local_injector().inject("s3_client_shortened_range", [&req, this] {
+            req._headers["Range"] = range{_range.offset(), _range.length() / 2}.to_header_string();
+        });
+        utils::get_local_injector().inject("s3_client_dropped_range", [&req] {
+            req._headers.erase("Range");
+        });
     }
 
     auto bp = std::make_unique<std::optional<promise<external_body>>>(std::in_place);
     auto& p = *bp;
     future<external_body> f = p->get_future();
 
-    (void)_client->make_request(std::move(req), [this, &p] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    (void)_client->make_request(std::move(req), [this, &p, asked = _range] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         s3l.trace("GET {} got the body ({} {} bytes)", _object_name, rep._status, rep.content_length);
         if (rep._status != http::reply::status_type::partial_content && rep._status != http::reply::status_type::ok) {
             co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+        }
+        if (asked != s3::full_range) {
+            verify_reply_range(_object_name, asked, rep);
         }
 
         auto in = std::move(in_);
