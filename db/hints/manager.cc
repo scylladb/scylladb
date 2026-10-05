@@ -327,6 +327,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         local_as.request_abort();
     }
 
+<<<<<<< HEAD
     const auto tmptr = _proxy.get_token_metadata_ptr();
     std::unordered_map<endpoint_id, replay_position> hid_rps{};
     hid_rps.reserve(rps.size());
@@ -343,6 +344,12 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
             hid_rps.emplace(std::get<locator::host_id>(addr), rp);
         }
     }
+||||||| parent of 076163a5be (db/hints: do not pin the token metadata while waiting for a sync point)
+    const auto tmptr = _proxy.get_token_metadata_ptr();
+    const auto hid_rps = to_host_id_rps(_gossiper_anchor, rps);
+=======
+    const auto hid_rps = to_host_id_rps(_gossiper_anchor, rps);
+>>>>>>> 076163a5be (db/hints: do not pin the token metadata while waiting for a sync point)
 
     bool was_aborted = false;
     co_await coroutine::parallel_for_each(_ep_managers,
