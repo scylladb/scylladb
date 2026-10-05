@@ -83,27 +83,49 @@ request_failure_exception::request_failure_exception(exception_code code, const 
     {}
 
 replica_failure_map::replica_failure_map(const replica_failure_map& o)
-    : _entries(o._entries ? std::make_unique<entries>(*o._entries) : nullptr)
+    : _data(o._data ? std::make_unique<data>(*o._data) : nullptr)
 { }
 
 replica_failure_map& replica_failure_map::operator=(const replica_failure_map& o) {
     if (this != &o) {
-        _entries = o._entries ? std::make_unique<entries>(*o._entries) : nullptr;
+        _data = o._data ? std::make_unique<data>(*o._data) : nullptr;
     }
     return *this;
+}
+
+replica_failure_map::data* replica_failure_map::get_data() noexcept {
+    if (!_data) {
+        try {
+            _data = std::make_unique<data>();
+        } catch (const std::bad_alloc&) {
+            return nullptr;
+        }
+    }
+    return _data.get();
 }
 
 void replica_failure_map::add(locator::host_id replica, request_failure_reason reason) noexcept {
     if (std::ranges::find(*this, replica, &replica_failure::replica) != end()) {
         return;
     }
+    auto* d = get_data();
+    if (!d) {
+        return;
+    }
     try {
-        if (!_entries) {
-            _entries = std::make_unique<entries>();
-        }
-        _entries->push_back({replica, reason});
+        d->entries.push_back({replica, reason});
     } catch (const std::bad_alloc&) {
     }
+}
+
+void replica_failure_map::set_message(sstring message) noexcept {
+    if (auto* d = get_data()) {
+        d->message = std::move(message);
+    }
+}
+
+std::optional<sstring> replica_failure_map::take_message() noexcept {
+    return _data ? std::exchange(_data->message, std::nullopt) : std::nullopt;
 }
 
 overloaded_exception::overloaded_exception(size_t c) noexcept

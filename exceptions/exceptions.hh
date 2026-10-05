@@ -16,6 +16,7 @@
 #include "locator/host_id.hh"
 #include "utils/small_vector.hh"
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -202,12 +203,21 @@ struct replica_failure {
 
 // The replicas that failed a request, each with the reason of its failure.
 // Keeps one entry per replica, the one added first, in the order of addition.
-// The entries are allocated on the first addition, so an empty map takes
-// the size of a pointer.
-// The map is informational: an entry that cannot be allocated is dropped.
+// The map can also hold a message describing the failure, kept with the
+// replicas until the exception is built.
+// The entries and the message are allocated on the first addition, so an
+// empty map takes the size of a pointer.
+// The map is informational: an entry or a message that cannot be allocated
+// is dropped.
 class replica_failure_map {
-    using entries = utils::small_vector<replica_failure, 3>;
-    std::unique_ptr<entries> _entries;
+    struct data {
+        utils::small_vector<replica_failure, 3> entries;
+        std::optional<sstring> message;
+    };
+    std::unique_ptr<data> _data;
+
+    // Returns nullptr if the data cannot be allocated.
+    data* get_data() noexcept;
 public:
     replica_failure_map() noexcept = default;
     replica_failure_map(replica_failure_map&&) noexcept = default;
@@ -216,11 +226,13 @@ public:
     replica_failure_map& operator=(const replica_failure_map& o);
 
     void add(locator::host_id replica, request_failure_reason reason) noexcept;
+    void set_message(sstring message) noexcept;
+    std::optional<sstring> take_message() noexcept;
 
-    bool empty() const noexcept { return !_entries || _entries->empty(); }
-    size_t size() const noexcept { return _entries ? _entries->size() : 0; }
-    const replica_failure* begin() const noexcept { return _entries ? _entries->begin() : nullptr; }
-    const replica_failure* end() const noexcept { return _entries ? _entries->end() : nullptr; }
+    bool empty() const noexcept { return !_data || _data->entries.empty(); }
+    size_t size() const noexcept { return _data ? _data->entries.size() : 0; }
+    const replica_failure* begin() const noexcept { return _data ? _data->entries.begin() : nullptr; }
+    const replica_failure* end() const noexcept { return _data ? _data->entries.end() : nullptr; }
 };
 
 class request_failure_exception : public cassandra_exception {
