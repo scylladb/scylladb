@@ -15,6 +15,7 @@
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
 #include "compaction_fwd.hh"
+#include "enum_set.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "utils/chunked_vector.hh"
 
@@ -32,6 +33,19 @@ enum class compaction_type {
     Split = 8,
     Major = 9,
 };
+
+using compaction_type_set = enum_set<super_enum<compaction_type,
+        compaction_type::Compaction,
+        compaction_type::Cleanup,
+        compaction_type::Validation,
+        compaction_type::Scrub,
+        compaction_type::Index_build,
+        compaction_type::Reshard,
+        compaction_type::Upgrade,
+        compaction_type::Reshape,
+        compaction_type::Split,
+        compaction_type::Major
+        >>;
 
 struct compaction_completion_desc {
     // Old, existing SSTables that should be deleted and removed from the SSTable set.
