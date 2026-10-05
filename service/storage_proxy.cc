@@ -1783,9 +1783,9 @@ protected:
     error _error = error::NONE;
     bool _cl_achieved = false;
     bool _throttled = false;
-    std::optional<sstring> _message;
     size_t _failed = 0; // only failures that may impact consistency
-    exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
+    // The replicas counted in _failed, and the message of the failure which made CL unreachable.
+    exceptions::replica_failure_map _failed_replicas;
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
@@ -1850,10 +1850,11 @@ public:
             if (_error == error::TIMEOUT) {
                 _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
             } else if (_error == error::FAILURE) {
-                if (!_message) {
+                auto message = _failed_replicas.take_message();
+                if (!message) {
                     _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type, std::move(_failed_replicas)));
                 } else {
-                    _ready.set_exception(mutation_write_failure_exception(*_message, _cl, _cl_acks, _failed, _total_block_for, _type, std::move(_failed_replicas)));
+                    _ready.set_exception(mutation_write_failure_exception(*message, _cl, _cl_acks, _failed, _total_block_for, _type, std::move(_failed_replicas)));
                 }
             } else if (_error == error::RATE_LIMIT) {
                 _ready.set_value(exceptions::rate_limit_exception(get_schema()->ks_name(), get_schema()->cf_name(), db::operation_type::write, false));
@@ -1921,7 +1922,9 @@ public:
             _failed_replicas.add(from, reason);
             if (_total_block_for + _failed > _total_endpoints) {
                 _error = err;
-                _message = std::move(msg);
+                if (msg) {
+                    _failed_replicas.set_message(std::move(*msg));
+                }
                 delay(get_trace_state(), [] (abstract_write_response_handler*) { });
                 return true;
             }
