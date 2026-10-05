@@ -1571,6 +1571,8 @@ void leveled_oversized_l0_fn(test_env& env) {
         BOOST_REQUIRE_EQUAL(candidate.sstables.size(), size_t(cf.schema()->max_compaction_threshold()));
         BOOST_REQUIRE(!contains(candidate, oversized));
         BOOST_REQUIRE(!contains(candidate, oversized_smaller));
+        // and its output is bounded, so it cannot create an oversized sstable itself.
+        BOOST_REQUIRE_EQUAL(candidate.max_sstable_bytes, compaction::leveled_manifest::max_bytes_for_level(0, max_sstable_size));
     }
 }
 
@@ -1586,6 +1588,76 @@ SEASTAR_TEST_CASE(leveled_oversized_l0_s3, *boost::unit_test::precondition(tests
 
 SEASTAR_FIXTURE_TEST_CASE(leveled_oversized_l0_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { leveled_oversized_l0_fn(env); },
+                                   test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
+// Size-tiering L0 when it has fallen behind must not pick fragments of a run, such as
+// its own bounded output: they are disjoint already, so merging them would not shrink
+// L0 and that branch would then run forever ahead of the higher levels.
+void leveled_l0_size_tiering_skips_run_fragments_fn(test_env& env) {
+    auto schema = table_for_tests::make_default_schema();
+    auto cf = env.make_table_for_tests(schema);
+    auto stop_cf = deferred_stop(cf);
+
+    // Fragments of a run must be disjoint, so each L0 one gets a key of its own.
+    const auto fragment_count = compaction::leveled_manifest::MAX_COMPACTING_L0 + 1;
+    const auto l1_count = 8;
+    const auto keys = tests::generate_partition_keys(fragment_count + l1_count, cf.schema());
+    const auto max_sstable_size_in_mb = 1;
+    const uint64_t max_sstable_size = max_sstable_size_in_mb*1024*1024;
+    const auto output_bound = compaction::leveled_manifest::max_bytes_for_level(0, max_sstable_size);
+
+    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+    compaction::size_tiered_compaction_strategy_options stcs_options;
+    auto get_candidate = [&] {
+        auto candidates = get_candidates_for_leveled_strategy(*cf);
+        auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+        return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+    };
+
+    // L1 over capacity, and L0 far behind but made only of fragments of one run.
+    for (auto i = fragment_count; i < int(keys.size()); i++) {
+        add_sstable_for_leveled_test(env, cf, 2 * max_sstable_size, /*level*/1, keys[i].key(), keys[i].key());
+    }
+    auto run = run_id::create_random_id();
+    for (auto i = 0; i < fragment_count; i++) {
+        auto sst = env.make_sstable(cf->schema());
+        sstables::test(sst).set_values_for_leveled_strategy(max_sstable_size / 2, /*level*/0, 0, keys[i].key(), keys[i].key());
+        sstables::test(sst).set_run_identifier(run);
+        column_family_test(cf).add_sstable(sst).get();
+    }
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 2);
+    }
+
+    // Standalone L0 sstables are still size-tiered first, without the run fragments.
+    const auto standalone_count = cf.schema()->min_compaction_threshold();
+    for (auto i = 0; i < standalone_count; i++) {
+        add_sstable_for_leveled_test(env, cf, max_sstable_size / 2, /*level*/0, keys[0].key(), keys[1].key());
+    }
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 0);
+        BOOST_REQUIRE_EQUAL(candidate.sstables.size(), size_t(standalone_count));
+        BOOST_REQUIRE(std::ranges::none_of(candidate.sstables, [&] (auto& sst) { return sst->run_identifier() == run; }));
+        BOOST_REQUIRE_EQUAL(candidate.max_sstable_bytes, output_bound);
+    }
+}
+
+SEASTAR_TEST_CASE(leveled_l0_size_tiering_skips_run_fragments) {
+    return test_env::do_with_async([](test_env& env) { leveled_l0_size_tiering_skips_run_fragments_fn(env); });
+}
+
+SEASTAR_TEST_CASE(leveled_l0_size_tiering_skips_run_fragments_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_env::do_with_async([](test_env& env) { leveled_l0_size_tiering_skips_run_fragments_fn(env); },
+                                   test_env_config{.storage = make_test_object_storage_options("S3")});
+}
+
+SEASTAR_FIXTURE_TEST_CASE(leveled_l0_size_tiering_skips_run_fragments_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_env::do_with_async([](test_env& env) { leveled_l0_size_tiering_skips_run_fragments_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 

@@ -258,11 +258,13 @@ public:
             // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
-                auto most_interesting = size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
+                // Without the input filter this branch would re-tier its own bounded
+                // output forever and never yield to the higher levels.
+                auto most_interesting = size_tiered_compaction_strategy::most_interesting_bucket(single_fragment_runs(get_level(0)),
                     _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
-                    return compaction_descriptor(std::move(most_interesting));
+                    return compaction_descriptor(std::move(most_interesting), 0, max_bytes_for_level(0));
                 }
             }
             auto descriptor = get_descriptor_for_level(i, last_compacted_keys, compaction_counter);
