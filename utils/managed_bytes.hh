@@ -645,9 +645,20 @@ namespace std {
 template <>
 struct hash<managed_bytes_view> {
     size_t operator()(managed_bytes_view v) const {
-        bytes_view_hasher h;
-        appending_hash<managed_bytes_view>{}(h, v);
-        return h.finalize();
+        if (v.is_linearized()) [[likely]] {
+            return std::hash<bytes_view>{}(v.current_fragment());
+        }
+        return hash_fragmented(v);
+    }
+private:
+    // Out of line so the hasher state's large aligned frame stays off the hot path.
+    [[gnu::noinline]] static size_t hash_fragmented(managed_bytes_view v) {
+        XXH64_state_t st;
+        XXH64_reset(&st, 0);
+        for (bytes_view frag : fragment_range(v)) {
+            XXH64_update(&st, frag.data(), frag.size());
+        }
+        return XXH64_digest(&st);
     }
 };
 template <>

@@ -153,15 +153,12 @@ struct appending_hash<bytes_view> {
     }
 };
 
-using bytes_view_hasher = simple_xx_hasher;
-
 namespace std {
 template <>
 struct hash<bytes_view> {
+    // One-shot hash of the bytes alone; must match std::hash<managed_bytes_view>.
     size_t operator()(bytes_view v) const {
-        bytes_view_hasher h;
-        appending_hash<bytes_view>{}(h, v);
-        return h.finalize();
+        return XXH64(v.data(), v.size(), 0);
     }
 };
 } // namespace std
