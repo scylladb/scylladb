@@ -87,7 +87,11 @@ def test_system_clients_stores_tls_info(cql):
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             deadline = time.time() + 10  # 10 seconds timeout
             while time.time() < deadline:
-                rows = session.execute(f"SELECT * FROM system.clients")
+                # Only this session's connections, matched by client source port.
+                ports = {c._socket.getsockname()[1]
+                         for h in session.cluster.get_connection_holders()
+                         for c in h.get_connections() if c._socket}
+                rows = [row for row in session.execute("SELECT * FROM system.clients") if row.port in ports]
                 if rows and all(
                     row.ssl_enabled
                     and row.ssl_protocol == 'TLS1.2'
