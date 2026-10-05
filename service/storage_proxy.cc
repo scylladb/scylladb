@@ -2422,6 +2422,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
     struct {
         size_t errors = 0;
         sstring errors_message;
+        exceptions::replica_failure_map failed_replicas;
         // Whether the value of the requested key received from participating replicas match.
         bool digests_match = true;
         // Digest corresponding to the value of the requested key received from participating replicas.
@@ -2475,12 +2476,14 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: fail to send ballot {} to {}: {}", _id,
                                 ballot, peer, ex);
                         append_peer_error(request_tracker.errors_message, peer, ex);
+                        request_tracker.failed_replicas.add(peer, failure_reason_of(ex));
                         if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
                             auto e = std::make_exception_ptr(mutation_write_failure_exception(
                                 format("Failed to prepare ballot {} for {}.{}. Replica errors: {}",
                                     ballot, _schema->ks_name(), _schema->cf_name(), request_tracker.errors_message),
                                 _cl_for_paxos, summary.committed_ballots_by_replica.size(),
-                                request_tracker.errors, _required_participants, db::write_type::CAS));
+                                request_tracker.errors, _required_participants, db::write_type::CAS,
+                                std::move(request_tracker.failed_replicas)));
                             request_tracker.set_exception(std::move(e));
                         }
                     }
@@ -2586,6 +2589,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
         size_t rejects = 0;
         size_t errors = 0;
         sstring errors_message;
+        exceptions::replica_failure_map failed_replicas;
 
         size_t all_replies() const {
             return accepts + rejects + errors;
@@ -2637,6 +2641,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                                 *proposal, peer, ex);
                         request_tracker.errors++;
                         append_peer_error(request_tracker.errors_message, peer, ex);
+                        request_tracker.failed_replicas.add(peer, failure_reason_of(ex));
                     }
                 }
             }
@@ -2684,7 +2689,8 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                                 *proposal, _schema->ks_name(), _schema->cf_name(),
                                 request_tracker.errors_message),
                             _cl_for_paxos, request_tracker.non_error_replies(),
-                            request_tracker.errors, _required_participants, db::write_type::CAS));
+                            request_tracker.errors, _required_participants, db::write_type::CAS,
+                            std::move(request_tracker.failed_replicas)));
                 request_tracker.set_exception(std::move(e));
             } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
                 // In case there is no need to reply with a timeout if at least one node is accepted
@@ -4241,9 +4247,13 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 get_stats().write_timeouts.mark();
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (rpc::closed_error&) {
-                throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
+                exceptions::replica_failure_map failed_replicas;
+                failed_replicas.add(endpoint_and_mutations.first, exceptions::request_failure_reason::SCYLLA_DISCONNECTED);
+                throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER, std::move(failed_replicas));
             } catch (replica::stale_topology_exception& e) {
-                throw mutation_write_failure_exception(e.what(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
+                exceptions::replica_failure_map failed_replicas;
+                failed_replicas.add(endpoint_and_mutations.first, exceptions::request_failure_reason::INVALID_ROUTING);
+                throw mutation_write_failure_exception(e.what(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER, std::move(failed_replicas));
             }
         }
       }
