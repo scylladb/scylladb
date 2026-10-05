@@ -61,4 +61,14 @@ struct url_info {
 
 url_info parse_simple_url(std::string_view uri);
 
+// The Content-Range header of a 206 reply: "bytes <first>-<last>/<total>".
+// https://www.rfc-editor.org/rfc/rfc9110#section-14.4
+struct content_range {
+    uint64_t first;
+    uint64_t last;
+    uint64_t total;
+};
+
+std::optional<content_range> parse_content_range(std::string_view value);
+
 } // namespace utils::http
