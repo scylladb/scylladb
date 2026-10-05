@@ -4984,7 +4984,7 @@ public:
         _timeout.arm(timeout);
     }
     virtual ~abstract_read_resolver() {};
-    virtual void on_error(locator::host_id ep, error_kind kind) = 0;
+    virtual void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) = 0;
     future<result<>> done() {
         return _done_promise.get_future();
     }
@@ -5020,7 +5020,7 @@ public:
         }
 
         if (!_request_failed) { // request may fail only once.
-            on_error(ep, kind);
+            on_error(ep, kind, failure_reason_of(std::move(eptr)));
         }
     }
 };
@@ -5050,6 +5050,7 @@ private:
     utils::small_vector<digest_and_last_pos, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
+    exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
     noncopyable_function<void()> _on_disconnect;
 
     void on_timeout() override {
@@ -5137,9 +5138,10 @@ private:
             _done_promise.set_value(bo::success());
         }
     }
-    void on_error(locator::host_id ep, error_kind kind) override {
+    void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
         if (waiting_for(ep)) {
             _failed++;
+            _failed_replicas.add(ep, reason);
         }
         if (kind == error_kind::DISCONNECT && _on_disconnect) {
             _on_disconnect();
@@ -5150,7 +5152,8 @@ private:
             // in hope that the client will issue a retry.
             // FIXME: resolver should have access to all replicas and try
             // another one in this case.
-            fail_request(read_failure_exception_with_timeout(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result, _timeout.get_timeout()));
+            fail_request(read_failure_exception_with_timeout(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result, _timeout.get_timeout(),
+                    std::move(_failed_replicas)));
             return;
         }
         if (_block_for + _failed > _target_count_for_cl) {
@@ -5160,7 +5163,7 @@ private:
                 break;
             case error_kind::DISCONNECT:
             case error_kind::FAILURE:
-                fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
+                fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result, std::move(_failed_replicas)));
                 break;
             }
         }
@@ -5481,14 +5484,18 @@ public:
             }
         }
     }
-    void on_error(locator::host_id ep, error_kind kind) override {
+    void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
         switch (kind) {
         case error_kind::RATE_LIMIT:
             fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
             break;
         case error_kind::DISCONNECT:
         case error_kind::FAILURE:
-            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
+        {
+            exceptions::replica_failure_map failed_replicas;
+            failed_replicas.add(ep, reason);
+            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0, std::move(failed_replicas)));
+        }
             break;
         }
     }
@@ -6980,7 +6987,7 @@ static read_timeout_exception write_timeout_to_read(mutation_write_timeout_excep
 }
 
 static read_failure_exception write_failure_to_read(mutation_write_failure_exception& ex) {
-    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false, std::move(ex.failed_replicas));
 }
 
 static mutation_write_timeout_exception read_timeout_to_write(read_timeout_exception& ex) {
@@ -6988,7 +6995,7 @@ static mutation_write_timeout_exception read_timeout_to_write(read_timeout_excep
 }
 
 static mutation_write_failure_exception read_failure_to_write(read_failure_exception& ex) {
-    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
+    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS, std::move(ex.failed_replicas));
 }
 
 /**
