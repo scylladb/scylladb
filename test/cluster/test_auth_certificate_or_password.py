@@ -40,6 +40,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy     # type: ignore
 from cassandra.query import SimpleStatement                  # type: ignore
 
 from test.cluster.dtest.dtest_class import wait_for
+from test.cqlpy.test_ssl import normalize_cipher
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 
@@ -114,7 +115,8 @@ def _tls_socket(host: str, port: int, certfile: str, keyfile: str):
 def _make_tls_cluster(host: str, port: int,
                       certfile: str | None = None,
                       keyfile: str | None = None,
-                      auth_provider=None) -> Cluster:
+                      auth_provider=None,
+                      tls_version: ssl.TLSVersion | None = None) -> Cluster:
     """Return a cassandra-driver Cluster object configured to connect over TLS
     and present a client certificate (certfile, keyfile) if provided.
 
@@ -126,6 +128,8 @@ def _make_tls_cluster(host: str, port: int,
     ssl_ctx.verify_mode = ssl.CERT_NONE
     if certfile:
         ssl_ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+    if tls_version:
+        ssl_ctx.minimum_version = ssl_ctx.maximum_version = tls_version
 
     profile = ExecutionProfile(
         load_balancing_policy=WhiteListRoundRobinPolicy([host]),
@@ -402,6 +406,42 @@ async def test_cql_plain_port(manager: ScyllaClusterManager, tmp_path):
     error_texts = [str(e) for e in exc_info.value.errors.values()]
     assert any('Bad credentials' in t for t in error_texts), \
         f"Expected a CQL authentication failure, got: {error_texts}"
+
+
+async def test_system_clients_tls_info(manager: ScyllaClusterManager, tmp_path):
+    """system.clients reports each connection's negotiated TLS version and cipher (#9216)."""
+    _gen_certs(tmp_path)
+    auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
+    server = (await manager.servers_add(1, config=_server_config(tmp_path),
+                                        driver_connect_opts={'auth_provider': auth}))[0]
+    host = server.ip_addr
+    expected_ciphers = {normalize_cipher(c['name']) for c in ssl.create_default_context().get_ciphers()}
+
+    # Only the session under test uses the TLS port, so ssl_enabled rows are its connections.
+    def tls_rows():
+        return [r for r in manager.cql.execute('SELECT * FROM system.clients') if r.ssl_enabled]
+
+    for name, version in (('TLS1.2', ssl.TLSVersion.TLSv1_2), ('TLS1.3', ssl.TLSVersion.TLSv1_3)):
+        cluster = _make_tls_cluster(host, _TLS_PORT, auth_provider=auth, tls_version=version)
+        try:
+            cluster.connect()
+            # TLS info is filled in asynchronously after the connection is registered.
+            wait_for(lambda: (rows := tls_rows()) and all(
+                         r.ssl_protocol == name and normalize_cipher(r.ssl_cipher_suite or '') in expected_ciphers
+                         for r in rows),
+                     timeout=30, text=f'{name} connections in system.clients')
+        finally:
+            safe_driver_shutdown(cluster)
+        wait_for(lambda: not tls_rows(), timeout=30, text=f'{name} connections to close')
+
+    plain = Cluster(contact_points=[host], port=_TLS_PORT, auth_provider=auth, protocol_version=4,
+                    connect_timeout=30, control_connection_timeout=30,
+                    shard_aware_options={'disable_shardaware_port': True})
+    try:
+        with pytest.raises(NoHostAvailable, match="ProtocolError"):
+            plain.connect()
+    finally:
+        safe_driver_shutdown(plain)
 
 
 @asynccontextmanager
