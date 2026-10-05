@@ -4,10 +4,18 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from cassandra.query import ConsistencyLevel
+from test.cluster.util import FeatureConfig, FeatureConfigurations, feature_configs, get_commitlog_segment_id, new_test_keyspace
+from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace
+from test.pylib.util import gather_safely
 
 import pytest
+
+
+async def active_commitlog_segment_ids(manager: ScyllaClusterManager, server: ServerInfo) -> set[int]:
+    names = await manager.api.client.get_json("/commitlog/segments/active", host=server.ip_addr)
+    return {get_commitlog_segment_id(name) for name in names}
 
 
 @pytest.mark.asyncio
@@ -296,3 +304,51 @@ async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
     await manager.server_stop_gracefully(server.server_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("feature_config", feature_configs(
+    FeatureConfigurations.STRONG_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY
+))
+async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+    """
+    Verify that the commitlog reclaims a segment holding only applied raft
+    entries. state_machine::apply() must not take an applied entry whose replay
+    position handle the table didn't take over, as with logstor, for an
+    unapplied one. Otherwise, every segment written by such a table is kept,
+    and the commitlog runs out of space.
+    """
+    # A single shard has a single active segment, which holds all the writes below.
+    server = await manager.server_add(config=feature_config.get_cluster_cfg(), cmdline=["--smp", "1"])
+    cql, _ = await manager.get_ready_cql([server])
+
+    ks_stmt = feature_config.get_keyspace_opts("CREATE KEYSPACE ks WITH replication = "
+                                               "{'class': 'NetworkTopologyStrategy', "
+                                               "'replication_factor': 1}")
+    table_stmt = feature_config.get_table_opts("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c int)")
+
+    await cql.run_async(ks_stmt)
+    await cql.run_async(table_stmt)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.QUORUM
+
+    await cql.run_async(stmt, (0, 0))
+
+    # Start a fresh segment so that the entries written below are not kept alive
+    # by the handles of the earlier entries of the group (e.g. its configuration),
+    # which share the current one.
+    await manager.api.flush_all_keyspaces(server.ip_addr)
+
+    await gather_safely(*[cql.run_async(stmt, (pk, pk)) for pk in range(1, 10)])
+    segment = max(await active_commitlog_segment_ids(manager, server))
+
+    # Flushing closes the active segment and flushes every memtable, after
+    # which nothing holds the segment anymore.
+    await manager.api.flush_all_keyspaces(server.ip_addr)
+    segments = await active_commitlog_segment_ids(manager, server)
+    assert segment not in segments
+
+    rows = await cql.run_async("SELECT c FROM ks.tbl WHERE pk = 9")
+    assert [r.c for r in rows] == [9]
