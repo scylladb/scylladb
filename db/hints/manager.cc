@@ -354,7 +354,6 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         local_as.request_abort();
     }
 
-    const auto tmptr = _proxy.get_token_metadata_ptr();
     const auto hid_rps = to_host_id_rps(_gossiper_anchor, rps);
 
     bool was_aborted = false;
