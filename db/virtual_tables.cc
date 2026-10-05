@@ -45,6 +45,7 @@
 #include "types/map.hh"
 #include "types/types.hh"
 #include "utils/build_id.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
@@ -2284,6 +2285,8 @@ future<> initialize_virtual_tables(
         // TODO: In a follow-up, read existing large data entries from
         // the old tables and populate per-sstable LargeDataRecords
         // metadata via component_rewrite before dropping.
+        co_await utils::get_local_injector().inject("pause_legacy_large_data_tables_drop",
+                utils::wait_for_message(std::chrono::minutes(5)));
         for (auto table_name : {
                 db::system_keyspace::LARGE_PARTITIONS,
                 db::system_keyspace::LARGE_ROWS,
