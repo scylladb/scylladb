@@ -926,7 +926,13 @@ private:
             const auto cf_name = injector.inject_parameter("storage_proxy::handle_read", "cf_name");
             throwing_assert(cf_name);
             if (*cf_name == s->cf_name()) {
-                co_await injector.inject("storage_proxy::handle_read", utils::wait_for_message(std::chrono::minutes{1}));
+                if (injector.inject_parameter("storage_proxy::handle_read", "what") == "throw") {
+                    if (injector.enter("storage_proxy::handle_read")) {
+                        throw std::runtime_error(format("injected read error for {}.{}", s->ks_name(), s->cf_name()));
+                    }
+                } else {
+                    co_await injector.inject("storage_proxy::handle_read", utils::wait_for_message(std::chrono::minutes{1}));
+                }
             }
         }
 
