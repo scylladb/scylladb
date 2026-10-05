@@ -11,6 +11,7 @@
 #include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_weight_registration.hh"
+#include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <algorithm>
@@ -1543,6 +1544,25 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+private:
+    static sstables::shared_sstable sstable_to_quarantine(const sstables::malformed_sstable_exception& ex, std::span<const sstables::shared_sstable> ssts) {
+        auto it = std::ranges::find(ssts, ex.generation(), &sstables::sstable::generation);
+        return it != ssts.end() ? *it : nullptr;
+    }
+
+    future<> quarantine_sstable(const sstables::shared_sstable& sst) {
+        try {
+            utils::get_local_injector().inject("regular_compaction_quarantine_fail", [] { throw std::runtime_error("quarantine failure injection"); });
+            co_await sst->change_state(sstables::sstable_state::quarantine);
+        } catch (const storage_io_error&) {
+            throw;
+        } catch (...) {
+            auto s = _compacting_table->schema();
+            throw compaction_aborted_exception(s->ks_name(), s->cf_name(),
+                fmt::format("Failed to quarantine {}: {}", sst, std::current_exception()));
+        }
+    }
+
 protected:
     virtual future<> run() override {
         return perform();
@@ -1635,6 +1655,27 @@ protected:
                 continue;
             } catch (...) {
                 ex = std::current_exception();
+            }
+
+            if (auto* e = try_catch<sstables::malformed_sstable_exception>(ex); e && e->generation()) {
+                auto sst_to_quarantine = sstable_to_quarantine(*e, old_sstables);
+                // If no sstable is found, an attributed malformed sstable exception must have originated
+                // from one of the output sstables. This is not possible today, but guard against a future change
+                // making it possible. In such case, fall back to maybe_retry().
+                if (sst_to_quarantine) {
+                    cmlog.error("{}: failed: {}", *this, ex);
+
+                    try {
+                        co_await quarantine_sstable(sst_to_quarantine);
+                        cmlog.info("{}: quarantined {}", *this, sst_to_quarantine);
+                        _cm._stats.errors++;
+                        finish_compaction(state::failed);
+                        _cm.reevaluate_postponed_compactions();
+                        continue;
+                    } catch (...) {
+                        ex = std::current_exception();
+                    }
+                }
             }
 
             finish_compaction(state::failed);
