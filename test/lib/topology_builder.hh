@@ -144,10 +144,13 @@ private:
                 continue;
             }
 
-            service::topology_change change({service::topology_mutation_builder(guard.write_timestamp())
-                                                 .set_transition_state(service::topology::transition_state::lock)
-                                                 .build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "locking topology");
+            service::group0_update_collector updates;
+            updates.add(service::topology_mutation_builder(guard.write_timestamp())
+                             .set_transition_state(service::topology::transition_state::lock)
+                             .build());
+            service::group0_command g0_cmd = client.prepare_command<service::topology_change>(
+                    std::move(updates),
+                    guard, "locking topology").get();
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
             } catch (service::group0_concurrent_modification&) {
@@ -262,9 +265,10 @@ public:
                     .set("supported_features", std::set<sstring>())
                     .set("request_id", utils::UUID())
                     .set("ignore_msb", (uint32_t) 0);
-            service::topology_change change({builder.build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
-                                                                    format("adding node {} to topology", id));
+            service::group0_update_collector updates;
+            updates.add(builder.build());
+            service::group0_command g0_cmd = client.prepare_command<service::topology_change>(std::move(updates), guard,
+                                                                    format("adding node {} to topology", id)).get();
             testlog.info("Adding node {}/{} dc={} rack={} to topology", id, ip, dc_rack.dc, dc_rack.rack);
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
@@ -290,15 +294,14 @@ public:
         return h;
     }
 
-    void modify_group0(std::function<void(service::group0_guard&, utils::chunked_vector<canonical_mutation>&)> func) {
+    void modify_group0(std::function<void(service::group0_guard&, service::group0_update_collector&)> func) {
         abort_source as;
         auto& client = _env.get_raft_group0_client();
         while (true) {
             auto guard = client.start_operation(as).get();
-            utils::chunked_vector<canonical_mutation> muts;
+            service::group0_update_collector muts;
             func(guard, muts);
-            service::topology_change change({std::move(muts)});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "modify_topology()");
+            service::group0_command g0_cmd = client.prepare_command<service::topology_change>(std::move(muts), guard, "modify_topology()").get();
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
                 break;
@@ -309,10 +312,10 @@ public:
     }
 
     void modify_topology(std::function<void(service::topology_mutation_builder&)> func) {
-        modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+        modify_group0([&] (service::group0_guard& guard, service::group0_update_collector& muts) {
             service::topology_mutation_builder builder(guard.write_timestamp());
             func(builder);
-            muts.emplace_back(builder.build());
+            muts.add(builder.build());
         });
     }
 
@@ -323,9 +326,10 @@ public:
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
             builder.pause_rf_change_request(new_elem);
-            service::topology_change change({builder.build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
-                                                                    "setting ongoing RF change data");
+            service::group0_update_collector updates;
+            updates.add(builder.build());
+            service::group0_command g0_cmd = client.prepare_command<service::topology_change>(std::move(updates), guard,
+                                                                    "setting ongoing RF change data").get();
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
                 break;
@@ -342,9 +346,10 @@ public:
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
             builder.resume_rf_change_request(current_queue, elem_to_remove);
-            service::topology_change change({builder.build()});
-            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
-                                                                    "setting ongoing RF change data");
+            service::group0_update_collector updates;
+            updates.add(builder.build());
+            service::group0_command g0_cmd = client.prepare_command<service::topology_change>(std::move(updates), guard,
+                                                                    "setting ongoing RF change data").get();
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
                 break;
@@ -363,7 +368,7 @@ public:
     }
 
     void add_draining_request(locator::host_id id) {
-        modify_group0([&](service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+        modify_group0([&](service::group0_guard& guard, service::group0_update_collector& muts) {
             auto& topo = _env.local_token_metadata_ptr()->get_topology();
             auto req = topo.get_node(id).is_excluded() ? service::topology_request::remove : service::topology_request::leave;
 
@@ -371,14 +376,14 @@ public:
             builder.with_node(raft::server_id(id.uuid()))
                     .set("topology_request", req)
                     .set("request_id", guard.new_group0_state_id());
-            muts.emplace_back(builder.build());
+            muts.add(builder.build());
 
             service::topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(),
                                                                  _env.local_db().features().topology_requests_type_column);
             rtbuilder.set("initiating_host", raft::server_id(topo.my_host_id().uuid()))
                     .set("done", false);
             rtbuilder.set("request_type", req);
-            muts.emplace_back(rtbuilder.build());
+            muts.add(rtbuilder.build());
 
             testlog.info("Adding {} request for node {}", req, id);
         });
