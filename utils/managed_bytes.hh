@@ -653,12 +653,12 @@ struct hash<managed_bytes_view> {
 private:
     // Out of line so the hasher state's large aligned frame stays off the hot path.
     [[gnu::noinline]] static size_t hash_fragmented(managed_bytes_view v) {
-        XXH64_state_t st;
-        XXH64_reset(&st, 0);
+        XXH3_state_t st;
+        XXH3_64bits_reset(&st);
         for (bytes_view frag : fragment_range(v)) {
-            XXH64_update(&st, frag.data(), frag.size());
+            XXH3_64bits_update(&st, frag.data(), frag.size());
         }
-        return XXH64_digest(&st);
+        return XXH3_64bits_digest(&st);
     }
 };
 template <>

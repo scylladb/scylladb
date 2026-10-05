@@ -158,7 +158,7 @@ template <>
 struct hash<bytes_view> {
     // One-shot hash of the bytes alone; must match std::hash<managed_bytes_view>.
     size_t operator()(bytes_view v) const {
-        return XXH64(v.data(), v.size(), 0);
+        return XXH3_64bits(v.data(), v.size());
     }
 };
 } // namespace std
