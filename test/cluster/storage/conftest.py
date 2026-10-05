@@ -23,6 +23,8 @@ from test.pylib.util import gather_safely
 
 logger = logging.getLogger(__name__)
 
+BLOCK_SIZE = 2048
+
 
 @pytest.fixture(scope="function")
 def volumes_factory(pytestconfig, build_mode, request):
@@ -46,7 +48,15 @@ def volumes_factory(pytestconfig, build_mode, request):
                 volume = VolumeInfo(path.with_name(f"{path.name}.img"), path, path.with_name(f"{path.name}.log"))
 
                 subprocess.run(["truncate", "-s", size, volume.img], check=True)
-                subprocess.run(["mkfs.ext4", volume.img], check=True, stdout=subprocess.DEVNULL)
+                # 2 KB blocks: mkfs picks 1 KB for small images and fuse2fs then writes the image in 1 KB pieces, which is slow under load.
+                # 4 KB would be faster still, but rounds every small sstable file up to 4 KB and uses more space than 1 KB blocks with
+                # a journal once the node has some hundreds of files, which tips these tests over the critical disk utilization level.
+                # No journal: fuse2fs does not use it, and it would take ~1.4 MB of the small volume.
+                # The last block is marked bad to work around e2fsprogs 509da98991 (fixed in 1.47.4): freeing an extent that
+                # ends at the last block fails with EXT2_ET_BAD_BLOCK_NUM, which can make fuse2fs remount the volume read-only.
+                bad_blocks = path.with_name(f"{path.name}.bad_blocks")
+                bad_blocks.write_text(f"{volume.img.stat().st_size // BLOCK_SIZE - 1}\n")
+                subprocess.run(["mkfs.ext4", "-b", str(BLOCK_SIZE), "-O", "^has_journal", "-l", bad_blocks, volume.img], check=True, stdout=subprocess.DEVNULL)
                 # -o uid=... and -o gid=... to avoid root:root ownership of mounted files
                 # -o fakeroot to avoid permission denied errors on creating files inside docker
                 subprocess.run(["fuse2fs", "-o", f"uid={os.getuid()}", "-o", f"gid={os.getgid()}", "-o", "fakeroot", volume.img, volume.mount], check=True)
