@@ -3944,8 +3944,10 @@ void lcs_reshape_fn(test_env& env) {
     simple_schema ss;
     auto s = ss.schema();
     const auto keys = tests::generate_partition_keys(256, s);
+    const uint64_t max_sstable_size_in_mb = 160;
+    const uint64_t max_sstable_size = max_sstable_size_in_mb * 1024 * 1024;
     auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled,
-                                                 s->compaction_strategy_options());
+                                                 {{"sstable_size_in_mb", std::to_string(max_sstable_size_in_mb)}});
 
     // non overlapping
     {
@@ -3965,11 +3967,15 @@ void lcs_reshape_fn(test_env& env) {
         for (auto i = 0; i < 256; i++) {
             auto sst = env.make_sstable(s);
             auto key = keys[0].key();
-            sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
+            sstables::test(sst).set_values_for_leveled_strategy(max_sstable_size / 4, 0 /* level */, 0 /* max ts */, key, key);
             sstables.push_back(std::move(sst));
         }
 
-        BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
+        auto desc = get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict);
+        BOOST_REQUIRE(desc.sstables.size() == uint64_t(s->max_compaction_threshold()));
+        // 32 * 40MiB is 8 sstables of 160MiB, which fit in L1.
+        BOOST_REQUIRE_EQUAL(desc.level, 1);
+        BOOST_REQUIRE_EQUAL(desc.max_sstable_bytes, max_sstable_size);
     }
     // single sstable
     {
@@ -3978,6 +3984,63 @@ void lcs_reshape_fn(test_env& env) {
         sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
 
         BOOST_REQUIRE(get_reshaping_job(cs, { sst }, s, compaction::reshape_mode::strict).sstables.size() == 0);
+    }
+    // Mostly disjoint L0 with a few overlapping pairs, like a repair-based bootstrap that
+    // did not come out perfectly disjoint. The output must go to the level that fits it,
+    // split at the max sstable size, instead of becoming a single multi-GB L0 sstable.
+    // Tests SCYLLADB-2870.
+    {
+        const uint64_t sstable_size = max_sstable_size / 4;
+        std::vector<shared_sstable> sstables;
+        for (auto i = 0; i < 256; i++) {
+            auto sst = env.make_sstable(s);
+            // every 32nd sstable spans into the next key, overlapping the next sstable.
+            auto last = (i % 32 == 0) ? keys[i + 1].key() : keys[i].key();
+            sstables::test(sst).set_values_for_leveled_strategy(sstable_size, 0 /* level */, 0 /* max ts */, keys[i].key(), last);
+            sstables.push_back(std::move(sst));
+        }
+
+        auto desc = get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict);
+        BOOST_REQUIRE_EQUAL(desc.sstables.size(), 256u);
+        // 256 * 40MiB is 64 sstables of 160MiB, log10(64) rounds up to 2.
+        BOOST_REQUIRE_EQUAL(desc.level, 2);
+        BOOST_REQUIRE_EQUAL(desc.max_sstable_bytes, max_sstable_size);
+    }
+    // Relaxed (boot) reshape of a table that already has leveled sstables: the output
+    // stays in L0, size-capped, so that no level has to be compacted before the node
+    // comes online.
+    {
+        std::vector<shared_sstable> sstables;
+        for (auto i = 0; i < 40; i++) {
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values_for_leveled_strategy(max_sstable_size / 4, 0 /* level */, 0 /* max ts */, keys[0].key(), keys[255].key());
+            sstables.push_back(std::move(sst));
+        }
+        auto l2 = env.make_sstable(s);
+        sstables::test(l2).set_values_for_leveled_strategy(max_sstable_size, 2 /* level */, 0 /* max ts */, keys[0].key(), keys[1].key());
+        sstables.push_back(std::move(l2));
+
+        auto desc = get_reshaping_job(cs, sstables, s, compaction::reshape_mode::relaxed);
+        BOOST_REQUIRE(desc.sstables.size() == uint64_t(s->max_compaction_threshold()));
+        BOOST_REQUIRE_EQUAL(desc.level, 0);
+        BOOST_REQUIRE_EQUAL(desc.max_sstable_bytes, max_sstable_size);
+    }
+    // The output of such a job, fragments of one run, fed back in by boot reshape:
+    // nothing left to do, otherwise reshape would never end.
+    {
+        std::vector<shared_sstable> sstables;
+        auto run = run_id::create_random_id();
+        for (auto i = 0; i < 40; i++) {
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values_for_leveled_strategy(max_sstable_size, 0 /* level */, 0 /* max ts */, keys[i].key(), keys[i].key());
+            sstables::test(sst).set_run_identifier(run);
+            sstables.push_back(std::move(sst));
+        }
+        auto l2 = env.make_sstable(s);
+        sstables::test(l2).set_values_for_leveled_strategy(max_sstable_size, 2 /* level */, 0 /* max ts */, keys[0].key(), keys[1].key());
+        sstables.push_back(std::move(l2));
+
+        BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::relaxed).sstables.empty());
     }
 }
 

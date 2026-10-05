@@ -11,6 +11,8 @@
 #pragma once
 
 #include <algorithm>
+#include <ranges>
+#include <unordered_map>
 
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
@@ -545,6 +547,17 @@ public:
             SCYLLA_ASSERT(new_level > 0);
         }
         return new_level;
+    }
+
+    // Fragments of a run are disjoint; size-tiering must not re-tier capped outputs.
+    static std::vector<sstables::shared_sstable> single_fragment_runs(const std::vector<sstables::shared_sstable>& sstables) {
+        std::unordered_map<sstables::run_id, unsigned> fragments;
+        for (auto& sst : sstables) {
+            fragments[sst->run_identifier()]++;
+        }
+        return sstables | std::views::filter([&fragments] (const sstables::shared_sstable& sst) {
+            return fragments[sst->run_identifier()] == 1;
+        }) | std::ranges::to<std::vector>();
     }
 
     template <typename T>

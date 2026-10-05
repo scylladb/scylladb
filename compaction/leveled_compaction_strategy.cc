@@ -204,7 +204,22 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_ssta
 
     if (level_info[0].size() > offstrategy_threshold) {
         size_tiered_compaction_strategy stcs(_stcs_options);
-        return stcs.get_reshaping_job(std::move(level_info[0]), schema, cfg);
+        compaction_descriptor desc;
+        if (mode == reshape_mode::strict) {
+            desc = stcs.get_reshaping_job(std::move(level_info[0]), schema, cfg);
+            if (!desc.sstables.empty()) {
+                desc.level = ideal_level_for_input(desc.sstables, max_sstable_size_in_bytes);
+            }
+        } else {
+            // On boot the input is the data already on disk and the node is offline: output
+            // placed in a populated level would make that level be compacted before the node
+            // comes online. The output is fed back in, so its fragments must not be tiered again.
+            desc = stcs.get_reshaping_job(leveled_manifest::single_fragment_runs(level_info[0]), schema, cfg);
+        }
+        if (!desc.sstables.empty()) {
+            desc.max_sstable_bytes = max_sstable_size_in_bytes;
+            return desc;
+        }
     }
 
     for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
