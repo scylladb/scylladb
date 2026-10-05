@@ -38,7 +38,4 @@ public:
     ///
     /// \return true iff text matches constructor's pattern.
     bool operator()(bytes_view text) const;
-
-    /// Resets pattern if different from the current one.
-    void reset(bytes_view pattern);
 };
