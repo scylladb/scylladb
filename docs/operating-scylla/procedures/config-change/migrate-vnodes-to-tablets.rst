@@ -271,7 +271,7 @@ Procedure
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets finalize ks
+         $ scylla nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: tablets
 
