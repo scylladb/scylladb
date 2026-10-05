@@ -11,6 +11,7 @@
 #include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_weight_registration.hh"
+#include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "sstables/sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -1512,6 +1514,38 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+private:
+    std::vector<sstables::shared_sstable> sstables_to_quarantine(const sstables::malformed_sstable_exception& ex, std::span<const sstables::shared_sstable> ssts) {
+        if (const auto* attributed = dynamic_cast<const sstables::attributed_malformed_sstable_exception*>(&ex)) {
+            auto generation = attributed->generation();
+            auto it = std::ranges::find(ssts, generation, &sstables::sstable::generation);
+            if (it != ssts.end()) {
+                return {*it};
+            }
+            return {};
+        }
+        return ssts | std::views::filter([this] (const sstables::shared_sstable& sst) {
+            return _cm._compacting_sstables.contains(sst);
+        }) | std::ranges::to<std::vector>();
+    }
+
+    future<> quarantine_sstable(const sstables::shared_sstable& sst) {
+        try {
+            utils::get_local_injector().inject("regular_compaction_quarantine_fail", [] { throw std::runtime_error("quarantine failure injection"); });
+            co_await sst->change_state(sstables::sstable_state::quarantine);
+        } catch (...) {
+            auto s = _compacting_table->schema();
+            throw compaction_aborted_exception(s->ks_name(), s->cf_name(),
+                fmt::format("Failed to quarantine {}: {}", sst, std::current_exception()));
+        }
+    }
+
+    future<> quarantine_sstables(std::span<const sstables::shared_sstable> ssts) {
+        for (auto& sst : ssts) {
+            co_await quarantine_sstable(sst);
+        }
+    }
+
 protected:
     virtual future<> run() override {
         return perform();
@@ -1604,6 +1638,26 @@ protected:
                 continue;
             } catch (...) {
                 ex = std::current_exception();
+            }
+
+            if (auto* e = try_catch<sstables::malformed_sstable_exception>(ex)) {
+                auto ssts_to_quarantine = sstables_to_quarantine(*e, old_sstables);
+                // If the set of sstables is empty, an attributed malformed sstable exception must have originated
+                // from one of the output sstables. This is not possible today, but guard against a future change
+                // making it possible. In such case, fall back to maybe_retry().
+                if (!ssts_to_quarantine.empty()) {
+                    cmlog.error("{}: failed: {}", *this, ex);
+
+                    auto f = co_await coroutine::as_future(quarantine_sstables(ssts_to_quarantine));
+                    if (!f.failed()) {
+                        cmlog.info("{}: quarantined {}", *this, ssts_to_quarantine);
+                        _cm._stats.errors++;
+                        finish_compaction(state::failed);
+                        _cm.reevaluate_postponed_compactions();
+                        continue;
+                    }
+                    ex = f.get_exception();
+                }
             }
 
             finish_compaction(state::failed);
