@@ -11,6 +11,7 @@
 #include "exceptions.hh"
 
 #include "bytes.hh"
+#include <algorithm>
 #include <seastar/core/format.hh>
 #include <seastar/util/log.hh>
 
@@ -71,13 +72,39 @@ read_write_timeout_exception::read_write_timeout_exception(exception_code code, 
     , block_for{block_for}
     { }
 
-request_failure_exception::request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
+request_failure_exception::request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_,
+        replica_failure_map failed_replicas_) noexcept
     : cassandra_exception{code, prepare_message("Operation failed for {}.{} - received {} responses and {} failures from {} CL={}.", ks, cf, received_, failures_, block_for_, consistency_)}
     , consistency{consistency_}
     , received{received_}
     , failures{failures_}
     , block_for{block_for_}
+    , failed_replicas{std::move(failed_replicas_)}
     {}
+
+replica_failure_map::replica_failure_map(const replica_failure_map& o)
+    : _entries(o._entries ? std::make_unique<entries>(*o._entries) : nullptr)
+{ }
+
+replica_failure_map& replica_failure_map::operator=(const replica_failure_map& o) {
+    if (this != &o) {
+        _entries = o._entries ? std::make_unique<entries>(*o._entries) : nullptr;
+    }
+    return *this;
+}
+
+void replica_failure_map::add(locator::host_id replica, request_failure_reason reason) noexcept {
+    if (std::ranges::find(*this, replica, &replica_failure::replica) != end()) {
+        return;
+    }
+    try {
+        if (!_entries) {
+            _entries = std::make_unique<entries>();
+        }
+        _entries->push_back({replica, reason});
+    } catch (const std::bad_alloc&) {
+    }
+}
 
 overloaded_exception::overloaded_exception(size_t c) noexcept
     : cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: {}", c))

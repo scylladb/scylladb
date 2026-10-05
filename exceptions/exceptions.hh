@@ -13,6 +13,9 @@
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include "db/operation_type.hh"
+#include "locator/host_id.hh"
+#include "utils/small_vector.hh"
+#include <memory>
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -164,34 +167,96 @@ struct mutation_write_timeout_exception : public read_write_timeout_exception {
     { }
 };
 
+// The reason a replica failed to execute a request.
+// The values are the <failure_code> values of the <reason_map> in the
+// Read_failure and Write_failure errors of the CQL native protocol v5.
+// Values starting at 0xF000 are Scylla-specific. They are advertised to the
+// drivers by the SCYLLA_FAILURE_REASON_MAP protocol extension.
+enum class request_failure_reason : uint16_t {
+    UNKNOWN                  = 0x0000,
+    READ_TOO_MANY_TOMBSTONES = 0x0001,
+    TIMEOUT                  = 0x0002,
+    INCOMPATIBLE_SCHEMA      = 0x0003,
+    READ_SIZE                = 0x0004,
+    NODE_DOWN                = 0x0005,
+    INDEX_NOT_AVAILABLE      = 0x0006,
+    READ_TOO_MANY_INDEXES    = 0x0007,
+    NOT_CMS                  = 0x0008,
+    INVALID_ROUTING          = 0x0009,
+    COORDINATOR_BEHIND       = 0x000A,
+
+    // Scylla-specific failure reasons.
+    // NOTE TO DRIVER DEVELOPERS: These constants must not be relied upon,
+    // they must be learned from protocol extensions instead.
+    SCYLLA_RATE_LIMITED              = 0xF000,
+    SCYLLA_LARGE_DATA_REJECTED       = 0xF001,
+    SCYLLA_CRITICAL_DISK_UTILIZATION = 0xF002,
+    SCYLLA_ABORTED                   = 0xF003,
+    SCYLLA_DISCONNECTED              = 0xF004,
+};
+
+struct replica_failure {
+    locator::host_id replica;
+    request_failure_reason reason;
+};
+
+// The replicas that failed a request, each with the reason of its failure.
+// Keeps one entry per replica, the one added first, in the order of addition.
+// The entries are allocated on the first addition, so an empty map takes
+// the size of a pointer.
+// The map is informational: an entry that cannot be allocated is dropped.
+class replica_failure_map {
+    using entries = utils::small_vector<replica_failure, 3>;
+    std::unique_ptr<entries> _entries;
+public:
+    replica_failure_map() noexcept = default;
+    replica_failure_map(replica_failure_map&&) noexcept = default;
+    replica_failure_map& operator=(replica_failure_map&&) noexcept = default;
+    replica_failure_map(const replica_failure_map& o);
+    replica_failure_map& operator=(const replica_failure_map& o);
+
+    void add(locator::host_id replica, request_failure_reason reason) noexcept;
+
+    bool empty() const noexcept { return !_entries || _entries->empty(); }
+    size_t size() const noexcept { return _entries ? _entries->size() : 0; }
+    const replica_failure* begin() const noexcept { return _entries ? _entries->begin() : nullptr; }
+    const replica_failure* end() const noexcept { return _entries ? _entries->end() : nullptr; }
+};
+
 class request_failure_exception : public cassandra_exception {
 public:
     db::consistency_level consistency;
     int32_t received;
     int32_t failures;
     int32_t block_for;
+    replica_failure_map failed_replicas;
 
 protected:
-    request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept;
+    request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_,
+            replica_failure_map failed_replicas_ = {}) noexcept;
 
-    request_failure_exception(exception_code code, sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
+    request_failure_exception(exception_code code, sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_,
+            replica_failure_map failed_replicas_ = {}) noexcept
         : cassandra_exception{code, std::move(msg)}
         , consistency{consistency_}
         , received{received_}
         , failures{failures_}
         , block_for{block_for_}
+        , failed_replicas{std::move(failed_replicas_)}
     {}
 };
 
 struct mutation_write_failure_exception : public request_failure_exception {
     db::write_type type;
-    mutation_write_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_) noexcept :
-        request_failure_exception(exception_code::WRITE_FAILURE, ks, cf, consistency_, received_, failures_, block_for_)
+    mutation_write_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_,
+            replica_failure_map failed_replicas_ = {}) noexcept :
+        request_failure_exception(exception_code::WRITE_FAILURE, ks, cf, consistency_, received_, failures_, block_for_, std::move(failed_replicas_))
         , type{std::move(type_)}
     { }
 
-    mutation_write_failure_exception(sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_) noexcept :
-        request_failure_exception(exception_code::WRITE_FAILURE, std::move(msg), consistency_, received_, failures_, block_for_)
+    mutation_write_failure_exception(sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_,
+            replica_failure_map failed_replicas_ = {}) noexcept :
+        request_failure_exception(exception_code::WRITE_FAILURE, std::move(msg), consistency_, received_, failures_, block_for_, std::move(failed_replicas_))
         , type{std::move(type_)}
     { }
 };
@@ -199,13 +264,15 @@ struct mutation_write_failure_exception : public request_failure_exception {
 struct read_failure_exception : public request_failure_exception {
     bool data_present;
 
-    read_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
-        : request_failure_exception{exception_code::READ_FAILURE, ks, cf, consistency_, received_, failures_, block_for_}
+    read_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_,
+            replica_failure_map failed_replicas_ = {}) noexcept
+        : request_failure_exception{exception_code::READ_FAILURE, ks, cf, consistency_, received_, failures_, block_for_, std::move(failed_replicas_)}
         , data_present{data_present_}
     { }
 
-    read_failure_exception(sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
-        : request_failure_exception{exception_code::READ_FAILURE, std::move(msg), consistency_, received_, failures_, block_for_}
+    read_failure_exception(sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_,
+            replica_failure_map failed_replicas_ = {}) noexcept
+        : request_failure_exception{exception_code::READ_FAILURE, std::move(msg), consistency_, received_, failures_, block_for_, std::move(failed_replicas_)}
         , data_present{data_present_}
     { }
 };
@@ -214,8 +281,9 @@ struct read_failure_exception_with_timeout : public read_failure_exception {
     const seastar::lowres_clock::time_point _timeout;
     read_timeout_exception _timeout_exception;
 
-    read_failure_exception_with_timeout(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_, seastar::lowres_clock::time_point timeout_) noexcept
-        : read_failure_exception{ks, cf, consistency_, received_, failures_, block_for_, data_present_}
+    read_failure_exception_with_timeout(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_, seastar::lowres_clock::time_point timeout_,
+            replica_failure_map failed_replicas_ = {}) noexcept
+        : read_failure_exception{ks, cf, consistency_, received_, failures_, block_for_, data_present_, std::move(failed_replicas_)}
         , _timeout(timeout_)
         , _timeout_exception(ks, cf, consistency_, received_, block_for_, data_present_)
     { }
