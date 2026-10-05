@@ -63,3 +63,24 @@ BOOST_AUTO_TEST_CASE(test_parse_path) {
     BOOST_CHECK_EQUAL(info.path, "/ola/korv");
 }
 
+BOOST_AUTO_TEST_CASE(test_parse_content_range) {
+    auto r = parse_content_range("bytes 4096-8191/8192");
+    BOOST_REQUIRE(r);
+    BOOST_CHECK_EQUAL(r->first, 4096);
+    BOOST_CHECK_EQUAL(r->last, 8191);
+    BOOST_CHECK_EQUAL(r->total, 8192);
+
+    // Only the form S3 and GCS send: the unit as is and a numeric length.
+    for (std::string_view value : {
+            "",
+            "bytes 0-1",
+            "bytes */8192",          // what a 416 carries: no range was satisfied
+            "bytes 0-0/*",           // neither S3 nor GCS leaves the length out
+            "Bytes 1-2/3",
+            "bytes 0-1/2 ",
+            "bytes +0-1/2",
+            "bytes 0-18446744073709551616/18446744073709551617", // does not fit uint64_t
+    }) {
+        BOOST_CHECK_MESSAGE(!parse_content_range(value), fmt::format("\"{}\" parsed", value));
+    }
+}
