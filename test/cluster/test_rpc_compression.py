@@ -101,12 +101,18 @@ async def test_dict_training(manager: ScyllaClusterManager) -> None:
         'rpc_dict_training_when': 'never',
         'rpc_dict_training_min_bytes': training_min_bytes,
         'rpc_dict_training_min_time_seconds': 0,
+        # Test clusters scan TTL tables every 0.5 s, and that RPC traffic would keep retraining the dictionary.
+        'alternator_ttl_period_in_seconds': 24 * 60 * 60,
     }
     cmdline = [
         '--logger-log-level=dict_training=trace'
     ]
     logger.info(f"Booting initial cluster")
     servers = await manager.servers_add(servers_num=2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    # The TTL scan at startup must be over on both shards of each node before training starts.
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        await log.wait_for(*[rf"\[shard {shard}:[^\]]*\] alternator_ttl - sleeping .* until next period" for shard in range(2)], timeout=60)
 
     cql = manager.get_cql()
 
@@ -136,6 +142,8 @@ async def test_dict_training(manager: ScyllaClusterManager) -> None:
         await write_messages(msg_notrain)
         await set_dict_training_when("when_leader")
         await write_messages(msg_train)
+        # Otherwise any later RPC traffic can retrain and replace the dictionary before it is checked.
+        await set_dict_training_when("never")
 
         ngram_size = 8
         def make_ngrams(x: bytes) -> list[bytes]:
