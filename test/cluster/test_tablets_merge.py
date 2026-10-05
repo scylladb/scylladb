@@ -41,6 +41,8 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'table=debug',
         '--logger-log-level', 'load_balancer=debug',
+        # The GCS client logs the retries of its requests at debug level only.
+        '--logger-log-level', 'gcp_retry_strategy=debug',
         '--target-tablet-size-in-bytes', '30000',
     ]
     config = storage_config.get_cluster_cfg({
