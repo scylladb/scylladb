@@ -2644,6 +2644,12 @@ void cql_server::response::write_inet(socket_address inet)
     write_int(inet.port());
 }
 
+void cql_server::response::write_inetaddr(const net::inet_address& addr)
+{
+    write_byte(uint8_t(addr.size()));
+    _body.write(bytes_view(static_cast<const int8_t*>(addr.data()), addr.size()));
+}
+
 void cql_server::response::write_consistency(db::consistency_level c)
 {
     write_short(consistency_to_wire(c));

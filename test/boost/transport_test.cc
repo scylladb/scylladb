@@ -203,3 +203,24 @@ SEASTAR_THREAD_TEST_CASE(test_response_metadata_changed_for_empty_request_metada
     BOOST_CHECK_EQUAL(req.read_int().value(), 1);
     BOOST_CHECK_EQUAL(req.read_short_bytes().value(), expected_metadata_id);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_response_write_inetaddr) {
+    auto res = cql_transport::response(0, cql_transport::cql_binary_opcode::ERROR, tracing::trace_state_ptr());
+    res.write_inetaddr(net::inet_address("127.0.0.1"));
+    res.write_short(0x0002);
+    res.write_inetaddr(net::inet_address("::1"));
+    res.write_short(0xf001);
+
+    auto body = std::move(res).extract_body();
+    const auto expected = std::vector<uint8_t>{
+        0x04, 0x7f, 0x00, 0x00, 0x01,
+        0x00, 0x02,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0xf0, 0x01,
+    };
+    auto actual = body.linearize();
+    BOOST_REQUIRE_EQUAL(actual.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        BOOST_CHECK_EQUAL(unsigned(uint8_t(actual[i])), unsigned(expected[i]));
+    }
+}
