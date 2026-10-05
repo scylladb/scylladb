@@ -1715,6 +1715,8 @@ public:
                     return make_ready_future<>();
                 });
             }
+        }).handle_exception([this] (std::exception_ptr ex) {
+            return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
         });
     }
     virtual future<> fill_buffer() override {
@@ -1722,7 +1724,9 @@ public:
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return maybe_initialize().then([this] (bool initialized) {
+            return maybe_initialize().handle_exception([this] (std::exception_ptr ex) {
+                return make_exception_future<bool>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
+            }).then([this] (bool initialized) {
                 if (!initialized) {
                     _end_of_stream = true;
                     return make_ready_future<>();
@@ -1763,10 +1767,7 @@ public:
                 });
             }
         }).handle_exception([this] (std::exception_ptr ep) {
-            if (auto e = try_catch<sstables::malformed_sstable_exception>(ep); e) {
-                return make_exception_future<>(sstables::malformed_sstable_exception(format("Failed to read partition from SSTable {} due to {}", _sst->get_filename(), e->what())));
-            }
-            return make_exception_future<>(std::move(ep));
+            return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ep), _sst->get_filename(), "Failed to read partition from SSTable"));
         });
     }
     virtual future<> next_partition() override {
@@ -1789,7 +1790,9 @@ public:
         clear_buffer();
         if (!_partition_finished) {
             _end_of_stream = false;
-            return advance_context(_consumer.fast_forward_to(std::move(cr)));
+            return advance_context(_consumer.fast_forward_to(std::move(cr))).handle_exception([this] (std::exception_ptr ex) {
+                return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
+            });
         } else {
             _end_of_stream = true;
             return make_ready_future<>();

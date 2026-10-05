@@ -40,6 +40,7 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
@@ -159,6 +160,21 @@ bool components_are_missing(std::exception_ptr ex) {
 
 [[noreturn]] void throw_bufsize_mismatch_exception(size_t size, size_t expected) {
     throw_malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected));
+}
+
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, generation_type generation) {
+    if (auto e = try_catch<malformed_sstable_exception>(ex); e) {
+        return std::make_exception_ptr(attributed_malformed_sstable_exception(e->what(), generation));
+    }
+    return ex;
+}
+
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, component_name filename, std::string_view context) {
+    if (auto e = try_catch<malformed_sstable_exception>(ex); e) {
+        return std::make_exception_ptr(attributed_malformed_sstable_exception(
+                fmt::format("{} {} due to {}", context, filename, e->what()), filename.sst.generation()));
+    }
+    return ex;
 }
 
 scoped_no_abort_on_malformed_sstable_error::scoped_no_abort_on_malformed_sstable_error() noexcept
