@@ -57,6 +57,25 @@ static constexpr char RANGE[] = "Range";
 using namespace std::string_literals;
 using namespace utils::gcp;
 
+// Unlike S3, a 206 without a Content-Range is taken as the range asked for, as
+// google-cloud-cpp does (SCYLLADB-4786). A 200 is left to the callers' checks.
+static void verify_reply_offset(std::string_view bucket, std::string_view object_name, uint64_t pos, const seastar::http::reply& rep) {
+    if (rep._status != seastar::http::reply::status_type::partial_content) {
+        return;
+    }
+    auto header = rep.get_header(CONTENT_RANGE);
+    utils::get_local_injector().inject("gcp_client_no_content_range", [&header] {
+        header = "";
+    });
+    if (header.empty()) {
+        return;
+    }
+    auto answered = utils::http::parse_content_range(header);
+    if (!answered || answered->first != pos) {
+        throw storage_io_error(EIO, fmt::format("Read of {}:{} at offset {} was answered with Content-Range \"{}\"", bucket, object_name, pos, header));
+    }
+}
+
 static bool storage_scope_implies(const scopes_type& scopes, const scopes_type& check_for) {
     if (default_scopes_implies_other_scope(scopes, check_for)) {
         return true;
@@ -419,6 +438,10 @@ public:
         auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media",
                 _bucket, seastar::http::internal::url_encode(_object_name), _generation);
         auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
+        utils::get_local_injector().inject("gcp_client_misplaced_range", [&range, to_read] {
+            // A server answering another range than the one asked for (SCYLLADB-4786).
+            range = fmt::format("bytes=0-{}", to_read - 1);
+        });
         size_t result = 0;
         bool whole_object = false;
         co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
@@ -428,6 +451,7 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    verify_reply_offset(_bucket, _object_name, pos, rep);
                     whole_object = rep._status == seastar::http::reply::status_type::ok;
                     utils::get_local_injector().inject("gcp_client_whole_object_reply", [&whole_object] {
                         whole_object = true;
@@ -1100,6 +1124,10 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , _generation
             );
             auto range = fmt::format("bytes={}-{}", s.position, s.position+to_read-1); // inclusive range
+            utils::get_local_injector().inject("gcp_source_misplaced_range", [&range, to_read] {
+                // A server answering another range than the one asked for (SCYLLADB-4786).
+                range = fmt::format("bytes=0-{}", to_read - 1);
+            });
 
             co_await _impl->send_with_retry(path
                 , GCP_OBJECT_SCOPE_READ_ONLY
@@ -1109,6 +1137,8 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
+                    // Before anything is committed, like the length checks below.
+                    verify_reply_offset(_bucket, _object_name, s.position, rep);
                     // Before reading, because read_entire_stream() below accumulates
                     // whatever arrives into the shared buffers - past the memory lease
                     // taken for to_read - and the length check after the request would
