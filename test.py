@@ -221,7 +221,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
                              "is only supported by python tests for now, other tests ignore it. "
-                             "By default, the marker filter is not applied and all tests will be run without exception."
+                             "Without it (and without -k), python tests run as in CI's PR stage: those marked "
+                             "non_gating, tier2 or tier3 are left out unless named by their test id (path::name). "
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"

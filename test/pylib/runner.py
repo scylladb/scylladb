@@ -399,10 +399,51 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         yield cluster
 
 
+# What CI's PR stage leaves out: tier2 tests run in Next and Nightly only, tier3 tests in
+# Nightly only, and non_gating tests in no automatic job.  A run without -m and -k leaves
+# them out too, so test.py and pytest check by default what CI does; a test named by its
+# id (path::name) runs anyway.
+DEFAULT_EXCLUDED_MARKERS = ("non_gating", "tier2", "tier3")
+
+
+def _named_tests(config: pytest.Config) -> list[tuple[pathlib.Path, str]]:
+    """The file and the id within it of every test-id argument (path::name) of the run."""
+    named = []
+    for arg in config.args:
+        path, sep, name = arg.partition("::")
+        if not sep:
+            continue
+        for base in (config.invocation_params.dir, config.rootpath):
+            if (base / path).exists():
+                named.append(((base / path).resolve(), name))
+                break
+    return named
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
+    by_default = not config.option.markexpr and not config.option.keyword
+    if by_default:
+        named = _named_tests(config)
+        # by id(): an item hashes by its node id, which modify_pytest_item() changes
+        explicit = {
+            id(item) for item in items
+            if any(item.path.resolve() == path and (
+                (id_in_file := item.nodeid.partition("::")[2]) == name
+                or id_in_file.startswith((name + "::", name + "["))) for path, name in named)
+        }
+
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
         modify_pytest_item(item=item, run_ids=run_ids)
+
+    if by_default:
+        selected, deselected = [], []
+        for item in items:
+            keep = id(item) in explicit or not any(item.get_closest_marker(name) for name in DEFAULT_EXCLUDED_MARKERS)
+            (selected if keep else deselected).append(item)
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = selected
 
     suites_order = defaultdict(count().__next__)  # number suites in order of appearance
 
