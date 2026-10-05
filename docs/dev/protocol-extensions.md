@@ -209,6 +209,79 @@ The string map in the SUPPORTED response will contain the following parameters:
   - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
     will use as the error code for the rate limit exception.
 
+## Failure reason map
+
+This extension allows the driver to learn which replicas failed a request, and
+why, from the `Read_failure` (0x1300) and `Write_failure` (0x1500) errors.
+
+Protocol v4 bodies of these errors carry `<numfailures>`, the number of replicas
+that failed the request. Protocol v5 replaced it with `<reason_map>`. Scylla
+supports protocol v4 at most, so this extension brings `<reason_map>` to
+protocol v4 connections.
+
+When the extension is enabled, the bodies of the errors are:
+
+- `Read_failure`: `<cl><received><blockfor><reason_map><data_present>`
+- `Write_failure`: `<cl><received><blockfor><reason_map><write_type>`
+
+All fields other than `<reason_map>` are the same as in protocol v4.
+`<reason_map>` is encoded as in protocol v5: an [int] n followed by n pairs of
+`<endpoint><failure_code>`, where:
+
+- `<endpoint>` is an [inetaddr]: one [byte] with the size of the address (4 or 16)
+  followed by the address. Unlike [inet], it has no port.
+- `<failure_code>` is a [short] with the reason of the failure of that replica.
+
+When the extension is not enabled, the errors carry `<numfailures>` as before.
+Connections using protocol v3 receive `Read_timeout` and `Write_timeout` in place
+of these errors, whether the extension is enabled or not.
+
+The failure codes defined by protocol v5 keep their meaning. Scylla sends:
+
+  - 0x0000 UNKNOWN: the reason is not known.
+  - 0x0002 TIMEOUT: the replica did not respond in time.
+  - 0x0009 INVALID_ROUTING: the replica rejected the request because its view of
+    the cluster topology differs from the coordinator's.
+
+Scylla also sends Scylla-specific failure codes. Their values are not fixed;
+the driver learns them from the SUPPORTED response:
+
+  - `REASON_RATE_LIMITED`: the replica rejected the request because the
+    per-partition rate limit was exceeded.
+  - `REASON_LARGE_DATA_REJECTED`: the replica rejected a write because it would
+    exceed a large data threshold.
+  - `REASON_CRITICAL_DISK_UTILIZATION`: the replica rejected a write because its
+    disk utilization is critical.
+  - `REASON_ABORTED`: the operation on the replica was aborted, for example
+    because the replica is shutting down.
+  - `REASON_DISCONNECTED`: the connection to the replica was lost while the
+    request was in flight.
+
+The driver must accept failure codes it does not know.
+
+The map has one entry per failed replica. Its size can be smaller than the
+number of failures `<numfailures>` would carry: a replica that forwards a write
+to other replicas in its datacenter reports their failures as its own, and a
+replica that has left the cluster is omitted. TIMEOUT is reported only for a
+write that timed out on the coordinator acting as a replica; a write that timed
+out on another replica is reported with UNKNOWN. When every failure is due to the rate limit, the
+`SCYLLA_RATE_LIMIT_ERROR` error is sent in place of `Read_failure` or
+`Write_failure`.
+
+The driver must decide how to parse these errors from whether it enabled the
+extension, not from the protocol version.
+
+This extension is identified by the `SCYLLA_FAILURE_REASON_MAP` key. It is
+advertised only when all nodes in the cluster support it. The string map in the
+SUPPORTED response will contain the following parameters, each a decimal
+integer with the value of the Scylla-specific failure code:
+
+  - `REASON_RATE_LIMITED`
+  - `REASON_LARGE_DATA_REJECTED`
+  - `REASON_CRITICAL_DISK_UTILIZATION`
+  - `REASON_ABORTED`
+  - `REASON_DISCONNECTED`
+
 ## Tablets routing v1
 
 This extension adds support for sending tablet info to the drivers if the 
