@@ -635,7 +635,22 @@ gate::holder compaction_manager::hold_compaction_state_gate(compaction_state& cs
     return cs.gate.hold();
 }
 
+<<<<<<< HEAD
 future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info, bool consider_only_existing_data) {
+||||||| parent of 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+=======
+future<> compaction_manager::close_compaction_state_gate(compaction_state& cs) {
+    // The gate can be closed only once, but both really_do_stop() and remove() need to wait
+    // for its holders to leave, whichever of them closes it.
+    if (!cs.gate_closed) {
+        cs.gate_closed.emplace(cs.gate.close());
+    }
+    return cs.gate_closed->get_future();
+}
+
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+>>>>>>> 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
@@ -1285,11 +1300,11 @@ future<> compaction_manager::really_do_stop() noexcept {
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
     co_await _task_manager_module->stop();
-    co_await coroutine::parallel_for_each(_compaction_state, [] (auto& entry) -> future<> {
+    co_await coroutine::parallel_for_each(_compaction_state, [this] (auto& entry) -> future<> {
         auto& [t, cs] = entry;
         if (!cs.gate.is_closed()) {
             cmlog.debug("Closing compaction state gate of {}.{} compaction group {}", t->schema()->ks_name(), t->schema()->cf_name(), t->get_group_id());
-            co_await cs.gate.close();
+            co_await close_compaction_state_gate(cs);
         }
     });
     if (!_tasks.empty()) {
@@ -2381,11 +2396,32 @@ future<> compaction_manager::remove(table_state& t, sstring reason) noexcept {
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
+<<<<<<< HEAD
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
         co_await stop_ongoing_compactions(reason, &t);
         co_await std::move(close_gate);
     }
+||||||| parent of 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
+    if (!c_state.gate.is_closed()) {
+        auto close_gate = c_state.gate.close();
+        co_await stop_ongoing_compactions(reason, &t);
+        // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+        co_await c_state.incremental_repair_lock.write_lock();
+        co_await std::move(close_gate);
+    }
+=======
+    // really_do_stop() may have closed the gate already, possibly while it was still held: e.g. by
+    // a truncate, whose reenablers on other shards are destroyed asynchronously, through foreign_ptr,
+    // while the dropped table is already being stopped. Wait for the holders all the same, so the
+    // compaction state is not destroyed under them.
+    auto close_gate = close_compaction_state_gate(c_state);
+    co_await stop_ongoing_compactions(reason, &t);
+    // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+    // They hold the gate only while acquiring the lock, so closing the gate doesn't wait for them.
+    co_await c_state.incremental_repair_lock.write_lock();
+    co_await std::move(close_gate);
+>>>>>>> 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
 
 #ifdef DEBUG
     auto found = false;

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 #include "seastarx.hh"
@@ -33,7 +34,14 @@ private:
     // It is held through compaction_manager::hold_compaction_state_gate(),
     // which fails with an abort once the manager is stopped.
     seastar::named_gate gate;
+<<<<<<< HEAD
 >>>>>>> 623027b62b (compaction_manager: don't fail disabling compaction on a stopped manager)
+||||||| parent of 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
+=======
+    // The result of closing the gate, which both stopping the manager and removing
+    // the table wait for, see compaction_manager::close_compaction_state_gate().
+    std::optional<seastar::shared_future<>> gate_closed;
+>>>>>>> 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
 
 <<<<<<< HEAD
     // Prevents table from running major and minor compaction at the same time.
