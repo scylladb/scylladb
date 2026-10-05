@@ -36,6 +36,9 @@ PHASE_POST = "post"
 
 MIN_TABLETS = 1
 MAX_TABLETS = 20
+# On object storage every sstable operation is a chain of round trips to the
+# store, and the resizes to 16 tablets dominated those flavors' runtime.
+OBJECT_STORAGE_MAX_TABLETS = 4
 RESIZE_TIMEOUT = 240
 MIGRATE_ONE_TIMEOUT_S = 60
 NO_REPLICA_RE = re.compile(r"has no replica on", re.IGNORECASE)
@@ -193,6 +196,7 @@ async def run_random_resizes(
     counter_table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
     pause_range=(0.5, 2.0),
+    max_tablets: int = MAX_TABLETS,
 ):
     """
     Perform randomized tablet count changes (splits/merges) on the main LWT table
@@ -202,7 +206,7 @@ async def run_random_resizes(
     split_count = 0
     merge_count = 0
     current_resize_count = 0
-    pow2_targets = powers_of_two_in_range(MIN_TABLETS, MAX_TABLETS)
+    pow2_targets = powers_of_two_in_range(MIN_TABLETS, max_tablets)
 
     while not stop_event_.is_set() and current_resize_count < target_steps:
         # Drive resize direction from the main table.
@@ -293,11 +297,6 @@ async def run_random_resizes(
     }
 
 @pytest.mark.no_parallel
-@pytest.mark.skip_storage('s3', reason='S3 flavor of this test is extremely slow (9m+), deeper '
-                                       'investigation is needed')
-@pytest.mark.skip_storage('gs', reason='GCS flavor fails the LWT counter writes with WriteFailure at '
-                                       'LOCAL_QUORUM, the signature of SCYLLADB-3191; deeper '
-                                       'investigation is needed')
 async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaClusterManager, scale_timeout,
                                                            storage_config: FeatureConfig):
 
@@ -370,6 +369,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
                     table=table,
                     target_steps=TARGET_RESIZE_COUNT,
                     counter_table=cnt_table,
+                    max_tablets=OBJECT_STORAGE_MAX_TABLETS if storage_config.on_object_storage else MAX_TABLETS,
                 )
             )
             migrate_task = asyncio.create_task(
