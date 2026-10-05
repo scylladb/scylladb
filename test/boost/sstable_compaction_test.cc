@@ -254,6 +254,130 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    });
 }
 
+// Adds count same-size sstables to cf, so STCS puts them in one bucket.
+static std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstable_version_types version,
+        uint32_t count) {
+    auto s = cf.schema();
+    std::vector<shared_sstable> ssts;
+    for (uint32_t i = 0; i < count; ++i) {
+        mutation m(s, ss.make_pkey(i));
+        ss.add_row(m, ss.make_ckey(0), "v");
+        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+        column_family_test(cf).add_sstable(sst).get();
+        ssts.push_back(std::move(sst));
+    }
+    return ssts;
+}
+
+static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    simple_schema ss;
+    schema_builder builder(ss.schema());
+    if (!compress) {
+        builder.set_compressor_params(compression_parameters::no_compression());
+    }
+    auto cf = env.make_table_for_tests(builder.build());
+    auto& cm = cf->get_compaction_manager();
+    auto close_cf = deferred_stop(cf);
+    cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+    auto ssts = add_same_size_sstables(env, cf, ss, version, cf->schema()->min_compaction_threshold());
+    auto malformed = ssts[1];
+    slightly_corrupt_sstable(malformed);
+
+    cf->trigger_compaction();
+    BOOST_REQUIRE(eventually_true([&] {
+        return malformed->is_quarantined() && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+    }));
+
+    BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+    for (auto& sst : ssts) {
+        if (sst != malformed) {
+            BOOST_REQUIRE(!sst->is_quarantined());
+        }
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_me_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::me, compress_sstable::yes); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_me_uncompressed_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::me, compress_sstable::no); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_mt_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::mt, compress_sstable::yes); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_mt_uncompressed_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::mt, compress_sstable::no); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_multiple_malformed_sstables_test) {
+    return test_env::do_with_async([](test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        simple_schema ss;
+        auto cf = env.make_table_for_tests(ss.schema());
+        auto& cm = cf->get_compaction_manager();
+        auto close_cf = deferred_stop(cf);
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+        auto ssts = add_same_size_sstables(env, cf, ss, sstables::get_highest_sstable_version(), cf->schema()->min_compaction_threshold() + 2);
+        auto malformed = std::vector{ssts[1], ssts[3]};
+        for (auto& sst : malformed) {
+            slightly_corrupt_sstable(sst);
+        }
+
+        cf->trigger_compaction();
+        BOOST_REQUIRE(eventually_true([&] {
+            return std::ranges::all_of(malformed, &sstables::sstable::is_quarantined)
+                    && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }));
+
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, malformed.size());
+        for (auto& sst : ssts) {
+            if (!std::ranges::contains(malformed, sst)) {
+                BOOST_REQUIRE(!sst->is_quarantined());
+                // Compacted once both malformed sstables were out of the way.
+                BOOST_REQUIRE(!cf->get_sstables()->contains(sst));
+            }
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantine_failure_test) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        scoped_error_injection quarantine_error{"regular_compaction_quarantine_fail"};
+        simple_schema ss;
+        auto cf = env.make_table_for_tests(ss.schema());
+        auto& cm = cf->get_compaction_manager();
+        auto close_cf = deferred_stop(cf);
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+        auto ssts = add_same_size_sstables(env, cf, ss, sstables::get_highest_sstable_version(), cf->schema()->min_compaction_threshold());
+        auto malformed = ssts[1];
+        slightly_corrupt_sstable(malformed);
+
+        cf->trigger_compaction();
+        BOOST_REQUIRE(eventually_true([&] {
+            return cm.get_stats().errors > 0 && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }));
+
+        // Counted once by maybe_retry() for the abort, not again for the malformed sstable.
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+        for (auto& sst : ssts) {
+            BOOST_REQUIRE(!sst->is_quarantined());
+            BOOST_REQUIRE(cf->get_sstables()->contains(sst));
+        }
+    });
+}
+
 void compact(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     // The "compaction" sstable was created with the following schema:
