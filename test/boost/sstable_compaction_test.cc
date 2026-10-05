@@ -1465,6 +1465,130 @@ SEASTAR_TEST_CASE(remove_waits_for_gate_closed_by_compaction_manager_stop_test) 
     });
 }
 
+// An L0 sstable larger than a whole L1 (left behind by reshape, refresh or an aborted
+// off-strategy compaction) must never be merged with other sstables: it cannot be released
+// before such a job ends, costing its full size in free space. It is kept out of regular
+// candidates and rewritten on its own, size-capped, once nothing else is pending.
+// Tests SCYLLADB-2870.
+void leveled_oversized_l0_fn(test_env& env) {
+    auto schema = table_for_tests::make_default_schema();
+    auto cf = env.make_table_for_tests(schema);
+    auto stop_cf = deferred_stop(cf);
+
+    const auto keys = tests::generate_partition_keys(8, cf.schema());
+    const auto max_sstable_size_in_mb = 1;
+    const uint64_t max_sstable_size = max_sstable_size_in_mb*1024*1024;
+    const auto oversized_threshold = compaction::leveled_manifest::max_bytes_for_level(1, max_sstable_size);
+
+    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+    compaction::size_tiered_compaction_strategy_options stcs_options;
+    auto make_manifest = [&] {
+        auto candidates = get_candidates_for_leveled_strategy(*cf);
+        return compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    };
+    auto get_candidate = [&] {
+        return make_manifest().get_compaction_candidates(last_compacted_keys, compaction_counter);
+    };
+    auto contains = [] (const compaction::compaction_descriptor& desc, const shared_sstable& sst) {
+        return std::ranges::find(desc.sstables, sst) != desc.sstables.end();
+    };
+
+    auto l1 = add_sstable_for_leveled_test(env, cf, max_sstable_size, /*level*/1, keys[0].key(), keys[1].key());
+    auto oversized = add_sstable_for_leveled_test(env, cf, oversized_threshold * 2, /*level*/0, keys.front().key(), keys.back().key());
+    auto oversized_smaller = add_sstable_for_leveled_test(env, cf, oversized_threshold + 1, /*level*/0, keys.front().key(), keys.back().key());
+
+    // Nothing regular to do; the rewrite is a separate, lowest-priority job and takes
+    // the smallest oversized sstable, which needs the least free space.
+    {
+        auto manifest = make_manifest();
+        BOOST_REQUIRE(manifest.get_compaction_candidates(last_compacted_keys, compaction_counter).sstables.empty());
+        auto rewrite = manifest.get_oversized_l0_rewrite();
+        BOOST_REQUIRE_EQUAL(rewrite.sstables.size(), 1u);
+        BOOST_REQUIRE(rewrite.sstables.front() == oversized_smaller);
+        BOOST_REQUIRE_EQUAL(rewrite.level, 0);
+        BOOST_REQUIRE_EQUAL(rewrite.max_sstable_bytes, max_sstable_size);
+    }
+
+    // An sstable with less than two sstable sizes of data outside its largest partition
+    // is not considered oversized: the rewrite could not shrink it, and would loop forever.
+    {
+        auto make_with_largest_partition = [&] (uint64_t largest_partition) {
+            auto sst = env.make_sstable(cf->schema());
+            sstables::test(sst).set_values_for_leveled_strategy(oversized_threshold * 2, /*level*/0, 0, keys.front().key(), keys.back().key());
+            sstables::test(sst).set_largest_partition_size(largest_partition);
+            return sst;
+        };
+        auto manifest = make_manifest();
+        BOOST_REQUIRE(manifest.is_oversized_l0(oversized));
+        BOOST_REQUIRE(manifest.is_oversized_l0(make_with_largest_partition(oversized_threshold * 2 - 3 * max_sstable_size)));
+        BOOST_REQUIRE(!manifest.is_oversized_l0(make_with_largest_partition(oversized_threshold * 2 - max_sstable_size)));
+        // exactly two sstable sizes outside, minus the slack for compression framing.
+        BOOST_REQUIRE(!manifest.is_oversized_l0(make_with_largest_partition(oversized_threshold * 2 - 2 * max_sstable_size)));
+    }
+
+    // Enough regular L0 data to promote: the job takes it with the overlapping L1 and
+    // leaves the oversized sstables out.
+    const auto l0_count = cf.schema()->min_compaction_threshold();
+    for (auto i = 0; i < l0_count; i++) {
+        add_sstable_for_leveled_test(env, cf, max_sstable_size / 2, /*level*/0, keys[0].key(), keys[1].key());
+    }
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 1);
+        BOOST_REQUIRE_EQUAL(candidate.sstables.size(), size_t(l0_count + 1));
+        BOOST_REQUIRE(contains(candidate, l1));
+        BOOST_REQUIRE(!contains(candidate, oversized));
+        BOOST_REQUIRE(!contains(candidate, oversized_smaller));
+    }
+
+    // An over-capacity L1 comes before anything in L0.
+    for (auto i = 2; i < int(keys.size()); i++) {
+        add_sstable_for_leveled_test(env, cf, 2 * max_sstable_size, /*level*/1, keys[i].key(), keys[i].key());
+    }
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 2);
+        BOOST_REQUIRE(!contains(candidate, oversized));
+        BOOST_REQUIRE(!contains(candidate, oversized_smaller));
+    }
+
+    // Oversized sstables do not count towards L0 being far behind: with exactly the
+    // limit of regular L0 sstables the L1 job still goes first...
+    const auto max_l0 = compaction::leveled_manifest::MAX_COMPACTING_L0;
+    for (auto i = l0_count; i < max_l0; i++) {
+        add_sstable_for_leveled_test(env, cf, max_sstable_size / 2, /*level*/0, keys[0].key(), keys[1].key());
+    }
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 2);
+    }
+    // ...and one more makes size-tiered compaction within L0 go first, without them.
+    add_sstable_for_leveled_test(env, cf, max_sstable_size / 2, /*level*/0, keys[0].key(), keys[1].key());
+    {
+        auto candidate = get_candidate();
+        BOOST_REQUIRE_EQUAL(candidate.level, 0);
+        BOOST_REQUIRE_EQUAL(candidate.sstables.size(), size_t(cf.schema()->max_compaction_threshold()));
+        BOOST_REQUIRE(!contains(candidate, oversized));
+        BOOST_REQUIRE(!contains(candidate, oversized_smaller));
+    }
+}
+
+SEASTAR_TEST_CASE(leveled_oversized_l0) {
+    return test_env::do_with_async([](test_env& env) { leveled_oversized_l0_fn(env); });
+}
+
+SEASTAR_TEST_CASE(leveled_oversized_l0_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_env::do_with_async([](test_env& env) { leveled_oversized_l0_fn(env); },
+                                   test_env_config{.storage = make_test_object_storage_options("S3")});
+}
+
+SEASTAR_FIXTURE_TEST_CASE(leveled_oversized_l0_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_env::do_with_async([](test_env& env) { leveled_oversized_l0_fn(env); },
+                                   test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
 void overlapping_starved_sstables_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);

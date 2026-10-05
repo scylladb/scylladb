@@ -38,10 +38,7 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
         co_return candidate;
     }
 
-    if (!table_s.tombstone_gc_enabled()) {
-        co_return compaction_descriptor();
-    }
-
+    if (table_s.tombstone_gc_enabled()) {
     // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
     // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
     // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
@@ -63,7 +60,8 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
         });
         co_return compaction_descriptor({ sst }, sst->get_sstable_level());
     }
-    co_return compaction_descriptor();
+    }
+    co_return manifest.get_oversized_l0_rewrite();
 }
 
 compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
