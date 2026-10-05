@@ -135,6 +135,45 @@ utils::small_vector<locator::host_id, N> addr_vector_to_id(const gms::gossiper& 
     }
 }
 
+exceptions::request_failure_reason failure_reason_of(const replica::exception_variant& ev) {
+    using reason = exceptions::request_failure_reason;
+    return std::visit([] <typename Ex> (const Ex&) {
+        if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
+            return reason::SCYLLA_RATE_LIMITED;
+        } else if constexpr (std::is_same_v<Ex, replica::stale_topology_exception>) {
+            return reason::INVALID_ROUTING;
+        } else if constexpr (std::is_same_v<Ex, replica::large_data_exception>) {
+            return reason::SCYLLA_LARGE_DATA_REJECTED;
+        } else if constexpr (std::is_same_v<Ex, replica::critical_disk_utilization_exception>) {
+            return reason::SCYLLA_CRITICAL_DISK_UTILIZATION;
+        } else if constexpr (std::is_same_v<Ex, replica::abort_requested_exception>) {
+            return reason::SCYLLA_ABORTED;
+        } else {
+            return reason::UNKNOWN;
+        }
+    }, ev.reason);
+}
+
+exceptions::request_failure_reason failure_reason_of(std::exception_ptr eptr) {
+    using reason = exceptions::request_failure_reason;
+    if (try_catch<replica::rate_limit_exception>(eptr)) {
+        return reason::SCYLLA_RATE_LIMITED;
+    } else if (try_catch<replica::stale_topology_exception>(eptr)) {
+        return reason::INVALID_ROUTING;
+    } else if (try_catch<replica::large_data_exception>(eptr)) {
+        return reason::SCYLLA_LARGE_DATA_REJECTED;
+    } else if (try_catch<replica::critical_disk_utilization_exception>(eptr)) {
+        return reason::SCYLLA_CRITICAL_DISK_UTILIZATION;
+    } else if (try_catch<abort_requested_exception>(eptr)) {
+        return reason::SCYLLA_ABORTED;
+    } else if (try_catch_nested<rpc::closed_error>(eptr)) {
+        return reason::SCYLLA_DISCONNECTED;
+    } else if (try_catch<timed_out_error>(eptr) || try_catch<rpc::timeout_error>(eptr) || try_catch<semaphore_timed_out>(eptr)) {
+        return reason::TIMEOUT;
+    }
+    return reason::UNKNOWN;
+}
+
 } // namespace
 
 namespace storage_proxy_stats {
@@ -806,7 +845,8 @@ private:
                     }
                 }, exception->reason);
             }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::move(msg));
+            auto reason = exception ? failure_reason_of(*exception) : exceptions::request_failure_reason::UNKNOWN;
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, reason, std::move(msg));
             return netw::messaging_service::no_wait();
         });
     }
@@ -1739,6 +1779,7 @@ protected:
     bool _throttled = false;
     std::optional<sstring> _message;
     size_t _failed = 0; // only failures that may impact consistency
+    exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
@@ -1804,9 +1845,9 @@ public:
                 _ready.set_value(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
             } else if (_error == error::FAILURE) {
                 if (!_message) {
-                    _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
+                    _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type, std::move(_failed_replicas)));
                 } else {
-                    _ready.set_exception(mutation_write_failure_exception(*_message, _cl, _cl_acks, _failed, _total_block_for, _type));
+                    _ready.set_exception(mutation_write_failure_exception(*_message, _cl, _cl_acks, _failed, _total_block_for, _type, std::move(_failed_replicas)));
                 }
             } else if (_error == error::RATE_LIMIT) {
                 _ready.set_value(exceptions::rate_limit_exception(get_schema()->ks_name(), get_schema()->cf_name(), db::operation_type::write, false));
@@ -1868,9 +1909,10 @@ public:
         }
     }
 
-    bool failure(locator::host_id from, size_t count, error err, std::optional<sstring> msg) {
+    bool failure(locator::host_id from, size_t count, error err, exceptions::request_failure_reason reason, std::optional<sstring> msg) {
         if (waited_for(from)) {
             _failed += count;
+            _failed_replicas.add(from, reason);
             if (_total_block_for + _failed > _total_endpoints) {
                 _error = err;
                 _message = std::move(msg);
@@ -1881,8 +1923,8 @@ public:
         return false;
     }
 
-    virtual bool failure(locator::host_id from, size_t count, error err) {
-        return failure(std::move(from), count, std::move(err), {});
+    virtual bool failure(locator::host_id from, size_t count, error err, exceptions::request_failure_reason reason) {
+        return failure(std::move(from), count, std::move(err), reason, {});
     }
 
     void on_timeout() {
@@ -1907,7 +1949,7 @@ public:
     }
     // return true if handler is no longer needed because
     // CL cannot be reached
-    bool failure_response(locator::host_id from, size_t count, error err, std::optional<sstring> msg) {
+    bool failure_response(locator::host_id from, size_t count, error err, exceptions::request_failure_reason reason, std::optional<sstring> msg) {
         if (std::ranges::find(_targets, from) == _targets.end()) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
@@ -1919,7 +1961,7 @@ public:
         _all_failures += count;
         // we should not fail CL=ANY requests since they may succeed after
         // writing hints
-        return _cl != db::consistency_level::ANY && failure(from, count, err, std::move(msg));
+        return _cl != db::consistency_level::ANY && failure(from, count, err, reason, std::move(msg));
     }
     void check_for_early_completion() {
         if (_all_failures == _targets.size()) {
@@ -2196,13 +2238,14 @@ public:
             }
         }
     }
-    bool failure(locator::host_id from, size_t count, error err) override {
+    bool failure(locator::host_id from, size_t count, error err, exceptions::request_failure_reason reason) override {
         auto& topology = _effective_replication_map_ptr->get_topology();
         const sstring& dc = topology.get_datacenter(from);
         auto dc_resp = _dc_responses.find(dc);
 
         dc_resp->second.failures += count;
         _failed += count;
+        _failed_replicas.add(from, reason);
         if (dc_resp->second.total_block_for + dc_resp->second.failures > dc_resp->second.total_endpoints) {
             _error = err;
             return true;
@@ -2867,11 +2910,12 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, locator::ho
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::got_failure_response(storage_proxy::response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg) {
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err,
+        exceptions::request_failure_reason reason, std::optional<sstring> msg) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second->failure_response(from, count, err, std::move(msg))) {
+        if (it->second->failure_response(from, count, err, reason, std::move(msg))) {
             remove_response_handler_entry(std::move(it));
         } else {
             it->second->check_for_early_completion();
@@ -4857,7 +4901,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 slogger.error("exception during mutation write to {}.{} on {}: {:t}",
                     schema->ks_name(), schema->cf_name(), coordinator, eptr);
             }
-            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
+            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, failure_reason_of(eptr), std::move(msg));
         });
     }
 }
