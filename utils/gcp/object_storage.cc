@@ -57,6 +57,22 @@ static constexpr char RANGE[] = "Range";
 using namespace std::string_literals;
 using namespace utils::gcp;
 
+// Unlike S3, a 206 without a Content-Range is taken as the range asked for, as
+// google-cloud-cpp does (SCYLLADB-4786). A 200 is left to the callers' checks.
+static void verify_reply_offset(std::string_view bucket, std::string_view object_name, uint64_t pos, const seastar::http::reply& rep) {
+    if (rep._status != seastar::http::reply::status_type::partial_content) {
+        return;
+    }
+    auto header = rep.get_header(CONTENT_RANGE);
+    if (header.empty()) {
+        return;
+    }
+    auto answered = utils::http::parse_content_range(header);
+    if (!answered || answered->first != pos) {
+        throw storage_io_error(EIO, fmt::format("Read of {}:{} at offset {} was answered with Content-Range \"{}\"", bucket, object_name, pos, header));
+    }
+}
+
 static bool storage_scope_implies(const scopes_type& scopes, const scopes_type& check_for) {
     if (default_scopes_implies_other_scope(scopes, check_for)) {
         return true;
@@ -428,6 +444,7 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    verify_reply_offset(_bucket, _object_name, pos, rep);
                     auto status = rep._status;
                     utils::get_local_injector().inject("gcp_client_whole_object_reply", [&status] {
                         status = seastar::http::reply::status_type::ok;
@@ -1099,6 +1116,8 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
+                    // Before anything is committed, like the length checks below.
+                    verify_reply_offset(_bucket, _object_name, s.position, rep);
                     auto status = rep._status;
                     utils::get_local_injector().inject("gcp_source_whole_object_reply", [&status] {
                         status = status_type::ok;
