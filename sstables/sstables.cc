@@ -40,6 +40,7 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
@@ -164,6 +165,11 @@ bool components_are_missing(std::exception_ptr ex) {
         std::abort();
     }
     throw e;
+}
+
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, generation_type generation, std::optional<std::string_view> context) {
+    auto e = try_catch<malformed_sstable_exception>(ex);
+    return e ? e->attributed(generation, context) : ex;
 }
 
 scoped_no_abort_on_malformed_sstable_error::scoped_no_abort_on_malformed_sstable_error() noexcept
