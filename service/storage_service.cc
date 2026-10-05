@@ -3057,6 +3057,7 @@ future<> storage_service::do_drain() {
         return bm.drain();
     });
 
+    co_await _sys_ks.invoke_on_all(&db::system_keyspace::drain);
     co_await _db.invoke_on_all(&replica::database::drain);
     co_await _sys_ks.invoke_on_all(&db::system_keyspace::shutdown);
     co_await _repair.invoke_on_all(&repair_service::shutdown);

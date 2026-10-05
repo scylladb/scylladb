@@ -34,7 +34,6 @@ async def wait_for_legacy_tables_dropped(manager: ScyllaClusterManager, server: 
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.xfail(reason="SCYLLADB-4940")
 async def test_join_does_not_wait_for_legacy_tables_drop(manager: ScyllaClusterManager):
     """
     Reproduces SCYLLADB-4940. A joining node replaces the legacy system.large_*
@@ -52,6 +51,8 @@ async def test_join_does_not_wait_for_legacy_tables_drop(manager: ScyllaClusterM
     try:
         await log.wait_for(f"{PAUSE_DROP}: waiting for message")
         # Only the join must not wait for the drop.
+        # The bootstrap after it waits, because the dropped tables keep the old
+        # token metadata until they are gone.
         joined = asyncio.create_task(log.wait_for("join: success"))
         join_failed = asyncio.create_task(log.wait_for("will not join the cluster"))
         done, _ = await asyncio.wait([joined, join_failed], return_when=asyncio.FIRST_COMPLETED)
@@ -68,7 +69,6 @@ async def test_join_does_not_wait_for_legacy_tables_drop(manager: ScyllaClusterM
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.xfail(reason="SCYLLADB-4940")
 async def test_group0_does_not_wait_for_legacy_tables_drop(manager: ScyllaClusterManager):
     """
     Reproduces SCYLLADB-4940. When LARGE_DATA_VIRTUAL_TABLES gets enabled in a

@@ -3800,9 +3800,17 @@ system_keyspace::system_keyspace(
 system_keyspace::~system_keyspace() {
 }
 
+future<> system_keyspace::drain() {
+    if (!_async_gate_closed) {
+        _async_gate_closed.emplace(_async_gate.close());
+    }
+    co_await _async_gate_closed->get_future();
+}
+
 future<> system_keyspace::shutdown() {
     if (!_shutdown) {
         _shutdown = true;
+        co_await drain();
         co_await _db.unplug_system_keyspace();
     }
 }
