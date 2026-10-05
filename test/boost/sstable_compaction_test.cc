@@ -1373,6 +1373,49 @@ SEASTAR_TEST_CASE(disable_compaction_after_compaction_manager_stop_test) {
     });
 }
 
+// Stopping the manager closes the gates of the compaction states, while they can still be held:
+// e.g. by a truncate, whose reenablers on other shards are destroyed asynchronously, through
+// foreign_ptr, while the dropped table is already being stopped. Removing the table must still
+// wait for the holders to leave before destroying its compaction state, and for the holders of
+// the incremental repair lock, which outlive the gate holder used to acquire it.
+SEASTAR_TEST_CASE(remove_waits_for_gate_closed_by_compaction_manager_stop_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto cf = env.make_table_for_tests(table_for_tests::make_default_schema());
+        auto& cm = env.test_compaction_manager().get_compaction_manager();
+        auto& view = cf.as_compaction_group_view();
+
+        auto cre = std::make_optional(cm.stop_and_disable_compaction("test", view).get());
+        auto repair_lock = std::make_optional(cm.get_incremental_repair_read_lock(view, "test").get());
+
+        // Doesn't complete until the table is stopped, see disable_compaction_after_compaction_manager_stop_test.
+        auto stop_cm = cm.stop();
+        std::optional<future<>> stop_cf;
+        auto stop = defer([&] noexcept {
+            cre.reset();
+            repair_lock.reset();
+            if (!stop_cf) {
+                stop_cf = cf.stop();
+            }
+            stop_cf->get();
+            stop_cm.get();
+        });
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return env.test_compaction_manager().is_compaction_state_gate_closed(view);
+        }));
+
+        // Removes the view from the manager, which has to wait for cre to release the gate.
+        stop_cf = cf.stop();
+        seastar::sleep(std::chrono::milliseconds(100)).get();
+        BOOST_REQUIRE(!stop_cf->available());
+
+        // And then for repair_lock to be released.
+        cre.reset();
+        seastar::sleep(std::chrono::milliseconds(100)).get();
+        BOOST_REQUIRE(!stop_cf->available());
+    });
+}
+
 void overlapping_starved_sstables_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);
