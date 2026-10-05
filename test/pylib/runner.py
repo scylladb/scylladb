@@ -36,6 +36,7 @@ from _pytest.junitxml import xml_key
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
+from test.pylib.default_markers import DEFAULT_EXCLUDED_MARKERS
 from test.pylib.ldap_server import start_ldap
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
@@ -90,6 +91,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--tmpdir', action='store', default=str(TOP_SRC_DIR / 'testlog'),
                      help='Path to temporary test data and log files.  The data is further segregated per build mode.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
+    parser.addoption('--run-named', action='append', default=[], metavar='PATH::NAME',
+                     help='A test named by its id on the command line, which runs even if it is marked to be '
+                          'left out by default; test.py passes the ids its argument deduplication folds into a '
+                          'file or directory argument.')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
@@ -452,10 +457,52 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         raise pytest.UsageError(f"--gdb only works for C++ tests, but {session.items[0].nodeid} is not one.")
 
 
+# A run without -m leaves out the tests CI's PR stage leaves out (see default_markers.py);
+# -k (and test.py's --skip) only narrows what is left.  A test named by its id
+# (path::name) runs anyway.
+
+
+def _named_tests(config: pytest.Config) -> list[tuple[pathlib.Path, str]]:
+    """The file and the id within it of every test-id argument (path::name) of the run."""
+    named = []
+    for arg in [*config.args, *config.getoption("--run-named")]:
+        path, sep, name = arg.partition("::")
+        if not sep:
+            continue
+        for base in (config.invocation_params.dir, config.rootpath):
+            if (base / path).exists():
+                named.append(((base / path).resolve(), name))
+                break
+    return named
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
+    by_default = not config.option.markexpr
+    if by_default:
+        named = _named_tests(config)
+        # by id(): an item hashes by its node id, which modify_pytest_item() changes
+        explicit = {
+            id(item) for item in items
+            if any(item.path.resolve() == path and (
+                (id_in_file := item.nodeid.partition("::")[2]) == name
+                or id_in_file.startswith((name + "::", name + "["))) for path, name in named)
+        }
+
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
         modify_pytest_item(item=item, run_ids=run_ids)
+
+    if by_default:
+        selected, deselected = [], []
+        for item in items:
+            keep = id(item) in explicit or not any(item.get_closest_marker(name) for name in DEFAULT_EXCLUDED_MARKERS)
+            (selected if keep else deselected).append(item)
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = selected
+            if reporter := config.pluginmanager.get_plugin("terminalreporter"):
+                reporter.write_line(f"{len(deselected)} tests left out by default (marked "
+                                    f"{', '.join(DEFAULT_EXCLUDED_MARKERS)}); choose with --markers (pytest -m)")
 
     suites_order = defaultdict(count().__next__)  # number suites in order of appearance
 
