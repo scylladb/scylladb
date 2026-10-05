@@ -95,6 +95,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_v0_feature_is_supported) {
     dummy_init dummy;
     auto features = dummy.fs.supported_feature_set();
     BOOST_REQUIRE(features.contains("CLUSTER_CONFIG_REGISTRY_V0"));
+    BOOST_REQUIRE(features.contains("CLUSTER_CONFIG_REGISTRY_V1"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_feature_gate) {
@@ -106,8 +107,15 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_fe
         db::cluster_config_registry::current_version(dummy.fs)
         == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v0));
 
+    dummy.fs.cluster_config_registry_v1.enable();
+
+    BOOST_REQUIRE(
+        db::cluster_config_registry::current_version(dummy.fs)
+        == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v1));
+
     gms::feature_config cfg;
     cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V1");
     gms::feature_service fs(cfg);
 
     BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);

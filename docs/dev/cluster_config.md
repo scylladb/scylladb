@@ -236,13 +236,13 @@ An option's allowed scopes must belong to a single resolution domain: a scope se
 
 The registry version controls which options are visible, gated by cluster features rather than an operator-set value.
 
-The minimum implementation supports a single coarse-grained registry epoch:
+The registry shipped with a single coarse-grained epoch:
 
-- existing options belong to registry epoch `v0`
-- the minimum implementation is gated by `CLUSTER_CONFIG_REGISTRY_V0`
+- the options that shipped with it belong to registry epoch `v0`
+- `v0` is gated by `CLUSTER_CONFIG_REGISTRY_V0`, which also brings the schema tables every epoch stores into
 - the current registry version is derived from enabled cluster features, not from an operator-set value
 
-Each later epoch is introduced when a new batch of options is added: the new options are declared with `min_version` set to that epoch (`v1`, `v2`, ...) and gated by a matching cluster feature (`CLUSTER_CONFIG_REGISTRY_V1`, `CLUSTER_CONFIG_REGISTRY_V2`, ...). The current registry version is the highest epoch whose feature is enabled cluster-wide, so an option only becomes visible once every node supports its epoch. This keeps option visibility tied to feature gating during upgrades, without an operator-set version. The minimum implementation defines only `v0`; the concrete `v1` and later rollouts are deferred until those option batches land.
+Each later epoch is introduced when a new batch of options is added: the new options are declared with `min_version` set to that epoch (`v1`, `v2`, ...) and gated by a matching cluster feature (`CLUSTER_CONFIG_REGISTRY_V1`, `CLUSTER_CONFIG_REGISTRY_V2`, ...). The current registry version is the highest epoch whose feature is enabled cluster-wide, so an option only becomes visible once every node supports its epoch. This keeps option visibility tied to feature gating during upgrades, without an operator-set version. `v0` holds the options that shipped with the registry, `v1` (`CLUSTER_CONFIG_REGISTRY_V1`) the ones added after it shipped; later epochs follow the same pattern.
 
 ### Value Encoding And Type Validation
 

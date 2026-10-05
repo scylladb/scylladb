@@ -227,10 +227,14 @@ bool is_table_oriented(const option& opt) {
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {
-    if (features.cluster_config_registry_v0) {
-        return version::v0;
+    // v0 brings the schema tables every epoch stores into, so a later epoch counts only on top of it.
+    if (!features.cluster_config_registry_v0) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    if (features.cluster_config_registry_v1) {
+        return version::v1;
+    }
+    return version::v0;
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
