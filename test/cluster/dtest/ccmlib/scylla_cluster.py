@@ -47,6 +47,30 @@ _NOT_FROM_SHIPPED_YAML = {
 }
 
 
+# Linux capability bits (linux/capability.h).
+_CAP_DAC_OVERRIDE = 1
+_CAP_DAC_READ_SEARCH = 2
+
+
+@cache
+def _node_launch_prefix() -> list[str]:
+    """How to start a node so that file permissions bind it, as they did under ccm.
+
+    Under ccm the nodes ran as an ordinary user, and some tests count on that: they
+    take a directory's permissions away and expect Scylla to fail on it.  Where the
+    tests run as root (CI's test.py stage runs in a rootless podman container, as uid 0
+    of its user namespace), root's capabilities to ignore file permissions would let
+    Scylla read anything; start the nodes without them.  Nothing changes for an
+    ordinary user.
+    """
+    with open("/proc/self/status") as status:
+        effective = int(next(line.split()[1] for line in status if line.startswith("CapEff:")), 16)
+    if not effective & (1 << _CAP_DAC_OVERRIDE | 1 << _CAP_DAC_READ_SEARCH):
+        return []
+    caps = "-dac_override,-dac_read_search"
+    return [shutil.which("setpriv") or "setpriv", f"--inh-caps={caps}", f"--bounding-set={caps}", "--"]
+
+
 @cache
 def _shipped_scylla_yaml() -> dict[str, Any]:
     """The Scylla tree's conf/scylla.yaml, as ccm started every node from it.
@@ -240,6 +264,7 @@ class ScyllaCluster:
             name = f"node{self._next_node_num}"
             self._next_node_num += 1
             node = self._nodes[name] = ScyllaNode(cluster=self, server=server, name=name)
+            self.manager.cluster.servers[node.server_id].launch_prefix = _node_launch_prefix()
             for level, class_name in self._log_levels:
                 node.set_log_level(level, class_name)
             if self.ccm_parity:

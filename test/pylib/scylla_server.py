@@ -361,6 +361,9 @@ class ScyllaServer:
         # SCYLLA_CMDLINE_OPTIONS, the version's argv, and the cluster-level options.
         self._per_server_cmdline_options: List[str] = []
         self.auth_provider: Optional[AuthProvider] = None
+        # A command the server's executable is started through (e.g. setpriv), which
+        # must exec it so the server keeps the process id; empty by default.
+        self.launch_prefix: List[str] = []
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
@@ -901,6 +904,7 @@ class ScyllaServer:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
         self.cmd = await asyncio.create_subprocess_exec(
+            *self.launch_prefix,
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
             cwd=self.workdir,
