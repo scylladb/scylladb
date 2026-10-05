@@ -222,7 +222,10 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
                              "is only supported by python tests for now, other tests ignore it. "
-                             "By default, the marker filter is not applied and all tests will be run without exception."
+                             "Without it, python tests run as in CI's PR stage: those marked non_gating or tier2 "
+                             "(which xfail tests are too) are left out unless named by their test id "
+                             "(path::name); -k and --skip "
+                             "only narrow what is left. "
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"
@@ -394,6 +397,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         '--color=yes',
         f'--repeat={options.repeat}',
         *[f'--mode={mode}' for mode in options.modes],
+        # Deduplication may fold a test id into a file argument: keep it named.
+        *[f'--run-named={name}' for name in options.name if '::' in name and name not in files_to_run],
     ]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet', '--no-header'])
@@ -480,8 +485,9 @@ async def main() -> int:
         print(palette.fail(e))
         raise
     if exit_code == 5:
-        print(palette.fail("No tests were collected. Please check the test names and modes you provided, as well as"
-                           "the test markers if you used the '--markers' option."
+        print(palette.fail("No tests were collected. Please check the test names and modes you provided, as well as "
+                           "the test markers if you used the '--markers' option; without it, tests marked "
+                           "non_gating or tier2 (or xfail) are left out unless named by their id (path::name). "
                            "Alternatively you can check with --list option if there any errors."))
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(
