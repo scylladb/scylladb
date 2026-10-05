@@ -12,26 +12,11 @@ import pytest
 
 import cassandra.cluster
 from contextlib import contextmanager
-import re
 import ssl
 import time
 
-from test.pylib.driver_utils import safe_driver_shutdown
+from test.pylib.driver_utils import normalize_cipher, safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-
-
-# This function normalizes the SSL cipher suite name (a string),
-# which we need to do because tests use python library and scylla server uses C library,
-# and both the python's and the C's library naming conventions are different,
-# so we need some translation in order to compare them.
-def normalize_cipher(cipher_name: str) -> str:
-    if cipher_name.startswith("TLS_"):
-        cipher_name = cipher_name[len("TLS_"):] # Remove leading "TLS_" if present.
-    cipher_name = cipher_name.replace("_WITH_", "-")
-    cipher_name = cipher_name.replace("_", "-")
-    # Remove hyphen between letters and digits: e.g. convert "AES-256" to "AES256"
-    cipher_name = re.sub(r'([A-Z]+)-(\d+)', r'\1\2', cipher_name)
-    return cipher_name
 
 
 # Test that TLS 1.2 is supported (because this is what "cqlsh --ssl" uses
