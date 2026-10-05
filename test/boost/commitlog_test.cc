@@ -3124,4 +3124,93 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     return make_ready_future<>();
 }
 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+SEASTAR_TEST_CASE(test_oversized_entry_forced_sync_retry) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 512 * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 5;
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false;
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    std::unordered_map<db::replay_position, fragmented_temporary_buffer> rp2buf;
+    sstring write_error;
+
+    utils::get_local_injector().enable("commitlog_segment_force_oversized_sync");
+    utils::get_local_injector().set_parameter("commitlog_segment_force_oversized_sync", "param", "true");
+
+    {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto uuid = make_table_id();
+        const auto size = log.max_record_size() * 6;
+
+        for (size_t n = 0; n < 3; ++n) {
+            // Position dependent bytes, so a shifted fragment is visible.
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+            auto out = buf.get_ostream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = static_cast<char>((i * 31 + n * 7) & 0xff);
+                out.write(&c, 1);
+            }
+            try {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no,
+                        [&buf](db::commitlog::output& dst) {
+                            for (auto& tmp : buf) {
+                                dst.write(tmp.get(), tmp.size());
+                            }
+                        });
+                rp2buf.emplace(h.release(), std::move(buf));
+            } catch (const std::exception& e) {
+                write_error = e.what();
+                BOOST_TEST_MESSAGE(fmt::format("add_mutation of entry {} failed: {}", n, write_error));
+                break;
+            }
+        }
+        co_await log.sync_all_segments();
+        co_await log.release();
+        co_await log.shutdown();
+    }
+
+    utils::get_local_injector().disable("commitlog_segment_force_oversized_sync");
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+    commitlog::replay_state state;
+    size_t found = 0;
+    size_t mismatched = 0;
+
+    for (auto& f : replay_set) {
+        co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            auto it = rp2buf.find(buf_rp.position);
+            if (it == rp2buf.end()) {
+                co_return;
+            }
+            ++found;
+            fragmented_temporary_buffer::view expected(it->second);
+            fragmented_temporary_buffer::view actual(buf_rp.buffer);
+            if (expected != actual) {
+                ++mismatched;
+                BOOST_TEST_MESSAGE(fmt::format("entry at {} read back corrupted ({} vs {} bytes)",
+                        buf_rp.position, actual.size_bytes(), expected.size_bytes()));
+            }
+            co_return;
+        });
+    }
+
+    BOOST_TEST_MESSAGE(fmt::format("wrote {}, replayed {}, corrupted {}", rp2buf.size(), found, mismatched));
+
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_EQUAL(write_error, sstring());
+    BOOST_REQUIRE_EQUAL(mismatched, 0u);
+    BOOST_REQUIRE_EQUAL(found, rp2buf.size());
+}
+
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()
