@@ -271,10 +271,11 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
             }
         }
         ~hold_state() {
+            // Given back on the exception path too: the commit is all-or-nothing, so
+            // the state always describes exactly what the call did, and the caller
+            // resumes from there. Dropping it rewound the source to position zero.
             _state->adjust_lease();
-            if (!std::uncaught_exceptions()) {
-                _src._state = std::move(_state);
-            }
+            _src._state = std::move(_state);
         }
         operator state&() const {
             return *_state;
@@ -419,6 +420,7 @@ public:
                 _bucket, seastar::http::internal::url_encode(_object_name), _generation);
         auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
         size_t result = 0;
+        bool whole_object = false;
         co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
                 [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != seastar::http::reply::status_type::ok
@@ -426,6 +428,10 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    whole_object = rep._status == seastar::http::reply::status_type::ok;
+                    utils::get_local_injector().inject("gcp_client_whole_object_reply", [&whole_object] {
+                        whole_object = true;
+                    });
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
@@ -438,6 +444,25 @@ public:
                 httpclient::method_type::GET,
                 rest::key_values({{ RANGE, range }}),
                 _as);
+        // 200 means the reply carried the whole object rather than the range, so
+        // the copy above took its first to_read bytes - the right count from the
+        // wrong offset, which the length check below cannot see. The handler
+        // accepts 200 for a request that carried a Range, so this is a reply it
+        // will process. A request that already covers the whole object is
+        // answered this way legitimately, and gets the same bytes either way.
+        if (whole_object && (pos != 0 || to_read != _size)) {
+            throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {}"
+                , _bucket, _object_name, to_read, pos
+            ));
+        }
+        // A body cut off in transit is caught and retried by the http client, so
+        // a short answer here is a reply that described a shorter range than the
+        // one asked for.
+        if (result != to_read) {
+            throw storage_io_error(EIO, fmt::format("Short read of object {}:{}: asked for {} bytes at offset {}, got {}"
+                , _bucket, _object_name, to_read, pos, result
+            ));
+        }
         co_return result;
     }
 
@@ -1084,13 +1109,58 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = s.position;
+                    // Before reading, because read_entire_stream() below accumulates
+                    // whatever arrives into the shared buffers - past the memory lease
+                    // taken for to_read - and the length check after the request would
+                    // only notice once it is all in memory. The handler accepts 200
+                    // for a request that carried a Range, so a reply carrying the
+                    // whole object is one it will process, which for a Data file is
+                    // gigabytes. A chunked reply declares nothing and is not covered
+                    // here; the length check is what catches that one.
+                    auto declared = rep.content_length;
+                    utils::get_local_injector().inject("gcp_source_oversized_reply", [&declared, to_read] {
+                        declared = to_read + 1;
+                    });
+                    if (declared > to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} declared {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, declared, to_read, s.position, _size));
+                    }
+                    // send_with_retry() re-runs this handler on every attempt.
+                    // Nothing is appended before read_entire_stream() returns, so an
+                    // attempt that fails leaves the shared state as it found it.
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
+                    auto got = std::accumulate(bufs.cbegin(), bufs.cend(), 0ul, [](size_t init, auto& buf) {
+                        return init + buf.size();
+                    });
+                    utils::get_local_injector().inject("gcp_source_short_range", [&got] {
+                        // Drop a byte once the range has been read whole, standing in
+                        // for a reply that described a shorter range than the one asked
+                        // for. That is not a truncation and not retryable, so it has to
+                        // reach the check below.
+                        got -= got > 0 ? 1 : 0;
+                    });
+                    // Before the buffers are committed, so a reply this rejects leaves
+                    // the shared state untouched whatever the caller does next.
+                    // to_read never runs past the end of the object, so a satisfiable
+                    // range that came back whole came back complete. Anything else
+                    // means the reply described a different range than the one asked
+                    // for, which is not something a retry can fix, and handing the
+                    // short data back would surface two calls later as an end of
+                    // stream that is not one.
+                    if (got != to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, got, to_read, s.position, _size));
+                    }
+                    auto old = s.position;
                     for (auto&& buf : bufs) {
-                        s.position += buf.size();
-                        _impl->count_read_bytes(buf.size());
+                        // deque's push is strongly exception safe, so either the
+                        // state takes the bytes and the position moves, or neither
+                        // happens.
+                        auto n = buf.size();
                         s.buffers.emplace_back(std::move(buf));
+                        s.position += n;
+                        _impl->count_read_bytes(n);
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
                 }
