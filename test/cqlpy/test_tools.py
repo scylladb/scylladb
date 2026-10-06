@@ -2194,9 +2194,16 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
             out = subprocess.check_output(base_args + args + sstables, text=True)
             return out.strip().split('\n')
 
+        # The tool's default target version comes from its own configuration,
+        # which may differ from the server's, so to check the "nothing to do"
+        # case, explicitly ask for the version the server wrote the sstables in.
+        versions = {os.path.basename(sst).split('-')[0] for sst in sstables}
+        assert len(versions) == 1
+        same_version = ["--sstable-version", versions.pop()]
+
         # Nothing to upgrade
         with tempfile.TemporaryDirectory() as tmp_dir:
-            lines = invoke(tmp_dir, [])
+            lines = invoke(tmp_dir, same_version)
             assert len(lines) == len(sstables)
             for line, sst in zip(lines, sstables):
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
@@ -2219,7 +2226,7 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
                 f.write("dummy")
                 f.flush()
 
-            lines = invoke(tmp_dir, [])
+            lines = invoke(tmp_dir, same_version)
             assert len(lines) == len(sstables)
             for line, sst in zip(lines, sstables):
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
