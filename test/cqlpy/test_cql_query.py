@@ -592,7 +592,7 @@ def test_drop_table_with_si_and_mv(cql, this_dc):
         cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
         cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
         cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
-        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT a, c FROM {tbl} WHERE c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, a)")
         # dropping a table with materialized views is prohibited
         with pytest.raises(InvalidRequest):
             cql.execute(f"DROP TABLE {tbl}")
@@ -603,7 +603,7 @@ def test_drop_table_with_si_and_mv(cql, this_dc):
         cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
         cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
         cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
-        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT a, c FROM {tbl} WHERE c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, a)")
         # dropping whole keyspace with MV and SI is fine too
         cql.execute(f"DROP KEYSPACE {ks}")
     finally:
