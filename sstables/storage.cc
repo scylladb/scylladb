@@ -108,7 +108,7 @@ public:
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
-    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
+    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref del_node_ref) const override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
@@ -660,7 +660,7 @@ bool filesystem_storage::operator==(const storage& other) const noexcept {
     return other_fs && sstable_directory::compare_sstable_storage_prefix(_base_dir.native(), other_fs->_base_dir.native());
 }
 
-future<bool> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
+future<bool> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref) const {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
@@ -759,7 +759,7 @@ public:
     future<> destroy(const sstable& sst) override;
     std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     bool operator==(const storage&) const noexcept override;
-    future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
+    future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref del_node_ref) const override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
@@ -1242,29 +1242,32 @@ bool object_storage_base::operator==(const storage& other) const noexcept {
             && _prefix == other_object->_prefix;
 }
 
-future<bool> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const {
+future<bool> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref del_node_ref) const {
     if (!desc.sid) {
         on_internal_error(sstlog, fmt::format("Cannot remove SSTable on object storage with generation={} from registry: has no sstable_id", desc.generation));
     }
     auto sid = *desc.sid;
 
     auto ref_name = make_ref_object_name(sid, desc.generation, node_owner);
-    co_await delete_object(ref_name);
+    if (del_node_ref) {
+        co_await delete_object(ref_name);
+        sstlog.debug("Deleted reference {}", ref_name.str());
+    }
 
     auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     if (has_own_snapshot_ref(refs, desc.generation)) {
         // Still pinned by this node's snapshot references: the caller must
         // retain the registry entry as snapshot_owned (see storage.hh).
-        sstlog.debug("Deleted reference {}: retained for snapshot, remaining_refs={}", ref_name.str(), refs.size());
+        sstlog.debug("Reference {}: retained for snapshot, remaining_refs={}", ref_name.str(), refs.size());
         co_return true;
     }
     if (!refs.empty()) {
-        sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), refs.size());
+        sstlog.debug("Reference {}: remaining_refs={}", ref_name.str(), refs.size());
         co_return false;
     }
 
     co_await delete_components(all_possible_components(desc.version), sid, false);
-    sstlog.debug("Deleted reference {}: remaining_refs=0", ref_name.str());
+    sstlog.debug("Reference {}: remaining_refs=0", ref_name.str());
     co_return false;
 }
 
@@ -1407,7 +1410,7 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
         // remove the node reference with remove_by_registry_entry(), which deletes the
         // components when no reference is left, remove the registry entry, and fail.
         if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), snapshot_tag), as)) {
-            co_await remove_by_registry_entry(desc, node_owner);
+            co_await remove_by_registry_entry(desc, node_owner, delete_node_ref::yes);
             co_await src.manager().sstables_registry().delete_entry(owner(), node_owner, gen);
             co_await coroutine::return_exception(std::runtime_error(fmt::format("Cannot restore {}: snapshot {} does not hold the components of sstable_id={}",
                     src.get_filename(), snapshot_tag, sid)));
