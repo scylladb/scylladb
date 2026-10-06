@@ -2978,7 +2978,11 @@ def test_is_null_with_secondary_index(cql, test_keyspace, scylla_only):
 #  5. Query again: the stale posting must not produce a v=5 row for "v = 3".
 #     The read path re-validates the indexed column against the base row, so
 #     the stale posting stays in the view but is filtered out of the result.
-def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
+# The test is skipped without tablets: the bug isn't tablets-specific, but
+# this orchestration pauses the view building worker, which only builds
+# views of tables using tablets (see docs/dev/view-building-coordinator.md).
+# Views of tables using vnodes are built differently, without these pauses.
+def test_index_query_with_stale_index_entry(cql, test_keyspace, skip_without_tablets):
     def inj_enable(err, one_shot=False):
         rest_api.post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}')
         if err not in rest_api.get_request(cql, 'v2/error_injection/injection'):
