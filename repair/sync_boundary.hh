@@ -21,12 +21,16 @@ struct repair_sync_boundary {
         position_in_partition::tri_compare _position_cmp;
     public:
         tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
-        std::strong_ordering operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
-            auto ret = _pk_cmp(a.pk, b.pk);
+        std::strong_ordering operator()(
+                const dht::decorated_key& a_pk, const position_in_partition& a_pos, const dht::decorated_key& b_pk, const position_in_partition& b_pos) const {
+            auto ret = _pk_cmp(a_pk, b_pk);
             if (ret == 0) {
-                ret = _position_cmp(a.position, b.position);
+                ret = _position_cmp(a_pos, b_pos);
             }
             return ret;
+        }
+        std::strong_ordering operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
+            return (*this)(a.pk, a.position, b.pk, b.position);
         }
     };
 };
