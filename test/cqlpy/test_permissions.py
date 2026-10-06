@@ -196,7 +196,10 @@ def test_udf_permissions_serialization(cql):
                     for permission in permissions:
                         cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
-                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system.role_permissions")}
+                # Scylla moved its auth tables from the system_auth keyspace,
+                # where Cassandra keeps them, to the system keyspace.
+                auth_ks = 'system' if is_scylla(cql) else 'system_auth'
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM {auth_ks}.role_permissions")}
                 assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])
