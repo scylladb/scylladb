@@ -92,7 +92,11 @@ def test_keyspace_vnodes(cql, this_dc, has_tablets):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
-@pytest.fixture(scope=dynamic_scope())
+# This keyspace uses tablets (if enabled), and some tests need no keyspace
+# using tablets to exist (e.g., the storage_service/ownership API refuses
+# to work if a keyspace uses tablets), so this fixture must not be
+# session-scoped, and leave this keyspace behind for all following tests.
+@pytest.fixture(scope="module")
 def test_keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
