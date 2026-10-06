@@ -44,6 +44,7 @@
 # * testDroppingIndexInvalidatesPreparedStatements
 
 from ...porting import *
+from ....util import new_cql
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID
 
@@ -84,8 +85,11 @@ def dotestCreateAndDropIndex(cql, table, indexName, addKeyspaceOnDrop):
     if addKeyspaceOnDrop:
         execute(cql, table, f"DROP INDEX {KEYSPACE}.{indexName}")
     else:
-        execute(cql, table, f"USE {KEYSPACE}")
-        execute(cql, table, f"DROP INDEX {indexName}")
+        # "USE" on the shared cql session would leave it pointing to
+        # this test's keyspace after it is dropped, so use a new session.
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {KEYSPACE}")
+            ncql.execute(f"DROP INDEX {indexName}")
     assert_invalid_message(cql, table, "ALLOW FILTERING",
                          "SELECT * FROM %s where b = ?", 1)
     execute(cql, table, f"DROP INDEX IF EXISTS {KEYSPACE}.{indexName}")
