@@ -74,6 +74,24 @@ constexpr std::array registry_options = {
         .min_version = version::v0,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::auto_repair_threshold_size_fraction,
+        .description = "Trigger automatic repair for a tablet once the average unrepaired size of its "
+                       "replicas reaches this fraction of their average total size. 0 disables the "
+                       "size-based trigger, leaving only the time-based one",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v1,
+        .default_value = 0.0,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_min_size_in_bytes,
+        .description = "Floor for the size-based automatic repair trigger: a tablet is not repaired on "
+                       "the size threshold until the average unrepaired size of its replicas reaches "
+                       "this many bytes, however large a fraction of the tablet that is",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v1,
+        .default_value = int64_t(10 * 1024 * 1024),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -238,6 +256,14 @@ bool is_table_oriented(const option& opt) {
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {
+    // The highest epoch every node supports. An option only becomes visible once its own
+    // epoch's feature is enabled cluster-wide, which is what keeps a node from accepting an
+    // ALTER for an option its peers do not know. The epochs are cumulative - a node
+    // implementing the latest version implements all older versions as well - so the
+    // highest enabled epoch is the answer.
+    if (features.cluster_config_registry_v1) {
+        return version::v1;
+    }
     if (features.cluster_config_registry_v0) {
         return version::v0;
     }

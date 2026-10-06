@@ -51,6 +51,7 @@ enum class value_type {
 
 enum class version : uint8_t {
     v0,
+    v1,
 };
 
 // A config value in its native type. One alternative per value_type, in the same order;
@@ -64,6 +65,8 @@ namespace option_name {
 
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
+inline constexpr std::string_view auto_repair_threshold_size_fraction = "auto_repair_threshold_size_fraction";
+inline constexpr std::string_view auto_repair_threshold_min_size_in_bytes = "auto_repair_threshold_min_size_in_bytes";
 
 }
 
