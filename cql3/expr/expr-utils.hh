@@ -94,6 +94,12 @@ void for_each_expression(const expression& e, Fn for_each_func) {
 /// Counts binary_operator atoms b for which f(b) is true.
 size_t count_if(const expression& e, const noncopyable_function<bool (const binary_operator&)>& f);
 
+// A call that counts every row: countRows(), or count(<non-null constant>). A
+// constant argument is never null, so counting its non-null occurrences yields
+// the row count, exactly like countRows(). count(<column>) does not qualify: it
+// counts only the rows where the column is non-null.
+bool is_count_rows_call(const function_call& fc);
+
 inline const binary_operator* find(const expression& e, oper_t op) {
     return find_binop(e, [&] (const binary_operator& o) { return o.op == op; });
 }

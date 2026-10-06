@@ -206,24 +206,6 @@ contains_ttl(const expr::expression& e) {
     return contains_column_mutation_attribute(expr::column_mutation_attribute::attribute_kind::ttl, e);
 }
 
-// A call that counts every row: countRows(), or count(<non-null constant>). A
-// constant argument is never null, so counting its non-null occurrences yields
-// the row count, exactly like countRows(). count(<column>) does not qualify: it
-// counts only the rows where the column is non-null.
-static
-bool
-is_count_rows_call(const expr::function_call& fc) {
-    auto& func = std::get<shared_ptr<cql3::functions::function>>(fc.func);
-    if (func->name() == functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME)) {
-        return true;
-    }
-    if (func->name() != functions::function_name::native_function("count") || fc.args.size() != 1) {
-        return false;
-    }
-    auto* c = expr::as_if<expr::constant>(&fc.args[0]);
-    return c && !c->is_null();
-}
-
 class selection_with_processing : public selection {
 private:
     std::vector<expr::expression> _selectors;
@@ -298,7 +280,7 @@ public:
 
     virtual bool is_count() const override {
         return _selectors.size() == 1
-            && expr::find_in_expression<expr::function_call>(_selectors[0], is_count_rows_call);
+            && expr::find_in_expression<expr::function_call>(_selectors[0], expr::is_count_rows_call);
     }
 
     virtual bool is_reducible() const override {
@@ -343,7 +325,7 @@ public:
             }
             auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func));
 
-            auto type = is_count_rows_call(*fc) ? query::mapreduce_request::reduction_type::count : query::mapreduce_request::reduction_type::aggregate;
+            auto type = expr::is_count_rows_call(*fc) ? query::mapreduce_request::reduction_type::count : query::mapreduce_request::reduction_type::aggregate;
 
             std::vector<sstring> column_names;
             if (type == query::mapreduce_request::reduction_type::aggregate) {
