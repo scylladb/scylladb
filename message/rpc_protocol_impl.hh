@@ -313,4 +313,15 @@ auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, loc
     return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
 }
 
+// Send one way message for verb, aborting the send when `as` is triggered
+template <typename... MsgOut>
+auto send_message_oneway_cancellable(messaging_service* ms, messaging_verb verb, msg_addr id, abort_source& as, MsgOut&&... msg) {
+    return send_message_cancellable<rpc::no_wait_type>(ms, std::move(verb), std::move(id), as, std::forward<MsgOut>(msg)...);
+}
+
+template <typename... MsgOut>
+auto send_message_oneway_cancellable(messaging_service* ms, messaging_verb verb, locator::host_id id, abort_source& as, MsgOut&&... msg) {
+    return send_message_cancellable<rpc::no_wait_type>(ms, std::move(verb), std::move(id), as, std::forward<MsgOut>(msg)...);
+}
+
 } // namespace netw
