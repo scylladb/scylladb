@@ -39,6 +39,19 @@ def create_conf(url: str, region: str):
     return [endpoint]
 
 
+def create_bucket(resource, name: str):
+    """Create the bucket with an empty "sstables/" folder object in it.
+
+    The gateway's posix backend removes a directory once its last object is
+    deleted, so deleting the last sstable of a bucket also removes sstables/,
+    and a PUT creating sstables/<other_id>/ at that moment fails with a
+    409 ExistingObjectIsDirectory that aborts the flushing node (SCYLLADB-5060).
+    A directory that was PUT as its own key is not removed this way.
+    """
+    resource.Bucket(name).create()
+    resource.Object(name, 'sstables/').put()
+
+
 class S3MockServer:
     ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
     ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
@@ -89,7 +102,7 @@ class S3MockServer:
                                   region_name=self.DEFAULT_REGION,
                                   config=boto3.session.Config(signature_version='s3v4'),
                                   verify=False)
-        resource.Bucket(self.bucket_name).create()
+        create_bucket(resource, self.bucket_name)
 
     def _set_environ(self):
         self.old_env = dict(os.environ)
