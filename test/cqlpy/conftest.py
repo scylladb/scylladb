@@ -78,8 +78,24 @@ def cql_test_connection(cql, request):
     if cql_test_connection.scylla_crashed:
         skip_env('Server down')
     yield
+    # A test must not run "USE" on the shared cql session - that will not only
+    # modify the current connection for other tests, it can permanently break
+    # reconnection attempts if the USEd keyspace (remembered by the driver in
+    # cql.keyspace) has been already deleted. So if a test did change the
+    # keyspace, we declare the test failed, but then "repair" the driver's
+    # state so the following tests can continue normally. We must do this
+    # before checking the connection below, because that check may itself
+    # fail if the connection needs to be reopened.
+    if cql.keyspace is not None:
+        cql.keyspace = None
+        for host in cql.cluster.metadata.all_hosts():
+            future = cql.add_or_renew_pool(host, False)
+            # We have not been able to reconnect, we can't continue the tests
+            if not future or not future.result():
+                cql_test_connection.scylla_crashed = True
+        pytest.fail(f'Test {request.node.parent.name}::{request.node.name} used "USE" on the shared session. Use new_cql() if you want to use "USE"')
     try:
-        # We want to run a do-nothing CQL command. 
+        # We want to run a do-nothing CQL command.
         # "BEGIN BATCH APPLY BATCH" is the closest to do-nothing I could find...
         cql.execute("BEGIN BATCH APPLY BATCH")
     except:
