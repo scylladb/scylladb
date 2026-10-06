@@ -24,7 +24,8 @@ SCYLLA_ANN_UNDEFINED_COLUMN_MESSAGE = "Unrecognized name bad_col"
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector does not support filtering"
 CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires all restricted column(s) to be indexed"
-TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
+SCYLLA_TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
+CASSANDRA_TOPK_AGGREGATION_ERROR = "Top-K queries can not be run with aggregation"
 TOPK_LIMIT_ERROR = "queries must have a limit specified"
 VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
 
@@ -215,7 +216,7 @@ def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace, skip_on_scylla
         execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)")
 
         assert_invalid_message(
-            cql, table, TOPK_AGGREGATION_ERROR,
+            cql, table, SCYLLA_TOPK_AGGREGATION_ERROR if is_scylla(cql) else CASSANDRA_TOPK_AGGREGATION_ERROR,
             "SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"
         )
 
