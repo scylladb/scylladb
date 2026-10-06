@@ -23,7 +23,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....util import is_scylla, is_cassandra_older_than
 from cassandra.protocol import ConfigurationException
+from test.pylib.skip_types import skip_env
 
 def testDropColumnAsPreparedStatement(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:
@@ -211,7 +213,14 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 # Test {@link ConfigurationException} thrown on alter keyspace to no DC
 # option in replication configuration.
 # Reproduces CASSANDRA-12681 and Scylla #10036
+# Cassandra 4.1 changed this behavior: it added a default_keyspace_rf
+# configuration option, used when the replication factor isn't specified,
+# and replaced this test by testDefaultRF (CASSANDRA-14557). So we skip this
+# test on Cassandra 4.1 and above. See also Scylla issue #16028, which added
+# a default replication factor only to CREATE KEYSPACE.
 def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc, has_tablets):
+    if not is_scylla(cql) and not is_cassandra_older_than(cql, (4, 1)):
+        skip_env("Cassandra 4.1 allows a missing replication factor (CASSANDRA-14557)")
     if has_tablets:
         extra_opts = " AND TABLETS = {'enabled': false}"
     else:
