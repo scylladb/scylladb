@@ -12,6 +12,12 @@ import pytest
 import re
 from .util import new_test_table, new_function, is_scylla
 from cassandra.protocol import InvalidRequest, SyntaxException
+from test.pylib.skip_types import skip_env
+
+# Tests which create a vector index are skipped on Scylla without tablets:
+# Scylla requires a vector index's base table to use tablets - its vector
+# search is not supported on vnodes (see docs/dev/vector_search.md). Cassandra
+# doesn't have tablets, and supports vector indexes without them.
 
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 UNKNOWN_SCORING_FUNCTION_MESSAGE = "An ORDER BY expression must name at least one search, through ANN() or BM25()"
@@ -24,9 +30,11 @@ CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requi
 
 
 @pytest.fixture(scope="module")
-def indexed_vector_table(cql, test_keyspace, scylla_only):
+def indexed_vector_table(cql, test_keyspace, scylla_only, has_tablets):
     """A table with a vector_index on the vector column `v`, for the function-style
     ANN() syntax tests below. The syntax is a ScyllaDB extension."""
+    if not has_tablets:
+        skip_env("Vector search requires tablets")
     schema = 'p int primary key, c int, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
@@ -39,7 +47,7 @@ def test_ann_query_without_index(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match=re.escape(ANN_REQUIRES_INDEX_MESSAGE)):
             cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 5")
 
-def test_ann_query_with_null_vector(cql, test_keyspace):
+def test_ann_query_with_null_vector(cql, test_keyspace, skip_on_scylla_vnodes):
     schema = 'p int primary key, c int, v vector<float, 3>'
     custom_index = 'vector_index' if is_scylla(cql) else 'sai'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -105,7 +113,7 @@ def test_two_ann_calls_on_one_order_by_column_must_agree(cql, test_keyspace, ind
             cql.prepare(f"SELECT p FROM {indexed_vector_table} "
                         f"ORDER BY {test_keyspace}.{fuse}(ANN(v, [0.1, 0.2, 0.3]), ANN(v, [0.4, 0.5, 0.6])) LIMIT 5")
 
-def test_ann_function_in_select_on_different_column(cql, test_keyspace, scylla_only):
+def test_ann_function_in_select_on_different_column(cql, test_keyspace, skip_without_tablets):
     schema = 'p int primary key, v vector<float, 3>, w vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
@@ -140,7 +148,7 @@ def test_ann_query_with_group_by_rejected(cql, indexed_vector_table):
 # prepare rather than execute, to stop at the check they pin.
 @pytest.mark.parametrize("selection", ["p", "p, ANN(v, [0.1, 0.2, 0.3])"], ids=["key", "key_and_score"])
 @pytest.mark.xfail(reason="DISTINCT is accepted and answered with duplicate partition keys")
-def test_ann_query_with_distinct_rejected(cql, test_keyspace, scylla_only, selection):
+def test_ann_query_with_distinct_rejected(cql, test_keyspace, skip_without_tablets, selection):
     schema = "p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
