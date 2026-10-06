@@ -2789,20 +2789,34 @@ def test_list_parameter_marker(cql, test_keyspace):
                                 [(True, [10, 20, 30]) if is_scylla(cql) else (True,)])
 
 
-def test_select_serial_consistency(cql, test_keyspace):
+@pytest.fixture(scope="module")
+def serial_consistency_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, primary key (a,b)") as table:
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 1)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 2)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 1)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 2)")
+        yield table
 
-        def check_fails(query):
-            with pytest.raises(InvalidRequest):
-                execute_prepared_serial(cql, query, [], [], ConsistencyLevel.SERIAL)
-        check_fails(f"select * from {table} allow filtering")
-        check_fails(f"select * from {table} where  b > 0 allow filtering")
-        check_fails(f"select * from {table} where  a in (1, 3)")
-        execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
+
+def test_select_serial_consistency(cql, serial_consistency_table):
+    table = serial_consistency_table
+    execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
+
+
+# Cassandra (checked with Cassandra 5) allows SERIAL reads of multiple
+# partitions - scans and multi-partition IN queries. Scylla only allows SERIAL
+# reads of a single partition, and rejects these reads with "SERIAL/LOCAL_SERIAL
+# consistency may only be requested for one partition at a time".
+@pytest.mark.xfail(reason="Scylla doesn't support SERIAL reads of multiple partitions")
+def test_select_serial_consistency_multi_partition(cql, serial_consistency_table):
+    table = serial_consistency_table
+    execute_prepared_serial(cql, f"select * from {table} allow filtering", [],
+                            [(1, 1), (1, 2), (2, 1), (2, 2)], ConsistencyLevel.SERIAL)
+    execute_prepared_serial(cql, f"select * from {table} where  b > 1 allow filtering", [],
+                            [(1, 2), (2, 2)], ConsistencyLevel.SERIAL)
+    execute_prepared_serial(cql, f"select * from {table} where  a in (1, 3)", [],
+                            [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
 
 
 def test_range_deletions_for_specific_column(cql, test_keyspace):
