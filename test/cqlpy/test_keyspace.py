@@ -204,27 +204,23 @@ def test_alter_keyspace(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }} AND DURABLE_WRITES = false")
 
-# Test trying to ALTER RF of tablets-enabled KS by more than 1 at a time
-# This limitation only applies to keyspaces using tablets (see "ALTER
-# KEYSPACE with Tablets" in docs/cql/ddl.rst): With tablets, an RF change
-# is carried out by migrating tablets, and limiting the change to 1
-# guarantees that the old and new QUORUMs overlap. With vnodes, and in
-# Cassandra, an RF change only changes the keyspace's metadata, so there is
-# no such limitation, and the test is skipped.
-def test_alter_keyspace_rf_by_more_than_1(cql, this_dc, skip_without_tablets):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
-        with pytest.raises((InvalidRequest, ConfigurationException)):
-            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
+# Note that the limitation that ALTER KEYSPACE can't change a tablets
+# keyspace's RF by more than 1 at a time can't be tested here: on a single
+# node, with RF-rack-valid keyspaces, the RF can only be 0 or 1. It is
+# tested in test/cluster/test_tablets.py::test_singledc_alter_tablets_rf.
 
 # Test trying to ALTER a tablets-enabled KS by providing the 'replication_factor' tag
 # This limitation only applies to keyspaces using tablets (see "ALTER
 # KEYSPACE with Tablets" in docs/cql/ddl.rst). With vnodes, and in
 # Cassandra, the 'replication_factor' tag is allowed in ALTER KEYSPACE, so
 # the test is skipped.
-def test_alter_keyspace_with_replication_factor_tag(cql, skip_without_tablets):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
-        with pytest.raises((InvalidRequest, ConfigurationException)):
-            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }}")
+# The ALTER lists the DC with its current RF, so it doesn't change the
+# replication, and can only fail because of the 'replication_factor' tag -
+# not because of other checks, e.g., of an RF change.
+def test_alter_keyspace_with_replication_factor_tag(cql, this_dc, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with pytest.raises(InvalidRequest, match="'replication_factor' tag is not allowed"):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1, 'replication_factor' : 1 }}")
 
 # Test trying to ALTER a keyspace with invalid options.
 def test_alter_keyspace_invalid(cql, this_dc):
