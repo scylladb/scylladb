@@ -276,16 +276,16 @@ SEASTAR_TEST_CASE(alter_role) {
 namespace {
 
 const auto default_query_template = fmt::format(
-        "ldap://localhost:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
-        ldap_port, base_dn);
+        "ldap://{}:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
+        ldap_host, ldap_port, base_dn);
 
 const auto flaky_server_query_template = fmt::format(
-        "ldap://localhost:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
-        std::stoi(ldap_port) + 2, base_dn);
+        "ldap://{}:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
+        ldap_host, std::stoi(ldap_port) + 2, base_dn);
 
 const auto member_uid_query_template = fmt::format(
-        "ldap://localhost:{}/dc=example,dc=com?cn?sub?(memberUid={{USER}})",
-        ldap_port);
+        "ldap://{}:{}/dc=example,dc=com?cn?sub?(memberUid={{USER}})",
+        ldap_host, ldap_port);
 
 auto make_ldap_manager(cql_test_env& env, sstring query_template = default_query_template) {
     auto stop_role_manager = [] (auth::ldap_role_manager* m) {

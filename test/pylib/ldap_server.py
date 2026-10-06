@@ -209,8 +209,10 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit:
         except CalledProcessError as e:
             logging.critical("toxiproxy-cli failed: %s: %s", e, e.stdout)
             raise 
-        # Set up the server.
-        SLAPD_URLS = f'ldap://:{port}/ ldaps://:{port + 1}/'
+        # Set up the server.  Listen only on this run's leased address: the port is fixed, and with a
+        # wildcard bind, concurrent test.py runs sharing a network namespace (e.g. dbuild's --network host)
+        # would collide on it, so a run could end up talking to another run's slapd and lose it mid-test.
+        SLAPD_URLS = f'ldap://{host}:{port}/ ldaps://{host}:{port + 1}/'
 
         def can_connect_to_slapd():
             return can_connect((host, port)) and can_connect((host, port + 1)) and can_connect(
