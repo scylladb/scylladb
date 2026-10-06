@@ -74,3 +74,12 @@ def test_like_operator_conjunction(cql, test_keyspace, scylla_only):
         assert rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '%' allow filtering")) == [["a"], ["abc"]]
         assert rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering")) == [["abc"]]
         assert rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 = 'abc' allow filtering")) == [["abc"]]
+
+# Scylla-only because Cassandra rejects the pattern '%' with "LIKE value
+# can't be empty".
+def test_like_operator_static_column(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int, c text, s text static, primary key(p, c)") as t:
+        assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == []
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
+        assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+        assert rows(cql.execute(f"select * from {t} where c like '%' allow filtering")) == []

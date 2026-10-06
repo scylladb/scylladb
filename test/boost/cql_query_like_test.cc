@@ -29,16 +29,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_like_operator_static_column) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (p int, c text, s text static, primary key(p, c))");
-        require_rows(e, "select s from t where s like '%c' allow filtering", {});
-        cquery_nofail(e, "insert into t (p, s) values (1, 'abc')");
-        require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}});
-        require_rows(e, "select * from t where c like '%' allow filtering", {});
-    });
-}
-
 SEASTAR_TEST_CASE(test_like_operator_bind_marker) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (s text primary key, )");
