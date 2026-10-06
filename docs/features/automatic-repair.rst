@@ -12,7 +12,9 @@ Enabling automatic repair
 -------------------------
 
 Whether automatic repair runs for a table is controlled by the ``auto_repair_enabled`` cluster
-configuration option, which can be set per table, per keyspace, or for the whole cluster:
+configuration option, which can be set per table, per keyspace, or for the whole cluster
+(``auto_repair_threshold_in_seconds`` additionally requires the ``CLUSTER_CONFIG_REGISTRY_V1``
+cluster feature):
 
 .. code-block:: cql
 
@@ -37,12 +39,30 @@ each node, to an identical value. Prefer ``ALTER CLUSTER`` to set a cluster-wide
 Repair interval
 ---------------
 
-The repair period is configured in ``scylla.yaml``, on each node, to an identical value:
+The repair period is set with ``auto_repair_threshold_in_seconds``, which follows the same
+per table, per keyspace and cluster-wide precedence as ``auto_repair_enabled``:
+
+.. code-block:: cql
+
+    ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 86400;
+    ALTER TABLE ks.tbl WITH auto_repair_threshold_in_seconds = 3600;
+
+The example above gives a repair period of 1 day for the cluster, and 1 hour for one table
+that needs repairing more often.
+
+Setting the interval to ``0`` turns the time-based trigger off, rather than repairing on every
+round. A table can therefore opt out of time-based repair while a cluster-wide interval stays
+in force for everything else:
+
+.. code-block:: cql
+
+    ALTER TABLE ks.tbl WITH auto_repair_threshold_in_seconds = 0;
+
+When no level sets the option, the value of ``auto_repair_threshold_default_in_seconds`` in
+``scylla.yaml`` applies, which likewise has to be identical on each node:
 
 .. code-block:: yaml
 
     auto_repair_threshold_default_in_seconds: 86400
-
-The example above gives a repair period of 1 day.
 
 Automatic repair relies on :doc:`Incremental Repair </features/incremental-repair>` and as such it only works with :doc:`tablet </architecture/tablets>` tables.
