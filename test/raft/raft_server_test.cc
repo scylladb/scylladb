@@ -51,6 +51,32 @@ static auto signal_when_leader_applies(int value, seastar::promise<>& applied) {
     };
 }
 
+// Makes the only server of a cluster receive a snapshot from a leader of a
+// later term, which the fsm accepts, so the applier fiber goes on to load it.
+// The returned future resolves once the fsm has accepted the snapshot.
+template <typename Clock>
+static future<raft::snapshot_reply> receive_snapshot_from_new_leader(raft_cluster<Clock>& cluster) {
+    // The fsm rejects a snapshot while it has commits it hasn't reported yet,
+    // like the commit of the dummy entry appended on election, which the io
+    // fiber may not have reported right after wait_for_leader(). Everything
+    // committed so far is reported once it's applied.
+    co_await cluster.get_server(0).read_barrier(nullptr);
+
+    raft::configuration config;
+    config.current.emplace(config_member_from_id(to_raft_id(0)));
+    const auto term = raft::term_t{cluster.get_server(0).get_current_term().value() + 1};
+    raft::install_snapshot snp {
+        .current_term = term,
+        .snp = {
+            .idx = raft::index_t{100},
+            .term = term,
+            .config = std::move(config),
+            .id = raft::snapshot_id::create_random_id(),
+        },
+    };
+    co_return co_await cluster.receive_snapshot(0, to_raft_id(1), std::move(snp));
+}
+
 SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     raft_cluster<std::chrono::steady_clock> cluster(
             test_case { .nodes = 1 },
@@ -72,6 +98,171 @@ SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).read_barrier(nullptr).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).set_configuration({}, nullptr).get(), raft::stopped_error, check_error);
 }
+
+// Can only be enabled once state machine is aborted early.
+#if 0
+
+// The applier fiber takes its input from the mailbox and may suspend before it
+// calls the state machine, so abort() may happen in between. The injection
+// puts the fiber in that window.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_before_load_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+
+    std::optional<future<>> aborted;
+    std::optional<future<raft::snapshot_reply>> received;
+
+    {
+        constexpr std::string_view block_applier = "block_raft_applier_fiber_before_load_snapshot";
+        scoped_error_injection blocked_applier{block_applier};
+
+        received = receive_snapshot_from_new_leader(cluster);
+        wait_for_injection_enter(block_applier).get();
+
+        stop.cancel();
+        aborted = cluster.stop_server(0, "test abort");
+        // The test is only meaningful if the state machine is aborted before
+        // the applier fiber is released; otherwise it would pass no matter
+        // what the fiber does next.
+        BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+    }
+
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted->get();
+    received->get();
+#endif
+}
+
+// A state machine may complete apply() after it's aborted, finishing what it
+// cannot interrupt. The applier fiber then must not go on to take a snapshot,
+// which it would do right away with a snapshot threshold of 1.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_after_apply) {
+    auto cfg = raft::server::configuration { .snapshot_threshold = 1 };
+    auto cluster = get_default_cluster(test_case {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({std::move(cfg)})
+    });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    // Let the snapshot after the dummy entry appended on election be taken
+    // before the state machine is aborted.
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    // Unlike the injections above, the hold doesn't end when the state
+    // machine is aborted.
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    // The test is only meaningful if the state machine is aborted before
+    // apply() returns; otherwise it would pass no matter what the applier
+    // fiber does next.
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    apply_release.signal();
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted.get();
+}
+
+// Like test_state_machine_not_used_after_abort_after_apply, but with a snapshot
+// requested by trigger_snapshot(), which the applier fiber takes once it has
+// applied what it was given.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_on_triggered_snapshot) {
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    auto triggered = cluster.get_server(0).trigger_snapshot(nullptr);
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    // The test is only meaningful if the state machine is aborted before
+    // apply() returns; otherwise it would pass no matter what the applier
+    // fiber does next.
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    apply_release.signal();
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted.get();
+    BOOST_CHECK_THROW(triggered.get(), raft::request_aborted);
+}
+
+// The io fiber drops the snapshots replaced by a new one after it persists the
+// new one, so abort() may happen in between. The injection puts the fiber in
+// that window.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_on_dropping_snapshots) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    std::optional<future<>> aborted;
+    std::optional<future<bool>> triggered;
+
+    {
+        constexpr std::string_view block_store = "raft_test_persistence_block_store_snapshot_descriptor";
+        scoped_error_injection blocked_store{block_store};
+
+        // The batch carrying the new snapshot also carries the one it replaces
+        // to be dropped.
+        triggered = cluster.get_server(0).trigger_snapshot(nullptr);
+        wait_for_injection_enter(block_store).get();
+
+        stop.cancel();
+        aborted = cluster.stop_server(0, "test abort");
+        // The test is only meaningful if the state machine is aborted before
+        // the io fiber is released; otherwise it would pass no matter what the
+        // fiber does next.
+        BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+    }
+
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted->get();
+    BOOST_CHECK_THROW(triggered->get(), raft::request_aborted);
+#endif
+}
+
+#endif
 
 SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
