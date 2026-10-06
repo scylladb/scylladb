@@ -63,6 +63,17 @@ def cql(request, host):
                 username=request.config.getoption("--auth_username") or "cassandra",
                 password=request.config.getoption("--auth_password") or "cassandra",
         ) as session:
+            # Many tests do a non-LWT write followed by an LWT write to the
+            # same row. On Cassandra, an LWT's write uses a timestamp with
+            # millisecond granularity, so it may be older than the driver's
+            # microsecond-granularity client-side timestamp of the preceding
+            # non-LWT write in the same millisecond. The LWT is then reported
+            # as applied but loses to the earlier write (CASSANDRA-11000,
+            # "Won't Fix"). Avoid this by letting Cassandra generate all timestamps,
+            # as Cassandra's own unit tests do: server-side timestamps and LWT
+            # timestamps come from the same monotonic clock.
+            if not is_scylla(session):
+                session.use_client_timestamp = False
             yield session
             session.shutdown()
     except NoHostAvailable:
