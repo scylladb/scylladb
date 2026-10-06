@@ -76,6 +76,13 @@ public:
     std::optional<bool> resolve_boolean_table_config(std::string_view config_name, table_id table) const;
     std::optional<int64_t> resolve_integer_table_config(std::string_view config_name, table_id table) const;
 
+    // The same, for a consumer that has no fallback of its own and wants the option's
+    // registered default when no scope stores a value - the per-table counterpart of the
+    // resolve_*_config() accessors above. An unregistered name is a programming error here,
+    // since there would be no default to give, and is reported as an internal error.
+    int64_t resolve_integer_table_config_or_default(std::string_view config_name, table_id table) const;
+    double resolve_floating_point_table_config_or_default(std::string_view config_name, table_id table) const;
+
     // Resolve an option and return its effective value in the option's native type, falling
     // back to the default registered for it when no scope in the chain stores an override.
     // These are what a consuming subsystem normally calls: unlike resolve_config(), which
@@ -202,6 +209,7 @@ private:
     // holding a table_id reads through the typed resolve_*_table_config() accessors rather
     // than assembling a context itself.
     std::optional<lookup_context> table_lookup_context(table_id table) const;
+    std::optional<sstring> stored_table_config(std::string_view config_name, table_id table) const;
 
     // Look up `config_name` in a keyed scope map (dc/rack/node/keyspace/table):
     // nullopt if the key is absent or holds no such override. Shared by the

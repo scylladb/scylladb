@@ -554,6 +554,27 @@ std::optional<bool> cluster_config_manager::resolve_boolean_table_config(std::st
     return cluster_config_registry::to_boolean(opt, value);
 }
 
+// The stored value for a table, or nullopt when the table is no longer in the local schema or
+// no scope in the chain stores one. The *_or_default() accessors below hand this to the
+// registry's converter, which substitutes the option's registered default for nullopt.
+std::optional<sstring> cluster_config_manager::stored_table_config(std::string_view config_name, table_id table) const {
+    auto ctx = table_lookup_context(table);
+    if (!ctx) {
+        return std::nullopt;
+    }
+    return resolve_config(config_name, *ctx);
+}
+
+int64_t cluster_config_manager::resolve_integer_table_config_or_default(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    return cluster_config_registry::to_integer(opt, stored_table_config(config_name, table));
+}
+
+double cluster_config_manager::resolve_floating_point_table_config_or_default(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    return cluster_config_registry::to_floating_point(opt, stored_table_config(config_name, table));
+}
+
 std::optional<int64_t> cluster_config_manager::resolve_integer_table_config(std::string_view config_name, table_id table) const {
     const auto& opt = find_registered_option(config_name);
     auto ctx = table_lookup_context(table);
