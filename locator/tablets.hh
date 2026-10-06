@@ -587,13 +587,39 @@ struct tablet_load_stats {
     uint64_t add_tablet_sizes(const tablet_load_stats& tls);
 };
 
+// Unrepaired bytes per tablet replica, in the same shape as tablet_load_stats::tablet_sizes.
+//
+// This is a struct of its own, carried beside tablet_load_stats rather than inside it,
+// because tablet_load_stats is `final` in the IDL: it is serialized without a size prefix,
+// so it cannot grow a field without breaking the wire format for a mixed-version cluster.
+// Unlike that one, this struct is not final, so it can be extended.
+// One replica's measurement of how much of a tablet incremental repair has not covered.
+struct tablet_unrepaired_size {
+    uint64_t unrepaired_size = 0;
+    // The tablet's sstables_repaired_at that the replica classified against. A consumer
+    // compares it with the tablet's current value and discards an older measurement. Load
+    // stats are refreshed periodically, so without this a tablet that was just repaired
+    // would still look wholly unrepaired until the next refresh, and a size-based trigger
+    // would select it again and again in the meantime.
+    int64_t sstables_repaired_at = 0;
+};
+
+struct tablet_unrepaired_load_stats {
+    // The token ranges must be in the form (a, b] and only such ranges are allowed
+    std::unordered_map<table_id, std::unordered_map<dht::token_range, tablet_unrepaired_size>> unrepaired_sizes;
+
+    void add_unrepaired_sizes(const tablet_unrepaired_load_stats& tus);
+};
+
 // Used as a return value for functions returning both table and tablet stats
 struct combined_load_stats {
     locator::table_load_stats table_ls;
     locator::tablet_load_stats tablet_ls;
+    locator::tablet_unrepaired_load_stats tablet_unrepaired_ls;
 };
 
 using tablet_load_stats_map = std::unordered_map<host_id, tablet_load_stats>;
+using tablet_unrepaired_load_stats_map = std::unordered_map<host_id, tablet_unrepaired_load_stats>;
 
 struct load_stats {
     std::unordered_map<table_id, table_load_stats> tables;
@@ -606,6 +632,10 @@ struct load_stats {
 
     // Size-based load balancing data
     tablet_load_stats_map tablet_stats;
+
+    // Unrepaired size per tablet replica, for the size-based auto repair trigger. Empty for
+    // a node that does not support the TABLET_UNREPAIRED_LOAD_STATS cluster feature.
+    tablet_unrepaired_load_stats_map tablet_unrepaired_stats;
 
     // Distinguishes a default-constructed (null) load_stats from one that has
     // been aggregated via operator+=.  A null element contributes nothing when
@@ -625,6 +655,13 @@ struct load_stats {
 
     // Returns average size of tablet replica of a given tablet, or nullopt if information is incomplete.
     std::optional<uint64_t> get_avg_tablet_size(const tablet_map&, global_tablet_id) const;
+
+    // Returns the average unrepaired size of a tablet's replicas, or nullopt if any replica
+    // did not report one - a node that predates the TABLET_UNREPAIRED_LOAD_STATS cluster
+    // feature, or one whose stats have not arrived yet. Unlike get_avg_tablet_size(), this
+    // does not follow a tablet in transition to its leaving or pending replica: a tablet in
+    // transition is not a candidate for repair anyway.
+    std::optional<uint64_t> get_avg_unrepaired_tablet_size(const tablet_map&, global_tablet_id) const;
 
     // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
     // other hosts based on the tablet transition info:
