@@ -6,7 +6,6 @@
 # ALTER KEYSPACE
 
 from .util import new_test_keyspace, unique_name
-from .conftest import has_tablets
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
@@ -26,13 +25,21 @@ def assert_keyspace(cql, keyspace, expected_class, rf_key):
 
 # Trying to create a keyspace specifying replication options without replication strategy
 # should result in NetworkTopologyStrategy being set by default.
-def test_create_and_drop_keyspace_with_default_replication_class(cql, this_dc):
+# This default is a Scylla extension, requested in issue #16029 and
+# documented in docs/cql/ddl.rst. Cassandra requires the replication
+# strategy class, and fails with "Missing replication strategy class".
+def test_create_and_drop_keyspace_with_default_replication_class(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'replication_factor' : '1' }") as keyspace:
         assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
 # Trying to create a keyspace specifying replication options without replication factor
-# should fail since SimpleStrategy does not support default replication factor
-def test_create_and_drop_keyspace_simple_strategy_with_default_replication_factor(cql, this_dc):
+# should fail since SimpleStrategy does not support default replication factor.
+# In Scylla, SimpleStrategy's replication_factor is mandatory (as documented
+# in docs/cql/ddl.rst). In Cassandra 4.1 and above, a missing
+# replication_factor *is* allowed, and the default_keyspace_rf configuration
+# option is used. Scylla's issue #16028 asked for a similar default, but it
+# was only added for NetworkTopologyStrategy (see the next test).
+def test_create_and_drop_keyspace_simple_strategy_with_default_replication_factor(cql, this_dc, scylla_only):
     # create and drop a keyspace with SimpleStrategy and default replication factor
     with pytest.raises(ConfigurationException):
         with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy' }") as keyspace:
@@ -46,14 +53,20 @@ def test_create_and_drop_keyspace_network_topology_strategy_with_default_replica
 
 # Trying to create a keyspace specifying empty replication options
 # should result in NetworkTopologyStrategy and replication factor of 1 being set by default.
-def test_create_and_drop_keyspace_with_default_replication_options(cql, this_dc):
+# This is a Scylla extension, added as part of the fix for issue #16028 and
+# documented in docs/cql/ddl.rst. Cassandra (as of 5.0) doesn't support it,
+# and moreover fails this request with a NullPointerException.
+def test_create_and_drop_keyspace_with_default_replication_options(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, "WITH REPLICATION = {}") as keyspace:
         assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
 # The "WITH REPLICATION" part of CREATE KEYSPACE may be omitted.
 # Trying to create a keyspace with no replication options at all
 # should result in NetworkTopologyStrategy and replication factor of 1 being set by default.
-def test_create_and_drop_keyspace_with_no_replication_options(cql, this_dc):
+# This is a Scylla extension, requested in issue #25145 and documented in
+# docs/cql/ddl.rst. In Cassandra, "WITH REPLICATION" is required, and
+# omitting it is a syntax error.
+def test_create_and_drop_keyspace_with_no_replication_options(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, "") as keyspace:
         assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
@@ -66,7 +79,7 @@ def test_create_keyspace_twice(cql, this_dc):
     cql.execute("DROP KEYSPACE test_create_keyspace_twice")
 
 # "IF NOT EXISTS" on CREATE KEYSPACE:
-def test_create_keyspace_if_not_exists(cql, this_dc):
+def test_create_keyspace_if_not_exists(cql, this_dc, has_tablets):
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     # A second invocation with IF NOT EXISTS is fine:
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
