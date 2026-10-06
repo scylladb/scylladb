@@ -23,6 +23,7 @@ import math
 from .util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest, FunctionFailure
 from ctypes import c_float
+from decimal import Decimal
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -271,5 +272,50 @@ def test_cast_to_narrower_integer(cql, table2, table3, scylla_only):
     cql.execute(f'UPDATE {table2} SET c = c + 1000 WHERE p = {p}')
     with pytest.raises(FunctionFailure, match='out of range'):
         cql.execute(f"SELECT CAST(c AS tinyint) FROM {table2} WHERE p={p}")
+
+# Casting a float or double to varint is exact, truncating toward zero. NaN
+# and infinities have no integer value, so the cast fails; Scylla used to
+# report that as a server error. Cassandra instead casts through a bigint,
+# saturating at its limits and taking NaN as 0, so there 1e30 becomes
+# 9223372036854775807. Hence this test is Scylla-only.
+def test_cast_float_to_varint(cql, table3, scylla_only):
+    p = unique_key_int()
+    for v in [2.7, -1.9, 1e30, -1e30]:
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {v}, {v})')
+        assert [(int(c_float(v).value), int(v))] == list(cql.execute(
+            f"SELECT CAST(f AS varint), CAST(db AS varint) FROM {table3} WHERE p={p}"))
+    for lit in ['NaN', 'Infinity', '-Infinity']:
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {lit}, {lit})')
+        for col in ['f', 'db']:
+            with pytest.raises(FunctionFailure, match='out of range'):
+                cql.execute(f"SELECT CAST({col} AS varint) FROM {table3} WHERE p={p}")
+
+# Casting a double to decimal keeps its shortest exact representation.
+def test_cast_float_to_decimal(cql, table3):
+    p = unique_key_int()
+    for v in ['2.7', '-1.9', '1e+30']:
+        cql.execute(f'INSERT INTO {table3} (p, db) VALUES ({p}, {v})')
+        assert [(Decimal(v),)] == list(cql.execute(
+            f"SELECT CAST(db AS decimal) FROM {table3} WHERE p={p}"))
+
+# NaN and infinities have no decimal value, so casting them to decimal fails.
+# Cassandra fails it too, but with a server error (NumberFormatException).
+def test_cast_nan_to_decimal(cql, table3, cassandra_bug):
+    p = unique_key_int()
+    for lit in ['NaN', 'Infinity', '-Infinity']:
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {lit}, {lit})')
+        for col in ['f', 'db']:
+            with pytest.raises(FunctionFailure):
+                cql.execute(f"SELECT CAST({col} AS decimal) FROM {table3} WHERE p={p}")
+
+# Same for a float, which keeps the shortest representation of the float.
+# Cassandra widens it to double first (CASSANDRA-18647), so there 2.7 becomes
+# 2.700000047683716.
+def test_cast_float_column_to_decimal(cql, table3, cassandra_bug):
+    p = unique_key_int()
+    for v in ['2.7', '-1.9', '1e+30']:
+        cql.execute(f'INSERT INTO {table3} (p, f) VALUES ({p}, {v})')
+        assert [(Decimal(v),)] == list(cql.execute(
+            f"SELECT CAST(f AS decimal) FROM {table3} WHERE p={p}"))
 
 # TODO: test casts from more types.

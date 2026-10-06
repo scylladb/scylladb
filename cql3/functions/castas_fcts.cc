@@ -100,6 +100,16 @@ static data_value castas_fctn_simple(data_value from) {
     return static_cast<ToType>(val_from);
 }
 
+// Exact, truncating toward zero.  NaN and infinities have no integer value.
+template<typename FromType>
+static data_value castas_fctn_from_float_to_varint(data_value from) {
+    auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<utils::multiprecision_int>()->cql3_type_name()));
+    }
+    return utils::multiprecision_int(val_from);
+}
+
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_float(data_value from) {
     auto val_from = value_cast<big_decimal>(from);
@@ -143,6 +153,9 @@ static data_value castas_fctn_from_integer_to_decimal(data_value from) {
 template<typename FromType>
 static data_value castas_fctn_from_float_to_decimal(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<big_decimal>()->cql3_type_name()));
+    }
     return big_decimal(fmt::to_string(val_from));
 }
 
@@ -322,9 +335,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::varint, kind::long_kind):
         return castas_fctn_simple<utils::multiprecision_int, int64_t>;
     case cast_switch_case_val(kind::varint, kind::float_kind):
-        return castas_fctn_simple<utils::multiprecision_int, float>;
+        return castas_fctn_from_float_to_varint<float>;
     case cast_switch_case_val(kind::varint, kind::double_kind):
-        return castas_fctn_simple<utils::multiprecision_int, double>;
+        return castas_fctn_from_float_to_varint<double>;
     case cast_switch_case_val(kind::varint, kind::decimal):
         return castas_fctn_from_decimal_to_varint;
 
