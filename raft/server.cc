@@ -1874,11 +1874,10 @@ future<> server_impl::applier_fiber() {
     auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
             if (_applier_mailbox.stopped()) {
-                // abort() waits for this fiber before it aborts the state
-                // machine, so nothing else will interrupt apply() -- and the
-                // backlog here is unbounded, io_fiber never having been
-                // throttled by the applier. Stop after the batch in hand, as
-                // the bounded queue this replaced did when its pop threw.
+                // The server is being aborted, and the backlog here is
+                // unbounded, io_fiber never having been throttled by the
+                // applier. Stop after the batch in hand, as the bounded queue
+                // this replaced did when its pop threw.
                 throw stop_apply_fiber{};
             }
             const index_t first_idx = _applied_idx + index_t{1};
@@ -2186,7 +2185,10 @@ void server_impl::check_state_machine_usable() const {
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
+    // abort() aborts the state machine while the fibers still run, so a call
+    // in progress may fail because of that.
+    if (_aborted && (try_catch_nested<seastar::abort_requested_exception>(e)
+            || try_catch_nested<seastar::gate_closed_exception>(e))) {
         logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
         return;
     }
@@ -2223,9 +2225,11 @@ future<> server_impl::abort(sstring reason) {
     _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // transfers, so abort them first. Aborting the state machine here
+    // to interrupt ongoing apply/snapshot operations.
     _applier_mailbox.stop();
 
+    auto abort_sm = _state_machine->abort();
     co_await maybe_note_error(
         seastar::when_all_succeed(
             std::move(_io_status),
@@ -2236,7 +2240,6 @@ future<> server_impl::abort(sstring reason) {
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
-    auto abort_sm = _state_machine->abort();
     auto abort_persistence = _persistence->abort();
 
     // Abort snapshot applications before waiting for `abort_rpc`,

@@ -408,6 +408,7 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
 
     co_await utils::get_local_injector().inject("group0_state_machine::delay_apply", 1s);
 
+    utils::get_local_injector().enter("group0_state_machine_apply_waits_for_read_apply_mutex");
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
 
     // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
@@ -471,6 +472,7 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
+    utils::get_local_injector().enter("group0_state_machine_load_snapshot_waits_for_read_apply_mutex");
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     if (_in_memory_state_machine_enabled) {
         co_await reload_state();
