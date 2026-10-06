@@ -23,7 +23,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 from .test_secondary_index import wait_for_index
 from .util import new_materialized_view, new_test_table, unique_name
@@ -659,3 +659,13 @@ def test_like_operator_fails_on_non_string(cql, test_keyspace, scylla_only, type
     with new_test_table(cql, test_keyspace, f"k {type}, p int primary key") as t:
         with pytest.raises(InvalidRequest, match="only on string types"):
             cql.execute(f"select * from {t} where k like 123 allow filtering")
+
+# LIKE on token() is an error in both Scylla and Cassandra, but a different
+# one: Scylla rejects it with an InvalidRequest, while Cassandra's grammar
+# does not allow it, so it fails with a SyntaxException.
+def test_like_operator_on_token(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "s text primary key") as t:
+        with pytest.raises((InvalidRequest, SyntaxException)) as excinfo:
+            cql.execute(f"select * from {t} where token(s) like 'abc' allow filtering")
+        if excinfo.type is InvalidRequest:
+            assert "token function" in str(excinfo.value)
