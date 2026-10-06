@@ -2567,23 +2567,6 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     require_timestamp("mintimeuuid")
     require_timestamp("maxtimeuuid")
 
-    # test timeuuid arg
-    def require_timeuuid(fct):
-        throw(InvalidRequest, fct, "t")
-        throw(InvalidRequest, fct, "l")
-        throw(InvalidRequest, fct, "f")
-        nofail(fct, "u")
-        throw(InvalidRequest, fct, "d")
-
-        throw(InvalidRequest, fct, "currenttime()")
-        throw(InvalidRequest, fct, "currentdate()")
-        nofail(fct, "now()")
-        nofail(fct, "currenttimeuuid()")
-        throw(InvalidRequest, fct, "currenttimestamp()")
-
-    require_timeuuid("dateof")
-    require_timeuuid("unixtimestampof")
-
     # test timeuuid or date arg
     def require_timeuuid_or_date(fct):
         throw(InvalidRequest, fct, "t")
@@ -2646,14 +2629,75 @@ def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
     def require_timestamp(fct):
         throw(InvalidRequest, fct, "mintimeuuid(t)")
         throw(InvalidRequest, fct, "maxtimeuuid(t)")
-        nofail(fct, "dateof(u)")
-        nofail(fct, "unixtimestampof(u)")
         nofail(fct, "totimestamp(u)")
         throw(InvalidRequest, fct, "todate(u)")
         nofail(fct, "tounixtimestamp(u)")
 
     require_timestamp("mintimeuuid")
     require_timestamp("maxtimeuuid")
+
+    # test timeuuid or date arg
+    def require_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        throw(InvalidRequest, fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        throw(InvalidRequest, fct, "tounixtimestamp(u)")
+
+    require_timeuuid_or_date("totimestamp")
+
+    # test timestamp or timeuuid arg ("todate"): the C++ test had no checks here.
+
+    # test timestamp, timeuuid, or date arg
+    def require_timestamp_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        nofail(fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        nofail(fct, "tounixtimestamp(u)")
+
+    require_timestamp_timeuuid_or_date("tounixtimestamp")
+
+
+# Cassandra 5 removed the deprecated functions dateof() and unixtimestampof()
+# (CASSANDRA-18328), replaced by totimestamp() and tounixtimestamp(). Scylla
+# still supports them, so the following two tests check them, like the above
+# two tests check the other functions, only on Scylla.
+def test_deprecated_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table, scylla_only):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
+
+    # test timeuuid arg
+    def require_timeuuid(fct):
+        throw(InvalidRequest, fct, "t")
+        throw(InvalidRequest, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        throw(InvalidRequest, fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        throw(InvalidRequest, fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        throw(InvalidRequest, fct, "currenttimestamp()")
+
+    require_timeuuid("dateof")
+    require_timeuuid("unixtimestampof")
+
+
+def test_deprecated_time_uuid_fcts_result(cql, time_uuid_fcts_table, scylla_only):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
 
     # test timeuuid arg
     def require_timeuuid(fct):
@@ -2668,31 +2712,13 @@ def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
     require_timeuuid("dateof")
     require_timeuuid("unixtimestampof")
 
-    # test timeuuid or date arg
-    def require_timeuuid_or_date(fct):
-        nofail(fct, "mintimeuuid(t)")
-        nofail(fct, "maxtimeuuid(t)")
-        throw(InvalidRequest, fct, "dateof(u)")
-        throw(InvalidRequest, fct, "unixtimestampof(u)")
-        throw(InvalidRequest, fct, "totimestamp(u)")
-        nofail(fct, "todate(u)")
-        throw(InvalidRequest, fct, "tounixtimestamp(u)")
-
-    require_timeuuid_or_date("totimestamp")
-
-    # test timestamp or timeuuid arg ("todate"): the C++ test had no checks here.
-
-    # test timestamp, timeuuid, or date arg
-    def require_timestamp_timeuuid_or_date(fct):
-        nofail(fct, "mintimeuuid(t)")
-        nofail(fct, "maxtimeuuid(t)")
+    # results of dateof() and unixtimestampof() as arguments of the other
+    # functions
+    for fct in ["mintimeuuid", "maxtimeuuid", "tounixtimestamp"]:
         nofail(fct, "dateof(u)")
         nofail(fct, "unixtimestampof(u)")
-        nofail(fct, "totimestamp(u)")
-        nofail(fct, "todate(u)")
-        nofail(fct, "tounixtimestamp(u)")
-
-    require_timestamp_timeuuid_or_date("tounixtimestamp")
+    throw(InvalidRequest, "totimestamp", "dateof(u)")
+    throw(InvalidRequest, "totimestamp", "unixtimestampof(u)")
 
 
 # Executes a prepared statement with SERIAL serial consistency (and the given

@@ -33,14 +33,18 @@ def testTimeuuid(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k = 0 AND t = ?", rows[0][1]), 1)
 
-        assert_invalid(cql, table, "SELECT dateOf(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1])
+        # Cassandra 5 removed the deprecated dateOf() and unixTimestampOf()
+        # (CASSANDRA-18328), and changed this test to use minTimeuuid() for this
+        # check (toTimestamp() accepts an int in Cassandra 5), and toTimestamp()
+        # and toUnixTimestamp() below, so we do too.
+        assert_invalid(cql, table, "SELECT minTimeuuid(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1])
 
         for i in range(4):
             uuid = rows[i][1]
             datetime = datetime_from_uuid1(uuid)
-            # Before comparing this datetime to the result of dateOf(), we
+            # Before comparing this datetime to the result of toTimestamp(), we
             # must truncate the resolution of datetime to milliseconds.
-            # he problem is that the dateOf(timeuuid) CQL function converts a
+            # The problem is that the toTimestamp(timeuuid) CQL function converts a
             # timeuuid to CQL's "timestamp" type, which has millisecond
             # resolution, but datetime *may* have finer resolution. It will
             # usually be whole milliseconds, because this is what the now()
@@ -49,7 +53,7 @@ def testTimeuuid(cql, test_keyspace):
             # millisecond part.
             datetime = datetime.replace(microsecond=datetime.microsecond//1000*1000)
             timestamp = round(datetime.replace(tzinfo=timezone.utc).timestamp() * 1000)
-            assert_rows(execute(cql, table, "SELECT dateOf(t), unixTimestampOf(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
+            assert_rows(execute(cql, table, "SELECT toTimestamp(t), toUnixTimestamp(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
                        [datetime, timestamp])
 
         assert_empty(execute(cql, table, "SELECT t FROM %s WHERE k = 0 AND t > maxTimeuuid(1234567) AND t < minTimeuuid('2012-11-07 18:18:22-0800')"))
