@@ -54,8 +54,16 @@ def test_size_tiered_compaction_strategy_cold_reads_to_omit(cql, table1, scylla_
 def test_time_window_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, "Invalid window unit SECONDS for compaction_window_unit|SECONDS is not valid for compaction_window_unit", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_unit' : 'SECONDS' }")
     assert_throws(cql, table1, r"compaction_window_size value \(-8\) must be greater than 1|-8 must be greater than 1 for compaction_window_size", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'compaction_window_size' : -8 }")
-    assert_throws(cql, table1, "Invalid timestamp resolution SECONDS for timestamp_resolution", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : 'SECONDS' }")
+    assert_throws(cql, table1, "Invalid timestamp resolution DOGS for timestamp_resolution|DOGS is not valid for timestamp_resolution", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : 'DOGS' }")
     assert_throws(cql, table1, r"max_threshold value \(1\) must be bigger or equal to 2|cannot be greater than max compaction threshold \(got 1\)", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'max_threshold' : 1 }")
+
+# Cassandra allows TWCS's timestamp_resolution to be any time unit, including
+# SECONDS (useful for applications which write timestamps in seconds), but
+# Scylla currently only supports MICROSECONDS and MILLISECONDS (issue #16057).
+@pytest.mark.xfail(reason="issue #16057")
+def test_time_window_compaction_strategy_timestamp_resolution_seconds(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int") as table:
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy', 'timestamp_resolution' : 'SECONDS' }}")
 
 # The TWCS option enable_optimized_twcs_queries exists only in Scylla, so
 # this test is Scylla-only.
