@@ -625,6 +625,10 @@ def raw_utf8_serialization(monkeypatch):
 # first byte of a UTF-8 sequence - wrapped so it can be bound using the
 # raw_utf8_serialization fixture.
 bad_utf8_string = b'\xad'.decode('utf-8', errors='surrogateescape')
+# The error message on invalid UTF-8: Scylla prints "Validation failed -
+# non-UTF8 character in a UTF8 string", Cassandra prints "String didn't
+# validate.". See also test_validation.py.
+bad_utf8_error = re.compile('validat', re.IGNORECASE)
 
 def test_list_elements_validation(cql, test_keyspace, raw_utf8_serialization):
     with new_test_table(cql, test_keyspace, "a int, b list<date>, PRIMARY KEY (a)") as tbl:
@@ -633,7 +637,7 @@ def test_list_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
     with new_test_table(cql, test_keyspace, "a int, b list<text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, [bad_utf8_string]])
         cql.execute(stmt, [1, ["proper utf8 string"]])
 
@@ -645,7 +649,7 @@ def test_set_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, {{'2015-05-03'}})")
     with new_test_table(cql, test_keyspace, "a int, b set<text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, {bad_utf8_string}])
         cql.execute(stmt, [1, {"proper utf8 string"}])
 
@@ -670,7 +674,7 @@ def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         def test_bind(value, should_throw):
             for m in [{value: "foo"}, {"foo": value}]:
                 if should_throw:
-                    with pytest.raises(InvalidRequest, match='UTF8'):
+                    with pytest.raises(InvalidRequest, match=bad_utf8_error):
                         cql.execute(stmt, [1, m])
                 else:
                     cql.execute(stmt, [1, m])
@@ -685,7 +689,7 @@ def test_in_clause_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"SELECT r1 FROM {tbl} WHERE (c1,r1) IN ((1, '2015-05-03')) ALLOW FILTERING")
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1, r1)") as tbl2:
         stmt = cql.prepare(f"SELECT r1 FROM {tbl2} WHERE (c1,r1) IN ? ALLOW FILTERING")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [[(2, bad_utf8_string)]])
         cql.execute(stmt, [[(2, "proper utf8 string")]])
 
@@ -736,7 +740,7 @@ def test_tuple_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, (1, '2015-05-03'))")
     with new_test_table(cql, test_keyspace, "a int, b tuple<int, text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, (2, bad_utf8_string)])
         cql.execute(stmt, [1, (2, "proper utf8 string")])
 
@@ -748,7 +752,7 @@ def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
     with new_test_table(cql, test_keyspace, "a int, b vector<text, 1>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, [bad_utf8_string]])
         cql.execute(stmt, [1, ["proper utf8 string"]])
 
