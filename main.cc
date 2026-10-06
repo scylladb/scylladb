@@ -1888,7 +1888,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 .background_sg = dbcfg.maintenance_scheduling_group,
             };
             sharded<service::tablet_allocator> tablet_allocator;
-            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
+            // cluster_config_manager is started later; the allocator only reads it once the
+            // load balancer runs, which is well after that.
+            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db), std::ref(cluster_config_manager)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });

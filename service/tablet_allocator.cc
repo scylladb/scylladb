@@ -22,6 +22,8 @@
 #include "utils/stall_free.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/div_ceil.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/config.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
@@ -952,6 +954,7 @@ class load_balancer {
     size_t max_read_streaming_load;
 
     replica::database& _db;
+    db::cluster_config_manager& _ccm;
     token_metadata_ptr _tm;
     service::topology* _topology;
     db::system_keyspace* _sys_ks;
@@ -1063,7 +1066,7 @@ private:
         return streaming_infos;
     }
 public:
-    load_balancer(replica::database& db, token_metadata_ptr tm,
+    load_balancer(replica::database& db, db::cluster_config_manager& ccm, token_metadata_ptr tm,
             service::topology* topology,
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
@@ -1074,6 +1077,7 @@ public:
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
+        , _ccm(ccm)
         , _tm(std::move(tm))
         , _topology(topology)
         , _sys_ks(sys_ks)
@@ -1208,19 +1212,30 @@ public:
         return std::nullopt;
     }
 
-    bool is_auto_repair_enabled(const std::optional<locator::repair_scheduler_config>& config) {
-        // Only check the yaml config for now
-        return _db.get_config().auto_repair_enabled_default();
+    // Whether auto repair is enabled for the tablets of `table`.
+    //
+    // The yaml auto_repair_enabled_default sits below the option's
+    // table -> keyspace -> cluster chain as the last-resort default, which is why this reads
+    // the option through resolve_boolean_table_config() - reporting absence - rather than
+    // through resolve_boolean_config(), which would substitute the registry's own default
+    // and hide the yaml value. Until the cluster enables cluster config, no scope can hold
+    // an override and the yaml value is the only answer.
+    //
+    // For a co-located group the option is resolved on the base table: the tablets are
+    // shared by the whole group, so there is a single answer to give for all of them.
+    bool is_auto_repair_enabled(table_id table) {
+        return _ccm.resolve_boolean_table_config(db::cluster_config_registry::option_name::auto_repair_enabled, table)
+                .value_or(_db.get_config().auto_repair_enabled_default());
     }
 
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
+            bool auto_repair_enabled, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
             co_return true;
         }
-        if (!is_auto_repair_enabled(config)) {
+        if (!auto_repair_enabled) {
             co_return false;
         }
         auto size = info.replicas.size();
@@ -1346,8 +1361,7 @@ public:
             }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
-            auto config = tmap.get_repair_scheduler_config();
-            auto auto_repair_enabled = is_auto_repair_enabled(config);
+            auto auto_repair_enabled = is_auto_repair_enabled(table);
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
@@ -1392,7 +1406,7 @@ public:
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, auto_repair_enabled, now, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
@@ -4738,6 +4752,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
+    sharded<db::cluster_config_manager>& _ccm;
     load_balancer_stats_manager _load_balancer_stats;
     scheduling_group _background;
     bool _stopped = false;
@@ -4749,7 +4764,7 @@ private:
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
             std::unordered_set<host_id> skiplist) {
-        load_balancer lb(_db, tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
+        load_balancer lb(_db, _ccm.local(), tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
             std::move(skiplist));
@@ -4758,9 +4773,11 @@ private:
         return lb;
     }
 public:
-    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
+    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db,
+                sharded<db::cluster_config_manager>& ccm)
             : _migration_notifier(mn)
             , _db(db)
+            , _ccm(ccm)
             , _load_balancer_stats("load_balancer")
             , _background(cfg.background_sg)
     {
@@ -5069,8 +5086,9 @@ future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migrat
     co_return tablets;
 }
 
-tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db)
-    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db)) {
+tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db,
+        sharded<db::cluster_config_manager>& ccm)
+    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db, ccm)) {
 }
 
 future<> tablet_allocator::stop() {
