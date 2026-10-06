@@ -1890,7 +1890,7 @@ future<> server_impl::applier_fiber() {
                 try {
                     co_await _state_machine->apply(std::move(commands));
                 } catch (abort_requested_exception& e) {
-                    logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
+                    logger.debug("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
                     std::throw_with_nested(raft::state_machine_error{});
@@ -2144,8 +2144,15 @@ void server_impl::check_state_machine_usable() const {
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    // abort() aborts the state machine while the fibers still run, so a call
+    // in progress may fail because of that, with abort_requested_exception
+    // (see state_machine::abort()). The services the fibers use may also be
+    // stopping already, e.g. on node shutdown, and fail them with
+    // gate_closed_exception (SCYLLADB-2632). Any other error is reported: it
+    // isn't explained by the abort.
+    if (_aborted && (try_catch_nested<seastar::abort_requested_exception>(e)
+            || try_catch_nested<seastar::gate_closed_exception>(e))) {
+        logger.debug("[{}] {} fiber stopped while aborting raft server: {:t}", _tag, fiber_name, e);
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
@@ -2188,9 +2195,11 @@ future<> server_impl::abort(sstring reason) {
     _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // transfers, so abort them first. Aborting the state machine here
+    // to interrupt ongoing apply/snapshot operations.
     _applier_mailbox.stop();
 
+    auto abort_sm = futurize_invoke(&state_machine::abort, *_state_machine);
     co_await maybe_note_error(
         seastar::when_all_succeed(
             std::move(_io_status),
@@ -2201,7 +2210,6 @@ future<> server_impl::abort(sstring reason) {
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = futurize_invoke(&rpc::abort, *_rpc);
-    auto abort_sm = futurize_invoke(&state_machine::abort, *_state_machine);
     auto abort_persistence = futurize_invoke(&persistence::abort, *_persistence);
 
     // Abort snapshot applications before waiting for `abort_rpc`,

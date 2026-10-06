@@ -457,6 +457,7 @@ class raft_cluster<Clock>::state_machine : public raft::state_machine {
     promise<> _done;
     snapshots* _snapshots;
 
+    seastar::abort_source _as;
     bool _abort_requested = false;
     // Counts the calls raft made after aborting this state machine. Must stay 0.
     size_t _calls_after_abort = 0;
@@ -478,6 +479,10 @@ public:
             apply_entered.signal();
             co_await apply_release.wait();
         }
+        co_await utils::get_local_injector().inject("raft_test_sm_block_apply",
+                std::chrono::seconds(30), _as);
+        utils::get_local_injector().inject("raft_test_sm_apply_failure",
+                [] { throw std::runtime_error("raft_test_sm_apply_failure"); });
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -492,11 +497,13 @@ public:
 
     future<raft::snapshot_id> take_snapshot() override {
         note_call("take_snapshot");
+        co_await utils::get_local_injector().inject("raft_test_sm_block_take_snapshot",
+                std::chrono::seconds(30), _as);
         auto snp_id = raft::snapshot_id::create_random_id();
         (*_snapshots)[_id][snp_id].hasher = *hasher;
         tlogger.debug("sm[{}] takes snapshot id {} {} seen {}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), snp_id, _seen);
         (*_snapshots)[_id][snp_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(snp_id);
+        co_return snp_id;
     }
     void drop_snapshot(raft::snapshot_id snp_id) override {
         note_call("drop_snapshot");
@@ -513,6 +520,8 @@ public:
             load_snapshot_entered.signal();
             co_await load_snapshot_release.wait();
         }
+        co_await utils::get_local_injector().inject("raft_test_sm_block_load_snapshot",
+                std::chrono::seconds(30), _as);
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
         tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
         _seen = (*_snapshots)[_id][snp_id].idx.value();
@@ -527,6 +536,7 @@ public:
     };
     future<> abort() override {
         _abort_requested = true;
+        _as.request_abort();
         if (utils::get_local_injector().enter("raft_test_state_machine_abort_failure")) {
             return make_exception_future<>(std::runtime_error("raft_test_state_machine_abort_failure"));
         }
