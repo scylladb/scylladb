@@ -694,7 +694,11 @@ def test_in_clause_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(stmt, [[(2, "proper utf8 string")]])
 
 
-def test_in_clause_cartesian_product_limits(cql, test_keyspace):
+# This test is Scylla-only because it checks Scylla's default limits on the
+# size of the cartesian product of IN restrictions. Cassandra has a similar
+# guardrail (in_select_cartesian_product_fail_threshold), but it is disabled
+# by default.
+def test_in_clause_cartesian_product_limits(cql, test_keyspace, scylla_only):
     # These limits are the defaults of max_partition_key_restrictions_per_query
     # and max_clustering_key_restrictions_per_query (100). Scylla reports
     # exceeding them as a generic server error (the C++ test just expects
