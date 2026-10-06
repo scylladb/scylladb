@@ -2000,8 +2000,11 @@ async def check_no_toc_less_sstables(manager, servers, ks, stopped_ids=()):
 async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_toc_less_sstables(manager: ScyllaClusterManager):
     nr_keys = 1000
     cmdline = ['--hinted-handoff-enabled', 'false', '--logger-log-level', 'compaction=debug']
+    # The high min_threshold below holds only with compaction_enforce_min_threshold:
+    # otherwise compaction still merges any pair of similar-sized sstables.
     servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline,
-                                        config={'tablet_load_stats_refresh_interval_in_seconds': 1})
+                                        config={'tablet_load_stats_refresh_interval_in_seconds': 1,
+                                                'compaction_enforce_min_threshold': True})
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                                         "'replication_factor': 3} AND tablets = {'initial': 1}")
