@@ -34,3 +34,20 @@ def test_like_operator(cql, test_keyspace, scylla_only):
         assert rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abb"], ["abc"]]
         assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
         assert rows(cql.execute(f"select s from {t} where s like 'aaa' allow filtering")) == []
+
+# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
+# patterns (only '%'), so the '_' patterns below match nothing there.
+def test_like_operator_on_partition_key(cql, test_keyspace, scylla_only):
+    # Fully constrained:
+    with new_test_table(cql, test_keyspace, "s text primary key") as t:
+        cql.execute(f"insert into {t} (s) values ('abc')")
+        assert rows(cql.execute(f"select s from {t} where s like 'a__' allow filtering")) == [["abc"]]
+        cql.execute(f"insert into {t} (s) values ('acc')")
+        assert rows(cql.execute(f"select s from {t} where s like 'a__' allow filtering")) == [["abc"], ["acc"]]
+
+    # Partially constrained:
+    with new_test_table(cql, test_keyspace, "s1 text, s2 text, primary key((s1, s2))") as t:
+        cql.execute(f"insert into {t} (s1, s2) values ('abc', 'abc')")
+        assert rows(cql.execute(f"select s2 from {t} where s2 like 'a%' allow filtering")) == [["abc"]]
+        cql.execute(f"insert into {t} (s1, s2) values ('aba', 'aba')")
+        assert rows(cql.execute(f"select s2 from {t} where s2 like 'a%' allow filtering")) == [["aba"], ["abc"]]
