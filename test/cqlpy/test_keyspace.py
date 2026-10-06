@@ -90,23 +90,30 @@ def test_create_keyspace_if_not_exists(cql, this_dc, has_tablets):
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }" + tablets_opts)
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
+# The following tests check the "rack list" replication factor - a list of
+# racks instead of a number. This is a Scylla extension, which is only
+# supported for keyspaces using tablets (see "Rack-list replication factor"
+# in docs/cql/ddl.rst): Cassandra doesn't have this syntax at all, and
+# Scylla rejects a rack list for a keyspace using vnodes. So these tests
+# are skipped unless tablets are enabled.
+
 # We treat ALTER to numeric RF of same count as no-op.
-def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc, scylla_only):
+def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 1 }}")
         assert get_replication(cql, keyspace)[this_dc] == ['rack1']
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
 
-def test_empty_rack_list_is_accepted(cql, this_dc, scylla_only):
+def test_empty_rack_list_is_accepted(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': [] }}")
         assert this_dc not in get_replication(cql, keyspace)
 
-def test_can_alter_rack_list_to_0(cql, this_dc, scylla_only):
+def test_can_alter_rack_list_to_0(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}")
 
-def test_can_alter_to_rack_list_from_0(cql, this_dc, scylla_only):
+def test_can_alter_to_rack_list_from_0(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
         assert get_replication(cql, keyspace)[this_dc] == ['rack1']
@@ -198,13 +205,23 @@ def test_alter_keyspace(cql, this_dc, scylla_only):
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER RF of tablets-enabled KS by more than 1 at a time
-def test_alter_keyspace_rf_by_more_than_1(cql, this_dc):
+# This limitation only applies to keyspaces using tablets (see "ALTER
+# KEYSPACE with Tablets" in docs/cql/ddl.rst): With tablets, an RF change
+# is carried out by migrating tablets, and limiting the change to 1
+# guarantees that the old and new QUORUMs overlap. With vnodes, and in
+# Cassandra, an RF change only changes the keyspace's metadata, so there is
+# no such limitation, and the test is skipped.
+def test_alter_keyspace_rf_by_more_than_1(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
         with pytest.raises((InvalidRequest, ConfigurationException)):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER a tablets-enabled KS by providing the 'replication_factor' tag
-def test_alter_keyspace_with_replication_factor_tag(cql):
+# This limitation only applies to keyspaces using tablets (see "ALTER
+# KEYSPACE with Tablets" in docs/cql/ddl.rst). With vnodes, and in
+# Cassandra, the 'replication_factor' tag is allowed in ALTER KEYSPACE, so
+# the test is skipped.
+def test_alter_keyspace_with_replication_factor_tag(cql, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
         with pytest.raises((InvalidRequest, ConfigurationException)):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }}")
