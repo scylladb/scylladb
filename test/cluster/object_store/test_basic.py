@@ -881,6 +881,9 @@ async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager
             components = {}
             refs = {}
             for o in objects:
+                if o.key.endswith("/"):
+                    # the "sstables/" folder object
+                    continue
                 generation, has_refs, ref = o.key.rpartition("/refs/")
                 if has_refs:
                     refs.setdefault(generation, set()).add(ref)

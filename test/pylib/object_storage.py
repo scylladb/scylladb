@@ -29,7 +29,7 @@ import requests
 
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
-from test.pylib.s3mock_server import S3MockServer, create_conf
+from test.pylib.s3mock_server import S3MockServer, create_bucket, create_conf
 
 
 type StorageKind = Literal["s3", "gs"]
@@ -102,8 +102,7 @@ class S3Server:
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using boto3."""
         self.bucket_name = _make_bucket_name(test_name)
-        resource = self.get_resource()
-        resource.Bucket(self.bucket_name).create()
+        create_bucket(self.get_resource(), self.bucket_name)
 
     def destroy_test_bucket(self):
         """Empty and delete the per-test bucket using boto3.
