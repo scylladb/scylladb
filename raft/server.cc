@@ -201,11 +201,6 @@ public:
     bool snapshot_requested() const {
         return _snapshot_requested;
     }
-    // abort() has been called: the applier fiber must stop at the first
-    // opportunity rather than drain what is left (see apply_entries()).
-    bool stopped() const {
-        return _stopped;
-    }
 
     // Hands over what the round applies and clears the snapshot here. Called
     // right after wait() returns, with nothing suspending in between, so both
@@ -500,6 +495,10 @@ private:
     future<> wait_for_apply(index_t idx, abort_source*);
 
     void check_not_aborted();
+    // The state machine cannot be used after it's aborted.
+    // This getter either returns the state machine, or throws
+    // abort_requested_exception if it has been aborted.
+    state_machine& usable_state_machine();
     void handle_background_error(const char* fiber_name);
 
     // Triggered on the next tick, used to delay retries in add_entry, modify_config, read_barrier.
@@ -1532,8 +1531,13 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
     }
 
-    for (const auto& snp_id: batch.snps_to_drop) {
-        _state_machine->drop_snapshot(snp_id);
+    // The state machine must not be used once the server is aborted.
+    // Dropping snapshots is just cleanup, so it's skipped rather than
+    // stopping the fiber.
+    if (!_aborted) {
+        for (const auto& snp_id: batch.snps_to_drop) {
+            _state_machine->drop_snapshot(snp_id);
+        }
     }
 
     if (batch.log_entries.size()) {
@@ -1775,7 +1779,7 @@ future<> server_impl::applier_fiber() {
                 utils::wait_for_message(std::chrono::minutes(5)));
         // Apply snapshot it to the state machine
         logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
-        co_await _state_machine->load_snapshot(snp.id);
+        co_await usable_state_machine().load_snapshot(snp.id);
         // Resolve the apply waiters covered by the snapshot only now, after
         // load_snapshot(): a resolved "applied" waiter promises that the
         // local state machine already contains the entry's effect. The marked
@@ -1814,7 +1818,7 @@ future<> server_impl::applier_fiber() {
         snp.term = *_fsm->log_term_for(snp.idx);
         snp.config = _fsm->log_last_conf_for(snp.idx);
         logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
-        snp.id = co_await _state_machine->take_snapshot();
+        snp.id = co_await usable_state_machine().take_snapshot();
         // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
         // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon find
         // a later snapshot in the mailbox.
@@ -1831,12 +1835,9 @@ future<> server_impl::applier_fiber() {
     // received from the leader removed the remaining entries from the fsm log.
     auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
-            if (_applier_mailbox.stopped()) {
-                // abort() waits for this fiber before it aborts the state
-                // machine, so nothing else will interrupt apply() -- and the
-                // backlog here is unbounded, io_fiber never having been
-                // throttled by the applier. Stop after the batch in hand, as
-                // the bounded queue this replaced did when its pop threw.
+            // The backlog is unbounded, io_fiber never having been throttled
+            // by the applier, and abort() doesn't wait for it to be applied.
+            if (_aborted) {
                 throw stop_apply_fiber{};
             }
             const index_t first_idx = _applied_idx + index_t{1};
@@ -1887,7 +1888,7 @@ future<> server_impl::applier_fiber() {
             const auto size = commands.size();
             if (size) {
                 try {
-                    co_await _state_machine->apply(std::move(commands));
+                    co_await usable_state_machine().apply(std::move(commands));
                 } catch (abort_requested_exception& e) {
                     logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
                     throw stop_apply_fiber{};
@@ -2129,11 +2130,25 @@ void server_impl::check_not_aborted() {
     }
 }
 
+state_machine& server_impl::usable_state_machine() {
+    // abort() sets _aborted before it aborts the state machine.
+    if (_aborted) {
+        throw abort_requested_exception{};
+    }
+    return *_state_machine;
+}
+
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    // The applier fiber fails with abort_requested_exception if it reaches
+    // the state machine after abort() (see usable_state_machine()).
+    // The services the fibers use may also be stopping already, e.g. on node
+    // shutdown, and fail them with gate_closed_exception (SCYLLADB-2632). Any
+    // other error is reported: it isn't explained by the abort.
+    if (_aborted && (try_catch_nested<seastar::abort_requested_exception>(e)
+            || try_catch_nested<seastar::gate_closed_exception>(e))) {
+        logger.debug("[{}] {} fiber stopped while aborting raft server: {:t}", _tag, fiber_name, e);
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
