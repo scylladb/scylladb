@@ -164,10 +164,10 @@ def test_keyspace_1(cql, this_dc, has_tablets, test_keyspace):
         name = unique_name()
         cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true, 'initial': 1 }")
         yield name
+        cql.execute("DROP KEYSPACE " + name)
     else:
         # The regular test_keyspace is fine, no need to create another one
         yield test_keyspace
-    cql.execute("DROP KEYSPACE " + name)
 
 @pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace_1, compaction_strategy):
