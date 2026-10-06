@@ -2746,9 +2746,11 @@ def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
     def test_for_single_type(typ, update_value):
         with new_test_table(cql, test_keyspace, f"k int PRIMARY KEY, test {typ}") as table:
             cql.execute(f"INSERT INTO {table} (k, test) VALUES (0, null)")
-            # a list containing a single null value
+            # a list containing a single null value. When the condition is
+            # true, Cassandra returns just the [applied] column, while
+            # Scylla also returns the old value (docs/kb/lwt-differences.rst).
             execute_prepared_serial(cql, f"UPDATE {table} SET test={update_value} WHERE k=0 IF test IN ?",
-                                    [[None]], [(True, None)])
+                                    [[None]], [(True, None) if is_scylla(cql) else (True,)])
 
     test_for_single_type("double", "1.0")
     test_for_single_type("float", "1.0")
@@ -2777,7 +2779,11 @@ def test_list_parameter_marker(cql, test_keyspace):
 
         query = f"UPDATE {table} SET v=:upd_v WHERE k=1 IF v[:i] in :v"
         execute_prepared_serial(cql, query, [[100, 200, 300], 1, [21, 22, 23]], [(False, [10, 20, 30])])
-        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]], [(True, [10, 20, 30])])
+        # When the condition is true, Cassandra returns just the [applied]
+        # column, while Scylla also returns the old value
+        # (docs/kb/lwt-differences.rst).
+        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]],
+                                [(True, [10, 20, 30]) if is_scylla(cql) else (True,)])
 
 
 def test_select_serial_consistency(cql, test_keyspace):
