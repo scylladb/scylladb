@@ -294,6 +294,11 @@ def temp_workdir():
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
 
+# "has_tablets" is true if new keyspaces use tablets *by default*. Note that
+# it doesn't mean whether tablets are supported at all: when it's false, it
+# may be Cassandra or an old Scylla without tablets, but also a Scylla where
+# the default is vnodes (e.g., test/cqlpy/run --vnodes), where a keyspace can
+# still explicitly ask to use tablets (see test_keyspace_tablets).
 @pytest.fixture(scope=dynamic_scope())
 def has_tablets(cql, this_dc):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1}") as keyspace:
@@ -302,7 +307,7 @@ def has_tablets(cql, this_dc):
 @pytest.fixture(scope="function")
 def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
 
 # Like skip_without_tablets but does not require scylla_only, so Cassandra
@@ -310,7 +315,7 @@ def skip_without_tablets(scylla_only, has_tablets):
 @pytest.fixture(scope="function")
 def skip_on_scylla_vnodes(cql, has_tablets):
     if is_scylla(cql) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
 # A keyspace whose tables are strongly consistent. The test is skipped on
 # Cassandra and with --vnodes, which don't support strongly consistent tables,
