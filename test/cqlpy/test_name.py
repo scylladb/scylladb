@@ -11,6 +11,7 @@ import pytest
 from contextlib import contextmanager
 from cassandra.protocol import InvalidRequest, SyntaxException, ConfigurationException, Unauthorized
 from .util import unique_name, new_test_table, new_secondary_index, new_function, is_scylla
+from test.pylib.skip_types import skip_env
 
 # This context manager is similar to new_test_table() - creating a table and
 # keeping it alive while the context manager is in scope - but allows the
