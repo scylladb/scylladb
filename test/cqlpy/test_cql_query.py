@@ -1909,7 +1909,18 @@ def test_alter_table_validation(cql, test_keyspace):
             cql.execute(f"alter table {table} add r3 map<int, text>")
         with pytest.raises(InvalidRequest):
             cql.execute(f"alter table {table} add r4 set<int>")
-        # blob is compatible with any type, so re-adding as blob is allowed
+
+
+# In Scylla, blob is compatible with any type, so a dropped column may be
+# re-added with blob in place of its original type. Cassandra is stricter -
+# it only allows re-adding a dropped column with a serialization-compatible
+# type ("Cannot add a column 'r3' of type map<int, blob>, incompatible with
+# previously dropped column 'r3' of type map<int, int>") - so this test is
+# Scylla-only.
+def test_alter_table_readd_dropped_column_as_blob(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r3 map<int, int>, r4 set<text>, PRIMARY KEY (p1, c1, c2)") as table:
+        cql.execute(f"alter table {table} drop r3")
+        cql.execute(f"alter table {table} drop r4")
         cql.execute(f"alter table {table} add r3 map<int, blob>")
         cql.execute(f"alter table {table} add r4 set<blob>")
 
