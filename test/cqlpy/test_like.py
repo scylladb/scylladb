@@ -123,3 +123,10 @@ def test_like_operator_fails_on_non_string(cql, test_keyspace, scylla_only, type
     with new_test_table(cql, test_keyspace, f"k {type}, p int primary key") as t:
         with pytest.raises(InvalidRequest, match="only on string types"):
             cql.execute(f"select * from {t} where k like 123 allow filtering")
+
+# Scylla-only because Cassandra's grammar does not allow LIKE on token(),
+# so it fails with a syntax error rather than an InvalidRequest.
+def test_like_operator_on_token(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "s text primary key") as t:
+        with pytest.raises(InvalidRequest, match="token function"):
+            cql.execute(f"select * from {t} where token(s) like 'abc' allow filtering")
