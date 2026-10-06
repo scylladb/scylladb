@@ -2266,7 +2266,11 @@ def test_rf_expand(cql, this_dc):
         assert_replication_contains(ks, {"class": network_topology, this_dc: "2"})
 
 
-def test_int_sum_overflow(cql, test_keyspace):
+# Scylla reports an error when sum() overflows its result type. Cassandra
+# silently wraps around and returns a wrong sum - a known Cassandra issue
+# which was closed as "Won't Fix" (CASSANDRA-9674). So the following two
+# tests are marked cassandra_bug.
+def test_int_sum_overflow(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "pk text, ck text, val int, primary key(pk, ck)") as table:
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c1', 2147483647)")
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c2', 1)")
@@ -2285,7 +2289,7 @@ def test_int_sum_overflow(cql, test_keyspace):
         assert list(cql.execute(sum_query)) == [(2147483646,)]
 
 
-def test_bigint_sum_overflow(cql, test_keyspace):
+def test_bigint_sum_overflow(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "pk text, ck text, val bigint, primary key(pk, ck)") as table:
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c1', 9223372036854775807)")
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c2', 1)")
