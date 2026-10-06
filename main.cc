@@ -89,6 +89,9 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#endif
 #include "tracing/tracing.hh"
 #include "audit/audit.hh"
 #include <seastar/core/prometheus.hh>
@@ -496,6 +499,9 @@ adjust_and_verify_rlimit(bool developer_mode) {
 // baseline (e.g. seastar's malloc), so it must be built for the base ISA and use only syscalls.
 #ifdef __x86_64__
 [[gnu::target("arch=x86-64")]]
+#elif defined(__aarch64__)
+// clang keeps the -march features unless disabled; keep this list in sync with the baseline in configure.py.
+[[gnu::target("arch=armv8-a+nolse+nodotprod+norcpc+nocrypto+nocrc+nordm")]]
 #endif
 static void cpu_sanity() {
 #ifdef __x86_64__
@@ -503,6 +509,14 @@ static void cpu_sanity() {
     __builtin_cpu_init();
     if (!__builtin_cpu_supports("x86-64-v3") || !__builtin_cpu_supports("pclmul")) {
         static constexpr std::string_view msg = "Scylla requires a processor with x86-64-v3 (AVX2) and PCLMUL support\n";
+        (void)!::write(STDERR_FILENO, msg.data(), msg.size());
+        _exit(71);
+    }
+#elif defined(__aarch64__)
+    // Must match the -march baseline in configure.py's default_target_arch().
+    constexpr unsigned long needed = HWCAP_ATOMICS | HWCAP_LRCPC | HWCAP_ASIMDDP | HWCAP_CRC32 | HWCAP_AES | HWCAP_PMULL | HWCAP_SHA1 | HWCAP_SHA2 | HWCAP_ASIMDRDM;
+    if ((getauxval(AT_HWCAP) & needed) != needed) {
+        static constexpr std::string_view msg = "Scylla requires an ARMv8.2-A processor with LSE atomics, RCpc, dot product, CRC32 and crypto (Neoverse N1 or later)\n";
         (void)!::write(STDERR_FILENO, msg.data(), msg.size());
         _exit(71);
     }
