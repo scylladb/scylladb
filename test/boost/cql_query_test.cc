@@ -98,7 +98,10 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
 
 SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_feature_is_disabled) {
     cql_test_config cfg;
+    // Every registry epoch, so that no option is visible at any version. Each new epoch
+    // belongs here too.
     cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V1");
 
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto feature_disabled = [] (const exceptions::invalid_request_exception& ex) {

@@ -51,6 +51,7 @@ enum class value_type {
 
 enum class version : uint8_t {
     v0,
+    v1,
 };
 
 // A config value in its native type. One alternative per value_type, in the same order;
@@ -63,6 +64,7 @@ using config_value = std::variant<std::string_view, int64_t, double, bool>;
 namespace option_name {
 
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
+inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 
 }
 
