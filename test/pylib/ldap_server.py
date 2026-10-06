@@ -197,7 +197,151 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit:
         tp_server.wait()
         tp_log_file.close()
 
+<<<<<<< HEAD
     try:
+||||||| parent of 96e73c66cc (test.py: bind slapd to the run's leased address, not all interfaces)
+    # Anything failing below must not leave the server behind for the next run to trip over.
+    with ExitStack() as stack:
+        stack.callback(stop_toxiproxy)
+        if not try_something_backoff(can_connect_to_toxiproxy):
+            raise Exception('Could not connect to toxiproxy')
+
+        instance_path = instance_root / str(port)
+        slapd_pid_file = instance_path / 'slapd.pid'
+        saslauthd_socket_path = TemporaryDirectory()
+        stack.callback(saslauthd_socket_path.cleanup)
+        os.makedirs(instance_path)
+        stack.callback(shutil.rmtree, instance_path)
+        # This will always fail because it lacks the permissions to read the default slapd data
+        # folder but it does create the instance folder so we don't want to fail here.
+        subprocess.run(['slaptest', '-f', TOP_SRC_DIR / LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Set up failure injection.
+        try:
+            proxy_name = f'p{port}'
+            subprocess.check_output(
+                ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'create', '--listen', f'{host}:{port + 2}', '--upstream',
+                 f'{host}:{port}', proxy_name], stderr=subprocess.STDOUT)
+            subprocess.check_output(
+                ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'toxic', 'add', '-t', 'limit_data', '-n', 'limiter', '-a',
+                 f'bytes={toxiproxy_byte_limit}', proxy_name], stderr=subprocess.STDOUT)
+            # Change the data folder in the default config.
+            replace_expression = f"s/olcDbDirectory:.*/olcDbDirectory: {str(instance_path).replace('/', r'\/')}/g"
+            subprocess.check_output(
+                ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'],
+                stderr=subprocess.STDOUT
+            )
+            # Change the pid file to be kept with the instance.
+            replace_expression = f"s/olcPidFile:.*/olcPidFile: {str(slapd_pid_file).replace('/', r'\/')}/g"
+            subprocess.check_output(
+                ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'],
+                stderr=subprocess.STDOUT
+            )
+            # Put the test data in.
+            cmd = ['slapadd', '-F', instance_path]
+            subprocess.check_output(cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
+        except CalledProcessError as e:
+            logging.critical("toxiproxy-cli failed: %s: %s", e, e.stdout)
+            raise 
+        # Set up the server.
+        SLAPD_URLS = f'ldap://:{port}/ ldaps://:{port + 1}/'
+
+        def can_connect_to_slapd():
+            return can_connect((host, port)) and can_connect((host, port + 1)) and can_connect(
+                (host, port + 2))
+
+        def can_connect_to_saslauthd():
+            return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
+
+        slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
+
+        def stop_slapd():
+            slapd_proc.terminate()
+            slapd_proc.wait()  # Wait for slapd to remove slapd.pid, so it doesn't race with rmtree.
+
+        stack.callback(stop_slapd)
+        saslauthd_conf_path = make_saslauthd_conf(host, port, instance_path)
+        os.environ.update(SEASTAR_LDAP_PORT=str(port), SEASTAR_LDAP_HOST=str(host),
+                          SASLAUTHD_MUX_PATH=os.path.join(saslauthd_socket_path.name, 'mux'))
+
+        saslauthd_proc = subprocess.Popen(
+            ['saslauthd', '-d', '-n', '1', '-a', 'ldap', '-O', saslauthd_conf_path, '-m', saslauthd_socket_path.name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        stack.callback(saslauthd_proc.kill)  # Somehow, invoking terminate() here also terminates toxiproxy-server. o_O
+
+=======
+    # Anything failing below must not leave the server behind for the next run to trip over.
+    with ExitStack() as stack:
+        stack.callback(stop_toxiproxy)
+        if not try_something_backoff(can_connect_to_toxiproxy):
+            raise Exception('Could not connect to toxiproxy')
+
+        instance_path = instance_root / str(port)
+        slapd_pid_file = instance_path / 'slapd.pid'
+        saslauthd_socket_path = TemporaryDirectory()
+        stack.callback(saslauthd_socket_path.cleanup)
+        os.makedirs(instance_path)
+        stack.callback(shutil.rmtree, instance_path)
+        # This will always fail because it lacks the permissions to read the default slapd data
+        # folder but it does create the instance folder so we don't want to fail here.
+        subprocess.run(['slaptest', '-f', TOP_SRC_DIR / LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Set up failure injection.
+        try:
+            proxy_name = f'p{port}'
+            subprocess.check_output(
+                ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'create', '--listen', f'{host}:{port + 2}', '--upstream',
+                 f'{host}:{port}', proxy_name], stderr=subprocess.STDOUT)
+            subprocess.check_output(
+                ['toxiproxy-cli', '--host', f'{host}:{tp_port}', 'toxic', 'add', '-t', 'limit_data', '-n', 'limiter', '-a',
+                 f'bytes={toxiproxy_byte_limit}', proxy_name], stderr=subprocess.STDOUT)
+            # Change the data folder in the default config.
+            replace_expression = f"s/olcDbDirectory:.*/olcDbDirectory: {str(instance_path).replace('/', r'\/')}/g"
+            subprocess.check_output(
+                ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'],
+                stderr=subprocess.STDOUT
+            )
+            # Change the pid file to be kept with the instance.
+            replace_expression = f"s/olcPidFile:.*/olcPidFile: {str(slapd_pid_file).replace('/', r'\/')}/g"
+            subprocess.check_output(
+                ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'],
+                stderr=subprocess.STDOUT
+            )
+            # Put the test data in.
+            cmd = ['slapadd', '-F', instance_path]
+            subprocess.check_output(cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
+        except CalledProcessError as e:
+            logging.critical("toxiproxy-cli failed: %s: %s", e, e.stdout)
+            raise 
+        # Set up the server.  Listen only on this run's leased address: the port is fixed, and with a
+        # wildcard bind, concurrent test.py runs sharing a network namespace (e.g. dbuild's --network host)
+        # would collide on it, so a run could end up talking to another run's slapd and lose it mid-test.
+        SLAPD_URLS = f'ldap://{host}:{port}/ ldaps://{host}:{port + 1}/'
+
+        def can_connect_to_slapd():
+            return can_connect((host, port)) and can_connect((host, port + 1)) and can_connect(
+                (host, port + 2))
+
+        def can_connect_to_saslauthd():
+            return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
+
+        slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
+
+        def stop_slapd():
+            slapd_proc.terminate()
+            slapd_proc.wait()  # Wait for slapd to remove slapd.pid, so it doesn't race with rmtree.
+
+        stack.callback(stop_slapd)
+        saslauthd_conf_path = make_saslauthd_conf(host, port, instance_path)
+        os.environ.update(SEASTAR_LDAP_PORT=str(port), SEASTAR_LDAP_HOST=str(host),
+                          SASLAUTHD_MUX_PATH=os.path.join(saslauthd_socket_path.name, 'mux'))
+
+        saslauthd_proc = subprocess.Popen(
+            ['saslauthd', '-d', '-n', '1', '-a', 'ldap', '-O', saslauthd_conf_path, '-m', saslauthd_socket_path.name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        stack.callback(saslauthd_proc.kill)  # Somehow, invoking terminate() here also terminates toxiproxy-server. o_O
+
+>>>>>>> 96e73c66cc (test.py: bind slapd to the run's leased address, not all interfaces)
         if not try_something_backoff(can_connect_to_slapd):
             raise Exception('Unable to connect to slapd')
         if not try_something_backoff(can_connect_to_saslauthd):
