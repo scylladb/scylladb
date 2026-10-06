@@ -1836,7 +1836,9 @@ class AuthSLContext:
     def __enter__(self):
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
-        self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
+        # Service levels are a Scylla-only feature.
+        if is_scylla(self.cql):
+            self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
