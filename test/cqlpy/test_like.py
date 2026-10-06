@@ -17,8 +17,9 @@
 # scylla_only. test_like_common_patterns checks the patterns supported by
 # both.
 #
-# Except test_like_common_patterns, these tests were translated from
-# scylla-dtest's like_operator_test.py.
+# Except test_like_common_patterns, and the test_like_operator* tests at the
+# end of the file, which were ported from test/boost/cql_query_like_test.cc,
+# these tests were translated from scylla-dtest's like_operator_test.py.
 #############################################################################
 
 import pytest
@@ -543,3 +544,28 @@ def test_like_local_index(cql, test_keyspace, scylla_only):
         cql.execute(f'CREATE INDEX {local_index} ON {table} ((name), city)')
         wait_for_index(cql, test_keyspace, local_index)
         check_like_on_indexed_city(cql, table)
+
+#############################################################################
+# The following tests were ported from test/boost/cql_query_like_test.cc.
+# Tests which depend on a difference between Scylla's and Cassandra's LIKE
+# are scylla_only, and each explains why; the others need Cassandra 6, the
+# first version to support LIKE with ALLOW FILTERING (CASSANDRA-17198).
+#############################################################################
+
+# Result rows sorted, since results spanning several partitions come back
+# in token order.
+def sorted_result_rows(result):
+    return sorted(list(row) for row in result)
+
+# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
+# patterns (only '%'), so the '_' patterns below match nothing there.
+def test_like_operator(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key, s text") as t:
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'abc' allow filtering")) == []
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'abc' allow filtering")) == [["abc"]]
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abc"]]
+        cql.execute(f"insert into {t} (p, s) values (2, 'abb')")
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abb"], ["abc"]]
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'aaa' allow filtering")) == []

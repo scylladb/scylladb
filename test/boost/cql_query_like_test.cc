@@ -29,20 +29,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_like_operator) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (p int primary key, s text)");
-        require_rows(e, "select s from t where s like 'abc' allow filtering", {});
-        cquery_nofail(e, "insert into t (p, s) values (1, 'abc')");
-        require_rows(e, "select s from t where s like 'abc' allow filtering", {{T("abc")}});
-        require_rows(e, "select s from t where s like 'ab_' allow filtering", {{T("abc")}});
-        cquery_nofail(e, "insert into t (p, s) values (2, 'abb')");
-        require_rows(e, "select s from t where s like 'ab_' allow filtering", {{T("abc")}, {T("abb")}});
-        require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}});
-        require_rows(e, "select s from t where s like 'aaa' allow filtering", {});
-    });
-}
-
 SEASTAR_TEST_CASE(test_like_operator_on_partition_key) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // Fully constrained:
