@@ -2199,6 +2199,9 @@ def test_describe_varchar(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, t text, v varchar") as table:
         ks, tbl = table.split('.')
         rows = list(cql.execute(f"select * from system_schema.columns where keyspace_name = '{ks}' and table_name = '{tbl}'"))
+        # Scylla writes clustering_order in uppercase ("NONE"), Cassandra in
+        # lowercase ("none"). Drivers accept both, so ignore the case.
+        rows = [r._replace(clustering_order=r.clustering_order.upper()) for r in rows]
         assert rows == [
             (ks, tbl, 'id', 'NONE', b'id', 'partition_key', 0, 'int'),
             (ks, tbl, 't', 'NONE', b't', 'regular', -1, 'text'),
