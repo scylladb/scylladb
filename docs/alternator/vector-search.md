@@ -404,7 +404,7 @@ depends on the similarity function:
 | `SimilarityFunction` | Range | Mapping |
 |----------------------|-------|---------|
 | `COSINE` (default) | 0.0 to 1.0 | The cosine of the angle between the two vectors is in `[-1, 1]`. So taking `(1 + cos)/2` gives us a similarity value in `[0, 1]`: 1.0 means identical direction, 0.5 means orthogonal vectors, 0.0 means opposite direction. |
-| `EUCLIDEAN` | 0.0 to 1.0 | Euclidean distance _d_ in `[0, inf)` is mapped to `1 / (1 + d)`. similarity 1.0 means identical vectors, 0.0 means infinitely far apart. |
+| `EUCLIDEAN` | 0.0 to 1.0 | The squared Euclidean distance _d²_ in `[0, inf)` is mapped to `1 / (1 + d²)`. similarity 1.0 means identical vectors, 0.0 means infinitely far apart. |
 | `DOT_PRODUCT` | Unbounded | Uses the same distance definition and mapping as `COSINE`. For L2-normalized vectors the result is identical to `COSINE` and stays in [0, 1]. For unnormalized vectors the value may exceed 1 or be negative. |
 
 `ReturnScores=SIMILARITY` is not allowed with `Select=COUNT`,
