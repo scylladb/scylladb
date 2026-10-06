@@ -23,6 +23,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 
+#include "schema/schema_fwd.hh"
 #include "service/migration_listener.hh"
 #include "seastarx.hh"
 #include "utils/UUID.hh"
@@ -62,6 +63,23 @@ public:
     future<> wait_until_ready();
 
     std::optional<sstring> resolve_config(std::string_view config_name, const lookup_context& ctx) const;
+
+    // Resolve a table-oriented option for a table, by name, in the option's native type.
+    //
+    // These report absence rather than substituting the registry's default, which is what a
+    // consumer that keeps a fallback of its own - a scylla.yaml setting, say - needs in
+    // order to tell "nobody set this" from "somebody set the default". A consumer that just
+    // wants a usable value should use the resolve_*_config() accessors above instead.
+    //
+    // Absence covers every way the chain can fail to produce a value: the option is not
+    // registered, the table is no longer in the local schema (dropped since the caller
+    // sampled it), or no scope in the chain stores an override. A consumer applies the same
+    // fallback in all three cases, so they are deliberately not distinguished.
+    //
+    // Looking the option up by name is done here rather than by the caller, so that a
+    // consumer never handles a registry option pointer just to convert a value with it.
+    std::optional<bool> resolve_boolean_table_config(std::string_view config_name, table_id table) const;
+    std::optional<int64_t> resolve_integer_table_config(std::string_view config_name, table_id table) const;
 
     // Resolve an option and return its effective value in the option's native type, falling
     // back to the default registered for it when no scope in the chain stores an override.
@@ -183,6 +201,17 @@ private:
     std::optional<sstring> get_node_config(const utils::UUID& node_uuid, std::string_view config_name) const;
     std::optional<sstring> get_keyspace_config(std::string_view keyspace_name, std::string_view config_name) const;
     std::optional<sstring> get_table_config(std::string_view keyspace_name, std::string_view table_name, std::string_view config_name) const;
+
+    // The lookup context addressing a table's table-oriented chain (table -> keyspace ->
+    // cluster), or nullopt when the table is not in the local schema, and the untyped
+    // resolution built on it. Private for the same reason as the per-scope accessors above:
+    // a consumer holding a table_id asks for a resolved value through one of the typed
+    // resolve_*_table_config() accessors, rather than assembling a context, or handling the
+    // stored text and the registry option, itself.
+    std::optional<lookup_context> table_lookup_context(table_id table) const;
+    std::optional<sstring> resolve_table_config(std::string_view config_name, table_id table) const;
+    // The registered option called `config_name`, or nullptr if there is none.
+    const cluster_config_registry::option* find_option(std::string_view config_name) const;
 
     // Look up `config_name` in a keyed scope map (dc/rack/node/keyspace/table):
     // nullopt if the key is absent or holds no such override. Shared by the
