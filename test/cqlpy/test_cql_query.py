@@ -22,7 +22,7 @@ from cassandra import ConsistencyLevel, InvalidRequest, ReadFailure, Unauthorize
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
-from cassandra.protocol import ConfigurationException, RESULT_KIND_SCHEMA_CHANGE, ResultMessage, ServerError, SyntaxException
+from cassandra.protocol import ConfigurationException, RESULT_KIND_SCHEMA_CHANGE, ResultMessage, SyntaxException
 from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
@@ -2603,25 +2603,18 @@ def cql_func_require_nofail(cql, table, fct, inp):
 
 
 def cql_func_require_throw(cql, table, exception, fct, inp):
-    query = f"SELECT {fct}({inp}) FROM {table}"
-    if exception is ServerError:
-        # The driver retries a query failing with a server error on the
-        # other hosts, and eventually raises NoHostAvailable wrapping the
-        # server errors.
-        with pytest.raises(NoHostAvailable) as excinfo:
-            cql.execute(query)
-        errors = excinfo.value.errors.values()
-        assert errors and all(isinstance(e, ServerError) for e in errors)
-    else:
-        with pytest.raises(exception):
-            cql.execute(query)
+    with pytest.raises(exception):
+        cql.execute(f"SELECT {fct}({inp}) FROM {table}")
 
 
+# Note that the bigint column "l" holds a number of milliseconds since the
+# epoch - the same time as "t". Functions taking a timestamp also accept a
+# bigint, interpreted this way.
 @pytest.fixture(scope="module")
 def time_uuid_fcts_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int primary key, t timestamp, l bigint, f float, u timeuuid, d date") as table:
         cql.execute(f"INSERT INTO {table} (id, t, l, f, u, d) VALUES "
-                    "(1, 1579072460606, 1579072460606000, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')")
+                    "(1, 1579072460606, 1579072460606, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')")
         cql.execute(f"SELECT * FROM {table}")
         yield table
 
@@ -2647,7 +2640,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp arg
     def require_timestamp(fct):
         nofail(fct, "t")
-        throw(ServerError, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         throw(InvalidRequest, fct, "u")
         throw(InvalidRequest, fct, "d")
@@ -2680,7 +2673,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp or timeuuid arg
     def require_timestamp_or_timeuuid(fct):
         nofail(fct, "t")
-        throw(Exception, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         nofail(fct, "u")
         throw(InvalidRequest, fct, "d")
@@ -2696,7 +2689,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp, timeuuid, or date arg
     def require_timestamp_timeuuid_or_date(fct):
         nofail(fct, "t")
-        throw(ServerError, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         nofail(fct, "u")
         nofail(fct, "d")
