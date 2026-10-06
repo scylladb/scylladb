@@ -1289,7 +1289,11 @@ def get_sstable_compression(cql, table):
     return cql.execute(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compression
 
 
-def test_table_compression(cql, test_keyspace):
+# This test is Scylla-only: it uses the old "sstable_compression" option name,
+# which current Cassandra no longer supports (it switched to "class", which
+# Scylla doesn't support yet - #8948), checks how Scylla stores the options in
+# system_schema.tables, and reads Scylla's system.config.
+def test_table_compression(cql, test_keyspace, scylla_only):
     # Compression disabled: the compression options map doesn't have a
     # sstable_compression class.
     with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text", "with compression = { }") as tb1:
