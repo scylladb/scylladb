@@ -1686,7 +1686,11 @@ def new_random_table(cql, keyspace, udts=[], tablet_options={}):
     extras["speculative_retry"] = f"'{random.choice(speculative_retries)}'"
 
     compressions = ["LZ4Compressor", "SnappyCompressor", "DeflateCompressor"]
-    extras["compression"] = f"{{'sstable_compression': '{random.choice(compressions)}'}}"
+    # Cassandra renamed the compression option "sstable_compression" to
+    # "class" and no longer supports the old name, but Scylla doesn't yet
+    # support the new name (issue #8948).
+    compression_key = "sstable_compression" if is_scylla(cql) else "class"
+    extras["compression"] = f"{{'{compression_key}': '{random.choice(compressions)}'}}"
 
     # see the last element of `probs` defined by scylladb/utils/bloom_calculation.cc,
     # the minimum false positive rate supported by the bloom filter is determined by
