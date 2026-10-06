@@ -33,6 +33,12 @@ def testDateCompatibility(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b timestamp, c bigint, d varint, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (0, toUnixTimestamp(now()), toTimestamp(now()), toTimestamp(now()))")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=0 AND b <= toUnixTimestamp(now())"))) == 1
+
+# Cassandra 5 removed the deprecated unixTimestampOf() and dateOf()
+# (CASSANDRA-18328), and dropped this part of testDateCompatibility which
+# used them. Scylla still supports them, so we keep checking them on Scylla.
+def testDateCompatibilityDeprecatedFunctions(cql, test_keyspace, scylla_only):
+    with create_table(cql, test_keyspace, "(a int, b timestamp, c bigint, d varint, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, unixTimestampOf(now()), dateOf(now()), dateOf(now()))")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=1 AND b <= toUnixTimestamp(now())"))) == 1
 
