@@ -6,7 +6,7 @@ System Requirements
 
 Supported Platforms
 ===================
-ScyllaDB runs on 64-bit Linux. The x86_64 and AArch64 architectures are supported (AArch64 support includes AWS EC2 Graviton).
+ScyllaDB runs on 64-bit Linux. The x86_64 and AArch64 architectures are supported (AArch64 support includes AWS EC2 Graviton2 and later).
 
 See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ for information about 
 supported operating systems, distros, and versions.
@@ -43,8 +43,13 @@ ScyllaDB supports the following CPUs:
 * Intel atom: Gracemont and later (2021)
 * AMD: Excavator and later (2015)
 * Apple M1 and M2
-* Ampere Altra
-* AWS Graviton, Graviton2, Graviton3
+* Ampere Altra, AmpereOne
+* AWS Graviton2 and later
+* Google Cloud Axion, Tau T2A
+* Microsoft Azure Cobalt 100, Dpsv5 (Ampere Altra)
+
+ARM CPUs must support ARMv8.2-A with the Neoverse N1 feature set (LSE atomics, RCpc, dot product);
+AWS Graviton (first generation, A1 instances) is not supported.
 
 
 In terms of the number of cores, any number will work since ScyllaDB scales up with the number of cores. 
