@@ -57,7 +57,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 
 constexpr std::array registry_options = {
     option{
-        .name = "auto_repair_enabled",
+        .name = option_name::auto_repair_enabled,
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
