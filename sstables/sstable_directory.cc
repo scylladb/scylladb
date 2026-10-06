@@ -578,7 +578,7 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
     }));
     co_await max_concurrent_for_each(dangling_entries, 16, [this, &st, &gens_to_remove, &descs_to_retain] (entry_descriptor& desc) -> future<> {
         auto gen = desc.generation;
-        if (co_await st.remove_by_registry_entry(entry_descriptor(desc), _node_owner)) {
+        if (co_await st.remove_by_registry_entry(entry_descriptor(desc), _node_owner, delete_node_ref::yes)) {
             // Still pinned by this node's snapshot references. Keep the entry until the last one is cleared.
             descs_to_retain.push_back(std::move(desc));
         } else {
