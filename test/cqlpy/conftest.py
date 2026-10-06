@@ -11,6 +11,7 @@
 
 import pytest
 from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import SyntaxException, ConfigurationException, InvalidRequest
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import json
 import os
@@ -100,14 +101,27 @@ cql_test_connection.scylla_crashed = False
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
+# A keyspace using tablets, or None if tablets aren't supported (Cassandra,
+# or old versions of Scylla). Tablets don't need to be enabled by default
+# (see has_tablets) - a keyspace can explicitly ask to use tablets.
 @pytest.fixture(scope=dynamic_scope())
 def test_keyspace_tablets(cql, this_dc, has_tablets):
-    if not is_scylla(cql) or not has_tablets:
+    if not is_scylla(cql):
         yield None
         return
 
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true}")
+    try:
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true}")
+    except (SyntaxException, ConfigurationException, InvalidRequest):
+        # Old versions of Scylla (e.g., test/cqlpy/run --release) may not
+        # support tablets, or not enable them. But if tablets are the
+        # default, creating a keyspace with tablets must work, so don't
+        # hide its failure - which would silently skip tablets tests.
+        if has_tablets:
+            raise
+        yield None
+        return
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
