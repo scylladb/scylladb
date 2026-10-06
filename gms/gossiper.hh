@@ -130,6 +130,11 @@ private:
     // Endpoints an apply fiber is currently running for.
     std::unordered_set<locator::host_id> _applying_states;
     seastar::named_gate _background_msg;
+    // Aborts the gossip message sends in flight when gossip is shut down.
+    // A send to a peer that accepted the connection but never answers would
+    // otherwise block shutdown() forever: a one-way send only completes when
+    // the message is written or withdrawn.
+    abort_source _msg_abort_source;
     std::unordered_map<locator::host_id, syn_msg_pending> _syn_handlers;
     std::unordered_map<locator::host_id, ack_msg_pending> _ack_handlers;
     // Map ip address and generation number

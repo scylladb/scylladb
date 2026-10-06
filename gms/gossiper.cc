@@ -277,7 +277,7 @@ future<> gossiper::do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_
     examine_gossiper(g_digest_list, delta_gossip_digest_list, delta_ep_state_map);
     gms::gossip_digest_ack ack_msg(std::move(delta_gossip_digest_list), std::move(delta_ep_state_map));
     logger.debug("Calling do_send_ack_msg to node {}, syn_msg={}, ack_msg={}", from, syn_msg, ack_msg);
-    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack(&_messaging, from, std::move(ack_msg));
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack(&_messaging, from, _msg_abort_source, std::move(ack_msg));
 }
 
 // Whether applying this state is work that gossip must be considered busy
@@ -393,7 +393,7 @@ future<> gossiper::do_send_ack2_msg(locator::host_id from, utils::chunked_vector
     gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
     auto ack2_msg_str = fmt::format("{}", ack2_msg);
     logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
-    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, _msg_abort_source, std::move(ack2_msg));
     logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
 }
 
@@ -580,7 +580,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
     int index = dist(_random_engine);
     std::conditional_t<std::is_same_v<T, gms::inet_address>, netw::msg_addr, T> id{__live_endpoints[index]};
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    return ser::gossip_rpc_verbs::send_gossip_digest_syn(&_messaging, id, std::move(message)).handle_exception([id] (auto ep) {
+    return ser::gossip_rpc_verbs::send_gossip_digest_syn(&_messaging, id, _msg_abort_source, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
         // failure_detector thinks that peer node is down.
@@ -2086,6 +2086,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         co_await _background_msg.close();
     }
     _background_msg = seastar::named_gate("gossiper");
+    _msg_abort_source = abort_source();
     /* Ensure all shards have enabled gossip before starting the failure detector loop */
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
@@ -2383,6 +2384,7 @@ future<> gossiper::start() {
 }
 
 future<> gossiper::shutdown() {
+    _msg_abort_source.request_abort();
     if (!_background_msg.is_closed()) {
         co_await _background_msg.close();
     }
