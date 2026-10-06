@@ -970,6 +970,61 @@ def test_index_map_entries(cql, test_keyspace):
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[3] = 2'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 6'))
 
+# The following tests read the index view directly, because index queries
+# hide stale entries. Scylla-only - relies on the index's representation.
+
+# Reproduces SCYLLADB-4070: an element added and removed at the same timestamp.
+@pytest.mark.parametrize("removal", [
+    "UPDATE {table} USING TIMESTAMP 100 SET cs = cs - {{7}} WHERE p = 1 AND c = 1",
+    "DELETE cs FROM {table} USING TIMESTAMP 100 WHERE p = 1 AND c = 1",
+    "DELETE FROM {table} USING TIMESTAMP 100 WHERE p = 1 AND c = 1",
+    "DELETE FROM {table} USING TIMESTAMP 100 WHERE p = 1 AND c >= 1",
+    "DELETE FROM {table} USING TIMESTAMP 100 WHERE p = 1",
+], ids=["element", "column", "row", "range", "partition"])
+def test_collection_index_element_removed_at_same_timestamp(cql, test_keyspace, scylla_only, removal):
+    with new_test_table(cql, test_keyspace, 'p int, c int, cs set<int>, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(cs)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 100 SET cs = cs + {{7}} WHERE p = 1 AND c = 1')
+        cql.execute(removal.format(table=table))
+        assert [] == list(cql.execute(f'SELECT cs FROM {table} WHERE p = 1'))
+        assert [] == list(cql.execute(f'SELECT coll_value FROM {table}_cs_idx_index'))
+
+# Reproduces SCYLLADB-4165: an element removed by an overwrite one timestamp
+# later.
+def test_collection_index_element_removed_by_overwrite(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, cs set<int>') as table:
+        cql.execute(f'CREATE INDEX ON {table}(cs)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 100 SET cs = cs + {{7}} WHERE p = 1')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 101 SET cs = {{8}} WHERE p = 1')
+        assert [({8},)] == list(cql.execute(f'SELECT cs FROM {table} WHERE p = 1'))
+        assert [(8,)] == list(cql.execute(f'SELECT coll_value FROM {table}_cs_idx_index'))
+
+# Reproduces SCYLLADB-4072: a static element removed by a partition deletion,
+# and added back later.
+def test_collection_index_static_element_removed_by_partition_delete(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s set<int> STATIC, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 100 SET s = s + {{7}} WHERE p = 1')
+        cql.execute(f'DELETE FROM {table} USING TIMESTAMP 200 WHERE p = 1')
+        assert [] == list(cql.execute(f'SELECT coll_value FROM {table}_s_idx_index'))
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 300 SET s = s + {{7}} WHERE p = 1')
+        assert [(1,)] == list(cql.execute(f'SELECT p FROM {table} WHERE s CONTAINS 7'))
+        assert [(7,)] == list(cql.execute(f'SELECT coll_value FROM {table}_s_idx_index'))
+
+# A map value changed later, or at the same timestamp (winning by value).
+@pytest.mark.parametrize("ts", [101, 100], ids=["newer", "tie"])
+@pytest.mark.parametrize("target,expected", [
+    ("keys(m)", 1),
+    ("values(m)", 'b'),
+    ("entries(m)", (1, 'b')),
+], ids=["keys", "values", "entries"])
+def test_collection_index_value_changed(cql, test_keyspace, scylla_only, ts, target, expected):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, m map<int, text>') as table:
+        cql.execute(f'CREATE INDEX ON {table}({target})')
+        cql.execute(f"UPDATE {table} USING TIMESTAMP 100 SET m[1] = 'a' WHERE p = 1")
+        cql.execute(f"UPDATE {table} USING TIMESTAMP {ts} SET m[1] = 'b' WHERE p = 1")
+        assert [(expected,)] == list(cql.execute(f'SELECT coll_value FROM {table}_m_idx_index'))
+
 # Check that it is possible to index the same map column in different ways
 # (values, keys and entries) at the same time:
 def test_index_map_multiple(cql, test_keyspace):
