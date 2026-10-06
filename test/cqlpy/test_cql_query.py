@@ -1223,7 +1223,11 @@ def test_vectors_variable_length_elements(cql, test_keyspace):
 # Since durations don't have a well-defined ordering on their semantic value,
 # a number of restrictions exist on their use.
 def test_duration_restrictions(cql, test_keyspace):
-    def validate_request_failure(request, expected_message):
+    # Some of the error messages are different in Cassandra, so
+    # cassandra_message, if given, is the message expected on Cassandra.
+    def validate_request_failure(request, expected_message, cassandra_message=None):
+        if cassandra_message and not is_scylla(cql):
+            expected_message = cassandra_message
         with pytest.raises(InvalidRequest, match=re.escape(expected_message)):
             cql.execute(request)
 
@@ -1239,20 +1243,26 @@ def test_duration_restrictions(cql, test_keyspace):
     # key of a table or a materialized view.
     my_table = f"{test_keyspace}.{unique_name()}"
     validate_request_failure(f"create table {my_table} (direct_key duration PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part direct_key")
+        "duration type is not supported for PRIMARY KEY part direct_key",
+        "duration type is not supported for PRIMARY KEY column 'direct_key'")
     validate_request_failure(f"create table {my_table} (collection_key frozen<list<duration>> PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part collection_key")
+        "duration type is not supported for PRIMARY KEY part collection_key",
+        "duration type is not supported for PRIMARY KEY column 'collection_key'")
     with new_type(cql, test_keyspace, "(span duration)") as my_type0:
         validate_request_failure(f"create table {my_table} (udt_key frozen<{my_type0}> PRIMARY KEY)",
-            "duration type is not supported for PRIMARY KEY part udt_key")
+            "duration type is not supported for PRIMARY KEY part udt_key",
+            "duration type is not supported for PRIMARY KEY column 'udt_key'")
     validate_request_failure(f"create table {my_table} (tuple_key tuple<int, duration, int> PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part tuple_key")
+        "duration type is not supported for PRIMARY KEY part tuple_key",
+        "duration type is not supported for PRIMARY KEY column 'tuple_key'")
     validate_request_failure(f"create table {my_table} (a int, b duration, PRIMARY KEY ((a), b)) WITH CLUSTERING ORDER BY (b DESC)",
-        "duration type is not supported for PRIMARY KEY part b")
+        "duration type is not supported for PRIMARY KEY part b",
+        "duration type is not supported for PRIMARY KEY column 'b'")
     with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, name text, span duration") as my_table0:
         my_mv = f"{test_keyspace}.{unique_name()}"
         validate_request_failure(f"create materialized view {my_mv} as select * from {my_table0} primary key (key, span)",
-            "Cannot use Duration column 'span' in PRIMARY KEY of materialized view")
+            "Cannot use Duration column 'span' in PRIMARY KEY of materialized view",
+            "duration type is not supported for PRIMARY KEY column 'span'")
 
         # Disallow creating secondary indexes on durations.
         validate_request_failure(f"create index {unique_name()} on {my_table0} (span)",
@@ -1264,9 +1274,11 @@ def test_duration_restrictions(cql, test_keyspace):
         # columns (which cannot be `duration`) and that multi-column conditions
         # are not supported in the grammar.
         validate_request_failure(f"select * from {my_table0} where key = 0 and span < 3d",
-            "Duration type is unordered for span")
+            "Duration type is unordered for span",
+            "Slice restrictions are not supported on duration columns")
         validate_request_failure(f"update {my_table0} set name = 'joe' where key = 0 if span >= 5m",
-            "Duration type is unordered for span")
+            "Duration type is unordered for span",
+            "Slice conditions ( >= ) are not supported on durations")
 
 
 def test_select_multiple_ranges(cql, test_keyspace):
