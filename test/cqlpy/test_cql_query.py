@@ -1294,9 +1294,11 @@ def test_validate_keyspace(cql):
 
 
 def test_validate_table(cql, test_keyspace):
-    # Table name too long (schema::NAME_LENGTH is 192)
-    table_name = 't' * 193
-    with pytest.raises(InvalidRequest):
+    # Table name too long. Scylla's limit is 192 characters (schema::NAME_LENGTH)
+    # but Cassandra's is 222 (see also test_name.py), and Cassandra reports
+    # this error as a ConfigurationException.
+    table_name = 't' * ((192 if is_scylla(cql) else 222) + 1)
+    with pytest.raises((InvalidRequest, ConfigurationException)):
         cql.execute(f"create table {test_keyspace}.{table_name} (foo text PRIMARY KEY, bar text)")
     tb = f"{test_keyspace}.{unique_name()}"
     with pytest.raises(InvalidRequest):
