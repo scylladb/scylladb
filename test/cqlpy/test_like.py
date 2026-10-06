@@ -595,3 +595,18 @@ def test_like_operator_on_clustering_key(cql, test_keyspace, new_to_cassandra_6)
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"], ["acc"]]
         cql.execute(f"insert into {t} (p, s) values (2, 'acd')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where p = 2 and s like '%c' allow filtering")) == [["acc"]]
+
+# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
+# patterns (only '%'), rejects the pattern '%' with "LIKE value can't be
+# empty", and rejects combining LIKE with = on the same column with "s1
+# cannot be restricted by more than one relation if it includes an Equal".
+def test_like_operator_conjunction(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "s1 text primary key, s2 text") as t:
+        cql.execute(f"insert into {t} (s1, s2) values ('abc', 'ABC')")
+        cql.execute(f"insert into {t} (s1, s2) values ('a', 'A')")
+        assert sorted_result_rows(cql.execute(f"select * from {t} where s1 like 'a%' and s2 like '__C' allow filtering")) == [["abc", "ABC"]]
+        assert sorted_result_rows(cql.execute(f"select * from {t} where s1 like 'a%' and s1 like '__C' allow filtering")) == []
+        assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '_' allow filtering")) == [["a"]]
+        assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '%' allow filtering")) == [["a"], ["abc"]]
+        assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering")) == [["abc"]]
+        assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 = 'abc' allow filtering")) == [["abc"]]

@@ -29,22 +29,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_like_operator_conjunction) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (s1 text primary key, s2 text)");
-        cquery_nofail(e, "insert into t (s1, s2) values ('abc', 'ABC')");
-        cquery_nofail(e, "insert into t (s1, s2) values ('a', 'A')");
-        require_rows(e, "select * from t where s1 like 'a%' and s2 like '__C' allow filtering",
-                     {{T("abc"), T("ABC")}});
-        require_rows(e, "select * from t where s1 like 'a%' and s1 like '__C' allow filtering", {});
-        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '_' allow filtering", {{T("a")}});
-        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '%' allow filtering", {{T("a")}, {T("abc")}});
-        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering",
-                     {{T("abc")}});
-        require_rows(e, "select s1 from t where s1 like 'a%' and s1 = 'abc' allow filtering", {{T("abc")}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_like_operator_static_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (p int, c text, s text static, primary key(p, c))");
