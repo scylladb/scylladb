@@ -39,20 +39,9 @@ def table3(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, i int, a ascii, bi bigint, b blob, bool boolean, d date, dec decimal, db double, dur duration, f float, addr inet, si smallint, t text, tim time, ts timestamp, tu timeuuid, ti tinyint, u uuid, vc varchar, vi varint") as table:
         yield table
 
-# Utility function for emulating a wrapping cast of a big positive number
-# into a smaller signed integer of given number of bits. For example,
-# casting 511 to 8 bits results in -1.
-def signed(number, bits):
-    p = 2**bits
-    ret = number % p
-    if ret > p/2:
-        return ret - p
-    else:
-        return ret
-
 # Test casting a very large varint number to various other types, resulting
-# in various non-trivial conversions including truncation or wrap-around of
-# numbers.
+# in various non-trivial conversions including truncation of numbers.
+# Casting it to integer types fails; see test_cast_to_narrower_integer.
 def test_cast_from_large_varint(cql, table1):
     p = unique_key_int()
     p_negative = unique_key_int()
@@ -65,11 +54,6 @@ def test_cast_from_large_varint(cql, table1):
     assert [(v,)] == list(cql.execute(f"SELECT cVarint FROM {table1} WHERE p={p}"))
     assert [(v,)] == list(cql.execute(f"SELECT CAST(cVarint AS varint) FROM {table1} WHERE p={p}"))
     assert [(v,)] == list(cql.execute(f"SELECT CAST(cVarint AS decimal) FROM {table1} WHERE p={p}"))
-    # Casting into smaller integer types results in wraparound
-    assert [(signed(v,8),)] == list(cql.execute(f"SELECT CAST(cVarint AS tinyint) FROM {table1} WHERE p={p}"))
-    assert [(signed(v,16),)] == list(cql.execute(f"SELECT CAST(cVarint AS smallint) FROM {table1} WHERE p={p}"))
-    assert [(signed(v,32),)] == list(cql.execute(f"SELECT CAST(cVarint AS int) FROM {table1} WHERE p={p}"))
-    assert [(signed(v,64),)] == list(cql.execute(f"SELECT CAST(cVarint AS bigint) FROM {table1} WHERE p={p}"))
     # Casting to a 32-bit floating point, which only supports numbers up
     # to 1e38, results in infinity
     assert [(math.inf,)] == list(cql.execute(f"SELECT CAST(cVarint AS float) FROM {table1} WHERE p={p}"))
@@ -129,8 +113,8 @@ def test_cast_from_counter(cql, table2):
     # cast to the same type "counter".
     assert [(1000,)] == list(cql.execute(f"SELECT c FROM {table2} WHERE p={p}"))
     assert [(1000,)] == list(cql.execute(f"SELECT CAST(c AS counter) FROM {table2} WHERE p={p}"))
-    # Casting into smaller integer types results in wraparound
-    assert [(signed(1000,8),)] == list(cql.execute(f"SELECT CAST(c AS tinyint) FROM {table2} WHERE p={p}"))
+    # Casting into smaller integer types works when the number fits. When it
+    # does not, as for tinyint, see test_cast_to_narrower_integer.
     assert [(1000,)] == list(cql.execute(f"SELECT CAST(c AS smallint) FROM {table2} WHERE p={p}"))
     assert [(1000,)] == list(cql.execute(f"SELECT CAST(c AS int) FROM {table2} WHERE p={p}"))
     assert [(1000,)] == list(cql.execute(f"SELECT CAST(c AS bigint) FROM {table2} WHERE p={p}"))
@@ -256,5 +240,36 @@ def test_cast_float_to_integer(cql, table3, scylla_only):
             for t in ['tinyint', 'smallint', 'int', 'bigint']:
                 with pytest.raises(FunctionFailure, match='out of range'):
                     cql.execute(f"SELECT CAST({col} AS {t}) FROM {table3} WHERE p={p}")
+
+# Casting a number to a narrower integer type fails if it does not fit, as in
+# SQL. Cassandra wraps around instead, as Java does, so this test is
+# Scylla-only. A decimal is truncated toward zero first.
+def test_cast_to_narrower_integer(cql, table2, table3, scylla_only):
+    p = unique_key_int()
+    targets = {'tinyint': 8, 'smallint': 16, 'int': 32, 'bigint': 64}
+    for col, bits in [('si', 16), ('i', 32), ('bi', 64), ('vi', None), ('dec', None)]:
+        for t, tbits in targets.items():
+            if bits and bits <= tbits:
+                continue
+            lo, hi = -2**(tbits-1), 2**(tbits-1)-1
+            for v in [lo - 1, lo, hi, hi + 1]:
+                cql.execute(f'INSERT INTO {table3} (p, {col}) VALUES ({p}, {v})')
+                q = f"SELECT CAST({col} AS {t}) FROM {table3} WHERE p={p}"
+                if lo <= v <= hi:
+                    assert [(v,)] == list(cql.execute(q))
+                else:
+                    with pytest.raises(FunctionFailure, match='out of range'):
+                        cql.execute(q)
+    for v, expected in [('127.9', 127), ('-128.9', -128), ('128.0', None), ('-129.5', None)]:
+        cql.execute(f'INSERT INTO {table3} (p, dec) VALUES ({p}, {v})')
+        q = f"SELECT CAST(dec AS tinyint) FROM {table3} WHERE p={p}"
+        if expected is None:
+            with pytest.raises(FunctionFailure, match='out of range'):
+                cql.execute(q)
+        else:
+            assert [(expected,)] == list(cql.execute(q))
+    cql.execute(f'UPDATE {table2} SET c = c + 1000 WHERE p = {p}')
+    with pytest.raises(FunctionFailure, match='out of range'):
+        cql.execute(f"SELECT CAST(c AS tinyint) FROM {table2} WHERE p={p}")
 
 # TODO: test casts from more types.

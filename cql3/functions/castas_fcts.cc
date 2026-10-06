@@ -15,6 +15,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace cql3 {
 namespace functions {
@@ -91,6 +92,10 @@ static data_value castas_fctn_simple(data_value from) {
             throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
         }
         return static_cast<ToType>(val);
+    } else if constexpr (std::is_integral_v<FromType> && std::is_integral_v<ToType>) {
+        if (!std::in_range<ToType>(val_from)) {
+            throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+        }
     }
     return static_cast<ToType>(val_from);
 }
@@ -110,13 +115,19 @@ static utils::multiprecision_int from_decimal_to_cppint(const data_value& from) 
 template<typename ToType>
 static data_value castas_fctn_from_varint_to_integer(data_value from) {
     const auto& varint = value_cast<utils::multiprecision_int>(from);
-    return static_cast<ToType>(from_varint_to_integer(varint));
+    if (varint < std::numeric_limits<ToType>::min() || varint > std::numeric_limits<ToType>::max()) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return static_cast<ToType>(varint);
 }
 
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_integer(data_value from) {
     auto varint = from_decimal_to_cppint(from);
-    return static_cast<ToType>(from_varint_to_integer(varint));
+    if (varint < std::numeric_limits<ToType>::min() || varint > std::numeric_limits<ToType>::max()) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return static_cast<ToType>(varint);
 }
 
 static data_value castas_fctn_from_decimal_to_varint(data_value from) {
