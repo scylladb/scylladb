@@ -2862,6 +2862,12 @@ def test_query_limit(cql, test_keyspace, scylla_only):
                         assert list(cql.execute(select)) == expected_rows
 
 
+# BYPASS CACHE is a Scylla extension. Cassandra doesn't have a row cache
+# (unless enabled per table), so its reads go to the sstables anyway.
+def bypass_cache(cql):
+    return " BYPASS CACHE" if is_scylla(cql) else ""
+
+
 # Reproduces https://github.com/scylladb/scylla/issues/3552
 # when clustering-key filtering is enabled in filter_sstable_for_reader.
 # The C++ test flushed the memtables and cleared the row cache before reading;
@@ -2873,8 +2879,8 @@ def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
                         f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
         flush(cql, table)
-        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+        assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',)]
 
 
 @pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
@@ -2884,8 +2890,8 @@ def test_clustering_filtering_2(cql, test_keyspace, compaction_strategy):
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('b', 2, 'b2')")
         flush(cql, table)
-        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b2',)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+        assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',), ('b2',)]
 
 
 @pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
@@ -2897,8 +2903,8 @@ def test_clustering_filtering_3(cql, test_keyspace, compaction_strategy):
             flush(cql, table)
             cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('b', 0, 'b0')")
             flush(cql, table)
-            assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-            assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b0',)]
+            assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+            assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',), ('b0',)]
 
 
 def test_counter_column_added_into_non_counter_table(cql, test_keyspace):
