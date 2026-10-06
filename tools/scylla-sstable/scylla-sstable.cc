@@ -51,6 +51,7 @@
 #include "release.hh"
 #include "replica/database.hh"
 #include "replica/schema_describe_helper.hh"
+#include "replica/tablets.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
 #include "tools/json_mutation_stream_parser.hh"
@@ -3447,6 +3448,15 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         dbcfg.enable_cache(false);
         dbcfg.volatile_system_keyspace_for_testing(true);
+
+        // Like main.cc does, enable the strongly consistent tables' support
+        // in the system schema if the configuration enables this experimental
+        // feature - which it does if scylla.yaml wasn't found above. Without
+        // this, loading the system schema fails, because the configuration
+        // asks for system tables which can't be built while it's disabled.
+        // This must be done before any system schema is built.
+        replica::set_strongly_consistent_tables_enabled(dbcfg.check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES));
 
         // Override whatever value the option has. Setting this to `true` is correct because
         // schema loader doesn't attempt to create any keyspace and doesn't go through any

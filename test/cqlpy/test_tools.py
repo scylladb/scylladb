@@ -2302,6 +2302,22 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
         cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")
 
 
+# Reproducer for a bug where "scylla sstable" failed to load the system
+# schema (--system-schema) when its configuration enabled the experimental
+# "strongly-consistent-tables" feature - as it does in a scylla.yaml which
+# enables it, but also when the tool can't find scylla.yaml at all and
+# enables all experimental features.
+def test_scylla_sstable_system_schema_with_strongly_consistent_tables(scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        scylla_yaml_file = os.path.join(tmp_dir, "scylla.yaml")
+        with open(scylla_yaml_file, "w") as f:
+            f.write("experimental_features: [strongly-consistent-tables]\n")
+        out = subprocess.check_output([scylla_path, "sstable", "dump-schema", "--system-schema",
+                                       "--keyspace", "system", "--table", "local",
+                                       "--scylla-yaml-file", scylla_yaml_file], text=True)
+        assert "CREATE TABLE system.local" in out
+
+
 def test_scylla_sstable_filter(cql, test_keyspace, scylla_path, scylla_data_dir):
     with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
         pks = [r.pk for r in cql.execute(f"SELECT pk FROM {test_keyspace}.{table}")]
