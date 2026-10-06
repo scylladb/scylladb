@@ -3,7 +3,7 @@
 import sys
 
 # Use the run.py library from ../cqlpy:
-sys.path.insert(1, sys.path[0] + '/test/cqlpy')
+sys.path.insert(1, sys.path[0] + '/../cqlpy')
 import run
 
 print('Scylla is: ' + run.find_scylla() + '.')
@@ -16,10 +16,10 @@ else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
 
-# If the "--vnodes" option is given, drop the "tablets" experimental
-# feature (turned on in run.py) so that all tests will be run with the
-# old vnode-based replication instead of tablets. This option only has
-# temporary usefulness, and should eventually be removed.
+# If the "--vnodes" option is given, disable tablets (turned on in run.py)
+# so that all tests will be run with the old vnode-based replication
+# instead of tablets. This option only has temporary usefulness, and should
+# eventually be removed.
 if '--vnodes' in sys.argv:
     sys.argv.remove('--vnodes')
     def run_without_tablets(pid, dir):
@@ -27,6 +27,10 @@ if '--vnodes' in sys.argv:
         c.remove('--enable-tablets=true')
         # Tablets are now enabled by default on some releases, it is not enough to remove the enable above.
         c.append('--enable-tablets=false')
+        # In newer versions, the tablets_mode_for_new_keyspaces option, which
+        # conf/scylla.yaml sets to "enabled", takes precedence over
+        # enable_tablets, so we need to override it as well.
+        c.append('--tablets-mode-for-new-keyspaces=disabled')
         return (c, e)
     run_without_tablets.orig_cmd = cmd
     cmd = run_without_tablets
