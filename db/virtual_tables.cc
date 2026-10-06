@@ -598,7 +598,7 @@ public:
         co_await add_partition(mutation_sink, "incremental_backup_enabled", [this] () {
             return _db.map_reduce0([] (replica::database& db) {
                 return std::ranges::any_of(db.get_keyspaces(), [] (const auto& id_and_ks) {
-                    return id_and_ks.second.incremental_backups_enabled();
+                    return id_and_ks.second->incremental_backups_enabled();
                 });
             }, false, std::logical_or{}).then([] (bool res) -> sstring {
                 return res ? "true" : "false";
