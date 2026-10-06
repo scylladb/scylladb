@@ -754,12 +754,18 @@ def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
 
 
 # Reproduces #4209
-def test_list_of_tuples_with_bound_var(cql, test_keyspace):
+# Bind variables inside a collection literal (e.g., [(?,9999)]) are a Scylla
+# extension - Cassandra rejects them with "bind variables are not supported
+# inside collection literals".
+def test_list_of_tuples_with_bound_var(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>") as cf:
         cql.prepare(f"update {cf} SET c1 = c1 + [(?,9999)] where pk = 999")
 
 
-def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch):
+# Bind variables inside a collection literal (e.g., [997, ?]) are a Scylla
+# extension - Cassandra rejects them with "bind variables are not supported
+# inside collection literals".
+def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<int>") as list_t, \
          new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 set<int>") as set_t, \
          new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 map<int, int>") as map_t:
