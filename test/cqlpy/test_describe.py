@@ -1923,9 +1923,12 @@ def test_create_role_with_hashed_password_authorization(cql):
                     ncql.execute("CREATE ROLE some_unused_name WITH HASHED PASSWORD = '$2a$10$JSJEMFm6GeaW9XxT5JIheuEtPvat6i7uKbnTcxX3c1wshIIsGyUtG'")
 
         # List of form (role name, list of permission grants to the role)
-        r1 = "andrew"
-        r2 = "jane"
-        r3 = "bob"
+        # We use unique role names, because roles with the same names created
+        # and dropped by a previous test may still be in Cassandra's roles
+        # cache, which would make logging in with them fail.
+        r1 = unique_name()
+        r2 = unique_name()
+        r3 = unique_name()
 
         for r in [r1, r2]:
             cql.execute(f"CREATE ROLE {r} WITH LOGIN = true AND PASSWORD = '{r}'")
