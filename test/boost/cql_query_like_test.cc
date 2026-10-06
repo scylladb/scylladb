@@ -29,18 +29,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_like_operator_on_clustering_key) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (p int, s text, primary key(p, s))");
-        cquery_nofail(e, "insert into t (p, s) values (1, 'abc')");
-        require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}});
-        cquery_nofail(e, "insert into t (p, s) values (2, 'acc')");
-        require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}, {T("acc")}});
-        cquery_nofail(e, "insert into t (p, s) values (2, 'acd')");
-        require_rows(e, "select s from t where p = 2 and s like '%c' allow filtering", {{T("acc")}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_like_operator_conjunction) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (s1 text primary key, s2 text)");

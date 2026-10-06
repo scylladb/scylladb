@@ -51,3 +51,12 @@ def test_like_operator_on_partition_key(cql, test_keyspace, scylla_only):
         assert rows(cql.execute(f"select s2 from {t} where s2 like 'a%' allow filtering")) == [["abc"]]
         cql.execute(f"insert into {t} (s1, s2) values ('aba', 'aba')")
         assert rows(cql.execute(f"select s2 from {t} where s2 like 'a%' allow filtering")) == [["aba"], ["abc"]]
+
+def test_like_operator_on_clustering_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, s text, primary key(p, s)") as t:
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
+        assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+        cql.execute(f"insert into {t} (p, s) values (2, 'acc')")
+        assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"], ["acc"]]
+        cql.execute(f"insert into {t} (p, s) values (2, 'acd')")
+        assert rows(cql.execute(f"select s from {t} where p = 2 and s like '%c' allow filtering")) == [["acc"]]
