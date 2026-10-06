@@ -102,6 +102,8 @@ public:
 // carries the tag that names it, an incremental backup carries no tag.
 using incremental_backup = bool_class<class incremental_backup_tag>;
 
+using delete_node_ref = bool_class<class delete_node_ref_tag>;
+
 class storage {
     friend class test;
 
@@ -148,7 +150,9 @@ public:
     // entry, and the component objects if no references remain. Returns true
     // when this node's snapshot references still pin the sstable. The caller
     // must then retain the entry as "snapshot_owned".
-    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) = 0;
+    // `delete_node_ref = false` skips deleting the node reference, for callers
+    // that know it is already gone (a retained snapshot_owned entry).
+    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref del_node_ref = delete_node_ref::yes) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
