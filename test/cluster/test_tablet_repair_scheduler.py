@@ -488,11 +488,14 @@ async def live_update_config(manager: ScyllaClusterManager, servers: list[Server
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
 async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):
+    # The threshold is a yaml option in both cases; only auto_repair_enabled has a
+    # per-table form, through the cluster-config registry.
+    await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
     if not config_per_table:
-        await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
         await live_update_config(manager, servers, 'auto_repair_enabled_default', str(auto_repair_enabled).lower())
     else:
-        raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
+        cql = manager.get_cql()
+        await cql.run_async(f"ALTER TABLE {ks}.{table} WITH auto_repair_enabled = {str(auto_repair_enabled).lower()}")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ScyllaClusterManager):
@@ -556,7 +559,6 @@ async def test_tablet_auto_repair_cfg_enable(manager: ScyllaClusterManager):
     # Check repair is executed
     await check_has_repair_time(cql, hosts[0:1], table_id)
 
-@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-134", reason="no per tablet support yet")
 async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ScyllaClusterManager):
     cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
