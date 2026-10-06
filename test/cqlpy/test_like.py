@@ -93,3 +93,12 @@ def test_like_operator_bind_marker(cql, test_keyspace, scylla_only):
         assert rows(cql.execute(stmt, ["_b_"])) == [["abc"]]
         assert rows(cql.execute(stmt, ["%g"])) == []
         assert rows(cql.execute(stmt, ["%c"])) == [["abc"]]
+
+# Scylla-only because Cassandra rejects the empty pattern with "LIKE value
+# can't be empty".
+def test_like_operator_blank_pattern(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key, s text") as t:
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
+        assert rows(cql.execute(f"select s from {t} where s like '' allow filtering")) == []
+        cql.execute(f"insert into {t} (p, s) values (2, '')")
+        assert rows(cql.execute(f"select s from {t} where s like '' allow filtering")) == [[""]]
