@@ -1285,12 +1285,18 @@ def test_validate_keyspace(cql):
         cql.execute(f"create keyspace {keyspace_name} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
     with pytest.raises(SyntaxException):
         cql.execute("create keyspace ks3-1 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
-    # A replication strategy class is not mandatory
-    with new_test_keyspace(cql, "with replication = { 'replication_factor' : 1 }") as ks3:
-        with pytest.raises(SyntaxException):
-            cql.execute(f"create keyspace {ks3} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"create keyspace {unique_name()} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
     with pytest.raises(InvalidRequest, match="not user-modifiable"):
         cql.execute("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+
+
+# In Scylla, a replication strategy class is not mandatory - it defaults to
+# NetworkTopologyStrategy (see docs/cql/ddl.rst). Cassandra requires it
+# ("Missing replication strategy class"), so this test is Scylla-only.
+def test_keyspace_default_replication_class(cql, scylla_only):
+    with new_test_keyspace(cql, "with replication = { 'replication_factor' : 1 }") as ks:
+        assert cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'").one().replication['class'] == 'org.apache.cassandra.locator.NetworkTopologyStrategy'
 
 
 def test_validate_table(cql, test_keyspace):
