@@ -14,7 +14,7 @@ from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo, HostID
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import alter_keyspace_retry_ongoing_rf_change, create_new_test_keyspace, parse_replication_options, rf_change_requests, wait_for_cql_and_get_hosts, wait_for_auto_rf_settled
+from test.cluster.util import alter_keyspace_retry_ongoing_rf_change, create_new_test_keyspace, get_replica_count, parse_replication_options, rf_change_requests, wait_for_cql_and_get_hosts, wait_for_auto_rf_settled
 
 
 logger = logging.getLogger(__name__)
@@ -1059,3 +1059,31 @@ async def test_auto_rf_shrinks_a_dc_no_eligible_keyspace_uses_to_one_rack(manage
     assert len(audit['dc2']) == 1, f"dc2 must keep exactly one rack: {audit}"
     await assert_no_pending_rf_change(cql, AUDIT_KS)
     await assert_no_pending_rf_change(cql, SYSTEM_TRACES_KS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rf_rack_valid_keyspaces", [True, False])
+async def test_auto_rf_keyspace_creation_skips_a_dc_without_token_owners(manager: ScyllaClusterManager, rf_rack_valid_keyspaces: bool):
+    """
+    A DC made of zero-token nodes only (an arbiter DC) cannot host replicas. The
+    auto-RF keyspaces are created with one replica per DC, and naming such a DC
+    makes the creation fail: in the rack-list expansion with
+    rf_rack_valid_keyspaces, in the tablet allocation without it. The audit
+    keyspace is created while the node that enables auditing starts, so that
+    failure would stop the node. The creation has to leave such a DC out.
+    """
+    cfg = {"rf_rack_valid_keyspaces": rf_rack_valid_keyspaces}
+    no_audit = cfg | {"audit": "none"}
+    await manager.server_add(config=no_audit, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=no_audit | {"join_ring": False}, property_file={"dc": "dc2", "rack": "r1"})
+    cql = manager.get_cql()
+    rows = await cql.run_async(f"SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = '{AUDIT_KS}'")
+    assert not rows, "the audit keyspace must not exist before auditing is enabled"
+
+    logger.info("Enable auditing on a new node: it creates the audit keyspace while starting")
+    await manager.server_add(config=cfg | {"audit": "table"}, property_file={"dc": "dc1", "rack": "r2"})
+
+    replication = await _replication(cql, AUDIT_KS)
+    logger.info(f"audit replication: {replication}")
+    assert set(replication) == {"dc1"}, f"dc2 has no token owners and must not be named: {replication}"
+    assert get_replica_count(replication["dc1"]) == 1, replication
