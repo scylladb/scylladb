@@ -1929,6 +1929,104 @@ async def test_replace_during_migration_tablet_followers_unflushed(manager: Scyl
         await verify_data_integrity(cql, ks, table_name, num_keys, cl=ConsistencyLevel.LOCAL_ONE, server=new_server)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replace_during_migration_repairs_tablet_follower(manager: ScyllaClusterManager):
+    """Verify that repair-based replace can write missing rows to a tablet-only follower.
+
+    This test focuses on the write path of a tablet-based repair follower.
+
+    The repair master (the replacing node) is vnode-based, so each repair
+    session covers a vnode range. If a follower misses rows, the master writes
+    them to it. On a tablet-based follower, the rows of one session will
+    appear as belonging to several tablets, because pow2 pre-splitting divides
+    each vnode range into multiple tablets. The test expects that the follower
+    still writes each tablet's rows to a separate sstable.
+
+    The test differs from test_replace_during_migration_tablet_followers in
+    the following ways, which make the master write rows for several tablets
+    on the same shard of a follower:
+
+    * One follower misses all writes, so that the master writes rows to it.
+      The test drops the writes on that follower with the database_apply
+      error injection, and writes at CL=QUORUM so that the writes succeed.
+    * Hinted handoff is disabled, so that hints cannot fix the follower
+      before the replace.
+    * The follower runs with one shard, so that all its tablets are on the
+      same shard.
+    """
+    num_keys = 1000
+    replaced_cmdline = ['--smp', '2']
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': 16,
+        'enable_repair_based_node_ops': True,
+        'hinted_handoff_enabled': False,
+    }
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+
+    logger.info("Creating a cluster with 3 racks, 1 node per rack")
+    replaced_server = await manager.server_add(cmdline=replaced_cmdline, config=cfg, property_file=property_files[0])
+    synced_follower = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file=property_files[1])
+    stale_follower = await manager.server_add(cmdline=['--smp', '1'], config=cfg, property_file=property_files[2])
+    follower_servers = [synced_follower, stale_follower]
+    servers = [replaced_server] + follower_servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Creating keyspace and table with RF=3 using vnodeos")
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        table_name = "test"
+        await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(replaced_server.ip_addr, ks)
+
+        logger.info("Upgrading 2 nodes to tablets")
+        for s in follower_servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info(f"Writing {num_keys} rows at CL=QUORUM, dropped on follower {stale_follower.server_id}")
+        await manager.api.enable_injection(stale_follower.ip_addr, "database_apply", one_shot=False,
+                                           parameters={"ks_name": ks, "cf_name": table_name, "what": "throw"})
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{table_name} (pk, c) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+        await manager.api.disable_injection(stale_follower.ip_addr, "database_apply")
+
+        async def get_local_keys(server: ServerInfo) -> set[int]:
+            # MUTATION_FRAGMENTS reads only local data from the host that
+            # serves the query.
+            host = cql.cluster.metadata.get_host(server.ip_addr)
+            rows = await cql.run_async(f"SELECT pk FROM MUTATION_FRAGMENTS({ks}.{table_name})", host=host)
+            return {r.pk for r in rows}
+
+        logger.info("Verifying that the out-of-sync follower has no data")
+        stale_keys = await get_local_keys(stale_follower)
+        assert not stale_keys, f"The out-of-sync follower has {len(stale_keys)} keys before the replace"
+
+        logger.info(f"Stopping node {replaced_server.server_id} to replace mid-migration")
+        await manager.server_stop(replaced_server.server_id, convict=True)
+
+        logger.info("Adding the replacement node")
+        replace_cfg = ReplaceConfig(replaced_id=replaced_server.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=replaced_cmdline,
+                                              property_file=replaced_server.property_file(),
+                                              config=cfg)
+
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(follower_servers + [new_server])
+
+        logger.info("Verifying that repair wrote all rows to the previously out-of-sync follower")
+        stale_keys = await get_local_keys(stale_follower)
+        missing = set(range(num_keys)) - stale_keys
+        assert not missing, f"The previously out-of-sync follower misses keys {sorted(missing)}"
+
+
 async def test_replace_during_migration_rejects_shard_count_mismatch(manager: ScyllaClusterManager):
     """Verify that node replacement during vnodes-to-tablets migration fails if shard counts do not match."""
     cfg = {'num_tokens': 1}
