@@ -222,6 +222,15 @@ def test_alter_keyspace_with_replication_factor_tag(cql, this_dc, skip_without_t
         with pytest.raises(InvalidRequest, match="'replication_factor' tag is not allowed"):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1, 'replication_factor' : 1 }}")
 
+# Same as test_alter_keyspace_with_replication_factor_tag, but the keyspace's
+# only DC has RF 0. Such a DC doesn't appear in the keyspace's replication
+# options at all, which used to make Scylla not recognize the statement as
+# an ALTER, and allow the 'replication_factor' tag.
+def test_alter_keyspace_rf_0_with_replication_factor_tag(cql, this_dc, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}") as keyspace:
+        with pytest.raises(InvalidRequest, match="'replication_factor' tag is not allowed"):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+
 # Test trying to ALTER a keyspace with invalid options.
 def test_alter_keyspace_invalid(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
