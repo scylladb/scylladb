@@ -1212,24 +1212,31 @@ public:
         return std::nullopt;
     }
 
-    // Whether auto repair is enabled for the tablets of `table`.
+    // The auto repair options each keep their scylla.yaml counterpart as the last-resort
+    // default below the option's table -> keyspace -> cluster chain. That is why they are
+    // read through the resolve_*_table_config() accessors, which report absence, rather than
+    // the ones that substitute the registry's own default: absence is what says to fall back
+    // to the yaml value. Until the cluster enables the option's registry epoch, no scope can
+    // hold an override and the yaml value is the only answer.
     //
-    // The yaml auto_repair_enabled_default sits below the option's
-    // table -> keyspace -> cluster chain as the last-resort default, which is why this reads
-    // the option through resolve_boolean_table_config() - reporting absence - rather than
-    // through resolve_boolean_config(), which would substitute the registry's own default
-    // and hide the yaml value. Until the cluster enables cluster config, no scope can hold
-    // an override and the yaml value is the only answer.
-    //
-    // For a co-located group the option is resolved on the base table: the tablets are
+    // For a co-located group the options are resolved on the base table: the tablets are
     // shared by the whole group, so there is a single answer to give for all of them.
+
+    // Whether auto repair is enabled for the tablets of `table`.
     bool is_auto_repair_enabled(table_id table) {
         return _ccm.resolve_boolean_table_config(db::cluster_config_registry::option_name::auto_repair_enabled, table)
                 .value_or(_db.get_config().auto_repair_enabled_default());
     }
 
+    // How long a tablet of `table` may go unrepaired before auto repair selects it.
+    std::chrono::seconds get_auto_repair_threshold(table_id table) {
+        auto seconds = _ccm.resolve_integer_table_config(db::cluster_config_registry::option_name::auto_repair_threshold_in_seconds, table)
+                .value_or(_db.get_config().auto_repair_threshold_default_in_seconds());
+        return std::chrono::seconds(seconds);
+    }
+
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            bool auto_repair_enabled, const db_clock::time_point& now,
+            bool auto_repair_enabled, std::chrono::seconds repair_time_threshold, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
@@ -1243,12 +1250,17 @@ public:
             lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
             co_return false;
         }
-        auto threshold = _db.get_config().auto_repair_threshold_default_in_seconds();
-        auto repair_time_threshold = std::chrono::seconds(threshold);
         auto& last_repair_time = info.repair_time;
         diff = now - last_repair_time;
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
                 gid, diff, info.repair_time, repair_time_threshold);
+        // A threshold of zero turns the time-based trigger off, rather than meaning "repair
+        // whenever any time has passed" - which is what comparing against it would otherwise
+        // say, since the time since the last repair is never negative.
+        if (repair_time_threshold <= std::chrono::seconds::zero()) {
+            lblogger.debug("Skipped auto repair for tablet={}: the repair interval is disabled", gid);
+            co_return false;
+        }
         if (diff < repair_time_threshold) {
             co_return false;
         }
@@ -1362,6 +1374,7 @@ public:
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
             auto auto_repair_enabled = is_auto_repair_enabled(table);
+            auto repair_time_threshold = get_auto_repair_threshold(table);
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
@@ -1406,7 +1419,7 @@ public:
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, auto_repair_enabled, now, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, auto_repair_enabled, repair_time_threshold, now, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
