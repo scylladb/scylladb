@@ -1386,8 +1386,12 @@ void compaction_manager::do_stop() noexcept {
         // updates in the constructor too, so it can have an invocation in
         // flight, which touches this object after it completes. It has to be
         // drained as well, just like really_do_stop() does.
+        // The same holds for the throughput updater, which the constructor
+        // triggers on shard 0.
         _stop_future = _task_manager_module->stop().then([this] {
             return _update_compaction_static_shares_action.join();
+        }).then([this] {
+            return _throughput_updater.join();
         });
         return;
     }
