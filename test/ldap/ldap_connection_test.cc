@@ -107,7 +107,7 @@ void with_ldap_connection(const seastar::socket_address& a, std::function<void(l
 // LDAP setup.
 SEASTAR_THREAD_TEST_CASE(bind_with_default_io) {
     set_defbase();
-    const auto server_uri = "ldap://localhost:" + ldap_port;
+    const auto server_uri = "ldap://" + ldap_host + ":" + ldap_port;
     LDAP *manager_client_state{nullptr};
     BOOST_REQUIRE_EQUAL(LDAP_SUCCESS, ldap_initialize(&manager_client_state, server_uri.c_str()));
     static constexpr int v3 = LDAP_VERSION3;
