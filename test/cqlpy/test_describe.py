@@ -3435,7 +3435,11 @@ def test_hide_paxos_table(cql, test_keyspace):
 
 # It is allowed to directly describe a Paxos state table with `DESC ks."tbl$paxos"`
 # but it should contain only commented-out CQL statements, so executing them is a no-op.
-def test_paxos_table_described_in_comment(scylla_only, cql, test_keyspace):
+# A separate "tbl$paxos" table only exists for tables using tablets - tables
+# using vnodes keep their Paxos state in the system.paxos table (see "Paxos
+# State Tables" in docs/features/lwt.rst), and Cassandra has neither tablets
+# nor such tables. So this test is skipped unless tablets are enabled.
+def test_paxos_table_described_in_comment(skip_without_tablets, cql, test_keyspace):
     paxos_table_desc = ""
     with new_test_table(cql, test_keyspace, "p int primary key, x int") as table:
         # The extra "...$paxos" table only appears after a real LWT write is
