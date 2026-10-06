@@ -17,7 +17,6 @@ from contextlib import ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
     new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
     new_secondary_index, is_scylla
-from .conftest import has_tablets
 from .test_service_levels import MAX_USER_SERVICE_LEVELS
 from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest, Unauthorized
@@ -1628,8 +1627,11 @@ def new_random_keyspace(cql):
     options["replication_factor"] = random.randrange(1, 6)
     options_str = ", ".join([f"'{k}': '{v}'" for (k, v) in options.items()])
     extra = ""
-    # Cassandra does not have tablets and thus does not even support tablets syntax.
-    if not has_tablets or options["class"] == "SimpleStrategy" or options["replication_factor"] != 1:
+    # Tablets don't support SimpleStrategy, and in our single-rack test
+    # cluster they don't support RF > 1 either, so disable tablets in these
+    # cases. Scylla accepts this syntax even when it doesn't use tablets,
+    # but Cassandra doesn't have tablets and doesn't support this syntax.
+    if is_scylla(cql) and (options["class"] == "SimpleStrategy" or options["replication_factor"] != 1):
         extra = " and tablets = { 'enabled': false }"
 
     write = random.choice(writes)
