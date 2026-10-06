@@ -7,6 +7,7 @@
  */
 
 #include <boost/lexical_cast.hpp>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
 
@@ -1554,6 +1555,109 @@ SEASTAR_TEST_CASE(test_scrub_validate_mode_compaction_result) {
         BOOST_REQUIRE(res.stats.started_at.time_since_epoch().count() > 0);
         BOOST_REQUIRE(res.stats.started_at <= res.stats.ended_at);
     });
+}
+
+static future<std::vector<sstables::shared_sstable>> get_all_sstables(compaction::compaction_group_view& t) {
+    auto main_set = co_await t.main_sstable_set();
+    auto maintenance_set = co_await t.maintenance_sstable_set();
+    auto s = *main_set->all() | std::ranges::to<std::vector>();
+    auto maintenance_sstables = maintenance_set->all();
+    s.insert(s.end(), maintenance_sstables->begin(), maintenance_sstables->end());
+    co_return s;
+}
+
+class automatic_scrub_test_framework {
+    std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
+    sharded<test_env> _env;
+    tests::random_schema_specification::compress_sstable _compress;
+    size_t _schema_counter;
+public:
+    automatic_scrub_test_framework(tests::random_schema_specification::compress_sstable compress)
+        : _compress(compress)
+        , _schema_counter(0)
+    {
+        _env.start(test_env_config(), std::ref(*scf)).get();
+    }
+
+    ~automatic_scrub_test_framework() {
+        _env.stop().get();
+    }
+
+    test_env& env() { return _env.local(); }
+private:
+    tests::random_schema make_random_schema(uint32_t seed) {
+        auto spec = tests::make_random_schema_specification(
+            "automatic_scrub_test_framework_" + fmt::to_string(_schema_counter++),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8),
+            _compress
+        );
+        return {seed, *spec};
+    }
+
+    shared_sstable make_sstable(tests::random_schema& random_schema, uint32_t seed) {
+        auto muts = tests::generate_random_mutations(
+                random_schema,
+                tests::uncompactible_timestamp_generator(seed),
+                tests::no_expiry_expiry_generator(),
+                std::uniform_int_distribution<size_t>(10, 10)).get();
+
+        auto sst = make_sstable_containing(env().make_sstable(random_schema.schema()), std::move(muts)).get();
+        return sst;
+    }
+
+    table_for_tests make_table(size_t sst_count) {
+        auto seed = tests::random::get_int<uint32_t>();
+        tests::random_schema random_schema = make_random_schema(seed);
+        testlog.info("random_schema: {}", random_schema.cql());
+        auto table = env().make_table_for_tests(random_schema.schema());
+        table->start();
+        table->set_compaction_strategy(compaction::compaction_strategy_type::null);
+
+        for (size_t i = 0; i < sst_count; i++) {
+            auto sst = make_sstable(random_schema, seed);
+            table->add_sstable_and_update_cache(sst, offstrategy::no).get();
+        }
+
+        return table;
+    }
+public:
+    using test_func = std::function<void(table_for_tests&, compaction::compaction_group_view&, std::vector<sstables::shared_sstable>)>;
+    void run(size_t sst_count, test_func func) {
+        run_with_many_tables(1, sst_count, [func = std::move(func)] (std::span<table_for_tests> tables, std::span<compaction::compaction_group_view*> views, std::span<std::vector<sstables::shared_sstable>> sstables) {
+            func(tables.front(), *(views.front()), sstables.front());
+        });
+    }
+    using many_tablets_test_func = std::function<void(std::span<table_for_tests>, std::span<compaction::compaction_group_view*>, std::span<std::vector<sstables::shared_sstable>>)>;
+    void run_with_many_tables(size_t table_count, size_t sst_count, many_tablets_test_func func) {
+        std::vector<table_for_tests> tables;
+        tables.reserve(table_count);
+        std::vector<compaction::compaction_group_view*> views;
+        std::vector<std::vector<sstables::shared_sstable>> sstables;
+        std::vector<deferred_stop<table_for_tests>> stops;
+
+        for (size_t i = 0; i < table_count; i++) {
+            tables.emplace_back(make_table(sst_count));
+            stops.emplace_back(tables.back());
+            views.emplace_back(&tables.back().as_compaction_group_view());
+            sstables.emplace_back(get_all_sstables(*views.back()).get());
+            BOOST_REQUIRE_EQUAL(sstables.back().size(), sst_count);
+        }
+
+        scoped_no_abort_on_malformed_sstable_error no_abort{};
+
+        func(tables, views, sstables);
+    }
+};
+
+void scylla_digests_are_superset(const sstables::scylla_metadata::components_digests& lhs, const sstables::scylla_metadata::components_digests& rhs) {
+    for (const auto& [component, digest] : lhs.map) {
+        auto it = rhs.map.find(component);
+        BOOST_REQUIRE(it != rhs.map.end());
+        BOOST_REQUIRE_EQUAL(digest, it->second);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
