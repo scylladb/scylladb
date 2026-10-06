@@ -1019,14 +1019,22 @@ def test_range_deletion_scenarios(cql, test_keyspace):
         assert list(cql.execute(f"select * from {cf}")) == [(1, 1, '1')]
 
 
+# Cassandra supports range deletions on COMPACT STORAGE tables, but Scylla
+# doesn't, and rejects them (see also testBatchRangeDelete in
+# cassandra_tests/validation/operations/compact_storage_test.py).
+@pytest.mark.xfail(reason="issue #12471")
 def test_range_deletion_scenarios_with_compact_storage(cql, test_keyspace, compact_storage):
     with new_test_table(cql, test_keyspace, "p int, c int, v text, primary key (p, c)", "with compact storage") as table:
-        for i in range(10):
-            cql.execute(f"insert into {table} (p, c, v) values (1, {i}, 'abc')")
-        # Range deletions are not allowed on compact storage tables
-        for where in ["c <= 3", "c >= 0", "c > 0 and c <= 3", "c >= 0 and c < 3", "c > 0 and c < 3", "c >= 0 and c <= 3"]:
-            with pytest.raises(InvalidRequest):
-                cql.execute(f"delete from {table} where p = 1 and {where}")
+        for where, remaining in [("c <= 3", range(4, 10)),
+                                 ("c >= 2", range(0, 2)),
+                                 ("c > 0 and c <= 3", [0, 4, 5, 6, 7, 8, 9]),
+                                 ("c >= 0 and c < 3", range(3, 10)),
+                                 ("c > 0 and c < 3", [0, 3, 4, 5, 6, 7, 8, 9]),
+                                 ("c >= 1 and c <= 3", [0, 4, 5, 6, 7, 8, 9])]:
+            for i in range(10):
+                cql.execute(f"insert into {table} (p, c, v) values (1, {i}, 'abc')")
+            cql.execute(f"delete from {table} where p = 1 and {where}")
+            assert [r.c for r in cql.execute(f"select c from {table} where p = 1")] == list(remaining)
 
 
 def test_map_insert_update(cql, test_keyspace):
