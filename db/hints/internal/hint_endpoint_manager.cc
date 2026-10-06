@@ -62,12 +62,14 @@ future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const 
             return make_ready_future<>();
         });
 
+        const auto deadline = db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT;
+        const auto writer_units = co_await get_units(_store_writer, 1, deadline);
         const auto shared_lock = co_await get_shared_lock(file_update_mutex());
 
         hints_store_ptr log_ptr = co_await get_or_load();
         commitlog_mutation_entry_writer cew(s, *fm, commitlog::force_sync::no);
 
-        rp_handle rh = co_await log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
+        rp_handle rh = co_await log_ptr->add_entry(s->id(), cew, deadline);
 
         const replay_position rp = rh.release();
         if (_last_written_rp < rp) {
