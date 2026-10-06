@@ -21,6 +21,7 @@
 #include "db/hints/internal/hint_sender.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/resource_manager.hh"
+#include "db/timeout_clock.hh"
 #include "enum_set.hh"
 
 // STD.
@@ -59,6 +60,10 @@ private:
     state_set _state;
     const fs::path _hints_dir;
     uint64_t _hints_in_progress = 0;
+    /// Admits one do_store_hint() at a time into the write path, because every wait in
+    /// that path (loading the store, file_update_mutex(), a new segment) wakes all of its
+    /// waiters at once.
+    db::timeout_semaphore _store_writer{1};
     db::replay_position _last_written_rp;
     hint_sender _sender;
 
