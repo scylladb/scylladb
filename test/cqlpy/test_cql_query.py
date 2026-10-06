@@ -657,8 +657,8 @@ def test_set_elements_validation(cql, test_keyspace, raw_utf8_serialization):
 def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
     with new_test_table(cql, test_keyspace, "a int, b map<date, date>, PRIMARY KEY (a)") as tbl:
         def test_inline(value, should_throw):
-            cql1 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'10-10-2010' : '{value}'}})"
-            cql2 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'{value}' : '10-10-2010'}})"
+            cql1 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'2010-10-10' : '{value}'}})"
+            cql2 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'{value}' : '2010-10-10'}})"
             if should_throw:
                 with pytest.raises(InvalidRequest):
                     cql.execute(cql1)
