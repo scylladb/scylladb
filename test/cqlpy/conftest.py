@@ -285,7 +285,8 @@ def skip_s3_tests(request):
         skip_env("Skipping S3 related tests being run from test/cqlpy/run")
 
 
-@pytest.fixture(scope=dynamic_scope())
+# Module-scoped, so vector store client settings set by mock does not leak into other test files.
+@pytest.fixture(scope="module")
 def _vector_store_mock_session(cql):
     mock = VectorStoreMock()
     if not is_scylla(cql):
