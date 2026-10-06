@@ -83,3 +83,13 @@ def test_like_operator_static_column(cql, test_keyspace, scylla_only):
         cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
         assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
         assert rows(cql.execute(f"select * from {t} where c like '%' allow filtering")) == []
+
+# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
+# patterns (only '%'), so the '_b_' pattern below matches nothing there.
+def test_like_operator_bind_marker(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "s text primary key") as t:
+        cql.execute(f"insert into {t} (s) values ('abc')")
+        stmt = cql.prepare(f"select s from {t} where s like ? allow filtering")
+        assert rows(cql.execute(stmt, ["_b_"])) == [["abc"]]
+        assert rows(cql.execute(stmt, ["%g"])) == []
+        assert rows(cql.execute(stmt, ["%c"])) == [["abc"]]
