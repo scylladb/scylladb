@@ -1134,7 +1134,16 @@ def test_writetime_and_ttl(cql, test_keyspace):
         ts1 = the_timestamp + 1
         cql.execute(f"UPDATE {table} USING TIMESTAMP {ts1} SET fc = {{1}}, c = {{2}} WHERE p1 = 'key1'")
         assert list(cql.execute(f"SELECT writetime(fc) FROM {table}")) == [(ts1,)]
-        # writetime() of a non-frozen collection is not allowed
+
+
+# writetime() of a non-frozen collection is not allowed. Cassandra allows it,
+# but returns an array of timestamps where you can't tell which belongs to
+# which element, which we consider a Cassandra bug - see CASSANDRA-21240 and
+# test_writetime_ttl_whole_collection_forbidden in
+# test_select_collection_element.py.
+def test_writetime_non_frozen_collection(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, c set<int>") as table:
+        cql.execute(f"UPDATE {table} SET c = {{2}} WHERE p1 = 'key1'")
         with pytest.raises(InvalidRequest):
             cql.execute(f"SELECT writetime(c) FROM {table}")
 
