@@ -26,6 +26,11 @@ from .util import new_test_table, new_type
 
 COLUMN_NAME_TEMPLATE = "{}_clmn"
 
+# The expected result of a cast of a value that does not fit the target type:
+# Scylla fails the cast, as SQL databases do.  Cassandra (and the original
+# test) wraps around or gives an infinity.
+OUT_OF_RANGE = "<out of range>"
+
 
 @pytest.fixture(scope="module")
 def cqlsh(request, host):
@@ -143,6 +148,10 @@ def _check(cqlsh, checks, compare_error=False):
     checks = list(checks)
     failures = []
     for (query, description, from_type, to_type, exp_result), (actual_result, err) in zip(checks, cqlsh([c[0] for c in checks])):
+        if exp_result == OUT_OF_RANGE:
+            if not err or "out of range" not in err:
+                failures.append(f"{description}: expected an out of range error, got [{actual_result}]" + (f" error [{err}]" if err else ""))
+            continue
         actual_result = err if compare_error else actual_result
         if to_type in ["text", "varchar"] and from_type == "timestamp":
             # scylla omit zero milliseconds
@@ -309,27 +318,27 @@ class TestData:
             [
                 76571.345,
                 {
-                    "cast": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
-                    "avg": {"tinyint": 14, "smallint": 5390, "int": 38158, "float": 38158.54297, "decimal": "38158.54400650000050", "bigint": 38158, "varint": 38158, "text": None, "varchar": None},
-                    "sum": {"tinyint": 29, "smallint": 10781, "int": 76317, "float": 76317.08594, "decimal": "76317.08801300000099", "bigint": 76317, "varint": 76317, "text": None, "varchar": None},
-                    "min": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"},
-                    "max": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                    "cast": {"tinyint": OUT_OF_RANGE, "smallint": OUT_OF_RANGE, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                    "avg": {"tinyint": OUT_OF_RANGE, "smallint": OUT_OF_RANGE, "int": 38158, "float": 38158.54297, "decimal": "38158.54400650000050", "bigint": 38158, "varint": 38158, "text": None, "varchar": None},
+                    "sum": {"tinyint": OUT_OF_RANGE, "smallint": OUT_OF_RANGE, "int": 76317, "float": 76317.08594, "decimal": "76317.08801300000099", "bigint": 76317, "varint": 76317, "text": None, "varchar": None},
+                    "min": {"tinyint": OUT_OF_RANGE, "smallint": OUT_OF_RANGE, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"},
+                    "max": {"tinyint": OUT_OF_RANGE, "smallint": OUT_OF_RANGE, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
                 },
             ],
-            [-254.256987, {"cast": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"}}],
+            [-254.256987, {"cast": {"tinyint": OUT_OF_RANGE, "smallint": -254, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"}}],
         ],
         "float": [
             [
                 -564,
                 {
-                    "cast": {"tinyint": -52, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
-                    "avg": {"tinyint": 10, "smallint": 1034, "int": 1034, "double": "1034.23883", "decimal": "1034.238824", "bigint": 1034, "varint": 1034, "text": None, "varchar": None},
-                    "sum": {"tinyint": 30, "smallint": 3102, "int": 3102, "double": "3102.71648", "decimal": "3102.716473", "bigint": 3102, "varint": 3102, "text": None, "varchar": None},
-                    "min": {"tinyint": -52, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
-                    "max": {"tinyint": 123, "smallint": 3543, "int": 3543, "double": "3543.45654", "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"},
+                    "cast": {"tinyint": OUT_OF_RANGE, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
+                    "avg": {"tinyint": OUT_OF_RANGE, "smallint": 1034, "int": 1034, "double": "1034.23883", "decimal": "1034.238824", "bigint": 1034, "varint": 1034, "text": None, "varchar": None},
+                    "sum": {"tinyint": OUT_OF_RANGE, "smallint": 3102, "int": 3102, "double": "3102.71648", "decimal": "3102.716473", "bigint": 3102, "varint": 3102, "text": None, "varchar": None},
+                    "min": {"tinyint": OUT_OF_RANGE, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
+                    "max": {"tinyint": OUT_OF_RANGE, "smallint": 3543, "int": 3543, "double": "3543.45654", "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"},
                 },
             ],
-            [3543.4565429688, {"cast": {"tinyint": -41, "smallint": 3543, "int": 3543, "double": 3543.45654, "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"}}],
+            [3543.4565429688, {"cast": {"tinyint": OUT_OF_RANGE, "smallint": 3543, "int": 3543, "double": 3543.45654, "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"}}],
             ["123.25993624886543132316548678", {"cast": {"tinyint": 123, "smallint": 123, "int": 123, "double": "123.25993", "decimal": "123.259933", "bigint": 123, "varint": 123, "text": "123.25993", "varchar": "123.25993"}}],
         ],
         "int": [

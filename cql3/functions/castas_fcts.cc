@@ -12,6 +12,9 @@
 #include "cql3/functions/native_scalar_function.hh"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <chrono>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 
 namespace cql3 {
 namespace functions {
@@ -44,7 +47,14 @@ public:
             return std::nullopt;
         }
         auto val_from = from_type->deserialize(managed_bytes_view(*val));
-        auto val_to = _func(val_from);
+        auto val_to = [&] {
+            try {
+                return _func(val_from);
+            } catch (std::out_of_range& e) {
+                throw exceptions::function_execution_exception(name().name, e.what(), name().keyspace,
+                    {from_type->without_reversed().as_cql3_type().to_string()});
+            }
+        }();
         return managed_bytes(to_type->decompose(val_to));
     }
 };
@@ -66,9 +76,22 @@ static data_value identity_castas_fctn(data_value val) {
 
 using bytes_opt = std::optional<bytes>;
 
+// Converts with static_cast, but fails the cast when the value does not fit
+// the target type, as in SQL, instead of wrapping around or saturating.
 template<typename ToType, typename FromType>
 static data_value castas_fctn_simple(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if constexpr (std::is_floating_point_v<FromType> && std::is_integral_v<ToType>) {
+        // Truncates toward zero.  Converting a value outside the target's
+        // range is undefined behaviour in C++, so check the range first.  The
+        // limits are -2^(n-1) and 2^(n-1), exact in any floating-point type.
+        constexpr auto min = static_cast<FromType>(std::numeric_limits<ToType>::min());
+        auto val = std::trunc(val_from);
+        if (!(val >= min && val < -min)) {
+            throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+        }
+        return static_cast<ToType>(val);
+    }
     return static_cast<ToType>(val_from);
 }
 

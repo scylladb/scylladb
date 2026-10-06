@@ -21,7 +21,7 @@
 import pytest
 import math
 from .util import new_test_table, unique_key_int
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, FunctionFailure
 from ctypes import c_float
 
 @pytest.fixture(scope="module")
@@ -218,5 +218,43 @@ def test_cast_double_to_text(cql, table3):
         # printed too few digits, it would not be equal.
         ftext = list(cql.execute(f"SELECT CAST(db AS text) FROM {table3} WHERE p={p}"))[0][0]
         assert n == float(ftext)
+
+# Casting a float or double to an integer type truncates toward zero, and
+# fails if the result does not fit the type, as in SQL. Scylla's conversion
+# used to be undefined behavior there, which aborted debug builds (e.g. when
+# casting -564.0 to tinyint). Cassandra wraps around instead, as Java does,
+# so this test is Scylla-only.
+def test_cast_float_to_integer(cql, table3, scylla_only):
+    p = unique_key_int()
+    # (value, tinyint, smallint, int, bigint), None where the cast fails
+    cases = [(2.7, 2, 2, 2, 2),
+             (-1.9, -1, -1, -1, -1),
+             (-0.5, 0, 0, 0, 0),
+             (127.9, 127, 127, 127, 127),
+             (-128.9, -128, -128, -128, -128),
+             (128.0, None, 128, 128, 128),
+             (-564.0, None, -564, -564, -564),
+             (1e10, None, None, None, 10000000000),
+             (-2147483648.0, None, None, -2147483648, -2147483648),
+             (2147483648.0, None, None, None, 2147483648),
+             (-9.223372036854776e+18, None, None, None, -9223372036854775808),
+             (9.223372036854776e+18, None, None, None, None),
+             (1e30, None, None, None, None)]
+    for v, *expected in cases:
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {v}, {v})')
+        for col in ['f', 'db']:
+            for t, e in zip(['tinyint', 'smallint', 'int', 'bigint'], expected):
+                q = f"SELECT CAST({col} AS {t}) FROM {table3} WHERE p={p}"
+                if e is None:
+                    with pytest.raises(FunctionFailure, match='out of range'):
+                        cql.execute(q)
+                else:
+                    assert [(e,)] == list(cql.execute(q))
+    for lit in ['NaN', 'Infinity', '-Infinity']:
+        cql.execute(f'INSERT INTO {table3} (p, f, db) VALUES ({p}, {lit}, {lit})')
+        for col in ['f', 'db']:
+            for t in ['tinyint', 'smallint', 'int', 'bigint']:
+                with pytest.raises(FunctionFailure, match='out of range'):
+                    cql.execute(f"SELECT CAST({col} AS {t}) FROM {table3} WHERE p={p}")
 
 # TODO: test casts from more types.
