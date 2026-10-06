@@ -25,17 +25,25 @@ def assert_throws(cql, table1, msg, cmd):
 
 def test_common_options(cql, table1):
     assert_throws(cql, table1, r"tombstone_threshold value \(-0.4\) must be between 0.0 and 1.0|tombstone_threshold must be greater than 0, but was -0.400000", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'tombstone_threshold' : -0.4 }")
-    assert_throws(cql, table1, r"tombstone_threshold value \(5.5\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'tombstone_threshold' : 5.5 }")
     assert_throws(cql, table1, r"tombstone_compaction_interval value \(-7000ms\) must be positive|tombstone_compaction_interval must be greater than 0, but was -7", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'tombstone_compaction_interval' : -7 }")
     assert_throws(cql, table1, r"unchecked_tombstone_compaction value \(maybe\) must be \"true\" or \"false\"|'unchecked_tombstone_compaction' should be either 'true' or 'false', not 'maybe'", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'unchecked_tombstone_compaction' : 'maybe' }")
     assert_throws(cql, table1, r"enabled value \(certainly\) must be \"true\" or \"false\"|enabled should either be 'true' or 'false', not certainly", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'enabled' : 'certainly' }")
 
 def test_size_tiered_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"min_sstable_size value \(-1\) must be non negative|min_sstable_size must be non negative: -1", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_sstable_size' : -1 }")
+    assert_throws(cql, table1, r"min_threshold value \(1\) must be bigger or equal to 2|Min compaction threshold cannot be less than 2 \(got 1\)", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 1 }")
+
+# Scylla validates the ranges of some compaction options more strictly than
+# Cassandra: It requires tombstone_threshold to be at most 1.0, STCS's
+# bucket_low to be between 0.0 and 1.0, and bucket_high to be greater than 1.0.
+# Cassandra only requires tombstone_threshold to be positive, and bucket_low
+# to be lower than bucket_high, so this test is Scylla-only. Scylla's
+# stricter validation was added deliberately, for issue #2336.
+def test_compaction_options_strict_ranges(cql, table1, scylla_only):
+    assert_throws(cql, table1, r"tombstone_threshold value \(5.5\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'tombstone_threshold' : 5.5 }")
     assert_throws(cql, table1, r"bucket_low value \(0\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_low' : 0.0 }")
     assert_throws(cql, table1, r"bucket_low value \(1.3\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_low' : 1.3 }")
     assert_throws(cql, table1, r"bucket_high value \(0.7\) must be greater than 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'bucket_high' : 0.7 }")
-    assert_throws(cql, table1, r"min_threshold value \(1\) must be bigger or equal to 2|Min compaction threshold cannot be less than 2 \(got 1\)", "ALTER TABLE %s WITH compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 1 }")
 
 # Cassandra removed the STCS option cold_reads_to_omit (CASSANDRA-8860), but
 # Scylla still supports it, so this test is Scylla-only.
