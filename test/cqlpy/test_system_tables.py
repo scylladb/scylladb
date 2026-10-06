@@ -141,7 +141,9 @@ def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace):
 # See issue #21223
 # Test possibility to set 'memtable_flush_period_in_ms' option for system tables
 # and this option only: it is impossible to modify it with any other options together
-def test_alter_system_table_properties(cql, test_keyspace):
+# This test is Scylla-only because this is a Scylla feature - Cassandra
+# doesn't allow altering any option of system tables.
+def test_alter_system_table_properties(cql, test_keyspace, scylla_only):
     with pytest.raises(Unauthorized):
         cql.execute("ALTER TABLE system.compaction_history WITH comment = ''")
 
