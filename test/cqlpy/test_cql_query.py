@@ -1684,7 +1684,15 @@ def test_compact_storage(cql, test_keyspace, compact_storage):
             (1, 3, None, 6),
         ]
     with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, c1 int, c2 int", "with compact storage") as table:
-        cql.execute(f"insert into {table} (p1) values (1)")
+        # In a compact storage table without clustering columns, a row with
+        # just a key and no values can't exist. Scylla silently ignores an
+        # insert of such a row, while Cassandra rejects it (with the odd
+        # message "Some clustering keys are missing: column1", mentioning
+        # Cassandra's hidden clustering column). Either way, nothing is written.
+        try:
+            cql.execute(f"insert into {table} (p1) values (1)")
+        except InvalidRequest:
+            pass
         assert list(cql.execute(f"select * from {table}")) == []
 
 
