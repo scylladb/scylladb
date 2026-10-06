@@ -6,7 +6,7 @@
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for_cql_and_get_hosts, Host
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for, Host
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
@@ -487,15 +487,20 @@ async def live_update_config(manager: ScyllaClusterManager, servers: list[Server
     hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
+# Large enough that the time-based trigger cannot fire: a tablet that was never repaired
+# carries repair_time == epoch, so the time since the last repair is the current unix time,
+# somewhat over 1.7e9 seconds. The option is an int32, so this is close to the largest value
+# that can be set.
+AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS = 2000000000
+
 async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):
-    # The threshold is a yaml option in both cases; only auto_repair_enabled has a
-    # per-table form, through the cluster-config registry.
-    await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
     if not config_per_table:
+        await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
         await live_update_config(manager, servers, 'auto_repair_enabled_default', str(auto_repair_enabled).lower())
     else:
         cql = manager.get_cql()
-        await cql.run_async(f"ALTER TABLE {ks}.{table} WITH auto_repair_enabled = {str(auto_repair_enabled).lower()}")
+        await cql.run_async(f"ALTER TABLE {ks}.{table} WITH auto_repair_enabled = {str(auto_repair_enabled).lower()} "
+                            f"AND auto_repair_threshold_in_seconds = {auto_repair_threshold}")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ScyllaClusterManager):
@@ -567,6 +572,85 @@ async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ScyllaCl
     await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1, config_per_table=True)
 
     # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def wait_for_repair_planning_rounds(manager, servers, count):
+    """Wait until the load balancer has built a repair plan at least `count` times, so that a
+    test asserting that nothing was selected knows the planner actually ran and declined,
+    rather than having simply not run yet. Requires the tablet_dump_repair_plan injection."""
+    async def enough_rounds():
+        for s in servers:
+            log = await manager.server_open_log(s.server_id)
+            if len(await log.grep(r"dump_repair_plans=")) >= count:
+                return True
+        return None
+    await wait_for(enough_rounds, time.time() + 60)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair_yaml_defaults_apply(manager: ScyllaClusterManager):
+    """With no cluster-config value at any scope, both options fall back to their scylla.yaml
+    counterparts.
+
+    The repair interval is the interesting half: it starts out too large for any tablet to
+    have reached it, so nothing is repaired even though auto repair is enabled. That is what
+    distinguishes the yaml value from the option's registered default of one day, which every
+    tablet would already have exceeded - a tablet that was never repaired carries
+    repair_time == epoch. Lowering the yaml value then selects the tablets, which shows it is
+    the value actually in effect rather than merely an absent override."""
+    cmdline = ["--auto-repair-enabled-default", "1",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+    await inject_error_on(manager, "tablet_dump_repair_plan", servers)
+
+    await wait_for_repair_planning_rounds(manager, servers, 3)
+    m = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logger.info(f'repair times={m}')
+    assert all(v is None for v in m.values()), \
+            f"No tablet should have been repaired under the yaml repair interval, got {m}"
+
+    await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', '1')
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair_threshold_zero_disables_time_trigger(manager: ScyllaClusterManager):
+    """A repair interval of zero turns the time-based trigger off for a table, rather than
+    selecting it on every round - the time since the last repair is never negative, so a naive
+    comparison against zero would always pass. This is what lets a table opt out of
+    time-based repair while a cluster-wide interval stays in force for everything else."""
+    # Auto repair is off until the ALTER below, so that nothing is repaired before the
+    # interval under test is in place. The yaml interval of 1s is what would select every
+    # tablet immediately if the per-table zero were ignored.
+    cmdline = ["--auto-repair-enabled-default", "0", "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+    await inject_error_on(manager, "tablet_dump_repair_plan", servers)
+
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true "
+                        f"AND auto_repair_threshold_in_seconds = 0")
+
+    await wait_for_repair_planning_rounds(manager, servers, 3)
+    m = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logger.info(f'repair times={m}')
+    assert all(v is None for v in m.values()), \
+            f"No tablet should have been repaired with the repair interval disabled, got {m}"
+
+    # Restoring a non-zero interval selects the same tablets, so it was the zero that held
+    # them back and not some unrelated condition.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_threshold_in_seconds = 1")
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def test_tablet_auto_repair_threshold_per_table(manager: ScyllaClusterManager):
+    """The per-table repair interval overrides the yaml default, which is set here to a value
+    so large that it could never select a tablet on its own."""
+    cmdline = ["--auto-repair-enabled-default", "0",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True,
+                             auto_repair_threshold=1, config_per_table=True)
+
     await check_has_repair_time(cql, hosts[0:1], table_id)
 
 def parse_repair_plans(log_line):
