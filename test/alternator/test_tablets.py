@@ -143,7 +143,7 @@ def test_alternator_tablets_and_lwt(dynamodb):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
-        assert_tablets_usage_follows_config(dynamodb, table)
+        assert uses_tablets(dynamodb, table)
         # This put_item() failed before #18068 was fixed:
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'}, ConsistentRead=True)['Item'] == {'p': 'hello'}
@@ -159,6 +159,6 @@ def test_alternator_tablets_without_lwt(dynamodb):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
-        assert_tablets_usage_follows_config(dynamodb, table)
+        assert uses_tablets(dynamodb, table)
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'})['Item'] == {'p': 'hello'}
