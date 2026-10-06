@@ -112,3 +112,14 @@ def test_like_operator_varchar(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "s varchar primary key") as t:
         cql.execute(f"insert into {t} (s) values ('abc')")
         assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+
+# A column of a non-string type cannot be the LHS of the LIKE operator.
+# Scylla-only because Cassandra accepts LIKE on the numeric, timestamp,
+# date and time columns, for which 123 is a valid literal, and rejects it
+# on the other types only because 123 is not a valid literal for them.
+@pytest.mark.parametrize("type", ["bigint", "blob", "boolean", "counter", "decimal", "double", "duration", "float", "inet", "int",
+                                  "smallint", "timestamp", "tinyint", "uuid", "varint", "timeuuid", "date", "time"])
+def test_like_operator_fails_on_non_string(cql, test_keyspace, scylla_only, type):
+    with new_test_table(cql, test_keyspace, f"k {type}, p int primary key") as t:
+        with pytest.raises(InvalidRequest, match="only on string types"):
+            cql.execute(f"select * from {t} where k like 123 allow filtering")
