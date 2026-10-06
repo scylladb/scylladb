@@ -107,3 +107,8 @@ def test_like_operator_ascii(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "s ascii primary key") as t:
         cql.execute(f"insert into {t} (s) values ('abc')")
         assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+
+def test_like_operator_varchar(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "s varchar primary key") as t:
+        cql.execute(f"insert into {t} (s) values ('abc')")
+        assert rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]

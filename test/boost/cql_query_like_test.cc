@@ -25,20 +25,6 @@ using namespace std::literals::chrono_literals;
 
 namespace {
 
-auto T(const char* t) { return utf8_type->decompose(t); }
-
-} // anonymous namespace
-
-SEASTAR_TEST_CASE(test_like_operator_varchar) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (s varchar primary key, )");
-        cquery_nofail(e, "insert into t (s) values ('abc')");
-        require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}});
-    });
-}
-
-namespace {
-
 /// Asserts that a column of type \p type cannot be LHS of the LIKE operator.
 auto assert_like_doesnt_accept(const char* type) {
     return do_with_cql_env_thread([type] (cql_test_env& e) {
