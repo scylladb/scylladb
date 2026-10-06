@@ -8,12 +8,13 @@
 import glob
 import logging
 import os
+import stat
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from cassandra.cluster import Session
+from cassandra.cluster import Session, NoHostAvailable
 from ccmlib.scylla_cluster import ScyllaCluster
 from ccmlib.scylla_node import ScyllaNode
 
@@ -21,10 +22,12 @@ from dtest_class import Tester, create_cf, create_ks
 from test.pylib.skip_types import skip_env
 from tools.assertions import (
     assert_all,
+    assert_one,
     assert_almost_equal,
     assert_lists_equal_ignoring_order,
     assert_row_count,
     assert_row_count_in_select_less,
+    assert_row_count_in_select
 )
 from tools.data import insert_c1c2, rows_to_list
 from tools.metrics import get_node_metrics
@@ -830,3 +833,372 @@ class TestCommitLog(Tester):
 
         # CL replay should not have resurrected the data
         assert len(list(session.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0
+
+    def test_batch_commitlog(self):
+        """
+        Test batch mode of commitlog flushing
+        'batch' mode where each write is flushed as soon as possible (after previous flush completed)
+        and writes are only ready after they are flushed.
+        This mode is used for LWT
+        """
+        session, node1 = self.prepare_cluster_with_ks_cf()
+
+        logger.debug("Insert 100 rows")
+        for i in range(100):
+            session.execute(f"UPDATE Test.cf SET v1={i} WHERE pk1 = {i} and ck1={i} IF v1 = NULL")
+
+        assert_row_count(session=session, table_name="Test.cf", expected=100)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Start node")
+        node1.start()
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+        assert_row_count(session=session, table_name="Test.cf", expected=100)
+
+    def test_commitlog_replay_with_counters(self):
+        """
+        Test commit log replay with counters
+        The goal of the test is to verify that commit log replay works correctly -
+        we save the end result in the commit log, not delta.
+        """
+        node1 = self.node1
+        # Note: using batch mode to eliminate spurious waiting
+        node1.set_configuration_options(values={"commitlog_sync": "batch"})
+        self.cluster.start()
+
+        logger.debug("Create table")
+        session = self.patient_cql_connection(node1)
+        create_ks(session, "Test", 1)
+        session.execute(
+            """
+                    CREATE TABLE cf (
+                        pk1 INT,
+                        ck1 INT,
+                        cnt COUNTER,
+                        PRIMARY KEY(pk1, ck1)
+                    );
+                """
+        )
+
+        logger.debug("Increment counter")
+        for i in range(1, 10):
+            session.execute(f"UPDATE Test.cf SET cnt = cnt + {i} WHERE pk1 = 5 AND ck1 = 6;")
+
+        res = session.execute("SELECT cnt FROM Test.cf WHERE pk1 = 5 AND ck1 = 6;")
+        rows = rows_to_list(res)
+        assert rows[0][0] == 45, f"expecting 45, got rows[0][0]={rows[0][0]}"
+
+        logger.debug("Decrement counter")
+        session.execute("UPDATE Test.cf SET cnt = cnt - 1 WHERE pk1 = 5 AND ck1 = 6;")
+        logger.debug("Add one more counter")
+        session.execute("UPDATE Test.cf SET cnt = cnt + 10 WHERE pk1 = 7 AND ck1 = 8;")
+
+        res = session.execute("SELECT cnt FROM Test.cf;")
+        rows = rows_to_list(res)
+        assert rows[0][0] == 44, f"expecting 44, got rows[0][0]={rows[0][0]}"
+        assert rows[1][0] == 10, f"expecting 10, got rows[1][0]={rows[1][0]}"
+
+        # Original test used periodic + sleep. Not reliable.
+        # TODO: maybe add a sync API so we can whitebox this
+        #time.sleep(2)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Verify commitlog was written before abrupt stop")
+        commitlog_files = self._get_commitlog_files()
+        assert len(commitlog_files) > 0, f"expecting >0, got len(commitlog_files)={len(commitlog_files)}"
+
+        logger.debug("Verify commit log was replayed on startup")
+        node1.start()
+        node1.watch_log_for("Log replay complete")
+        # Here we verify there was more than 0 replayed mutations
+        zero_replays = node1.grep_log(" 0 replayed mutations", filter_expr="DEBUG")
+        assert len(zero_replays) == 0, f"expecting 0, got len(zero_replays)={len(zero_replays)}"
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+        res = session.execute("SELECT cnt FROM Test.cf;")
+        rows = rows_to_list(res)
+        assert rows[0][0] == 44, f"expecting 44, got rows[0][0]={rows[0][0]}"
+        assert rows[1][0] == 10, f"expecting 10, got rows[1][0]={rows[1][0]}"
+
+    # Note: this is not a very good test. What it tests is that a LWT transaction will
+    # force a commitlog flush. The side effect of which is that any writes done to the same
+    # shard will (assumedly, and currently) also be flushed with it.
+    # Transpose it mainly to have the verification assumption of LWT flush remaining
+    def test_mixed_mode_commitlog_2_partitions_smp_1(self):
+        """
+        Test 'batch' and 'periodic' mode of commitlog flushing
+
+        - 'periodic' mode is where all commitlog writes are ready the moment they are stored in
+          a memory buffer and the memory buffer is flushed to a storage periodically.
+
+        - 'batch' mode where each write is flushed as soon as possible (after previous flush completed)
+          and writes are only ready after they are flushed.
+          This mode is used for LWT
+        """
+        session, node1 = self.prepare_cluster_with_ks_cf(jvm_args=["--smp", "1"])
+
+        expected_result = []
+        logger.debug("Insert 200 rows")
+        for i in range(100):
+            # Row - candidate for 'batch' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+            # Row - candidate for 'periodic' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({2}, {i}, {i})")
+            expected_result.append([2, i, i])
+            expected_result.append([1, i, i])
+
+        logger.debug("Insert more 100 non-LWT rows and 1 LWT row in the middle of queue")
+        for i in range(100, 200):
+            if i == 150:
+                session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+                expected_result.append([1, i, i])
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({2}, {i}, {i})")
+            if i < 150:
+                expected_result.append([2, i, i])
+
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=101)
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=2", num_rows_expected=200)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Start node")
+        node1.start()
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+
+        # LWT rows - expected all rows were flushed immediately
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=101)
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=2", num_rows_expected=150)
+        assert_all(session=session, query="select * from Test.cf", expected=expected_result, ignore_order=True)
+
+    # This is same as above, but _cannot_ make any assumptions on non-lwt rows, since they
+    # might be on another shard -> not flushed as byproduct.
+    def test_mixed_mode_commitlog_2_partitions_smp_2(self):
+        """
+        Test 'batch' and 'periodic' mode of commitlog flushing
+
+        - 'periodic' mode is where all commitlog writes are ready the moment they are stored in
+          a memory buffer and the memory buffer is flushed to a storage periodically.
+
+        - 'batch' mode where each write is flushed as soon as possible (after previous flush completed)
+          and writes are only ready after they are flushed.
+          This mode is used for LWT
+
+        By Glebs explanation:
+            When LWT and non-LWT data is written into different partitions and smp > 1
+            non-LWT rows may be flushed for many reasons, or may be not.
+            Any number between 0 and total number of written non LWT rows are expected. So there is no expected
+            result for non-LWT rows
+        """
+        session, node1 = self.prepare_cluster_with_ks_cf(jvm_args=["--smp", "2"])
+
+        expected_result = []
+        logger.debug("Insert 200 rows")
+        for i in range(100):
+            # Row - candidate for 'batch' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+            # Row - candidate for 'periodic' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({2}, {i}, {i})")
+            expected_result.append([1, i, i])
+
+        logger.debug("Insert more 100 non-LWT rows and 1 LWT row in the middle of queue")
+        for i in range(100, 200):
+            if i == 150:
+                session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+                expected_result.append([1, i, i])
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({2}, {i}, {i})")
+
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=101)
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=2", num_rows_expected=200)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Start node")
+        node1.start()
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+
+        # LWT rows - expected all rows were flushed immediately
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=101)
+        assert_all(session=session, query="select * from Test.cf where pk1=1", expected=expected_result, ignore_order=True)
+
+    def test_mixed_mode_commitlog_same_partition_smp_1(self):
+        self._mixed_mode_commitlog_same_partition(smp="1")
+
+    def test_mixed_mode_commitlog_same_partition_smp_2(self):
+        self._mixed_mode_commitlog_same_partition(smp="2")
+
+    def _mixed_mode_commitlog_same_partition(self, smp):
+        """
+        Test 'batch' and 'periodic' mode of commitlog flushing
+
+        - 'periodic' mode is where all commitlog writes are ready the moment they are stored in
+          a memory buffer and the memory buffer is flushed to a storage periodically.
+
+        - 'batch' mode where each write is flushed as soon as possible (after previous flush completed)
+          and writes are only ready after they are flushed.
+          This mode is used for LWT
+
+          When LWT and non-LWT data is written into the same partition it isn't matter how many smp -
+          all non-LWT rows that were arrived before last LWT row should be flushed
+        """
+        session, node1 = self.prepare_cluster_with_ks_cf(jvm_args=["--smp", smp])
+
+        expected_result = []
+        logger.debug("Insert 200 rows")
+        for i in range(100):
+            # Row - candidate for 'batch' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+            expected_result.append([1, i, i])
+        for i in range(100, 200):
+            # Row - candidate for 'periodic' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i}, {i})")
+            expected_result.append([1, i, i])
+
+        logger.debug("Insert more 100 non-LWT rows and 1 LWT row in the middle of queue")
+        for i in range(200, 300):
+            if i == 250:
+                session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+            else:
+                session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i}, {i})")
+
+            if i <= 250:
+                expected_result.append([1, i, i])
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=300)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Start node")
+        node1.start()
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+
+        # LWT rows - expected all rows were flushed immediately
+        assert_row_count_in_select(session=session, query="select * from Test.cf", num_rows_expected=251)
+        assert_all(session=session, query="select * from Test.cf", expected=expected_result, ignore_order=True)
+
+    def test_mixed_mode_with_delete_commitlog(self):
+        """
+        Test 'batch' and 'periodic' mode of commitlog flushing
+
+        - 'periodic' mode is where all commitlog writes are ready the moment they are stored in
+          a memory buffer and the memory buffer is flushed to a storage periodically.
+
+        - 'batch' mode where each write is flushed as soon as possible (after previous flush completed)
+          and writes are only ready after they are flushed.
+          This mode is used for LWT
+        """
+        session, node1 = self.prepare_cluster_with_ks_cf()
+
+        expected_result = []
+        logger.debug("Insert 100 non-LWT rows")
+        for i in range(100):
+            # Row - candidate for 'periodic' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i}, {i})")
+            expected_result.append([1, i, i])
+
+        logger.debug("Insert 100 LWT rows")
+        for i in range(100, 200):
+            # Row - candidate for 'batch' mode
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i},{i}) IF NOT EXISTS")
+            if i != 150:
+                expected_result.append([1, i, i])
+
+        logger.debug("Insert more 100 non-LWT rows and 1 LWT row in the middle of queue")
+        for i in range(200, 300):
+            if i == 250:
+                session.execute("DELETE FROM Test.cf WHERE pk1 = 1 and ck1 = 150 IF EXISTS")
+            session.execute(f"INSERT INTO Test.cf (pk1, ck1, v1) VALUES ({1}, {i}, {i})")
+            if i < 250:
+                expected_result.append([1, i, i])
+
+        assert_row_count_in_select(session=session, query="select * from Test.cf where pk1=1", num_rows_expected=299)
+
+        logger.debug("Stop node abruptly")
+        node1.stop(gently=False)
+
+        logger.debug("Start node")
+        node1.start()
+
+        logger.debug("Make query and ensure data is present as expected")
+        session = self.patient_cql_connection(node1)
+        # LWT rows - expected all rows were flushed immediately
+        assert_row_count_in_select(session=session, query="select * from Test.cf", num_rows_expected=249)
+        assert_all(session=session, query="select * from Test.cf", expected=expected_result, ignore_order=True)
+
+    def _change_commitlog_perms(self, mod):
+        path = self._get_commitlog_path()
+        os.chmod(path, mod)
+        # don't change subdirs (schema etc), we want the
+        # errors in data allocation
+        commitlogs = glob.glob(path + "/*.log")
+        for commitlog in commitlogs:
+            os.chmod(commitlog, mod & ~stat.S_IEXEC)
+
+    def _unprotect_cldir(self):
+        self._change_commitlog_perms(stat.S_IRWXU |stat.S_IRGRP|stat.S_IROTH)
+
+    def _provoke_commitlog_failure(self):
+        """Provoke the commitlog failure"""
+
+        # Test things are ok at this point
+        self.session1.execute(
+            """
+            INSERT INTO test (key, col1) VALUES (1, 1);
+        """
+        )
+        assert_one(self.session1, "SELECT * FROM test where key=1;", [1, 1])
+
+        self._change_commitlog_perms(0)
+
+        try:
+            self.node1.stress(["write", "n=1000K", "-col", "size=FIXED(1000)", "-rate", "threads=25"])
+        except:
+            logger.info("Stress failed as expected")
+
+    def test_stop_failure_policy(self):
+        """Test the stop commitlog failure policy (default one)"""
+        self.prepare(batch_commitlog=True)
+        # #9343 - CL will attempt to re-delete files it fails to create/open.
+        # The way we do things, this will cause more exceptions
+        self.ignore_log_patterns.append("commitlog - Could not (delete|recycle) segment")
+
+        try:
+            self._provoke_commitlog_failure()
+            expected_log_message = "storage_service - Shutting down communications due to I/O errors until operator intervention"
+            failure = self.node1.grep_log(expected_log_message)
+            logger.debug(failure)
+            assert failure, f"Cannot find the commitlog failure message in logs, searched for {expected_log_message}"
+            assert self.node1.is_running(), "Node1 should still be running"
+
+            # Cannot write anymore after the failure
+            with pytest.raises(NoHostAvailable):
+                self.session1.execute(
+                    """
+                  INSERT INTO test (key, col1) VALUES (2, 2);
+                """
+                )
+
+            # Should not be able to read neither
+            with pytest.raises(NoHostAvailable):
+                self.session1.execute(
+                    """
+                  "SELECT * FROM test;"
+                """
+                )
+        finally:
+            # make sure the harness can remove the dirs
+            self._unprotect_cldir()
