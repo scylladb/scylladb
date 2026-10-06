@@ -19,7 +19,7 @@ import time
 from test import TEST_RUNNER
 from test.pylib.driver_utils import normalize_cipher, safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-from .util import cql_session
+from .util import cql_session, clients_table
 
 
 if TEST_RUNNER != "runpy":
@@ -96,10 +96,15 @@ def test_tls_versions(cql):
             assert 'protocol version' in str(e) or 'no protocols available' in str(e)
             print(f"{ssl_version} not supported")
 
+# Scylla's system.clients names TLS versions like "TLS1.2", but Cassandra's
+# system_views.clients uses Java's names, like "TLSv1.2". Return Scylla's name.
+def normalize_protocol(protocol):
+    return protocol.replace('TLSv', 'TLS') if protocol else protocol
+
 # a regression test for #9216
 def test_system_clients_stores_tls_info(cql):
     if not cql.cluster.ssl_context:
-        table_result = cql.execute(f"SELECT * FROM system.clients")
+        table_result = cql.execute(f"SELECT * FROM {clients_table(cql)}")
         for row in table_result:
             assert not row.ssl_enabled
             assert row.ssl_protocol is None
@@ -126,14 +131,14 @@ def test_system_clients_stores_tls_info(cql):
                 ports = {c._socket.getsockname()[1]
                          for h in session.cluster.get_connection_holders()
                          for c in h.get_connections() if c._socket}
-                all_rows = list(session.execute("SELECT * FROM system.clients"))
+                all_rows = list(session.execute(f"SELECT * FROM {clients_table(cql)}"))
                 rows = [row for row in all_rows if row.port in ports]
                 if rows and all(
                     row.ssl_enabled
-                    and row.ssl_protocol in ('TLS1.2', 'TLS1.3')
+                    and normalize_protocol(row.ssl_protocol) in ('TLS1.2', 'TLS1.3')
                     and normalize_cipher(row.ssl_cipher_suite) in expected_ciphers
                     for row in rows
-                ) and any(row.ssl_protocol == 'TLS1.2' for row in rows):
+                ) and any(normalize_protocol(row.ssl_protocol) == 'TLS1.2' for row in rows):
                     return
                 time.sleep(0.01)
             # Show the last poll, unfiltered too: the failing condition is otherwise invisible (SCYLLADB-6126).
