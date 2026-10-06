@@ -39,27 +39,27 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
     }
 
     if (table_s.tombstone_gc_enabled()) {
-    // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
-    // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
-    // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
-    // theoretically contain oldest non-overlapping data.
-    auto compaction_time = gc_clock::now();
-    for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
-        auto& sstables = manifest.get_level(level);
-        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-        std::erase_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, compaction_time, table_s);
-        });
-        if (sstables.empty()) {
-            continue;
+        // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
+        // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
+        // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
+        // theoretically contain oldest non-overlapping data.
+        auto compaction_time = gc_clock::now();
+        for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
+            auto& sstables = manifest.get_level(level);
+            // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+            std::erase_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
+                return !worth_dropping_tombstones(sst, compaction_time, table_s);
+            });
+            if (sstables.empty()) {
+                continue;
+            }
+            auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
+                auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+                auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+                return ratio_i < ratio_j;
+            });
+            co_return compaction_descriptor({ sst }, sst->get_sstable_level());
         }
-        auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
-            auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
-            auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
-            return ratio_i < ratio_j;
-        });
-        co_return compaction_descriptor({ sst }, sst->get_sstable_level());
-    }
     }
     co_return manifest.get_oversized_l0_rewrite();
 }
