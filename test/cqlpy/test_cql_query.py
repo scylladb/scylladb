@@ -2758,7 +2758,10 @@ def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
     test_for_single_type("timeuuid", "00000000-0000-1000-0000-000000000000")
 
 
-def test_like_parameter_marker(cql, test_keyspace):
+# Scylla allows the LIKE operator in LWT conditions (IF). Cassandra doesn't -
+# its grammar doesn't allow LIKE in IF conditions, so this test fails on
+# Cassandra with a syntax error.
+def test_like_parameter_marker(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, col text") as table:
         cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (1, 'aaa')")
         cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (2, 'bbb')")
