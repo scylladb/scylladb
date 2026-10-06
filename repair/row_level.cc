@@ -20,6 +20,7 @@
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
 #include "utils/assert.hh"
@@ -596,9 +597,26 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
         sst->being_repaired = sid;
         sst_list.insert(sst);
     };
+    auto consumer = streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, off_str,
+            _topo_guard, inc_repair_handler);
+    // A table that is migrating from vnodes to tablets can receive rows from a
+    // vnode-based repair master. The master's vnode range can span several
+    // tablets on the same shard, but every sstable of a tablet-based table
+    // must belong to a single tablet. Use the token group segregator to write
+    // one sstable per tablet.
+    if (t.uses_tablets() && is_table_migrating(_db.local(), *_schema)) {
+        consumer = [&db = _db, consumer = std::move(consumer)] (mutation_reader reader) -> future<> {
+            // Runs on the destination shard. The erm keeps the tablet map alive.
+            auto erm = db.local().find_column_family(reader.schema()).get_effective_replication_map();
+            auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(reader.schema()->id());
+            auto classify = [&tmap] (dht::token t) -> mutation_writer::token_group_id {
+                return tmap.get_tablet_id(t).value();
+            };
+            co_await mutation_writer::segregate_by_token_group(std::move(reader), std::move(classify), consumer);
+        };
+    }
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, off_str,
-                _topo_guard, inc_repair_handler),
+            std::move(consumer),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
