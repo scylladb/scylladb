@@ -16,6 +16,7 @@ from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
 from test.pylib.driver_utils import safe_driver_shutdown
+from test.cluster.storage.conftest import volumes_factory
 
 if TYPE_CHECKING:
     from collections.abc import Generator
