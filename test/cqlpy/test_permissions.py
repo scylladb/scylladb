@@ -11,7 +11,7 @@ import time
 from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
 from cassandra.query import BatchStatement, BatchType
-from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla, cql_session
+from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla, cql_session, clients_table
 from contextlib import contextmanager
 from test.pylib.skip_types import skip_env
 
@@ -136,8 +136,9 @@ def test_user_displays_as_authenticated(cql):
                 # include our sessions': another client's connection may never
                 # authenticate, and stay ESTABLISHED forever.
                 for retry in range(0, 5):
-                    res = user_session_1.execute("SELECT connection_stage, username FROM system.clients")
-                    stages = [r.connection_stage for r in res if r.username == 'cassandra']
+                    res = user_session_1.execute(f"SELECT connection_stage, username FROM {clients_table(cql)}")
+                    # Cassandra uses lowercase stage names, Scylla uppercase.
+                    stages = [r.connection_stage.upper() for r in res if r.username == 'cassandra']
                     if all([stage == "READY" for stage in stages]):
                         return
                     else:

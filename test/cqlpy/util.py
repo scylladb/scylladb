@@ -137,6 +137,11 @@ def is_cassandra_older_than(cql, version):
     # release_version looks like "5.0.4" or "6.0-alpha1"
     return tuple(int(x) for x in re.findall(r'\d+', release_version)[:len(version)]) < version
 
+# Scylla's system.clients table lists the clients connected to it.
+# Cassandra (4.0 and above) has a similar table, called system_views.clients.
+def clients_table(cql):
+    return 'system.clients' if is_scylla(cql) else 'system_views.clients'
+
 def keyspace_has_tablets(cql, keyspace):
     """ Return true if the keyspace was created with tablets.
 
