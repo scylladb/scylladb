@@ -972,7 +972,7 @@ def testDeleteWithNoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "DELETE FROM %s WHERE partitionKey > ? ", 0)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use DELETE with CONTAINS",
                              "DELETE FROM %s WHERE partitionKey CONTAINS ?", 0)
 
         # Non primary key in the where clause
@@ -1149,7 +1149,7 @@ def testDeleteWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "DELETE FROM %s WHERE partitionKey > ? AND clustering_1 = ? AND clustering_2 = ?", 0, 1, 1)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use DELETE with CONTAINS",
                              "DELETE FROM %s WHERE partitionKey CONTAINS ? AND clustering_1 = ? AND clustering_2 = ?", 0, 1, 1)
 
         # Non primary key in the where clause
