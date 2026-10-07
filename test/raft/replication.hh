@@ -477,6 +477,8 @@ public:
         }
         co_await utils::get_local_injector().inject("raft_test_sm_block_apply",
                 std::chrono::minutes(5), _as);
+        utils::get_local_injector().inject("raft_test_sm_apply_failure",
+                [] { throw std::runtime_error("raft_test_sm_apply_failure"); });
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {

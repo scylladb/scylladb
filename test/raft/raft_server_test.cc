@@ -361,6 +361,51 @@ SEASTAR_THREAD_TEST_CASE(test_abort_with_state_machine_stuck_in_load_snapshot) {
 #endif
 }
 
+// An error which a fiber stops with while the server is being aborted must not
+// reach on_background_error, even if the abort doesn't explain it. Some users
+// escalate on_background_error to on_internal_error, which would turn a
+// shutdown into a crash.
+SEASTAR_THREAD_TEST_CASE(test_background_error_while_aborting_not_reported) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    bool background_error = false;
+    auto cfg = raft::server::configuration {
+        .on_background_error = [&background_error] (std::exception_ptr) { background_error = true; },
+    };
+    auto cluster = get_default_cluster(test_case {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({std::move(cfg)})
+    });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    // Not an abort_requested_exception: an error the abort doesn't explain.
+    scoped_error_injection failing_apply{"raft_test_sm_apply_failure"};
+    apply_release.signal();
+    aborted.get();
+    BOOST_CHECK(!background_error);
+#endif
+}
+
 SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";

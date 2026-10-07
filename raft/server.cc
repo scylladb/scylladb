@@ -2185,11 +2185,17 @@ void server_impl::check_state_machine_usable() const {
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    // abort() aborts the state machine while the fibers still run, so a call
-    // in progress may fail because of that.
-    if (_aborted && (try_catch_nested<seastar::abort_requested_exception>(e)
-            || try_catch_nested<seastar::gate_closed_exception>(e))) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    if (_aborted) {
+        // abort() aborts the state machine while the fibers still run, so a
+        // call in progress may fail because of that.
+        const bool expected = try_catch_nested<seastar::abort_requested_exception>(e)
+                || try_catch_nested<seastar::gate_closed_exception>(e);
+        logger.log(expected ? log_level::debug : log_level::error,
+                "[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+        // Not passed to on_background_error even if unexpected: the server is
+        // already being stopped, and abort() fails all the waiters anyway.
+        // Some users escalate on_background_error to on_internal_error, which
+        // would turn a shutdown into a crash.
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
