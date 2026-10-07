@@ -89,6 +89,22 @@ struct recovery_summary {
     segment_sequence next_segment_seq{0};
 };
 
+// The separator runs in the memtable scheduling group, whose shares the memtable flush controller
+// sets from the memtable backlog. The separator has no memtable, so the controller would leave it
+// at the group's floor of one share, and the separator is on the path of every write: once its task
+// queue is full, writes wait for it. So the segment manager reports the shares the separator needs,
+// and the controller gives the group at least that many.
+//
+// An idle separator needs none, and then the group is the memtables' alone. An active one needs
+// separator_floor_shares, and more as its task queue fills, up to separator_max_shares - the most
+// the memtable flush controller gives - when the queue is full and the writes are already waiting.
+// Twice the floor at which writes stopped waiting for the separator in the worst case measured: small
+// records, with a statement group that never idles.
+static constexpr float separator_floor_shares = 300;
+static constexpr float separator_max_shares = 1000;
+
+float separator_shares_for(bool active, size_t queued_tasks, size_t queue_depth, float floor_shares, float max_shares) noexcept;
+
 // What the logstor of one shard is using. Every field is shard wide and covers every table, unlike
 // the statistics of the segments a compaction group owns. Kept in one struct, read through a single
 // accessor, so that the shard wide usage numbers stay in one place and another one can join them
@@ -179,6 +195,9 @@ public:
     // gives a pointer to them to the constructor of its segment_set.
     segment_stats& shard_segment_stats() noexcept;
     const segment_stats& shard_segment_stats() const noexcept;
+
+    // The CPU shares the separator needs right now, see separator_shares_for().
+    float separator_wanted_shares() const noexcept;
 
     // Returns the path of the file holding the given segment (for debug/introspection).
     // The path is computed from the segment id, the segment is not looked up, so the file
