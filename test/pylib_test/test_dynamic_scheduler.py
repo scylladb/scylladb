@@ -20,7 +20,7 @@ from test.pylib import sched_dir
 from test.pylib.db.model import HostInfo
 from test.pylib.db.writer import DEFAULT_DB_NAME, HOST_INFO_TABLE, SQLiteWriter
 from test.pylib.dynamic_scheduler import (
-    HELD_FORCE_SECONDS,
+    HELD_RESERVE_SECONDS,
     MEM_RESERVE,
     MEM_STALL_LIMIT,
     STATIC_MEM_CPP,
@@ -208,11 +208,12 @@ def test_sending_a_successor_is_what_starts_a_test(tmp_path):
     col = [f"a.py::t{i}.dev.1" for i in range(4)]
     # 3 cores each on a 4-cpu box with target 3.6 -> strictly one at a time
     sched, nodes = make_sched(tmp_path, col, {n: (3.0, 1e9, 1.0) for n in col})
-    # every worker got primed with one held test, exactly one of them was committed
-    assert all(len(n.sent) >= 1 for n in nodes)
+    # one worker runs a test and holds the next, which its successor would start; the
+    # other is not given a test it could not start
     assert len(committed(sched)) == 1
     runner = next(n for n in nodes if len(n.sent) == 2)
-    waiter = next(n for n in nodes if len(n.sent) == 1)
+    waiter = next(n for n in nodes if n is not runner)
+    assert not waiter.sent
     running = runner.sent[0]
     assert committed(sched) == {running}
     # finishing the running test frees the budget: exactly one more starts
@@ -621,6 +622,76 @@ def test_the_pool_shrinks_back_when_workers_sit_idle(tmp_path):
     assert draining_done and all(any(i in sched.committed_at for i in sched.node2pending[n]) for n in draining_done)
 
 
+def test_a_drained_worker_gives_its_held_test_back(tmp_path, monkeypatch):
+    """A worker drained for sitting idle is told to skip the test it holds, which goes
+    back to the queue: run on the way out, it would start past admission, and it needs
+    a fresh setup wherever it runs."""
+    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
+    clock, avail = {"t": 0.0}, {"v": 40 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=2, max_workers=4, n_tests=40,
+                                                 one_file=False)
+    for _ in range(20):
+        if len(sched._live_workers()) == 4:
+            break
+        clock["t"] += 11.0
+        if sched._spawning:
+            arrive(sched, nodes, col)
+        sched.check_schedule()
+    avail["v"] = 0.3 * GB + MEM_RESERVE                  # nothing more fits: the workers idle
+    for node in nodes:
+        for idx in [i for i in sched.node2pending[node] if i in sched.committed_at]:
+            sched.mark_test_complete(node, idx)
+    for _ in range(5):
+        clock["t"] += 61.0
+        sched.check_schedule()
+    evicted = [n for n in nodes if n in sched._evicted]
+    assert evicted and sched.stats["evicted"] == len(evicted)
+    for node in evicted:
+        held = sched._evicted[node]
+        assert node._shutdown_sent and held not in sched.committed_at, "sent home without running it"
+        assert (tmp_path / "sched" / "evictions" / node.gateway.id).read_text() == col[held]
+
+
+def test_a_test_held_too_long_gets_room_kept_instead_of_being_forced(tmp_path):
+    """Small tests refilling every freed core can starve a big one held on a worker.
+    After HELD_RESERVE_SECONDS room is kept for it: the small ones only use what is
+    left beside it, and it starts once enough has finished, never over the budget."""
+    clock = {"t": 1000.0}
+    col = ["a.py::big.dev.1"] + [f"b{i}.py::s.dev.1" for i in range(60)]
+    costs = {"a.py::big.dev.1": (3.0, 1e8, 15.0)}                 # too short to be the critical path
+    costs.update({f"b{i}.py::s.dev.1": (1.0, 1e8, 15.0) for i in range(60)})
+    model = make_model(tmp_path, 4, {profile_key(n): c for n, c in costs.items()})
+    sched = new_sched(FakeConfig(tmp_path, 5), model=model, ncpus=4, mem_total=20 * GB, cpu_target=1.0,
+                      cpu_overcommit=1.0, cgroup_tests=NO_CGROUP, now=lambda: clock["t"],
+                      available_fn=lambda: 20 * GB)
+    nodes = [FakeNode(f"gw{i}") for i in range(5)]
+    for n in nodes:
+        sched.add_node(n); sched.add_node_collection(n, col)
+    sched.collection = col
+    for i in range(len(col)):
+        sched._add_pending(i)
+    big = 0
+    sched._take(sched._file_of(big), big)              # gw0 holds it; the other four run small ones
+    sched._send(nodes[0], big)
+    for node, small in zip(nodes[1:], (1, 2, 3, 4)):
+        sched._take(sched._file_of(small), small)
+        sched._send(node, small)
+        sched._commit(small, node)
+    sched.check_schedule()
+    assert big not in committed(sched)
+    started = clock["t"]
+    while big not in committed(sched) and clock["t"] - started < 10 * HELD_RESERVE_SECONDS:
+        clock["t"] += 4.0
+        idx = min(committed(sched), key=lambda i: sched.committed_at[i])
+        sched.mark_test_complete(next(n for n in nodes if idx in sched.node2pending[n]), idx)
+        if clock["t"] - started < HELD_RESERVE_SECONDS:
+            assert big not in committed(sched) and len(committed(sched)) == 4, "the small ones refill the machine"
+        assert sum(sched.res_cpu.values()) <= 4.0, "never started over the budget"
+    assert sched.stats["reservations"] == 1
+    assert big in committed(sched) and clock["t"] - started <= HELD_RESERVE_SECONDS + 4 * 4.0, \
+        "it starts once the small ones running when room was kept for it are done"
+
+
 def test_a_worker_in_the_middle_of_a_module_is_not_drained(tmp_path):
     """However long admission keeps the next test of its module waiting: draining
     would start that test regardless and send the rest of the module elsewhere."""
@@ -923,8 +994,10 @@ def test_remove_node_distinguishes_held_from_running(tmp_path):
     col = [f"a.py::t{i}.dev.1" for i in range(4)]
     sched, nodes = make_sched(tmp_path, col, {n: (3.0, 1e9, 1.0) for n in col})
     runner = next(n for n in nodes if len(n.sent) == 2)
-    waiter = next(n for n in nodes if len(n.sent) == 1)
-    held_only = waiter.sent[0]
+    waiter = next(n for n in nodes if n is not runner)
+    held_only = min(sched.pending_set)                # handed to it, never started
+    sched._take(sched._file_of(held_only), held_only)
+    sched._send(waiter, held_only)
     waiter._down = True
     assert sched.remove_node(waiter) is None          # never started -> not a crash
     assert held_only in sched.pending_set or any(held_only in sched.node2pending[n] for n in sched.node2pending)
@@ -949,9 +1022,9 @@ def test_repeats_of_an_unknown_test_start_on_what_the_first_copy_measured(tmp_pa
     assert len(committed(sched)) == 1
     first = next(iter(committed(sched)))
     assert sched._costs_for(first).source == "static-cluster"
-    # the other copies are parked on workers, not started
+    # the other copies wait for it, and no idle worker is handed one meanwhile
     assert all(sched._waits_for_first_run(i) for i in range(4) if i != first)
-    assert sched.stats["held_first_run"] >= 1
+    assert all(not n.sent for n in nodes if first not in n.sent)
     sched.learn({"key": profile_key(col[first]), "wall": 3.0, "usage_sec": 1.5, "memory_peak": 3 * GB})
     sched.mark_test_complete(_node_of(sched, first), first)
     rest = committed(sched)
@@ -1164,7 +1237,7 @@ def test_a_blocked_worker_is_never_unblocked_past_memory(tmp_path):
     sched._commit(small, nodes[1])
 
     free["gb"] = 8.0                               # something else takes the memory
-    clock["t"] += 10 * HELD_FORCE_SECONDS          # long past the escape hatch
+    clock["t"] += 10 * HELD_RESERVE_SECONDS          # long past the escape hatch
     sched.check_schedule()
     assert hog not in committed(sched), "must not be forced onto a machine with no room"
     assert sched.stats["forced_held"] == 0
@@ -1248,11 +1321,12 @@ def test_admission_ramps_instead_of_bursting(tmp_path):
 
 
 def test_passed_over_test_still_runs(tmp_path):
-    """Backfill may pass over a big test for as long as the machine is full.
+    """Backfill may pass over a big test, but not for good.
 
-    No test has a deadline, so nothing is reserved for it: the workers stay busy
-    with whatever fits, and the big one runs once the small ones stop refilling
-    the machine.  What must never happen is that it is dropped or dead-locks.
+    A 100-second test on a run with a few seconds of other work left is the critical
+    path: room is kept for it, so the small tests stop refilling the machine and it
+    starts as soon as enough of them have finished.  What must never happen is that
+    it is dropped or dead-locks.
     """
     clock = {"t": 1000.0}
     col = ["a.py::big.dev.1"] + [f"b.py::s{i}.dev.1" for i in range(12)]
@@ -1288,8 +1362,8 @@ def test_passed_over_test_still_runs(tmp_path):
         busy.append(len(committed(sched)))
         if big in committed(sched):
             break
-    assert big in committed(sched)                    # it runs, without anything being reserved for it
-    assert max(busy) >= 2                             # and the machine kept working while it waited
+    assert big in committed(sched), "it runs"
+    assert len(busy) <= 3, "the room kept for it appears after a few small tests"
 
 
 def test_contention_gates_parallelism_learning(tmp_path):
@@ -1597,31 +1671,35 @@ def test_pressure_cuts_lower_the_limit_below_the_core_count_too(tmp_path):
     assert sched.stats["rejected_no_headroom"] == 1
 
 
-def test_pressure_does_not_hold_back_a_worker_going_on_with_a_long_module(tmp_path):
-    """With the target cut by pressure, the next test of a worker's module still
-    starts when the rest of that module is long next to the rest of the run (it
-    replaces the test that just ended); a short module's next test waits, and so
-    does a new module's."""
-    col = ["a.py::first.dev.1"] + [f"a.py::t{i}.dev.1" for i in range(10)] + ["b.py::b0.dev.1", "b.py::b1.dev.1"]
-    sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 60.0) for n in col}, nodes=1, ncpus=16)
-    node = nodes[0]
-    sched.committed_at.clear()
-    sched.measured_load = 7.0
-    sched.cpu_target = sched.cpu_target_frac * 16 / 2      # cut to its floor: the limit is 8 cores
-    sched.total_remaining = 16 * 15 * 60.0               # the rest of the run: 15 minutes
-    # a.py's first test is over; the worker holds a.py's next one, not yet admitted: about
-    # ten minutes of a.py are left
-    sched.node2pending[node] = [1]
-    sched._last_file_done[node] = sched._file_of(0)
-    assert sched._continues_module(node) and not sched._continues_module(node, 11)
-    assert sched._fits(1, node, pressure=True), "a.py's next test goes on"
-    assert not sched._fits(11, node, pressure=True), "b.py would add a module"
-    assert sched.stats["admitted_past_pressure"] == 1
-    # b.py's first test is over and its last one is held: one minute, not long
-    sched.node2pending[node] = [12]
-    sched._last_file_done[node] = sched._file_of(11)
-    assert sched._continues_module(node)
-    assert not sched._fits(12, node, pressure=True), "a short module waits like the rest"
+def test_room_goes_to_a_module_already_set_up_then_to_the_longest_chain(tmp_path):
+    """No test goes past the pressure cut.  When room frees up, a worker going on with
+    its module gets it first (no new setup), then the held test with the longest chain
+    of work behind it; a test that would start a short new module waits."""
+    col = (["a.py::first.dev.1", "a.py::next.dev.1"] + [f"b.py::b{i}.dev.1" for i in range(6)]
+           + ["c.py::c0.dev.1"])
+    # 10-second tests: none is long enough to be the critical path and have room kept for it
+    sched, nodes = make_sched(tmp_path, col, {n: (2.0, 1e8, 10.0) for n in col}, nodes=3, ncpus=16)
+    for n in nodes:                                       # start from three idle workers holding nothing
+        for i in sched.node2pending[n]:
+            sched.committed_at.pop(i, None); sched.res_cpu.pop(i, None); sched.res_mem.pop(i, None)
+            sched._add_pending(i, front=True)
+        sched.node2pending[n] = []
+    a, b, c = nodes
+    for node, idx in ((a, 1), (b, 2), (c, 8)):            # a goes on with a.py; b and c start modules
+        sched._take(sched._file_of(idx), idx)
+        sched._send(node, idx)
+    sched._last_file_done[a] = sched._file_of(0)
+    assert sched._continues_module(a) and not sched._continues_module(b)
+    sched._pressure_guard = lambda: True                   # under pressure, the target cut to its
+    sched.cpu_target = sched.cpu_target_frac * 16 / 2      # floor: the limit is 8 cores
+    sched._refresh_measurement = lambda: None
+    sched.measured_load = 4.5                              # room for one 2-core test, then none
+    sched.check_schedule()
+    assert 1 in committed(sched), "a.py goes on first"
+    assert not {2, 8} & committed(sched), "pressure holds the new modules back"
+    sched.measured_load = 2.5                              # room for one more
+    sched.check_schedule()
+    assert 2 in committed(sched) and 8 not in committed(sched), "b.py's six tests before c.py's one"
 
 
 def _chain_sched(tmp_path, first_wall=None, rest_wall=None):
