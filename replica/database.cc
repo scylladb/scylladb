@@ -3964,7 +3964,8 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
-bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change) const {
+bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change,
+        const std::unordered_set<sstring>& ignored_keyspaces) const {
     // if it's already invalid before the topology change, it's allowed to remain invalid
     try {
         check_rf_rack_validity(tmptr);
@@ -3977,6 +3978,9 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     bool valid = true;
 
     for (const auto& [name, info] : keyspaces) {
+        if (ignored_keyspaces.contains(name)) {
+            continue;
+        }
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy(), change);
         } catch (const std::invalid_argument&) {
