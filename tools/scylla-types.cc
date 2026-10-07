@@ -26,7 +26,7 @@ namespace bpo = boost::program_options;
 namespace std {
 // required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
 // by boost::program_option for printing out the default value of an option
-static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v) {
+static std::ostream& operator<<(std::ostream& os, const std::vector<std::string>& v) {
     return os << fmt::format("{}", v);
 }
 }
@@ -272,7 +272,7 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
 }
 
 const std::vector<operation_option> global_options{
-    typed_option<std::vector<sstring>>("type,t", "the type of the values, all values must be of the same type;"
+    typed_option<std::vector<std::string>>("type,t", "the type of the values, all values must be of the same type;"
             " when values are compounds, multiple types can be specified, one for each type making up the compound, "
             "note that the order of the types on the command line will be their order in the compound too"),
     typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
@@ -283,7 +283,7 @@ const std::vector<operation_option> global_options{
 };
 
 const std::vector<operation_option> global_positional_options{
-    typed_option<std::vector<sstring>>("value", "value(s) to process, can also be provided as positional arguments", -1),
+    typed_option<std::vector<std::string>>("value", "value(s) to process, can also be provided as positional arguments", -1),
 };
 
 const std::map<operation, operation_func_variant> operations_with_func = {
@@ -424,7 +424,7 @@ $ scylla types {{action}} --help
             throw std::invalid_argument("error: missing required option '--type'");
         }
         type_variant type = [&app_config] () -> type_variant {
-            auto types = app_config["type"].as<std::vector<sstring>>()
+            auto types = app_config["type"].as<std::vector<std::string>>()
                     | std::views::transform([] (const std::string_view type_name) { return db::marshal::type_parser::parse(type_name); })
                     | std::ranges::to<std::vector<data_type>>();
             if (app_config.contains("prefix-compound")) {
@@ -447,13 +447,16 @@ $ scylla types {{action}} --help
         switch (handler.index()) {
             case 0:
                 {
-                    auto from_hex_func = [] (const sstring& hex_str) { return from_hex(hex_str); };
-                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex_func) | std::ranges::to<std::vector>();
+                    auto from_hex_func = [] (const std::string& hex_str) { return from_hex(hex_str); };
+                    auto values = app_config["value"].as<std::vector<std::string>>() | std::views::transform(from_hex_func) | std::ranges::to<std::vector>();
                     std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);
                 }
                 break;
             case 1:
-                std::get<string_func>(handler)(std::move(type), app_config["value"].as<std::vector<sstring>>(), app_config);
+                {
+                    auto values = app_config["value"].as<std::vector<std::string>>() | std::ranges::to<std::vector<sstring>>();
+                    std::get<string_func>(handler)(std::move(type), std::move(values), app_config);
+                }
                 break;
         }
 
