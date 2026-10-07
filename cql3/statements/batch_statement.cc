@@ -134,7 +134,7 @@ std::optional<sstring> batch_statement::verify_batch_size(query_processor& qp, c
 
     size_t size = 0;
     for (auto&m : mutations) {
-        size += m.partition().external_memory_usage(*m.schema());
+        size += m.partition().representation_independent_data_size(*m.schema());
     }
 
     if (size > warn_threshold) {
