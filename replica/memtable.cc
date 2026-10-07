@@ -59,7 +59,7 @@ void memtable::memtable_encoding_stats_collector::update(tombstone tomb) noexcep
 }
 
 void memtable::memtable_encoding_stats_collector::update(const ::schema& s, const row& r, column_kind kind) {
-    r.for_each_cell([this, &s, kind](column_id id, const atomic_cell_or_collection& item) {
+    r.for_each_cell([this, &s, kind](column_id id, atomic_cell_or_collection_view item) {
         auto& col = s.column_at(kind, id);
         if (col.is_atomic()) {
             update(item.as_atomic_cell(col));

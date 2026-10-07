@@ -165,7 +165,7 @@ converting_mutation_partition_applier::accept_row_cell(column_id id, collection_
 }
 
 void
-converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
+converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, atomic_cell_or_collection_view cell,
         db::large_data_cache_tracker* tracker) {
     if (new_def.is_atomic()) {
         accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def), tracker);

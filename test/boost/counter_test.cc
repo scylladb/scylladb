@@ -160,7 +160,7 @@ atomic_cell_view get_counter_cell(mutation& m) {
     const auto& cells = mp.clustered_rows().begin()->row().cells();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     std::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+    cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view ac_o_c) {
         acv = ac_o_c.as_atomic_cell(m.schema()->regular_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));
@@ -172,7 +172,7 @@ atomic_cell_view get_static_counter_cell(mutation& m) {
     const auto& cells = mp.static_row();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     std::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+    cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view ac_o_c) {
         acv = ac_o_c.as_atomic_cell(m.schema()->static_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));

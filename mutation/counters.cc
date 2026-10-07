@@ -203,7 +203,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
 
     auto transform_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& transformee, auto& state) {
         std::deque<std::pair<column_id, counter_shard>> shards;
-        state.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        state.for_each_cell([&] (column_id id, atomic_cell_or_collection_view ac_o_c) {
             auto& cdef = s.column_at(kind, id);
             auto acv = ac_o_c.as_atomic_cell(cdef);
             if (!acv.is_live()) {

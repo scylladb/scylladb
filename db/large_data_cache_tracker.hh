@@ -21,6 +21,7 @@ class schema;
 class rows_entry;
 class column_definition;
 class atomic_cell_or_collection;
+class atomic_cell_or_collection_view;
 
 namespace db {
 
@@ -139,7 +140,7 @@ public:
     void set_partition_key(bytes pk) noexcept { _pk_bytes = std::move(pk); }
     void on_row_merged(const schema& s, const rows_entry& row) noexcept;
     void on_collection_merged(const column_definition& cdef,
-            const atomic_cell_or_collection& merged_cell) noexcept;
+            atomic_cell_or_collection_view merged_cell) noexcept;
 
 private:
     struct pending_collection {

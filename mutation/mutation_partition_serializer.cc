@@ -92,7 +92,7 @@ template<typename Writer>
 auto write_row_cells(Writer&& writer, const row& r, const schema& s, column_kind kind)
 {
     auto column_writer = std::move(writer).start_columns();
-    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+    r.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
         auto& def = s.column_at(kind, id);
         auto cell_or_collection_writer = column_writer.add().write_id(id);
         if (def.is_atomic()) {

@@ -738,7 +738,7 @@ void process_changes_without_splitting(const mutation& base_mutation, change_pro
 
         one_kind_column_set columns{base_schema->static_columns_count()};
         if (!p.static_row().empty()) {
-            p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            p.static_row().get().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
                 columns.set(id);
             });
             processor.produce_preimage(nullptr, columns);
@@ -751,7 +751,7 @@ void process_changes_without_splitting(const mutation& base_mutation, change_pro
                 // Row deleted - include all columns in preimage
                 columns.set(0, base_schema->regular_columns_count(), true);
             } else {
-                cr.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+                cr.row().cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
                     columns.set(id);
                 });
             }
