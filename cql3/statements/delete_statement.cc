@@ -120,12 +120,15 @@ void delete_statement::delete_row_range(mutation& m, const query::clustering_ran
         return;
     }
 
+    const auto prefix = range.start() ? range.start()->value() : clustering_key_prefix::make_empty();
+    mutation_cell_collector cells(m, prefix);
     for (auto&& op : _column_operations) {
         if (op->should_skip_operation(params._options)) {
             continue;
         }
-        op->execute(m, range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty(), params);
+        op->execute(cells, prefix, params);
     }
+    cells.finish();
 }
 
 namespace raw {

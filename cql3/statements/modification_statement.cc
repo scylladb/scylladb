@@ -745,7 +745,14 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
         _is_raw_counter_shard_write = is_raw_counter_shard_write;
     }
 
-    _column_operations.push_back(std::move(op));
+    // Keep operations ordered by column (static columns first), so that the
+    // cells they write are added to rows in column order, a block at a time
+    // (see mutation_cell_collector). Operations on the same column keep their order.
+    auto column_order = [] (const std::unique_ptr<operation>& o) {
+        return std::pair(o->column.is_regular(), o->column.id);
+    };
+    auto pos = std::ranges::upper_bound(_column_operations, column_order(op), std::less<>(), column_order);
+    _column_operations.insert(pos, std::move(op));
 }
 
 void modification_statement::inc_cql_stats(bool is_internal) const {
