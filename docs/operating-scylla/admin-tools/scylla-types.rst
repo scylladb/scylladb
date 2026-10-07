@@ -65,6 +65,28 @@ of the types on the command line must be the same as the order in the compound).
    scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 
 
+.. _scylla-types-schema-file:
+
+**Schema file**
+
+Instead of specifying the type(s) with ``-t``, you can load the schema of the table the values belong to, from a schema file, with ``--schema-file``.
+The schema file is expected to contain the ``CREATE TABLE`` statement of exactly one table, possibly preceded by ``CREATE KEYSPACE`` and ``CREATE TYPE``
+statements (for the UDTs the table uses). This is the same schema file format accepted by :doc:`scylla sstable </operating-scylla/admin-tools/scylla-sstable>`.
+When loading the type from the schema file, you also have to specify which type of the table the values belong to:
+
+* ``--column <name>`` - The type of the named column. For clustering columns, this is the type the clustering order of the column applies to
+  (``ReversedType`` for descending order).
+* ``--prefix-compound`` (``--clustering-key``) - The clustering key.
+* ``--full-compound`` (``--partition-key``) or ``--legacy-composite`` (``--legacy-partition-key``) - The partition key. When working with partition
+  keys of a table loaded from a schema file, its partitioner is used too (e.g., the CDC partitioner for CDC log tables), so ``tokenof``, ``shardof``
+  and ``ring-order-compare`` work correctly even for tables with non-default partitioners.
+
+For example:
+
+.. code-block:: console
+
+   scylla types deserialize --schema-file schema.cql --partition-key 0004000000010003616263
+
 .. _scylla-types-operations:
 
 Supported Operations
@@ -100,6 +122,8 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``--help-seastar`` - Prints the help message about the Seastar options.
 * ``--help-loggers`` - Prints a list of logger names.
 * ``-t`` ( or ``--type``) - Specifies the type of the provided value. See :ref:`Specifying the Value Type <scylla-types-type>`.
+* ``--schema-file`` - Path to a schema file, to load the type of the values from, instead of specifying it with ``-t``. See :ref:`Schema file <scylla-types-schema-file>`.
+* ``--column`` - The name of the column, which the values belong to. Only usable with ``--schema-file``.
 * ``--prefix-compound`` (or ``--clustering-key``) - Indicates that the value is a prefixable compound (e.g., clustering key) composed of multiple values of possibly different types.
 * ``--full-compound`` (or ``--partition-key``) - Indicates that the value is a full compound (e.g., partition key) composed of multiple values of possibly different types.
 * ``--legacy-composite`` (or ``--legacy-partition-key``) - Indicates that the value is a full compound (e.g., partition key), serialized in the legacy composite format,

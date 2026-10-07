@@ -43,3 +43,8 @@ def test_shardof_requires_full_compound(scylla_types_fails_with, compound_args):
 def test_shardof_legacy_composite(scylla_types):
     res = scylla_types("shardof", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "--shards=8", "00040000000100000361626300")
     assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"
+
+
+def test_shardof_schema_file(scylla_types, schema_file):
+    res = scylla_types("shardof", "--schema-file", schema_file, "--partition-key", "--shards=8", "0004000000010003616263")
+    assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"

@@ -51,3 +51,11 @@ def test_validate_legacy_composite(scylla_types):
     assert lines[1].startswith("000400000001000003616200: INVALID - ")
     # Value in scylla's in-memory format, missing the end-of-component bytes.
     assert lines[2].startswith("0004000000010003616263: INVALID - ")
+
+
+def test_validate_schema_file_column(scylla_types, schema_file):
+    res = scylla_types("validate", "--schema-file", schema_file, "--column", "pk1", "00000001", "000001")
+    lines = res.stdout.splitlines()
+    assert len(lines) == 2
+    assert lines[0] == "00000001: VALID - 1"
+    assert lines[1].startswith("000001: INVALID - ")

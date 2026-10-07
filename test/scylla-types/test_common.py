@@ -83,3 +83,39 @@ def test_compound_option_alias(scylla_types, action, option_name, alias):
     expected = scylla_types(action, *compound_option_args(action, option_name, f"--{option_name}")).stdout
     assert expected
     assert scylla_types(action, *compound_option_args(action, option_name, f"--{alias}")).stdout == expected
+
+
+def test_schema_file_and_type(scylla_types_fails_with, schema_file):
+    scylla_types_fails_with("serialize", "--schema-file", schema_file, "--column", "pk1", "-t", "Int32Type", "--", "1",
+                            error="error: --type and --schema-file are mutually exclusive")
+
+
+def test_column_without_schema_file(scylla_types_fails_with):
+    scylla_types_fails_with("serialize", "--column", "pk1", "-t", "Int32Type", "--", "1",
+                            error="error: --column requires --schema-file")
+
+
+def test_schema_file_unknown_column(scylla_types_fails_with, schema_file):
+    scylla_types_fails_with("serialize", "--schema-file", schema_file, "--column", "foo", "--", "1",
+                            error="error: column foo not found in table ks.tbl")
+
+
+def test_schema_file_without_type_selector(scylla_types_fails_with, schema_file):
+    scylla_types_fails_with("serialize", "--schema-file", schema_file, "--", "1",
+                            error="error: --schema-file requires one of: --column, --prefix-compound (--clustering-key),"
+                                  " --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key)")
+
+
+@pytest.mark.parametrize("compound_option", ["--prefix-compound", "--clustering-key", "--full-compound", "--partition-key",
+                                             "--legacy-composite", "--legacy-partition-key"])
+def test_schema_file_column_and_compound(scylla_types_fails_with, schema_file, compound_option):
+    scylla_types_fails_with("serialize", "--schema-file", schema_file, "--column", "pk1", compound_option, "--", "1",
+                            error="error: --column cannot be used together with --prefix-compound (--clustering-key),"
+                                  " --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key)")
+
+
+def test_schema_file_not_found(scylla_types_fails_with, tmp_path):
+    path = str(tmp_path / "nonexistent.cql")
+    res = scylla_types_fails_with("serialize", "--schema-file", path, "--column", "pk1", "--", "1",
+                                  error="No such file or directory")
+    assert path in res.stderr

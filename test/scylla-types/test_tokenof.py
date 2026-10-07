@@ -41,3 +41,12 @@ def test_tokenof_legacy_composite(scylla_types):
 def test_tokenof_legacy_composite_single_component(scylla_types):
     res = scylla_types("tokenof", "--legacy-composite", "-t", "Int32Type", "00000001")
     assert res.stdout == "(1): -4069959284402364209\n"
+
+
+@pytest.mark.parametrize("compound_option,key", [
+    ("--partition-key", "0004000000010003616263"),
+    ("--legacy-partition-key", "00040000000100000361626300"),
+])
+def test_tokenof_schema_file(scylla_types, schema_file, compound_option, key):
+    res = scylla_types("tokenof", "--schema-file", schema_file, compound_option, key)
+    assert res.stdout == "(1, abc): 8771735466527499816\n"
