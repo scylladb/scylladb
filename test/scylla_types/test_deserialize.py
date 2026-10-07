@@ -52,3 +52,25 @@ def test_deserialize_full_compound(scylla_types):
 def test_deserialize_type_with_spaces(scylla_types):
     res = scylla_types("deserialize", "-t", "MapType(Int32Type, UTF8Type)", "0000000100000004000000010000000161")
     assert res.stdout == "{1 : a}\n"
+
+
+@pytest.mark.parametrize("cql_type,cassandra_type,serialized", [
+    ("map<int, text>", "MapType(Int32Type, UTF8Type)", "0000000100000004000000010000000161"),
+    ("Map<INT,Text>", "MapType(Int32Type, UTF8Type)", "0000000100000004000000010000000161"),
+    ("frozen<map<int, text>>", "FrozenType(MapType(Int32Type, UTF8Type))", "0000000100000004000000010000000161"),
+    ("list<int>", "ListType(Int32Type)", "000000010000000400000001"),
+    ("set<text>", "SetType(UTF8Type)", "000000010000000161"),
+    ("tuple<int, text>", "TupleType(Int32Type, UTF8Type)", "00000004000000010000000161"),
+    ("list<frozen<tuple<int, text>>>", "ListType(FrozenType(TupleType(Int32Type, UTF8Type)))",
+     "000000010000000d00000004000000010000000161"),
+    ("vector<float, 3>", "VectorType(FloatType, 3)", "3f8000004000000040400000"),
+    ("ReversedType(timeuuid)", "ReversedType(TimeUUIDType)", "d00819896f6b11ea00000000001c571b"),
+])
+def test_deserialize_cql_type_name(scylla_types, cql_type, cassandra_type, serialized):
+    """Parametrized CQL types are equivalent to the respective cassandra types.
+
+    CQL type names can also be mixed with cassandra type names.
+    """
+    expected = scylla_types("deserialize", "-t", cassandra_type, serialized).stdout
+    assert expected
+    assert scylla_types("deserialize", "-t", cql_type, serialized).stdout == expected

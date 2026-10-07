@@ -98,3 +98,44 @@ def test_serialize_value_with_spaces(scylla_types):
 def test_serialize_full_compound_value_with_spaces(scylla_types):
     res = scylla_types("serialize", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "--", "1", "a b")
     assert res.stdout == "0004000000010003612062\n"
+
+
+@pytest.mark.parametrize("cql_type,cassandra_type,value,serialized", [
+    ("ascii", "AsciiType", "abc", "616263"),
+    ("bigint", "LongType", "1", "0000000000000001"),
+    ("blob", "BytesType", "0102", "0102"),
+    ("boolean", "BooleanType", "true", "01"),
+    ("counter", "CounterColumnType", "1", "0000000000000001"),
+    ("date", "SimpleDateType", "2021-03-27", "80004919"),
+    ("decimal", "DecimalType", "1.5", "000000010f"),
+    ("double", "DoubleType", "1.5", "3ff8000000000000"),
+    ("duration", "DurationType", "1h", "0000fc068c61714000"),
+    ("float", "FloatType", "1.5", "3fc00000"),
+    ("inet", "InetAddressType", "127.0.0.1", "7f000001"),
+    ("int", "Int32Type", "1", "00000001"),
+    ("smallint", "ShortType", "1", "0001"),
+    ("text", "UTF8Type", "abc", "616263"),
+    ("varchar", "UTF8Type", "abc", "616263"),
+    ("time", "TimeType", "08:12:54", "00001ae5bbc3bc00"),
+    ("timestamp", "TimestampType", "2021-03-27 10:00:00+0000", "0000017873204d00"),
+    ("timeuuid", "TimeUUIDType", "d0081989-6f6b-11ea-0000-0000001c571b", "d00819896f6b11ea00000000001c571b"),
+    ("tinyint", "ByteType", "1", "01"),
+    ("uuid", "UUIDType", "c61a3321-0459-41c3-8e56-75255feb0196", "c61a3321045941c38e5675255feb0196"),
+    ("varint", "IntegerType", "1", "01"),
+])
+def test_serialize_cql_type_name(scylla_types, cql_type, cassandra_type, value, serialized):
+    """Types can be specified with their CQL name, which is equivalent to the cassandra type class name."""
+    for type_name in (cql_type, cql_type.upper(), cassandra_type):
+        res = scylla_types("serialize", "-t", type_name, "--", value)
+        assert res.stdout == f"{serialized}\n"
+
+
+def test_serialize_prefix_compound_cql_type_names(scylla_types):
+    res = scylla_types("serialize", "--prefix-compound", "-t", "timeuuid", "-t", "int", "--",
+                       "d0081989-6f6b-11ea-0000-0000001c571b", "16")
+    assert res.stdout == "0010d00819896f6b11ea00000000001c571b000400000010\n"
+
+
+@pytest.mark.parametrize("type_name", ["list<int>", "frozen<map<int, text>>", "vector<float, 3>", "tuple<int, frozen<set<int>>>"])
+def test_serialize_unsupported_cql_type(scylla_types_fails_with, type_name):
+    scylla_types_fails_with("serialize", "-t", type_name, "--", "1", error="is not supported")

@@ -47,3 +47,9 @@ def test_compare_full_compound(scylla_types):
     res = scylla_types("compare", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type",
                        "0004000000010003616263", "0004000000020003616263")
     assert res.stdout == "(1, abc) < (2, abc)\n"
+
+
+def test_compare_cql_type_name(scylla_types):
+    res = scylla_types("compare", "-t", "ReversedType(timeuuid)",
+                       "b34b62d46a8d11ea0000005000237906", "d00819896f6b11ea00000000001c571b")
+    assert res.stdout == "b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b\n"

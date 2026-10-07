@@ -28,9 +28,11 @@ The command syntax is as follows:
 Specifying the Value Type
 -------------------------
 
-You must specify the type of the value(s) you want to examine by adding the ``-t [type name]`` option to the operation. 
-Specify the type by providing its Cassandra class name (the prefix can be omitted, for example, you can provide ``Int32Type`` 
-instead of ``org.apache.cassandra.db.marshal.Int32Type``). See `CQL3 Type Mapping <https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md>`_ for a mapping of cql3 types to Cassandra type class names.
+You must specify the type of the value(s) you want to examine by adding the ``-t [type name]`` option to the operation.
+Specify the type by providing either its CQL name (for example, ``int`` or ``map<int, text>``) or its Cassandra class name (the prefix can be omitted,
+for example, you can provide ``Int32Type`` instead of ``org.apache.cassandra.db.marshal.Int32Type``). See `CQL3 Type Mapping <https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md>`_
+for a mapping of CQL types to Cassandra type class names. CQL names are case-insensitive and can be mixed with Cassandra class names, for example,
+``ReversedType(timeuuid)``.
 
 Type names and values containing spaces, for example ``MapType(Int32Type, UTF8Type)``, have to be quoted on the command line.
 
@@ -175,6 +177,19 @@ Examples
        :class: hide-copy-button
 
        b34b62d4: VALID - -1286905132
+
+* Deserializing a value of a collection type, specified with its CQL name:
+
+    .. code-block:: console
+
+       scylla types deserialize -t 'map<int, text>' 0000000100000004000000010000000161
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+       {1 : a}
 
 * Comparing two values of ReversedType(TimeUUIDType):
 

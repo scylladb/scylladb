@@ -36,3 +36,17 @@ def test_fully_qualified_type_name(scylla_types):
     """The org.apache.cassandra.db.marshal. prefix of the type class names is optional."""
     res = scylla_types("serialize", "-t", "org.apache.cassandra.db.marshal.Int32Type", "--", "1")
     assert res.stdout == "00000001\n"
+
+
+@pytest.mark.parametrize("type_name,error", [
+    ("list<int", "failed to parse type 'list<int' at position 8: expected '>'"),
+    ("foo<int>", "failed to parse type 'foo<int>' at position 4: unknown parametric type foo"),
+    ("map<int, text> x", "failed to parse type 'map<int, text> x' at position 15: unexpected trailing characters"),
+    ("<int>", "failed to parse type '<int>' at position 0: expected type name"),
+])
+def test_invalid_cql_type_name(scylla_types_fails_with, type_name, error):
+    scylla_types_fails_with("deserialize", "-t", type_name, "00000001", error=error)
+
+
+def test_unknown_type_name(scylla_types_fails_with):
+    scylla_types_fails_with("deserialize", "-t", "foo", "00000001", error="unknown type: org.apache.cassandra.db.marshal.foo")
