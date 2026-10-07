@@ -882,6 +882,29 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Scyl
         for r in replicas:
             assert len(r.replicas) == 2
 
+@pytest.mark.xfail(reason="SCYLLADB-5066", strict=True)
+@pytest.mark.skip_mode(mode='debug', reason='repair row count is mode-independent; debug only adds runtime')
+async def test_rf_increase_repairs_tablet_once(manager: ScyllaClusterManager) -> None:
+    """Adding a DC (0->2) should repair each tablet once, not once per added replica."""
+    servers = await manager.servers_add(4, property_file=[
+        {'dc': 'dc1', 'rack': 'r1a'}, {'dc': 'dc1', 'rack': 'r1b'},
+        {'dc': 'dc2', 'rack': 'r2a'}, {'dc': 'dc2', 'rack': 'r2b'}])
+    cql = manager.get_cql()
+    nrows = 10
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1a', 'r1b']} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk) VALUES ({k})", consistency_level=ConsistencyLevel.ALL)) for k in range(nrows)])
+
+        async def rows_read_by_repair(s):
+            return (await manager.metrics.query(s.ip_addr)).get('scylla_repair_row_from_disk_nr') or 0
+
+        before = [await rows_read_by_repair(s) for s in servers[:2]]
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1a', 'r1b'], 'dc2': ['r2a', 'r2b']}}")
+        # A replica reads the tablet once per repair it joins; at most one repair is the goal.
+        read = [await rows_read_by_repair(s) - b for s, b in zip(servers[:2], before)]
+        assert max(read) <= nrows, f"dc1 replicas read {read} rows in repair, expected at most {nrows} each (one repair)"
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test aborting a 0->N RF increase (adding a new DC)."""
