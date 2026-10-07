@@ -3128,8 +3128,8 @@ public:
     void del(const bytes& name, api::timestamp_type ts) {
         add(name, atomic_cell::make_dead(ts, gc_clock::now()));
     }
-    collection_mutation to_mut() {
-        collection_mutation_writer ret(tombstone{});
+    collection_mutation to_mut(tombstone tomb = {}) {
+        collection_mutation_writer ret(tomb);
         for (auto&& e : collected) {
             ret.push_back(bytes_view(e.first), std::move(e.second));
         }
@@ -3546,10 +3546,6 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
         }
     }
     auto attrs = attrs_column(*schema);
-    if (!attrs_collector.empty()) {
-        auto serialized_map = attrs_collector.to_mut();
-        row.cells().apply(attrs, std::move(serialized_map));
-    }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
@@ -3570,7 +3566,9 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     //    Scylla to handle collection replacements in CQL (see #6084, PR #6491,
     //    e.g. cql3::maps::setter::execute()) and we utilize it to avoid
     //    emitting the REMOVE event (resolving #6930).
-    row.cells().apply(attrs, collection_mutation_writer(tombstone{ts - 1, gc_clock::now()}).finish());
+    // The tombstone is written into the same cell as the collected
+    // attributes, so the cell is applied to the row only once.
+    row.cells().apply(attrs, attrs_collector.to_mut(tombstone{ts - 1, gc_clock::now()}));
     // Note that for old tables created with regular LSI and GSI key columns,
     // we must also delete the regular columns that are not part of the new
     // schema consisting of pk, ck, and :attrs.
