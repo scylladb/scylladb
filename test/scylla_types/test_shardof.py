@@ -37,4 +37,9 @@ def test_shardof_missing_shards(scylla_types_fails_with):
 @pytest.mark.parametrize("compound_args", [[], ["--prefix-compound"]])
 def test_shardof_requires_full_compound(scylla_types_fails_with, compound_args):
     scylla_types_fails_with("shardof", *compound_args, "-t", "Int32Type", "--shards=8", "00000001",
-                            error="shardof action requires full-compound input")
+                            error="shardof action requires full-compound or legacy-composite input")
+
+
+def test_shardof_legacy_composite(scylla_types):
+    res = scylla_types("shardof", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "--shards=8", "00040000000100000361626300")
+    assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"

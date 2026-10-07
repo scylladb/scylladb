@@ -39,3 +39,15 @@ def test_validate_full_compound(scylla_types):
     assert len(lines) >= 2
     assert lines[0] == "0004000000010003616263: VALID - (1, abc)"
     assert lines[1].startswith("0004000000: INVALID - ")
+
+
+def test_validate_legacy_composite(scylla_types):
+    res = scylla_types("validate", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type",
+                       "00040000000100000361626300", "000400000001000003616200", "0004000000010003616263")
+    lines = res.stdout.splitlines()
+    assert len(lines) == 3
+    assert lines[0] == "00040000000100000361626300: VALID - (1, abc)"
+    # Truncated value.
+    assert lines[1].startswith("000400000001000003616200: INVALID - ")
+    # Value in scylla's in-memory format, missing the end-of-component bytes.
+    assert lines[2].startswith("0004000000010003616263: INVALID - ")

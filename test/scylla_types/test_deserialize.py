@@ -74,3 +74,18 @@ def test_deserialize_cql_type_name(scylla_types, cql_type, cassandra_type, seria
     expected = scylla_types("deserialize", "-t", cassandra_type, serialized).stdout
     assert expected
     assert scylla_types("deserialize", "-t", cql_type, serialized).stdout == expected
+
+
+def test_deserialize_legacy_composite(scylla_types):
+    res = scylla_types("deserialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "00040000000100000361626300")
+    assert res.stdout == "(1, abc)\n"
+
+
+def test_deserialize_legacy_composite_single_component(scylla_types):
+    res = scylla_types("deserialize", "--legacy-composite", "-t", "Int32Type", "00000001")
+    assert res.stdout == "(1)\n"
+
+
+def test_deserialize_legacy_composite_invalid(scylla_types_fails_with):
+    scylla_types_fails_with("deserialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "000400000001000003616200",
+                            error="invalid legacy compound")

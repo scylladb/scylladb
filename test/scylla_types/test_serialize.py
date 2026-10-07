@@ -139,3 +139,19 @@ def test_serialize_prefix_compound_cql_type_names(scylla_types):
 @pytest.mark.parametrize("type_name", ["list<int>", "frozen<map<int, text>>", "vector<float, 3>", "tuple<int, frozen<set<int>>>"])
 def test_serialize_unsupported_cql_type(scylla_types_fails_with, type_name):
     scylla_types_fails_with("serialize", "-t", type_name, "--", "1", error="is not supported")
+
+
+def test_serialize_legacy_composite(scylla_types):
+    res = scylla_types("serialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "--", "1", "abc")
+    assert res.stdout == "00040000000100000361626300\n"
+
+
+def test_serialize_legacy_composite_single_component(scylla_types):
+    """Single-component keys are serialized as-is in the legacy composite format."""
+    res = scylla_types("serialize", "--legacy-composite", "-t", "Int32Type", "--", "1")
+    assert res.stdout == "00000001\n"
+
+
+def test_serialize_legacy_composite_too_few_values(scylla_types_fails_with):
+    scylla_types_fails_with("serialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "--", "1",
+                            error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")

@@ -48,8 +48,12 @@ If you provide more than one value, all of the values must share the same type. 
 
 A compound is a single value that is composed of multiple values of possibly different types. An example of a compound value is a clustering key or a partition key.
 
-You can use the ``--prefix-compound`` or ``--full-compound``  options to indicate that the provided value is a compound 
+You can use the ``--prefix-compound``, ``--full-compound`` or ``--legacy-composite`` options to indicate that the provided value is a compound
 (see :ref:`Additional Options <scylla-types-options>`) for details.
+
+Full compounds (partition keys) can be serialized in two formats: ScyllaDB's in-memory format (``--full-compound``), which is the format
+partition keys are printed in, in ScyllaDB's logs, and the legacy composite format (``--legacy-composite``), which is the format partition
+keys are stored in, in SStables. Note that in the legacy composite format, single-component keys are serialized as the value of the component.
 
 When a value is a compound, you can specify a different type for each value making up the compound, **respectively** (i.e., the order 
 of the types on the command line must be the same as the order in the compound). For example:
@@ -70,8 +74,8 @@ Supported Operations
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
-* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
-* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``).
+* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound`` or ``--legacy-composite``).
+* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound`` or ``--legacy-composite``).
 
 
 You can learn more about each operation by invoking its help:
@@ -93,6 +97,8 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``-t`` ( or ``--type``) - Specifies the type of the provided value. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * ``--prefix-compound`` - Indicates that the value is a prefixable compound (e.g., clustering key) composed of multiple values of possibly different types.
 * ``--full-compound`` - Indicates that the value is a full compound (e.g., partition key) composed of multiple values of possibly different types.
+* ``--legacy-composite`` - Indicates that the value is a full compound (e.g., partition key), serialized in the legacy composite format, used in SStables,
+  instead of ScyllaDB's in-memory format.
 * ``--shards`` - The number of shards (only relevant for the ``shardof`` operation).
 * ``--ignore-msb-bits`` - The number of the most significant bits of the token to ignore, when calculating the shard. Defaults to 12, the default
   value of the ``murmur3_partitioner_ignore_msb_bits`` configuration option (only relevant for the ``shardof`` operation).
@@ -151,6 +157,19 @@ Examples
        :class: hide-copy-button
 
         0004000000010003616263
+
+* Serializing a partition-key in the legacy composite format, used in SStables (``--legacy-composite``):
+
+    .. code-block:: console
+
+        scylla types serialize --legacy-composite -t Int32Type -t UTF8Type -- 1 abc
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        00040000000100000361626300
 
 * Deserializing and printing a value of type Int32Type:
 
