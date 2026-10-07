@@ -1092,6 +1092,9 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage(const schema&) const;
+    // The size of the row's data, independent of its in-memory representation;
+    // see mutation_partition::data_size().
+    size_t data_size() const;
 
     // Handles eviction of the row, but doesn't attempt to handle eviction
     // of the containing partition_entry in case this is the last row.
