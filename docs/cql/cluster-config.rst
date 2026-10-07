@@ -36,8 +36,9 @@ value set at a broader one:
 Each option supports a fixed set of scopes. Options that describe a table (such as
 ``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
 describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
-can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
-``NODE`` scopes.
+can be set at ``CLUSTER`` scope only. Options that describe a node (such as
+``lsa_background_reclaim_goal_in_mb``) can be set at ``NODE``, ``RACK``, ``DATACENTER`` and
+``CLUSTER`` scope.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -78,7 +79,16 @@ For the cluster as a whole, use ``ALTER CLUSTER``:
 
    ALTER CLUSTER WITH auto_repair_enabled = true;
 
-The statements for the node-oriented scopes exist for options that will support them:
+For a node-oriented option, use ``ALTER DATACENTER``, ``ALTER RACK`` or ``ALTER NODE``:
+
+.. code-block:: cql
+
+   ALTER CLUSTER WITH lsa_background_reclaim_goal_in_mb = 100;
+   ALTER DATACENTER dc1 WITH lsa_background_reclaim_goal_in_mb = 200;
+   ALTER RACK dc1 rack1 WITH lsa_background_reclaim_goal_in_mb = 300;
+   ALTER NODE 7f4d8b1e-1c2a-4f3b-9e6d-0a1b2c3d4e5f WITH lsa_background_reclaim_goal_in_mb = 0;
+
+The syntax of these statements is:
 
 .. code-block:: cql
 
@@ -184,3 +194,9 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``lsa_background_reclaim_goal_in_mb``
+     - integer
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - Amount of free memory per shard, in MiB, which the background memory reclaimer tries to
+       maintain, so that allocations do not have to reclaim memory synchronously. ``0`` disables
+       background reclaiming. Default: ``60``.
