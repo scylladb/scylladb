@@ -13,8 +13,9 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
-from test.cluster.util import new_test_keyspace, get_topology_version
+from test.cluster.util import new_test_keyspace, get_topology_version, get_coordinator_host, get_non_coordinator_host
 from test.pylib.scylla_server import ScyllaVersionDescription
+from test.pylib.tablets import get_all_tablet_replicas
 import pytest
 import logging
 import time
@@ -55,6 +56,164 @@ def sent_total_metric(metrics: ScyllaMetrics):
 
 def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
     return metrics.lines_by_prefix('scylla_hints_manager_')
+
+
+# The fence version advanced by global_token_metadata_barrier, and the plain barrier which
+# follows it. 'barrier' is a prefix of 'barrier_and_drain', hence the trailing comma.
+FENCE_ADVANCED = r"updating topology state: advance fence version to (\d+)"
+BARRIER_SENT = "executing global topology command barrier,"
+COORDINATOR_BARRIER_EVENTS = f"{FENCE_ADVANCED}|{BARRIER_SENT}"
+# exec_global_command_helper doesn't say which plain barrier failed, the events
+# preceding it in the log do.
+BARRIER_FAILED = r"raft topology: exec_global_command\(barrier\) failed"
+
+# The replica side: the fence being applied on a shard (logged per shard) and the point
+# at which the barrier handler is done waiting for the group0 read barrier.
+FENCE_APPLIED = r"update_fence_version: new fence_version (\d+) is set"
+BARRIER_READ_BARRIER_COMPLETED = r"topology cmd rpc barrier index=\d+: read_barrier completed"
+REPLICA_BARRIER_EVENTS = f"{FENCE_APPLIED}|{BARRIER_READ_BARRIER_COMPLETED}"
+
+SINGLE_TABLET_KS_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                         "AND tablets = {'initial': 1}")
+
+
+def barrier_follows_fence(events, version: int) -> bool:
+    """events are the grep results of one of the *_BARRIER_EVENTS patterns: a fence version
+    message captures the version, a barrier message captures nothing. Check that a barrier
+    message follows the last message of version, before the first one of a later version."""
+    at = [i for i, (_, m) in enumerate(events) if m.group(1) == str(version)]
+    later = [i for i, (_, m) in enumerate(events) if m.group(1) is not None and int(m.group(1)) > version]
+    return bool(at) and any(m.group(1) is None for _, m in events[max(at) + 1:min(later, default=len(events))])
+
+
+async def start_tablets_cluster(manager: ScyllaClusterManager) -> list[ServerInfo]:
+    """Three nodes with tablets enabled and the tablet load balancer disabled,
+    so the only topology operations are the ones the test drives itself."""
+    servers = await manager.servers_add(3, config={'tablets_mode_for_new_keyspaces': 'enabled'})
+    await manager.disable_tablet_balancing()
+    return servers
+
+
+async def pick_tablet_move(manager: ScyllaClusterManager, servers: list[ServerInfo], ks: str):
+    """Return (src_host, src_shard, dst_host, token) which move the single tablet
+    of ks.test to a node which doesn't hold it yet."""
+    tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+    assert len(tablets) == 1 and len(tablets[0].replicas) == 1, f"expected a single tablet replica, got {tablets}"
+    src_host, src_shard = tablets[0].replicas[0]
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    dst_host = next(h for h in host_ids if h != src_host)
+    return src_host, src_shard, dst_host, tablets[0].last_token
+
+
+async def test_fence_version_applied_before_barrier_returns(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-3375: global_token_metadata_barrier returned right after
+    committing fence_version := version, without waiting for the other nodes to apply
+    it, so they could still admit requests with the previous version. It now always
+    runs a plain barrier after the commit, so by the time it returns every non-excluded
+    node has applied the new fence version on all of its shards.
+
+    Over the window of a single tablet migration (which goes through
+    global_tablet_token_metadata_barrier, i.e. drain_all_nodes=true) check that
+    * the coordinator sends a barrier after every fence version it advances,
+    * every node replies to a barrier after applying each of those fence versions.
+    Both checks key on the fence version, not on the position of a message in the log,
+    so neither a plain barrier outside of a fence round nor a retried fence commit
+    can shift them.
+    """
+    servers = await start_tablets_cluster(manager)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, SINGLE_TABLET_KS_OPTS) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        src_host, src_shard, dst_host, token = await pick_tablet_move(manager, servers, ks)
+        coordinator = await get_coordinator_host(manager)
+
+        logs = {s.server_id: await manager.server_open_log(s.server_id) for s in servers}
+        marks = {s.server_id: await logs[s.server_id].mark() for s in servers}
+
+        logger.info(f"Moving the tablet of {ks}.test from {src_host} to {dst_host}")
+        await manager.api.move_tablet(coordinator.ip_addr, ks, "test", src_host, src_shard, dst_host, 0, token)
+
+        coordinator_log = logs[coordinator.server_id]
+        coordinator_mark = marks[coordinator.server_id]
+
+        # The predicates raise rather than return None, so that wait_for reports
+        # the unsatisfied fence version when it times out.
+        async def barrier_sent_after_each_fence():
+            events = await coordinator_log.grep(COORDINATOR_BARRIER_EVENTS, from_mark=coordinator_mark)
+            versions = sorted({int(m.group(1)) for _, m in events if m.group(1) is not None})
+            assert versions, "the tablet migration advanced no fence version"
+            for version in versions:
+                assert barrier_follows_fence(events, version), \
+                    f"the coordinator sent no barrier after advancing fence version {version}"
+            return versions
+
+        fence_versions = await wait_for(barrier_sent_after_each_fence, time.time() + 60)
+        logger.info(f"Fence versions advanced during the migration: {fence_versions}")
+
+        for s in servers:
+            log, mark = logs[s.server_id], marks[s.server_id]
+
+            async def barrier_replied_after_each_fence():
+                events = await log.grep(REPLICA_BARRIER_EVENTS, from_mark=mark)
+                for version in fence_versions:
+                    assert barrier_follows_fence(events, version), \
+                        f"{s.server_id} replied to no barrier after applying fence version {version}"
+                return True
+
+            await wait_for(barrier_replied_after_each_fence, time.time() + 60)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_barrier_after_fence_failure_is_not_fatal(manager: ScyllaClusterManager):
+    """
+    SCYLLADB-3375: the barrier which follows the fence commit is a new failure point
+    on the success path of a tablet operation: before it was made unconditional no plain
+    barrier ran there at all. Fail it once on a non-coordinator replica and check that
+    it is that barrier which fails, and that the migration still completes.
+    """
+    servers = await start_tablets_cluster(manager)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, SINGLE_TABLET_KS_OPTS) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        src_host, src_shard, dst_host, token = await pick_tablet_move(manager, servers, ks)
+        coordinator = await get_coordinator_host(manager)
+        replica = await get_non_coordinator_host(manager)
+        assert replica is not None
+
+        # The one shot injection is consumed by any plain barrier, including the one the
+        # coordinator runs before it enables features. Wait until there is nothing left to enable.
+        host_ids = {await manager.get_host_id(s.server_id) for s in servers}
+        [coordinator_cql_host] = await wait_for_cql_and_get_hosts(cql, [coordinator], time.time() + 60)
+
+        async def features_enabled():
+            rows = await cql.run_async("select host_id, supported_features, enabled_features from system.topology",
+                                       host=coordinator_cql_host)
+            live = [r for r in rows if str(r.host_id) in host_ids]
+            supported = frozenset.intersection(*(frozenset(r.supported_features) for r in live))
+            return True if frozenset(live[0].enabled_features or []) == supported else None
+
+        await wait_for(features_enabled, time.time() + 60)
+
+        coordinator_log = await manager.server_open_log(coordinator.server_id)
+        coordinator_mark = await coordinator_log.mark()
+
+        logger.info(f"Enabling 'raft_topology_barrier_fail' injection on {replica.ip_addr}")
+        await manager.api.enable_injection(replica.ip_addr, 'raft_topology_barrier_fail', True)
+
+        logger.info(f"Moving the tablet of {ks}.test from {src_host} to {dst_host}")
+        await manager.api.move_tablet(coordinator.ip_addr, ks, "test", src_host, src_shard, dst_host, 0, token)
+
+        await coordinator_log.wait_for(BARRIER_FAILED, from_mark=coordinator_mark, timeout=60)
+        events = [m.group(0) for _, m in await coordinator_log.grep(f"{COORDINATOR_BARRIER_EVENTS}|{BARRIER_FAILED}",
+                                                                    from_mark=coordinator_mark)]
+        failed = next(i for i, e in enumerate(events) if e.startswith("raft topology: exec_global_command(barrier) failed"))
+        assert failed >= 2 and events[failed - 1] == BARRIER_SENT \
+            and events[failed - 2].startswith("updating topology state: advance fence version to "), \
+            f"the failed barrier is not the one which follows a fence commit: {events}"
+
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert tablets[0].replicas == [(dst_host, 0)], f"the tablet was not migrated: {tablets}"
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
