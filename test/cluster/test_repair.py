@@ -1058,3 +1058,57 @@ async def test_shutdown_during_repair_master_write(manager: ScyllaClusterManager
             rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {ks}.test",
                                                        consistency_level=ConsistencyLevel.ONE), host=host)
             assert sorted((r.pk, r.v) for r in rows) == [(0, 0), (1, 1)]
+
+
+@pytest.mark.parametrize("decode_fails", [False, True])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_row_hash_sketch(manager: ScyllaClusterManager, decode_fails: bool):
+    cmdline = ["--smp", "1", "--hinted-handoff-enabled", "0"]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v int)")
+        insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+        insert.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*[cql.run_async(insert, (pk, pk)) for pk in range(2000)])
+
+        # Diverge the last replica both ways: newer row versions it lacks, and ones only it has.
+        # Each differing row is two differing hashes; 80 fit the first round's 256-cell sketch.
+        async def write_skipping(skipped, pks, cl):
+            for s in skipped:
+                await manager.api.enable_injection(s.ip_addr, "database_apply", False, parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
+            stmt = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+            stmt.consistency_level = cl
+            await asyncio.gather(*[cql.run_async(stmt, (pk, -pk)) for pk in pks])
+            for s in skipped:
+                await manager.api.disable_injection(s.ip_addr, "database_apply")
+        await write_skipping(servers[2:], range(0, 20), ConsistencyLevel.QUORUM)
+        await write_skipping(servers[:2], range(20, 40), ConsistencyLevel.ONE)
+        for s in servers:
+            await manager.api.keyspace_flush(s.ip_addr, ks)
+
+        if decode_fails:
+            for s in servers:
+                await manager.api.enable_injection(s.ip_addr, "repair_row_hash_sketch_decode_fail", one_shot=False)
+
+        async def metric(name):
+            total = 0
+            for s in servers:
+                total += (await manager.metrics.query(s.ip_addr)).get(f"scylla_repair_{name}") or 0
+            return total
+
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "tbl", "all", incremental_mode="disabled")
+        decoded, fallback = await metric("sketch_decoded_nr"), await metric("sketch_fallback_nr")
+        if decode_fails:
+            assert decoded == 0 and fallback > 0
+        else:
+            assert decoded > 0 and fallback == 0
+            # No peer streamed its full row hash list either.
+            assert await metric("rx_hashes_nr") < 2000
+
+        # Replicas converged: a second repair moves no rows.
+        rx_rows = await metric("rx_row_nr")
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "tbl", "all", incremental_mode="disabled")
+        assert await metric("rx_row_nr") == rx_rows
