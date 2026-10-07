@@ -249,7 +249,11 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_other_sst
 
             # Now produce two additional sstable that will get into the same bucket
             # and hence be compacted together but not with the sstable from above.
-            populateSomeData(cql, cf, (11, 21), timestamp - 5)
+            # STCS buckets sstables by data size, per shard. Both sstables are
+            # populated with the same partitions, so they have similar sizes on
+            # every shard, however partitions are distributed among the shards
+            # (tablets or vnodes).
+            populateSomeData(cql, cf, (1, 11), timestamp - 5)
             alterSomeData(cql, cf, timestamp - 5)
             flushAllTablesTwice(rest_api)
 
