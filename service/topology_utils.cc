@@ -11,7 +11,20 @@
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 
+#include <algorithm>
+
 namespace service {
+
+const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
+    // FIXME: Currently an empty list, to be populated in the next patches
+    static const std::vector<std::pair<sstring, size_t>> keyspaces = {{
+    }};
+    return keyspaces;
+}
+
+bool is_auto_rf_keyspace(std::string_view ks_name) {
+    return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) { return e.first == ks_name; });
+}
 
 future<bool> ongoing_rf_change(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard, sstring ks) {
     auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
