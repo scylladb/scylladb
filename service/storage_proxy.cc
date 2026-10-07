@@ -644,15 +644,22 @@ private:
                         f.ignore_ready_future();
                     } catch (...) {
                         std::exception_ptr eptr = std::current_exception();
+                        if (is_timeout_exception(eptr)) {
+                            // Don't report a timeout as a failure: the replica's deadline is the
+                            // coordinator's, so the coordinator times out on its own and returns
+                            // a write timeout, the same as when its local replica times out.
+                            // A failure would be returned to the client as WriteFailure instead.
+                            slogger.debug("Failed to apply mutation from {}#{}: {:t}", reply_to_host_id, shard, eptr);
+                            co_return;
+                        }
                         errors.count++;
                         errors.local = replica::try_encode_replica_exception(eptr);
                         seastar::log_level l = seastar::log_level::warn;
-                        if (is_timeout_exception(eptr)
-                                || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)
+                        if (std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)
                                 || std::holds_alternative<replica::large_data_exception>(errors.local.reason)
                                 || std::holds_alternative<abort_requested_exception>(errors.local.reason)) {
-                            // ignore timeouts, abort requests, rate limit and large-data rejections so that logs are not flooded.
-                            // database's total_writes_timedout, total_writes_rate_limited or total_writes_rejected_due_to_large_partition counter was incremented.
+                            // ignore abort requests, rate limit and large-data rejections so that logs are not flooded.
+                            // database's total_writes_rate_limited or total_writes_rejected_due_to_large_partition counter was incremented.
                             l = seastar::log_level::debug;
                         }
                         slogger.log(l, "Failed to apply mutation from {}#{}: {:t}", reply_to_host_id, shard, eptr);
