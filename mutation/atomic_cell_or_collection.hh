@@ -12,6 +12,41 @@
 #include "collection_mutation.hh"
 #include "schema/schema.hh"
 
+class atomic_cell_or_collection;
+
+// A non-owning view of the serialized form of an atomic_cell_or_collection:
+// either an atomic_cell, or a serialized collection, as determined by the schema.
+// Empty means "no cell".
+class atomic_cell_or_collection_view final {
+    managed_bytes_view _data;
+public:
+    atomic_cell_or_collection_view() = default;
+    explicit atomic_cell_or_collection_view(managed_bytes_view data) noexcept : _data(data) {}
+    atomic_cell_or_collection_view(const atomic_cell_or_collection& c) noexcept;
+    atomic_cell_view as_atomic_cell(const column_definition& cdef) const { return atomic_cell_view::from_bytes(_data); }
+    collection_mutation_view as_collection_mutation() const { return collection_mutation_view{_data}; }
+    managed_bytes_view data() const noexcept { return _data; }
+    explicit operator bool() const noexcept {
+        return !_data.empty();
+    }
+    atomic_cell_or_collection copy(const abstract_type&) const;
+    bool equals(const abstract_type& type, atomic_cell_or_collection_view other) const;
+
+    class printer;
+};
+
+class atomic_cell_or_collection_view::printer {
+    const column_definition& _cdef;
+    atomic_cell_or_collection_view _cell;
+public:
+    printer(const column_definition& cdef, atomic_cell_or_collection_view cell)
+        : _cdef(cdef), _cell(cell) { }
+    printer(const printer&) = delete;
+    printer(printer&&) = delete;
+
+    friend fmt::formatter<printer>;
+};
+
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determined by the schema.
 // Has an "empty" state.
@@ -20,6 +55,7 @@ class atomic_cell_or_collection final {
     managed_bytes _data;
 private:
     atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
+    friend class atomic_cell_or_collection_view;
 public:
     atomic_cell_or_collection() = default;
     atomic_cell_or_collection(atomic_cell_or_collection&&) = default;
@@ -40,6 +76,11 @@ public:
         return true;
     }
     static atomic_cell_or_collection from_collection_mutation(collection_mutation data) { return std::move(data).data(); }
+    // Adopts the serialized form of a cell, as produced by data().
+    static atomic_cell_or_collection from_serialized(managed_bytes data) noexcept { return atomic_cell_or_collection(std::move(data)); }
+    // The serialized form.
+    managed_bytes& data() noexcept { return _data; }
+    const managed_bytes& data() const noexcept { return _data; }
     collection_mutation_view as_collection_mutation() const;
     bytes_view serialize() const;
     bool equals(const abstract_type& type, const atomic_cell_or_collection& other) const;
@@ -62,4 +103,13 @@ public:
 template <>
 struct fmt::formatter<atomic_cell_or_collection::printer> : fmt::formatter<string_view> {
     auto format(const atomic_cell_or_collection::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+inline atomic_cell_or_collection_view::atomic_cell_or_collection_view(const atomic_cell_or_collection& c) noexcept
+    : _data(c._data) {
+}
+
+template <>
+struct fmt::formatter<atomic_cell_or_collection_view::printer> : fmt::formatter<string_view> {
+    auto format(const atomic_cell_or_collection_view::printer&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

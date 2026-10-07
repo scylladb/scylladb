@@ -59,6 +59,13 @@ struct cell_and_hash {
     { }
 };
 
+// A cell stored in a row, together with its cached hash, which may be
+// updated in place.
+struct cell_and_hash_view {
+    atomic_cell_or_collection_view cell;
+    cell_hash_opt& hash;
+};
+
 class compaction_garbage_collector;
 
 //
@@ -85,12 +92,12 @@ public:
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const;
+    atomic_cell_or_collection_view cell_at(column_id id) const;
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const;
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const;
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const;
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const;
 
     template<typename Func>
     void remove_if(Func&& func) {
@@ -108,10 +115,29 @@ private:
     template<typename Func>
     void consume_with(Func&&);
 
+    template<typename Func>
+    static constexpr bool is_const_func = std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>
+            || std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>
+            || std::is_invocable_v<Func&, column_id&, const cell_and_hash&>
+            || std::is_invocable_v<Func&, column_id&, const atomic_cell_or_collection&>;
+
     // Func obeys the same requirements as for for_each_cell below.
-    template<typename Func, typename MaybeConstCellAndHash>
-    static constexpr auto maybe_invoke_with_hash(Func& func, column_id id, MaybeConstCellAndHash& c_a_h) {
-        if constexpr (std::is_invocable_v<Func, column_id, const cell_and_hash&>) {
+    template<typename Func>
+    static constexpr auto invoke_const(Func& func, column_id& id, const cell_and_hash& c_a_h) {
+        if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>) {
+            return func(id, cell_and_hash_view{c_a_h.cell, c_a_h.hash});
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>) {
+            return func(id, atomic_cell_or_collection_view(c_a_h.cell));
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash&>) {
+            return func(id, c_a_h);
+        } else {
+            return func(id, c_a_h.cell);
+        }
+    }
+
+    template<typename Func>
+    static constexpr auto maybe_invoke_with_hash(Func& func, column_id& id, cell_and_hash& c_a_h) {
+        if constexpr (std::is_invocable_v<Func&, column_id&, cell_and_hash&>) {
             return func(id, c_a_h);
         } else {
             return func(id, c_a_h.cell);
@@ -119,29 +145,46 @@ private:
     }
 
 public:
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
+    // Calls Func(column_id, const cell_and_hash_view&) or Func(column_id, atomic_cell_or_collection_view)
     // for each cell in this row, depending on the concrete Func type.
+    // Func(column_id, cell_and_hash&) and Func(column_id, atomic_cell_or_collection&),
+    // which may modify cells, are also supported.
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) {
-        _cells.walk([func] (column_id id, cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
-            return true;
-        });
+        if constexpr (is_const_func<Func>) {
+            std::as_const(*this).for_each_cell(func);
+        } else {
+            _cells.walk([&func] (column_id id, cell_and_hash& cah) {
+                maybe_invoke_with_hash(func, id, cah);
+                return true;
+            });
+        }
     }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
+        _cells.walk([&func] (column_id id, const cell_and_hash& cah) {
+            invoke_const(func, id, cah);
             return true;
         });
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            return maybe_invoke_with_hash(func, id, cah) != stop_iteration::yes;
+        _cells.walk([&func] (column_id id, const cell_and_hash& cah) {
+            return invoke_const(func, id, cah) != stop_iteration::yes;
+        });
+    }
+
+    // Calls func(column_id, managed_bytes_mutable_view) for each cell, with a view of the
+    // serialized cell which may be modified in place, as long as its size doesn't change
+    // (e.g. atomic_cell_mutable_view::from_bytes(v).set_timestamp()). Doesn't allocate.
+    template<typename Func>
+    void for_each_cell_in_place(Func&& func) {
+        _cells.walk([&func] (column_id id, cell_and_hash& cah) {
+            func(id, managed_bytes_mutable_view(cah.cell.data()));
+            return true;
         });
     }
 
@@ -290,7 +333,7 @@ public:
         }
     }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const {
+    atomic_cell_or_collection_view cell_at(column_id id) const {
         if (!_row) {
             throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
         } else {
@@ -298,25 +341,23 @@ public:
         }
     }
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const {
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell(id);
     }
 
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const {
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell_and_hash(id);
     }
 
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
-    // for each cell in this row, depending on the concrete Func type.
-    // noexcept if Func doesn't throw.
+    // See row::for_each_cell().
     template<typename Func>
     void for_each_cell(Func&& func) {
         if (!_row) {
