@@ -78,7 +78,8 @@ set as the current_sync_boundary.
 
 Request combined hashes from all nodes between last_sync_boundary and
 current_sync_boundary. If the combined hashes from all nodes are identical,
-data is synced, goto Step A. If not, request the full hashes from peers.
+data is synced, goto Step A. If not, request the full hashes from peers, or,
+in tablet repair, decode them from a row hash sketch (see below).
 
 At this point, the repair master knows exactly what rows are missing. Request the
 missing rows from peer nodes.
@@ -281,3 +282,28 @@ rows repair master sent.
 
 - repair_stream_cmd::error
 Notifies an error has happened on the follower.
+
+## Row hash sketch in tablet repair
+
+For the full algorithm and implementation, refer to [repair-iblt.md](repair-iblt.md).
+
+In tablet repair, when the REPAIR_ROW_HASH_SKETCH feature is enabled, the
+master gets the combined hash with REPAIR_GET_COMBINED_ROW_HASH_WITH_SKETCH,
+asking for a sketch of a given number of cells. The follower replies with its
+combined hash and, if the sketch is smaller than its full row hash list, an
+invertible Bloom lookup table (repair_hash_sketch) of its working row hashes.
+A cell has a 16-bit count, a 64-bit key sum and a 32-bit check sum (14 bytes).
+
+When the combined hashes differ, the master subtracts a sketch of its own rows
+from the follower's and peels the result. If that recovers the symmetric
+difference, and applying it to the master's hashes reproduces the follower's
+combined hash, the master has the follower's full hash set without streaming
+it. Otherwise it falls back to get_full_row_hashes().
+
+The master sizes the next sketch for each follower at twice the largest
+difference seen in the last four rounds, and at least 256 cells, so a sketch
+costs about 28 bytes per differing row instead of 8 bytes per row.
+
+The repair metrics rx_sketch_cells_nr, sketch_decoded_nr and
+sketch_fallback_nr count sketch cells received, sketches decoded, and
+sketches that fell back to the full row hash list.
