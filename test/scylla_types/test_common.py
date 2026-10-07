@@ -9,7 +9,7 @@
 import pytest
 
 
-ACTIONS = ["serialize", "deserialize", "compare", "validate", "tokenof", "shardof"]
+ACTIONS = ["serialize", "deserialize", "compare", "ring-order-compare", "validate", "tokenof", "shardof"]
 
 
 @pytest.mark.parametrize("action", ACTIONS)
@@ -64,7 +64,7 @@ def compound_option_args(action, option_name, option):
     value = "00000001" if option_name == "legacy-composite" else "000400000001"
     if action == "serialize":
         return [option, "-t", "Int32Type", "--", "1"]
-    if action == "compare":
+    if action in ("compare", "ring-order-compare"):
         return [option, "-t", "Int32Type", value, value]
     if action == "shardof":
         return [option, "-t", "Int32Type", "--shards=8", value]
