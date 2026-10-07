@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <ranges>
 #include <list>
 #include <unordered_set>
 
@@ -77,7 +78,7 @@ struct serialize_array_helper<false, T> {
 
 template<typename T, typename Container, typename Output>
 inline void serialize_array(Output& out, const Container& v) {
-    serialize_array_helper<can_serialize_fast<T>(), T>::doit(out, v);
+    serialize_array_helper<can_serialize_fast<T>() && std::ranges::contiguous_range<Container>, T>::doit(out, v);
 }
 
 template<typename Container>
@@ -210,7 +211,7 @@ struct deserialize_array_helper<false, T> {
 
 template<typename T, typename Input, typename Container>
 inline void deserialize_array(Input& in, Container& v, size_t sz) {
-    deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
+    deserialize_array_helper<can_serialize_fast<T>() && std::ranges::contiguous_range<Container>, T>::doit(in, v, sz);
 }
 
 template<typename T, typename Input>
