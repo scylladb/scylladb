@@ -329,7 +329,7 @@ schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::
     schema_builder builder(this_smp_shard_count(), "ks", "dummy");
     unsigned i = 0;
     for (const auto& t : type.types()) {
-        const auto col_name = format("pk{}", i);
+        const auto col_name = format("pk{}", i++);
         builder.with_column(bytes(to_bytes_view(col_name)), t, column_kind::partition_key);
     }
     builder.with_column("v", utf8_type, column_kind::regular_column);
