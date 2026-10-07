@@ -2199,77 +2199,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    // For each DC, the racks in which some non-auto-RF tablets keyspace places
-    // replicas. nullopt means every rack of the DC (a numeric RF was found).
-    // A DC missing from the map has no such keyspace.
-    using eligible_racks_map = std::unordered_map<sstring, std::optional<std::set<sstring>>>;
-
-    static bool is_rack_eligible(const eligible_racks_map& eligible, const sstring& dc, const sstring& rack) {
-        auto it = eligible.find(dc);
-        return it != eligible.end() && (!it->second.has_value() || it->second->contains(rack));
-    }
-
-    // The first rack of `rack_list` which the auto-RF keyspace may give up: one which
-    // no non-auto-RF tablets keyspace uses any more. A DC's last rack is never given
-    // up, and nothing is while no eligible keyspace exists at all (a fresh cluster, or
-    // one whose last user keyspace was dropped, says nothing about where the operator
-    // wants the system keyspaces).
-    static std::optional<sstring> find_ineligible_rack(const eligible_racks_map& eligible, const sstring& dc, const locator::rack_list& rack_list) {
-        if (eligible.empty() || rack_list.size() < 2) {
-            return std::nullopt;
-        }
-        for (const auto& rack : rack_list) {
-            if (!is_rack_eligible(eligible, dc, rack)) {
-                return rack;
-            }
-        }
-        return std::nullopt;
-    }
-
-    // Where the auto-RF keyspaces may replicate, computed once per reconciler pass.
-    struct auto_rf_racks {
-        // The racks the auto-RF keyspaces follow; a rack outside this set is given up.
-        eligible_racks_map eligible;
-        // The eligible racks with a token-owning, non-excluded normal node: the racks
-        // an auto-RF keyspace may be extended into. Always a subset of `eligible`.
-        std::unordered_map<sstring, std::set<sstring>> allowed;
-    };
-
     auto_rf_racks get_auto_rf_racks() {
-        auto_rf_racks racks;
-        for (const auto& [ks_name, ks] : _db.get_keyspaces()) {
-            if (is_auto_rf_keyspace(ks_name)) {
-                continue;
-            }
-            auto ks_md = ks->metadata();
-            if (!ks_md->uses_tablets()) {
-                continue;
-            }
-            for (const auto& [dc, rf] : ks_md->strategy_options()) {
-                auto it = racks.eligible.find(dc);
-                if (it != racks.eligible.end() && !it->second.has_value()) {
-                    continue; // already every rack of the DC
-                }
-                auto rf_data = locator::replication_factor_data(rf);
-                if (rf_data.is_numeric()) {
-                    // RF 0 places no replicas in the DC. It is also how a DC is drained, and
-                    // must not pull the auto-RF keyspaces into the DC being emptied.
-                    if (rf_data.count() != 0) {
-                        racks.eligible[dc] = std::nullopt;
-                    }
-                } else {
-                    auto& entry = racks.eligible.try_emplace(dc, std::set<sstring>{}).first->second;
-                    entry->insert(rf_data.get_rack_list().begin(), rf_data.get_rack_list().end());
-                }
-            }
-        }
-        const auto& excluded = _topo_sm._topology.excluded_tablet_nodes;
-        for (const auto& [id, rs] : _topo_sm._topology.normal_nodes) {
-            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && is_rack_eligible(racks.eligible, rs.datacenter, rs.rack)) {
-                racks.allowed[rs.datacenter].insert(rs.rack);
-            }
-        }
-        return racks;
+        return service::get_auto_rf_racks(_db, _topo_sm._topology);
     }
 
     // The metadata of an auto-RF keyspace, or null if it does not exist or is on
@@ -2323,7 +2254,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             if (!rf_data.is_rack_based()) {
                 continue;
             }
-            if (auto rack = find_ineligible_rack(racks.eligible, dc, rf_data.get_rack_list())) {
+            if (auto rack = find_ineligible_auto_rf_rack(racks.eligible, dc, rf_data.get_rack_list())) {
                 rtlogger.debug("Keyspace {} replicates to rack {} of DC {}, which is no longer eligible, removing it", ks_name, *rack, dc);
                 auto rack_list = rf_data.get_rack_list();
                 std::erase(rack_list, *rack);
