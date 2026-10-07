@@ -19,15 +19,7 @@ class schema_upgrader {
     std::optional<reader_permit> _permit;
 private:
     row transform(row&& r, column_kind kind) {
-        row new_row;
-        r.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-            const column_definition& col = _prev->column_at(kind, id);
-            const column_definition* new_col = _new->get_column_definition(col.name());
-            if (new_col) {
-                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col, std::move(cell));
-            }
-        });
-        return new_row;
+        return converting_mutation_partition_applier::upgrade_row(*_new, *_prev, kind, r);
     }
 public:
     schema_upgrader(schema_ptr s)
@@ -66,15 +58,7 @@ class schema_upgrader_v2 {
     std::optional<reader_permit> _permit;
 private:
     row transform(row&& r, column_kind kind) {
-        row new_row;
-        r.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-            const column_definition& col = _prev->column_at(kind, id);
-            const column_definition* new_col = _new->get_column_definition(col.name());
-            if (new_col) {
-                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col, std::move(cell));
-            }
-        });
-        return new_row;
+        return converting_mutation_partition_applier::upgrade_row(*_new, *_prev, kind, r);
     }
 public:
     schema_upgrader_v2(schema_ptr s)
