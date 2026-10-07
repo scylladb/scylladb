@@ -1949,6 +1949,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
     }
 
+    // A multi-RF change only extends DCs from RF 0, so a replica already in a DC it extends was
+    // added (and the tablet repaired) by an earlier rebuild of the same operation.
+    bool replica_added_by_ongoing_rf_change(const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo) {
+        if (!trinfo.pending_replica) {
+            return false;
+        }
+        const auto& ks_md = *_db.find_keyspace(_db.find_schema(gid.table)->ks_name()).metadata();
+        const auto& topo = get_token_metadata().get_topology();
+        const auto& dc = topo.get_datacenter(trinfo.pending_replica->host);
+        // Until the change completes, strategy_options() holds the old replication.
+        auto has_rf = [&] (const locator::replication_strategy_config_options& opts) {
+            auto it = opts.find(dc);
+            return it != opts.end() && (!std::holds_alternative<locator::rack_list>(it->second) || !std::get<locator::rack_list>(it->second).empty());
+        };
+        if (!ks_md.next_strategy_options_opt() || has_rf(ks_md.strategy_options()) || !has_rf(*ks_md.next_strategy_options_opt())) {
+            return false;
+        }
+        return std::ranges::any_of(tmap.get_tablet_info(gid.tablet).replicas, [&] (const locator::tablet_replica& r) {
+            return topo.get_datacenter(r.host) == dc && !is_excluded(raft::server_id(r.host.uuid()));
+        });
+    }
+
     future<> generate_rf_change_updates(group0_update_collector& out, const group0_guard& guard, const keyspace_rf_change_plan& rf_change_plan) {
         for (const auto& abort_info : rf_change_plan.aborts) {
             co_await coroutine::maybe_yield();
@@ -2306,7 +2328,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2 && !is_strong_consistency) {
+                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2 && !is_strong_consistency &&
+                            !replica_added_by_ongoing_rf_change(tmap, gid, trinfo)) {
                         transition_to_with_barrier(locator::tablet_transition_stage::rebuild_repair);
                     } else if (is_strong_consistency) {
                         // The pending replica joins the group as a non-voter, so that

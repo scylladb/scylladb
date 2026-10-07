@@ -882,7 +882,6 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Scyl
         for r in replicas:
             assert len(r.replicas) == 2
 
-@pytest.mark.xfail(reason="SCYLLADB-5066", strict=True)
 @pytest.mark.skip_mode(mode='debug', reason='repair row count is mode-independent; debug only adds runtime')
 async def test_rf_increase_repairs_tablet_once(manager: ScyllaClusterManager) -> None:
     """Adding a DC (0->2) should repair each tablet once, not once per added replica."""
