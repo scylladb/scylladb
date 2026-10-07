@@ -7,13 +7,10 @@
 # Tests for user types with names that are valid only when quoted. A failure
 # here can stop group 0 on the node, so each test starts its own node.
 
-import pytest
-
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5202: the schema stores these type names unquoted and cannot read them back")
 async def test_quoted_user_type_names(manager: ScyllaClusterManager):
     """
     Each name is a valid user type name only when quoted: a reserved type
