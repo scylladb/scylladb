@@ -8,6 +8,8 @@
  */
 
 #include "db/system_keyspace.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "replica/database.hh"
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 
@@ -24,6 +26,89 @@ const std::vector<std::pair<sstring, size_t>>& auto_rf_keyspaces() {
 
 bool is_auto_rf_keyspace(std::string_view ks_name) {
     return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) { return e.first == ks_name; });
+}
+
+bool is_auto_rf_rack_eligible(const auto_rf_eligible_racks& eligible, const sstring& dc, const sstring& rack) {
+    auto it = eligible.find(dc);
+    return it != eligible.end() && (!it->second.has_value() || it->second->contains(rack));
+}
+
+std::optional<sstring> find_ineligible_auto_rf_rack(const auto_rf_eligible_racks& eligible, const sstring& dc, const std::vector<sstring>& rack_list) {
+    if (eligible.empty() || rack_list.size() < 2) {
+        return std::nullopt;
+    }
+    for (const auto& rack : rack_list) {
+        if (!is_auto_rf_rack_eligible(eligible, dc, rack)) {
+            return rack;
+        }
+    }
+    return std::nullopt;
+}
+
+auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology) {
+    auto_rf_racks racks;
+    for (const auto& [ks_name, ks] : db.get_keyspaces()) {
+        if (is_auto_rf_keyspace(ks_name)) {
+            continue;
+        }
+        auto ks_md = ks->metadata();
+        if (!ks_md->uses_tablets()) {
+            continue;
+        }
+        for (const auto& [dc, rf] : ks_md->strategy_options()) {
+            auto it = racks.eligible.find(dc);
+            if (it != racks.eligible.end() && !it->second.has_value()) {
+                continue; // already every rack of the DC
+            }
+            auto rf_data = locator::replication_factor_data(rf);
+            if (rf_data.is_numeric()) {
+                // RF 0 is how a DC is drained; it must not pull the auto-RF keyspaces into it.
+                if (rf_data.count() != 0) {
+                    racks.eligible[dc] = std::nullopt;
+                }
+            } else {
+                auto& entry = racks.eligible.try_emplace(dc, std::set<sstring>{}).first->second;
+                entry->insert(rf_data.get_rack_list().begin(), rf_data.get_rack_list().end());
+            }
+        }
+    }
+    const auto& excluded = topology.excluded_tablet_nodes;
+    for (const auto& [id, rs] : topology.normal_nodes) {
+        if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && is_auto_rf_rack_eligible(racks.eligible, rs.datacenter, rs.rack)) {
+            racks.allowed[rs.datacenter].insert(rs.rack);
+        }
+    }
+    return racks;
+}
+
+bool auto_rf_will_give_up_rack(const replica::database& db, const topology& topology, const sstring& dc, const sstring& rack) {
+    const auto racks = get_auto_rf_racks(db, topology);
+    if (is_auto_rf_rack_eligible(racks.eligible, dc, rack)) {
+        return false;
+    }
+    for (const auto& [ks_name, goal] : auto_rf_keyspaces()) {
+        if (!db.has_keyspace(ks_name)) {
+            continue;
+        }
+        auto ks_md = db.find_keyspace(ks_name).metadata();
+        if (!ks_md->uses_tablets()) {
+            continue;
+        }
+        const auto& options = ks_md->strategy_options();
+        auto it = options.find(dc);
+        if (it == options.end()) {
+            continue;
+        }
+        auto rf_data = locator::replication_factor_data(it->second);
+        if (!rf_data.is_rack_based()) {
+            continue;
+        }
+        const auto& rack_list = rf_data.get_rack_list();
+        if (std::ranges::contains(rack_list, rack) && find_ineligible_auto_rf_rack(racks.eligible, dc, rack_list)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 future<bool> ongoing_rf_change(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard, sstring ks) {
