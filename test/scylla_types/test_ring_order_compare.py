@@ -52,3 +52,8 @@ def test_ring_order_compare_requires_full_compound(scylla_types_fails_with, comp
     scylla_types_fails_with("ring-order-compare", *compound_args, "-t", "Int32Type", "00000001", "00000002",
                             error="ring-order-compare action requires --full-compound (--partition-key) or --legacy-composite"
                                   " (--legacy-partition-key) input")
+
+
+def test_ring_order_compare_schema_file(scylla_types, schema_file):
+    res = scylla_types("ring-order-compare", "--schema-file", schema_file, "--partition-key", KEY1, KEY2)
+    assert res.stdout == f"{RING1} > {RING2}\n"

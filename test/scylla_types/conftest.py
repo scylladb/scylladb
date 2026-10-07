@@ -6,6 +6,7 @@
 
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -50,3 +51,20 @@ def scylla_types_fails_with(scylla_types):
         return res
 
     return invoker
+
+
+@pytest.fixture(scope="module")
+def schema_file(tmp_path_factory):
+    """A schema file, to be used with --schema-file."""
+    path = tmp_path_factory.mktemp("schema") / "schema.cql"
+    path.write_text(textwrap.dedent("""\
+        CREATE TABLE ks.tbl (
+            pk1 int,
+            pk2 text,
+            ck1 timeuuid,
+            ck2 int,
+            v map<int, text>,
+            PRIMARY KEY ((pk1, pk2), ck1, ck2)
+        ) WITH CLUSTERING ORDER BY (ck1 DESC, ck2 ASC);
+        """))
+    return str(path)

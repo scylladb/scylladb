@@ -19,6 +19,8 @@
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
+#include "tools/schema_loader.hh"
+#include "db/config.hh"
 #include "dht/i_partitioner.hh"
 #include "sstables/key.hh"
 #include "utils/managed_bytes.hh"
@@ -445,11 +447,46 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
     }
 }
 
+type_variant type_from_schema(const db::config& dbcfg, const bpo::variables_map& app_config) {
+    if (app_config.contains("type")) {
+        throw std::invalid_argument("error: --type and --schema-file are mutually exclusive");
+    }
+    const auto schema = tools::load_one_schema_from_file(dbcfg, app_config["schema-file"].as<std::string>()).get();
+
+    if (app_config.contains("column")) {
+        if (has_compound_option(app_config, "prefix-compound") || has_compound_option(app_config, "full-compound") || has_compound_option(app_config, "legacy-composite")) {
+            throw std::invalid_argument("error: --column cannot be used together with --prefix-compound (--clustering-key), --full-compound (--partition-key)"
+                    " or --legacy-composite (--legacy-partition-key)");
+        }
+        const auto& column_name = app_config["column"].as<std::string>();
+        const auto* cdef = schema->get_column_definition(to_bytes(column_name));
+        if (!cdef) {
+            throw std::invalid_argument(fmt::format("error: column {} not found in table {}.{}", column_name, schema->ks_name(), schema->cf_name()));
+        }
+        return cdef->type;
+    }
+
+    if (has_compound_option(app_config, "prefix-compound")) {
+        return compound_type<allow_prefixes::yes>(std::vector<data_type>(schema->clustering_key_prefix_type()->types()));
+    } else if (has_compound_option(app_config, "full-compound")) {
+        return partition_key_type{schema, false};
+    } else if (has_compound_option(app_config, "legacy-composite")) {
+        return partition_key_type{schema, true};
+    }
+    throw std::invalid_argument("error: --schema-file requires one of: --column, --prefix-compound (--clustering-key), --full-compound (--partition-key)"
+            " or --legacy-composite (--legacy-partition-key)");
+}
+
 const std::vector<operation_option> global_options{
     typed_option<std::vector<std::string>>("type,t", "the type of the values, all values must be of the same type;"
             " types can be specified either with their CQL name (e.g. map<int, text>) or with their cassandra type class name (e.g. MapType(Int32Type, UTF8Type));"
             " when values are compounds, multiple types can be specified, one for each type making up the compound, "
             "note that the order of the types on the command line will be their order in the compound too"),
+    typed_option<std::string>("schema-file", "path to a file containing the schema of the table, which the values belong to (CREATE TABLE statement, possibly preceded"
+            " by CREATE KEYSPACE and CREATE TYPE statements); alternative to --type, use --column to select the column the values belong to,"
+            " or --prefix-compound (--clustering-key), --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key)"
+            " for the clustering key or partition key respectively"),
+    typed_option<std::string>("column", "the name of the column the values belong to, the column is looked up in the schema loaded with --schema-file"),
     typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types;"
             " alias: --clustering-key"),
     typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types;"
@@ -622,10 +659,19 @@ $ scylla types {{action}} --help
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [] (const operation& op, const boost::program_options::variables_map& app_config) {
-        if (!app_config.contains("type")) {
-            throw std::invalid_argument("error: missing required option '--type'");
-        }
-        type_variant type = [&app_config] () -> type_variant {
+        // Kept alive alongside the schema loaded with it.
+        std::optional<db::config> dbcfg;
+
+        type_variant type = [&app_config, &dbcfg] () -> type_variant {
+            if (app_config.contains("schema-file")) {
+                return type_from_schema(dbcfg.emplace(), app_config);
+            }
+            if (app_config.contains("column")) {
+                throw std::invalid_argument("error: --column requires --schema-file");
+            }
+            if (!app_config.contains("type")) {
+                throw std::invalid_argument("error: missing required option '--type' (or '--schema-file')");
+            }
             auto types = app_config["type"].as<std::vector<std::string>>()
                     | std::views::transform([] (const std::string_view type_name) { return cql_type_name_converter(type_name).convert(); })
                     | std::views::transform([] (const sstring& type_name) { return db::marshal::type_parser::parse(type_name); })
