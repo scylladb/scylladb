@@ -88,6 +88,7 @@ PROFILE_VERSION = 4       # bumped when the recorded format changes; older files
 TAIL_SECONDS = 20.0       # below this a test is too short to be worth holding capacity for
 HELD_RESERVE_SECONDS = 60.0  # a test held this long without fitting gets room kept for it
 LOOKAHEAD_TRIES = 3        # tests an idle worker's pick asks admission about before it waits
+REFRESH_SECONDS = 0.5      # measurements, forecasts, pressure and the pool are looked at this often at most
 # A reservation is a test's *peak* memory held for its whole life, and
 # peaks rarely coincide.  Measured on a run with no profile: 34 GB
 # reserved against a 36 GB budget while the tests were really using 13
@@ -888,7 +889,8 @@ class DynamicScheduling:
                  cpu_target: float = CPU_TARGET, cpu_overcommit: float = CPU_OVERCOMMIT,
                  burst: float = BURST, psi_cpu_limit: float = PSI_CPU_LIMIT,
                  psi_mem_limit: float = PSI_MEM_LIMIT, depth: int = DEPTH, k_sigma: float = K_SIGMA,
-                 default_cost: tuple[float, float] = DEFAULT_COST, max_workers: int | None = None):
+                 default_cost: tuple[float, float] = DEFAULT_COST, max_workers: int | None = None,
+                 refresh: float = REFRESH_SECONDS):
         from xdist.workermanage import parse_tx_spec_config
         self.config = config
         self.numnodes = len(parse_tx_spec_config(config))
@@ -938,6 +940,9 @@ class DynamicScheduling:
         self._scout: dict[str, int] = {}               # file -> the index measuring it for its siblings
         self._scout_done: set[str] = set()
         self._pass_pressure = False                # the pressure the current scheduling pass saw
+        self.refresh = refresh
+        self._refreshed_at = -math.inf             # when measurements etc. were last looked at
+        self._pressure_now = False                 # the pressure guard's last verdict
         self._primed: list[tuple[WorkerController, int]] = []   # idle workers given a test in this pass
         self._pass_order: list[str] | None = None   # modules in pick order, sorted once per pass
         self._mem_charged_workers = False
@@ -1252,15 +1257,33 @@ class DynamicScheduling:
     def check_schedule(self) -> None:
         if self.collection is None or self._stopped:
             return
+        started = time.perf_counter()
+        try:
+            self._schedule_pass()
+        finally:
+            self.stats["controller_ms"] += round(1000 * (time.perf_counter() - started))
+
+    def _schedule_pass(self) -> None:
         nodes = [n for n in self.node2pending if not n.shutting_down]
         self._grow_ceiling()
-        self.live.refresh(n.gateway.id for n in nodes)
-        self._refresh_measurement()
-        self._refresh_forecasts()
-        self._ram_guard()
-        self._recycle_bloated_worker()
-        self._maybe_shrink_pool()
-        pressure = self._pressure_guard()
+        # A pass runs on every finished test, hundreds a second when
+        # tests are short, and what is measured changes with time, not
+        # with each test: reading every worker's usage and forecasting
+        # every running test's memory on each of them was most of the
+        # controller's time.  A finished test releases its own booking
+        # at once; the rest is looked at every REFRESH_SECONDS.
+        now = self.now()
+        refreshing = now - self._refreshed_at >= self.refresh
+        if refreshing:
+            self._refreshed_at = now
+            self.live.refresh(n.gateway.id for n in nodes)
+            self._refresh_measurement()
+            self._refresh_forecasts()
+            self._ram_guard()
+            self._recycle_bloated_worker()
+            self._maybe_shrink_pool()
+            self._pressure_now = self._pressure_guard()
+        pressure = self._pressure_now
         was = self.hold_for
         self.hold_for = self._critical_test()
         if self.hold_for is not None and self.hold_for != was:
@@ -1291,6 +1314,11 @@ class DynamicScheduling:
             chain = ((self.file_remaining.get(module, 0.0) + self._costs_for(held).wall)
                      * self._slowdown(self._profile_file_of(held), slow))
             return (len(self._committed(n)), 0 if self._continues_module(n) else 1, -chain)
+        # Only workers with something to decide: idle ones, and running
+        # ones whose next test has not been sent.  One that runs a test
+        # with the next queued behind it waits for its own to finish.
+        all_nodes = nodes
+        nodes = [n for n in nodes if not self._committed(n) or len(self.node2pending[n]) <= self._depth(n)]
         nodes.sort(key=prio)
         self._pass_pressure = pressure
         self._primed = []
@@ -1402,8 +1430,9 @@ class DynamicScheduling:
                     self.shutdown_sent.add(node)
                 else:
                     self._send(node, cand)
-        self._maybe_grow_pool(pressure)
-        self._record_state(nodes)
+        if refreshing:
+            self._maybe_grow_pool(pressure)
+        self._record_state(all_nodes)
 
     def _record_state(self, nodes: list[WorkerController]) -> None:
         """Sample admission's inputs into the metrics database, at most

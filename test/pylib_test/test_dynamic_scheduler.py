@@ -78,7 +78,8 @@ class FakeConfig:
 # What the tests run the scheduler with unless they ask otherwise: the pressure guards and
 # the ramp off, so that admission depends on the costs alone.
 TEST_SETTINGS = dict(cpu_target=0.9, psi_cpu_limit=1e9, psi_mem_limit=1e9, burst=0.0, k_sigma=0.0,
-                     max_workers=0)   # the pool stays as it starts unless a test grows it
+                     max_workers=0,   # the pool stays as it starts unless a test grows it
+                     refresh=0.0)     # every pass looks at the measurements, as the tests expect
 
 
 def new_sched(config, **kw) -> DynamicScheduling:
@@ -203,6 +204,26 @@ def test_learn_ema_and_family_fallback(tmp_path):
 
 
 # --------------------------------------------------------------- scheduler ----
+
+def test_measurements_are_looked_at_every_refresh_seconds_but_a_finished_test_frees_its_room_at_once(tmp_path):
+    """A pass runs on every finished test: it reads the machine at most every
+    REFRESH_SECONDS, while the room a finished test held goes to the next at once."""
+    clock = {"t": 1000.0}
+    col = [f"a{i}.py::t.dev.1" for i in range(6)]
+    sched, nodes = make_sched(tmp_path, col, {n: (3.0, 1e8, 1.0) for n in col}, nodes=2, ncpus=4,
+                              now=lambda: clock["t"], refresh=0.5)
+    reads = []
+    sched._refresh_measurement = lambda: reads.append(clock["t"])
+    running = next(iter(committed(sched)))
+    clock["t"] += 0.1
+    sched.mark_test_complete(next(n for n in nodes if running in sched.node2pending[n]), running)
+    assert len(committed(sched)) == 1 and running not in committed(sched), "the next one started at once"
+    assert reads == [], "without reading the machine again"
+    clock["t"] += 0.5
+    sched.check_schedule()
+    assert reads == [clock["t"]]
+    assert sched.stats["controller_ms"] >= 0
+
 
 def test_sending_a_successor_is_what_starts_a_test(tmp_path):
     col = [f"a.py::t{i}.dev.1" for i in range(4)]
