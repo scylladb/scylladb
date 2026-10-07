@@ -168,6 +168,8 @@ Procedure
 
 #. Upgrade all nodes to tablets:
 
+   .. _upgrade-node-start:
+
    #. Pick a node and open a shell on it to run the following commands.
 
    #. Mark the node for upgrade to tablets:
@@ -308,7 +310,8 @@ Procedure
          0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   uses vnodes
          017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
 
-   #. Move to the next node and repeat from step a until all nodes are upgraded.
+   #. Move to the next node and repeat from :ref:`step a <upgrade-node-start>`
+      until all nodes are upgraded.
 
 #. Finalize the migration:
 
@@ -437,6 +440,8 @@ following:
 #. For **each upgraded or upgrading node** in the cluster, perform a downgrade
    (one node at a time):
 
+   .. _downgrade-node-start:
+
    #. Open a shell on the node to run the following commands.
 
    #. Mark the node for downgrade:
@@ -469,7 +474,7 @@ following:
          017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
 
    #. If the node status is ``uses vnodes``, the downgrade is complete. Move to
-      the next node and repeat from step a.
+      the next node and repeat from :ref:`step a <downgrade-node-start>`.
 
    #. If the node is ``migrating to vnodes``, restart it to complete the
       downgrade:
@@ -579,8 +584,8 @@ following:
             0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   migrating to tablets
             017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
 
-      #. Move to the next node and repeat from step a until all nodes are
-         downgraded.
+      #. Move to the next node and repeat from
+         :ref:`step a <downgrade-node-start>` until all nodes are downgraded.
 
 #. Once all nodes have been downgraded, finalize the rollback:
 
