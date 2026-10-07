@@ -29,8 +29,8 @@ public:
         setter(const column_definition& column, expr::expression e)
                 : operation_skip_if_unset(column, std::move(e)) {
         }
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
-        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        static void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const cql3::raw_value& value);
     };
 
     class setter_by_index : public operation_skip_if_unset {
@@ -42,7 +42,7 @@ public:
         }
         virtual bool requires_read() const override;
         virtual void fill_prepare_context(prepare_context& ctx) override;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class setter_by_uuid : public setter_by_index {
@@ -51,17 +51,17 @@ public:
             : setter_by_index(column, std::move(idx), std::move(e)) {
         }
         virtual bool requires_read() const override;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class appender : public operation_skip_if_unset {
     public:
         using operation_skip_if_unset::operation_skip_if_unset;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     static void do_append(const cql3::raw_value& list_value,
-            mutation& m,
+            mutation_cell_collector& m,
             const clustering_key_prefix& prefix,
             const column_definition& column,
             const update_parameters& params);
@@ -69,7 +69,7 @@ public:
     class prepender : public operation_skip_if_unset {
     public:
         using operation_skip_if_unset::operation_skip_if_unset;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class discarder : public operation_skip_if_unset {
@@ -78,7 +78,7 @@ public:
                 : operation_skip_if_unset(column, std::move(e)) {
         }
         virtual bool requires_read() const override;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class discarder_by_index : public operation_skip_if_unset {
@@ -87,7 +87,7 @@ public:
                 : operation_skip_if_unset(column, std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
 
