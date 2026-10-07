@@ -394,7 +394,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
     };
 
     if (!mp.static_row().empty()) {
-        auto static_size = mp.static_row().external_memory_usage(s, column_kind::static_column);
+        auto static_size = mp.static_row().get().data_size();
         note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, static_size,
             row_fail, row_warn, "static row size",
             [&] { return seastar::format("partition_key={}", pk); }));
@@ -409,7 +409,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         if (e.dummy()) {
             continue;
         }
-        note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, e.memory_usage(s),
+        note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, e.data_size(),
             row_fail, row_warn, "row size",
             [&] { return seastar::format("clustering_key={}", e.key().with_schema(s)); }));
         e.row().cells().for_each_cell([&](column_id id, atomic_cell_or_collection_view cell) {
@@ -438,7 +438,7 @@ void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& 
             auto ck_bytes_view = row.key().view().representation();
 
             if (row_warn > 0 || row_fail > 0) {
-                size_t row_size = row.memory_usage(s);
+                size_t row_size = row.data_size();
                 uint64_t threshold = row_warn > 0 ? row_warn : row_fail;
                 if (row_size >= threshold) {
                     _row_cache.insert_or_assign(row_key{_pk_bytes, managed_bytes(ck_bytes_view)}, row_size);
