@@ -1654,7 +1654,11 @@ columnFamilyName returns [cql3::cf_name name]
     ;
 
 userTypeName returns [uninitialized<cql3::ut_name> name]
-    : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
+    : n=userTypeNameMaybeInternal[false] { $name = std::move(n); }
+    ;
+
+userTypeNameMaybeInternal [bool internal] returns [uninitialized<cql3::ut_name> name]
+    : (ks=ident '.')? ut=non_type_ident[internal] { $name = cql3::ut_name(ks, ut); }
     ;
 
 userOrRoleName returns [uninitialized<cql3::role_name> name]
@@ -2092,10 +2096,15 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
-    | vt=vector_type                { $t = vt; }
-    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
+    | vt=vector_type[internal]      { $t = vt; }
+    | id=userTypeNameMaybeInternal[internal] { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
     | K_FROZEN '<' f=comparator_type[internal] '>'
       {
+        if (internal && !f->supports_freezing()) {
+            // Older versions stored user types named like a native type unquoted, like frozen<int>.
+            // f is one native type keyword, the token before '>'.
+            f = cql3::cql3_type::raw::user_type(cql3::ut_name(nullptr, ::make_shared<cql3::column_identifier>(LT(-2)->getText(), false)));
+        }
         try {
             $t = cql3::cql3_type::raw::frozen(f);
         } catch (exceptions::invalid_request_exception& e) {
@@ -2177,8 +2186,8 @@ tuple_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> t]
       '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
-vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
-    : K_VECTOR '<' t=comparator_type[false] ',' d=INTEGER '>'
+vector_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> pt]
+    : K_VECTOR '<' t=comparator_type[internal] ',' d=INTEGER '>'
         {
             if ($d.text[0] == '-')
                 throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
@@ -2209,11 +2218,13 @@ username returns [sstring str]
 
 // Basically the same as cident, but we need to exclude existing CQL3 types
 // (which for some reason are not reserved otherwise)
-non_type_ident returns [shared_ptr<cql3::column_identifier> id]
-    : t=IDENT                    { if (_reserved_type_names().contains($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
+non_type_ident [bool internal] returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT                    { if (!internal && _reserved_type_names().contains($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
     | t=QUOTED_NAME              { $id = ::make_shared<cql3::column_identifier>($t.text, true); }
     | k=basic_unreserved_keyword { $id = ::make_shared<cql3::column_identifier>(k, false); }
     | kk=K_KEY                   { $id = ::make_shared<cql3::column_identifier>($kk.text, false); }
+    // Older versions stored user types named like these keywords, or like a reserved name above, unquoted.
+    | kw=(K_TTL | K_COUNT | K_WRITETIME) { if (!internal) { add_recognition_error("Invalid (reserved) user type name " + $kw.text); } $id = ::make_shared<cql3::column_identifier>($kw.text, false); }
     ;
 
 unreserved_keyword returns [sstring str]

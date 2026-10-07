@@ -7,13 +7,10 @@
 # Tests for user type names that older versions stored without the quotes
 # they need. The tests restart the node, so each starts its own node.
 
-import pytest
-
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5202: unquoted user type names stored by older versions are not read back")
 async def test_unquoted_user_type_names_from_older_versions(manager: ScyllaClusterManager):
     """
     Older versions stored these names without quotes. The node stopped group
