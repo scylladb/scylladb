@@ -852,6 +852,13 @@ def test_update_item_multiple(test_table_s):
                           'b': {'Action': 'DELETE'}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
 
+# The Action in AttributeUpdates is optional, and defaults to PUT.
+# Reproduces SCYLLADB-5116.
+def test_update_item_default_action(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': 'hello'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello'}
+
 # Using UpdateItem DELETE on a non-existent attribute of an existing item
 # succeeds but does nothing. Note that we have a separate test for the case
 # the whole item doesn't exist (test_update_item_non_existent)
