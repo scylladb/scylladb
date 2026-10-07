@@ -1632,3 +1632,43 @@ async def test_cache(manager: ScyllaClusterManager):
             for i in range(num_keys):
                 rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_no_cache WHERE pk = {i}")
                 assert rows[0].v == i * 10, f"unexpected value for pk={i}"
+
+async def test_separator_raises_memtable_group_shares(manager: ScyllaClusterManager):
+    """
+    The separator runs in the memtable scheduling group, whose shares the memtable flush controller
+    sets from the memtable backlog. A logstor table has no memtables, so the separator reports the
+    shares it needs instead: the controller has to give the group at least the separator's floor
+    while it is active, and the separator asks for nothing once it is idle again.
+    """
+    floor_shares = 300
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def get_shares() -> tuple[float, float]:
+        """Returns the shares the separator asks for and the shares the memtable group has"""
+        metrics = await manager.metrics.query(server.ip_addr)
+        return (metrics.get("scylla_logstor_sm_separator_wanted_shares") or 0,
+                metrics.get("scylla_scheduler_shares", {'group': 'memtable'}) or 0)
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+
+        next_pk = 0
+        async def separator_active():
+            # write on every attempt, so that the separator is still active when it is sampled
+            nonlocal next_pk
+            await cql.run_async(insert, [next_pk, next_pk])
+            next_pk += 1
+            wanted, memtable = await get_shares()
+            # the controller maps the shares to a backlog and back, which is not exact in floats
+            return True if wanted >= floor_shares and memtable >= floor_shares * 0.99 else None
+        await wait_for(separator_active, time.time() + 60)
+
+        async def separator_idle():
+            wanted, _ = await get_shares()
+            return True if wanted == 0 else None
+        await wait_for(separator_idle, time.time() + 60)
