@@ -3140,10 +3140,15 @@ public:
     }
 };
 
-// Verify that a value parsed from the user input is legal. In particular,
-// we check that the value is not an empty set, string or bytes - which is
-// (somewhat artificially) forbidden by DynamoDB.
-void validate_value(const rjson::value& v, const char* caller) {
+// Verify that a value parsed from the user input is legal: that it has the
+// structure of a DynamoDB typed value, all the way down into the elements of
+// lists, maps and sets, and that it is not an empty set - which is (somewhat
+// artificially) forbidden by DynamoDB.
+// A top-level number or binary value doesn't need its content validated
+// here, because it will be parsed - and validated - when it is serialized.
+// But a nested one (in a list or map) is stored as-is, as JSON, so we need
+// to validate it here, setting "nested" to true.
+static void validate_value(const rjson::value& v, const char* caller, bool nested) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
     }
@@ -3156,14 +3161,36 @@ void validate_value(const rjson::value& v, const char* caller) {
         if (it->value.Size() == 0) {
             throw api_error::validation(format("{}: empty set not allowed", caller));
         }
-    } else if (type == "S" || type == "B") {
+        // A set is always stored as-is, as JSON, so we need to validate its
+        // elements here, even if it is not nested.
+        for (const rjson::value& element : it->value.GetArray()) {
+            if (!element.IsString()) {
+                throw api_error::validation(format("{}: improperly formatted set '{}'", caller, v));
+            }
+            if (type == "NS") {
+                validate_number(rjson::to_string_view(element));
+            } else if (type == "BS") {
+                unwrap_bytes(element, true);
+            }
+        }
+    } else if (type == "S") {
         if (!it->value.IsString()) {
             throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
+        }
+    } else if (type == "B") {
+        if (!it->value.IsString()) {
+            throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
+        }
+        if (nested) {
+            unwrap_bytes(it->value, true);
         }
     } else if (type == "N") {
         if (!it->value.IsString()) {
             // DynamoDB uses a SerializationException in this case, not ValidationException.
             throw api_error::serialization(format("{}: number value must be encoded as string '{}'", caller, v));
+        }
+        if (nested) {
+            validate_number(rjson::to_string_view(it->value));
         }
     } else if (type == float32vector_type_name) {
         // Alternator-only optimized vector type (more optimized than a list-
@@ -3182,10 +3209,35 @@ void validate_value(const rjson::value& v, const char* caller) {
                     caller, element.GetDouble()));
             }
         }
-    } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
-        // TODO: can do more sanity checks on the content of the above types.
+    } else if (type == "BOOL") {
+        if (!it->value.IsBool()) {
+            throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
+        }
+    } else if (type == "NULL") {
+        if (!it->value.IsBool() || !it->value.GetBool()) {
+            throw api_error::validation(format("{}: NULL value must be true, got '{}'", caller, v));
+        }
+    } else if (type == "L") {
+        if (!it->value.IsArray()) {
+            throw api_error::validation(format("{}: improperly formatted list '{}'", caller, v));
+        }
+        for (const rjson::value& element : it->value.GetArray()) {
+            validate_value(element, caller, true);
+        }
+    } else if (type == "M") {
+        if (!it->value.IsObject()) {
+            throw api_error::validation(format("{}: improperly formatted map '{}'", caller, v));
+        }
+        for (const auto& member : it->value.GetObject()) {
+            validate_value(member.value, caller, true);
+        }
+    } else {
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
     }
+}
+
+void validate_value(const rjson::value& v, const char* caller) {
+    validate_value(v, caller, false);
 }
 
 // Per-table information needed to validate the attribute values written by
