@@ -152,25 +152,7 @@ public:
         bool has_pending_cells() const noexcept { return !_builder.empty(); }
     };
 
-    // Removes cells for which func(column_id, atomic_cell_or_collection&) returns true.
-    // func may also modify the cell.
-    template<typename Func>
-    void remove_if(Func&& func) {
-        rebuild_cells([&func] (column_id id, cell_and_hash& cah) {
-            if (func(id, cah.cell)) {
-                cah.cell = atomic_cell_or_collection();
-            }
-        });
-    }
-
 private:
-    // Compatibility path for code which needs atomic_cell_or_collection objects:
-    // materializes the cells of each block, calls func(column_id, cell_and_hash&)
-    // on each, and rebuilds the block from the results. Cells left empty are removed.
-    // Slow; prefer views.
-    template<typename Func>
-    void rebuild_cells(Func&& func);
-
     // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
     // `value` and may be moved from.
     void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
@@ -183,12 +165,6 @@ private:
     // caller can install other_block instead.
     bool merge_block(const schema& s, column_kind kind, block_index_type block_index, const block_type& other_block, bool steal,
             db::large_data_cache_tracker* tracker);
-
-    template<typename Func>
-    static constexpr bool is_const_func = std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>
-            || std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>
-            || std::is_invocable_v<Func&, column_id&, const cell_and_hash&>
-            || std::is_invocable_v<Func&, column_id&, const atomic_cell_or_collection&>;
 
     // Func obeys the same requirements as for for_each_cell below.
     template<typename Func>
@@ -210,32 +186,10 @@ private:
         }
     }
 
-    template<typename Func>
-    static constexpr auto maybe_invoke_with_hash(Func& func, column_id& id, cell_and_hash& c_a_h) {
-        if constexpr (std::is_invocable_v<Func&, column_id&, cell_and_hash&>) {
-            return func(id, c_a_h);
-        } else {
-            return func(id, c_a_h.cell);
-        }
-    }
-
 public:
     // Calls Func(column_id, const cell_and_hash_view&) or Func(column_id, atomic_cell_or_collection_view)
     // for each cell in this row, depending on the concrete Func type.
-    // For compatibility, Func(column_id, cell_and_hash&) and Func(column_id, atomic_cell_or_collection&)
-    // (which may modify cells) are also supported, at a cost.
-    // noexcept if Func doesn't throw and doesn't modify cells.
-    template<typename Func>
-    void for_each_cell(Func&& func) {
-        if constexpr (is_const_func<Func>) {
-            std::as_const(*this).for_each_cell(func);
-        } else {
-            rebuild_cells([&func] (column_id id, cell_and_hash& cah) {
-                maybe_invoke_with_hash(func, id, cah);
-            });
-        }
-    }
-
+    // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) const {
         _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
@@ -352,29 +306,6 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
 
-template<typename Func>
-void row::rebuild_cells(Func&& func) {
-    _cells.rebuild_blocks([&func] (block_index_type block_index, block_ptr& block) {
-        std::array<cell_and_hash, atomic_cell_or_collection_block_nr_cells> cells;
-        std::array<uint8_t, atomic_cell_or_collection_block_nr_cells> slots;
-        unsigned nr = 0;
-        block->for_each_cell([&] (const block_type::cell_entry& e) {
-            cells[nr] = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash);
-            slots[nr] = e.slot;
-            ++nr;
-        });
-        for (unsigned i = 0; i < nr; ++i) {
-            column_id id = column_of(block_index, slots[i]);
-            func(id, cells[i]);
-        }
-        atomic_cell_or_collection_block_builder builder;
-        for (unsigned i = 0; i < nr; ++i) {
-            builder.add_owned(slots[i], std::move(cells[i].cell.data()), cells[i].hash);
-        }
-        block = builder.empty() ? block_ptr() : builder.build();
-    });
-}
-
 // Like row, but optimized for the case where the row doesn't exist (e.g. static rows)
 class lazy_row {
     managed_ref<row> _row;
@@ -467,14 +398,6 @@ public:
     }
 
     // See row::for_each_cell().
-    template<typename Func>
-    void for_each_cell(Func&& func) {
-        if (!_row) {
-            return;
-        }
-        _row->for_each_cell(std::forward<Func>(func));
-    }
-
     template<typename Func>
     void for_each_cell(Func&& func) const {
         if (!_row) {
