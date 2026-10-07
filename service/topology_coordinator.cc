@@ -164,20 +164,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
 
-    // Auto-RF backoff.
-    //
-    // A keyspace_rf_change which the request handler rejects leaves no trace in
-    // group0: the request is dropped and marked done with the error. The next
-    // coordinator iteration therefore re-detects the very same shortfall in
-    // get_keyspaces_that_require_auto_rf_change() and schedules the very same
-    // request again. For a persistent rejection that is an unbounded loop which
-    // starves every other topology operation.
-    //
-    // Remember the failed attempts here and back off exponentially, so that a
-    // rejection which cannot be satisfied yet costs a handful of attempts rather
-    // than one per coordinator iteration. Keeping this in memory is adequate: the
-    // reconciler is a single fiber on the coordinator, and on coordinator failover
-    // the map resets, which costs at most one extra attempt.
+    // Auto-RF backoff. A rejected or failed keyspace_rf_change leaves no trace in
+    // group0, so the reconciler would detect the same shortfall and issue the same
+    // request again on every coordinator iteration, starving other topology work.
+    // Failed attempts are remembered per keyspace and retried with an exponential
+    // backoff. In memory only: a coordinator failover costs at most one extra attempt.
     struct auto_rf_failure {
         lowres_clock::time_point next_attempt;
         unsigned consecutive_failures = 0;
@@ -185,37 +176,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     static constexpr std::chrono::seconds auto_rf_backoff_base{1};
     static constexpr std::chrono::seconds auto_rf_backoff_max{60};
     std::unordered_map<sstring, auto_rf_failure> _auto_rf_failures;
-    // Wakes the coordinator fiber up when the earliest backoff expires. Without
-    // this the fiber, having no other work, sleeps on _topo_sm.event indefinitely
-    // and a backed-off keyspace would only be revisited on an unrelated event.
+    // Wakes the coordinator fiber up when the earliest backoff expires; it may have no
+    // other reason to wake up.
     timer<lowres_clock> _auto_rf_retry_timer{[this] { _topo_sm.event.broadcast(); }};
 
-    static bool is_auto_rf_keyspace(const sstring& ks_name) {
-        return std::ranges::any_of(get_auto_rf_keyspaces(), [&] (const auto& e) { return e.first == ks_name; });
-    }
-
-    // Records that a keyspace_rf_change for `ks_name` was rejected and pushes the
-    // next auto-RF attempt for that keyspace into the future.
-    void note_auto_rf_change_failure(const sstring& ks_name) {
-        // Operator ALTERs of other keyspaces go through the same request
-        // handler; only the reconciler's own keyspaces are backed off.
+    // Records the outcome of a keyspace_rf_change for the backoff above. Operator
+    // ALTERs of other keyspaces go through the same handler and are not backed off.
+    void record_auto_rf_change_outcome(const sstring& ks_name, bool failed) {
         if (!is_auto_rf_keyspace(ks_name)) {
+            return;
+        }
+        if (!failed) {
+            _auto_rf_failures.erase(ks_name);
             return;
         }
         auto& f = _auto_rf_failures[ks_name];
         // 1s, 2s, 4s, ... capped at auto_rf_backoff_max.
-        const auto delay = std::min(auto_rf_backoff_max,
-                std::chrono::seconds(auto_rf_backoff_base * (1u << std::min(f.consecutive_failures, 6u))));
+        const auto delay = std::min(auto_rf_backoff_max, auto_rf_backoff_base * (1u << std::min(f.consecutive_failures, 6u)));
         ++f.consecutive_failures;
         f.next_attempt = lowres_clock::now() + delay;
         rtlogger.info("auto-rf: keyspace_rf_change for {} failed {} time(s) in a row, "
                       "not retrying it for {}s", ks_name, f.consecutive_failures, delay.count());
-    }
-
-    // Called when a keyspace_rf_change for `ks_name` was processed successfully,
-    // so that the next shortfall is acted upon immediately.
-    void clear_auto_rf_change_failures(const sstring& ks_name) {
-        _auto_rf_failures.erase(ks_name);
     }
 
     static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
@@ -1246,9 +1227,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             }
 
                             auto builder = tbuilder_with_request_drop();
-                            if (_feature_service.auto_replication_factor && !get_keyspaces_that_require_auto_rf_change(guard).empty()) {
-                                builder.set_needs_auto_rf_change(true);
-                            }
+                            maybe_set_needs_auto_rf_change(builder);
                             updates.add(builder.build());
                             updates.add(topology_request_tracking_mutation_builder(req_id)
                                                         .done()
@@ -1300,14 +1279,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", utils::wait_for_message(30s));
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
 
-            // A rejected request is dropped without a trace, so auto-RF would
-            // re-detect the same shortfall and re-issue it on the coordinator's
-            // very next iteration. Remember the outcome, see note_auto_rf_change_failure().
-            if (error.empty()) {
-                clear_auto_rf_change_failures(ks_name);
-            } else {
-                note_auto_rf_change_failure(ks_name);
-            }
+            record_auto_rf_change_outcome(ks_name, !error.empty());
         }
         break;
         case global_topology_request::truncate_table: {
@@ -1704,56 +1676,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    static const std::vector<std::pair<sstring, size_t>>& get_auto_rf_keyspaces() {
-        // FIXME: Currently an empty list, to be populated in the next patches
-        static const std::vector<std::pair<sstring, size_t>> auto_keyspaces = {{
-        }};
-        return auto_keyspaces;
+    // For each DC, the racks in which some non-auto-RF tablets keyspace places
+    // replicas. nullopt means every rack of the DC (a numeric RF was found).
+    // A DC missing from the map has no such keyspace.
+    using eligible_racks_map = std::unordered_map<sstring, std::optional<std::set<sstring>>>;
+
+    static bool is_rack_eligible(const eligible_racks_map& eligible, const sstring& dc, const sstring& rack) {
+        auto it = eligible.find(dc);
+        return it != eligible.end() && (!it->second.has_value() || it->second->contains(rack));
     }
 
-    std::vector<std::pair<sstring, size_t>> get_keyspaces_that_require_auto_rf_change(const group0_guard& guard) {
-        // Note that a keyspace may need a change even if the RF goal is already
-        // met in every DC it replicates to: a new DC may have become eligible
-        // and has to be added to the replication options.
-        const auto allowed_racks = get_racks_for_auto_rf_change();
-        std::vector<std::pair<sstring, size_t>> result;
-        for (const auto& [ks_name, goal] : get_auto_rf_keyspaces()) {
-            if (!_db.has_keyspace(ks_name)) {
-                rtlogger.debug("Keyspace {} does not exist, skipping", ks_name);
-                continue;
-            }
-            auto& ks = _db.find_keyspace(ks_name);
-            auto ks_md = ks.metadata();
-            if (!ks_md->uses_tablets()) {
-                rtlogger.debug("Keyspace {} is using vnodes, skipping", ks_name);
-                continue;
-            }
+    // Where the auto-RF keyspaces may replicate, computed once per reconciler pass.
+    struct auto_rf_racks {
+        // The racks the auto-RF keyspaces follow.
+        eligible_racks_map eligible;
+        // The eligible racks with a token-owning, non-excluded normal node: the racks
+        // an auto-RF keyspace may be extended into. Always a subset of `eligible`.
+        std::unordered_map<sstring, std::set<sstring>> allowed;
+    };
 
-            auto options = ks_md->strategy_options();
-            bool needs_change = std::ranges::any_of(options, [goal = goal] (const auto& e) {
-                auto rf_data = locator::replication_factor_data(e.second);
-                return !rf_data.is_rack_based() || rf_data.get_rack_list().size() < goal;
-            });
-            if (!needs_change) {
-                needs_change = std::ranges::any_of(allowed_racks, [&options] (const auto& e) {
-                    return !options.contains(e.first);
-                });
-            }
-            if (needs_change) {
-                result.emplace_back(ks_name, goal);
-            }
-        }
-        return result;
-    }
-
-    std::unordered_map<sstring, std::set<sstring>> get_racks_for_auto_rf_change() {
-        const auto& auto_rf_keyspaces = get_auto_rf_keyspaces();
-
-        // For each DC, determine which racks have non-auto-RF tablet data.
-        // nullopt means all racks in the DC are eligible (numeric RF was found).
-        std::unordered_map<sstring, std::optional<std::set<sstring>>> dc_racks_with_tablets;
+    auto_rf_racks get_auto_rf_racks() {
+        auto_rf_racks racks;
         for (const auto& [ks_name, ks] : _db.get_keyspaces()) {
-            if (std::ranges::any_of(auto_rf_keyspaces, [&] (const auto& e) { return e.first == ks_name; })) {
+            if (is_auto_rf_keyspace(ks_name)) {
                 continue;
             }
             auto ks_md = ks->metadata();
@@ -1761,143 +1706,189 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 continue;
             }
             for (const auto& [dc, rf] : ks_md->strategy_options()) {
-                auto it = dc_racks_with_tablets.find(dc);
-                if (it != dc_racks_with_tablets.end() && !it->second.has_value()) {
-                    // Already marked as "all racks eligible" for this DC.
-                    continue;
+                auto it = racks.eligible.find(dc);
+                if (it != racks.eligible.end() && !it->second.has_value()) {
+                    continue; // already every rack of the DC
                 }
                 auto rf_data = locator::replication_factor_data(rf);
                 if (rf_data.is_numeric()) {
-                    if (rf_data.count() == 0) {
-                        // RF 0 places no replicas in this DC, so this keyspace cannot make
-                        // any rack there eligible. This is also the form used to drain a DC,
-                        // and treating it as "all racks eligible" would expand the auto-RF
-                        // keyspaces into the very DC the operator is emptying.
-                        continue;
+                    // RF 0 places no replicas in the DC. It is also how a DC is drained, and
+                    // must not pull the auto-RF keyspaces into the DC being emptied.
+                    if (rf_data.count() != 0) {
+                        racks.eligible[dc] = std::nullopt;
                     }
-                    dc_racks_with_tablets[dc] = std::nullopt; // all racks eligible
                 } else {
-                    auto& entry = dc_racks_with_tablets.try_emplace(dc, std::set<sstring>{}).first->second;
-                    for (const auto& rack : rf_data.get_rack_list()) {
-                        entry->insert(rack);
-                    }
+                    auto& entry = racks.eligible.try_emplace(dc, std::set<sstring>{}).first->second;
+                    entry->insert(rf_data.get_rack_list().begin(), rf_data.get_rack_list().end());
                 }
             }
         }
-
-        auto rack_eligible = [&] (const sstring& dc, const sstring& rack) {
-            auto it = dc_racks_with_tablets.find(dc);
-            return it != dc_racks_with_tablets.end() && (!it->second.has_value() || it->second->contains(rack));
-        };
-
-        const auto& dead_nodes = get_dead_nodes();
         const auto& excluded = _topo_sm._topology.excluded_tablet_nodes;
-        std::unordered_map<sstring, std::unordered_map<sstring, bool>> live_rack_by_dc;
         for (const auto& [id, rs] : _topo_sm._topology.normal_nodes) {
-            if (!rs.ring || rs.ring->tokens.empty() || excluded.contains(id)) {
-                continue;
-            }
-            if (!rack_eligible(rs.datacenter, rs.rack)) {
-                continue;
-            }
-            if (dead_nodes.contains(locator::host_id(id.uuid()))) {
-                live_rack_by_dc[rs.datacenter][rs.rack] = false;
-            } else {
-                live_rack_by_dc[rs.datacenter].try_emplace(rs.rack, true);
+            if (rs.ring && !rs.ring->tokens.empty() && !excluded.contains(id) && is_rack_eligible(racks.eligible, rs.datacenter, rs.rack)) {
+                racks.allowed[rs.datacenter].insert(rs.rack);
             }
         }
-
-        std::unordered_map<sstring, std::set<sstring>> allowed_racks;
-        for (const auto& [dc, racks] : live_rack_by_dc) {
-            for (const auto& [rack, live] : racks) {
-                if (live) {
-                    allowed_racks[dc].insert(rack);
-                }
-            }
-        }
-        return allowed_racks;
+        return racks;
     }
 
-    future<std::optional<group0_guard>> maybe_schedule_auto_rf_change(group0_guard guard) {
-        if (utils::get_local_injector().enter("skip_auto_rf_change")) {
-            rtlogger.debug("Injection point skip_auto_rf_change enabled, skipping auto RF change check");
-            co_return std::move(guard);
+    // The metadata of an auto-RF keyspace, or null if it does not exist or is on
+    // vnodes: auto-RF only manages tablets keyspaces.
+    lw_shared_ptr<data_dictionary::keyspace_metadata> auto_rf_keyspace_metadata(const sstring& ks_name) {
+        if (!_db.has_keyspace(ks_name)) {
+            rtlogger.debug("Keyspace {} does not exist, skipping", ks_name);
+            return nullptr;
+        }
+        auto ks_md = _db.find_keyspace(ks_name).metadata();
+        if (!ks_md->uses_tablets()) {
+            rtlogger.debug("Keyspace {} is using vnodes, skipping", ks_name);
+            return nullptr;
+        }
+        return ks_md;
+    }
+
+    // Whether the keyspace may need an auto-RF change: it has a numeric RF, a DC below
+    // the goal, or does not replicate to an allowed DC. Unlike next_auto_rf_change(),
+    // this does not check that a change can actually be made.
+    static bool may_need_auto_rf_change(const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
+        const auto& options = ks_md.strategy_options();
+        return std::ranges::any_of(options, [&] (const auto& e) {
+                    auto rf_data = locator::replication_factor_data(e.second);
+                    return !rf_data.is_rack_based() || rf_data.get_rack_list().size() < goal;
+                }) || std::ranges::any_of(racks.allowed, [&] (const auto& e) {
+                    return !options.contains(e.first);
+                });
+    }
+
+    // The replication options auto-RF gives the keyspace next, or nullopt if it has
+    // nothing to change. One step per change, tried in this order: convert numeric RFs
+    // to rack lists, add a rack to a DC below the goal, add a DC.
+    static std::optional<locator::replication_strategy_config_options> next_auto_rf_change(
+            const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
+        const auto& ks_name = ks_md.name();
+        const auto& options = ks_md.strategy_options();
+
+        // Every DC with enough allowed racks is converted in the same change.
+        auto converted = options;
+        bool any_converted = false;
+        for (const auto& [dc, rf] : options) {
+            auto rf_data = locator::replication_factor_data(rf);
+            auto it = racks.allowed.find(dc);
+            if (rf_data.is_numeric() && it != racks.allowed.end() && it->second.size() >= rf_data.count()) {
+                rtlogger.debug("Keyspace {} has a numeric replication factor for DC {}, converting it to a rack list", ks_name, dc);
+                converted[dc] = it->second | std::views::take(rf_data.count()) | std::ranges::to<locator::rack_list>();
+                any_converted = true;
+            }
+        }
+        if (any_converted) {
+            return converted;
         }
 
-        if (!_feature_service.auto_replication_factor) {
-            rtlogger.debug("auto_replication_factor feature is disabled, skipping auto RF change check");
-            co_return std::move(guard);
-        }
-
-        auto clear_needs_auto_rf_change = [&] -> future<> {
-            const auto ts = guard.write_timestamp();
-            topology_mutation_builder builder(ts);
-            builder.del_needs_auto_rf_change();
-            co_await update_topology_state(std::move(guard), {builder.build()}, "auto-rf: clear needs_auto_rf_change flag");
+        auto with_racks = [&] (const sstring& dc, locator::rack_list rack_list) {
+            auto new_options = options;
+            new_options[dc] = std::move(rack_list);
+            return new_options;
         };
 
-        // Auto-RF is automatic tablet movement, so it honours the switch that stops
-        // the load balancer: an operator who disabled balancing to carry out a manual
-        // RF change or a rack removal must not be fought over the system keyspaces,
-        // and tests get one switch for all automatic tablet work.
+        for (const auto& [dc, rf] : options) {
+            auto rf_data = locator::replication_factor_data(rf);
+            auto it = racks.allowed.find(dc);
+            if (!rf_data.is_rack_based() || rf_data.get_rack_list().size() >= goal || it == racks.allowed.end()) {
+                continue;
+            }
+            auto rack_list = rf_data.get_rack_list();
+            auto rack = std::ranges::find_if(it->second, [&] (const sstring& r) { return !std::ranges::contains(rack_list, r); });
+            if (rack != it->second.end()) {
+                rtlogger.debug("Keyspace {} is below the RF goal {} on DC {}, adding rack {}", ks_name, goal, dc, *rack);
+                rack_list.push_back(*rack);
+                return with_racks(dc, std::move(rack_list));
+            }
+        }
+
+        for (const auto& [dc, dc_racks] : racks.allowed) {
+            if (!options.contains(dc)) {
+                rtlogger.debug("Keyspace {} does not replicate to DC {}, adding rack {}", ks_name, dc, *dc_racks.begin());
+                return with_racks(dc, locator::rack_list{*dc_racks.begin()});
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Whether auto-RF has a change to make, regardless of backoff, ongoing changes
+    // and dead nodes.
+    bool auto_rf_change_needed() {
+        const auto racks = get_auto_rf_racks();
+        return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) {
+            auto ks_md = auto_rf_keyspace_metadata(e.first);
+            return ks_md && may_need_auto_rf_change(*ks_md, e.second, racks);
+        });
+    }
+
+    // Keeps needs_auto_rf_change set while auto-RF has a change to make, so that tablet
+    // load balancing yields to it (see should_preempt_balancing()).
+    void maybe_set_needs_auto_rf_change(topology_mutation_builder& builder) {
+        if (_feature_service.auto_replication_factor && auto_rf_change_needed()) {
+            builder.set_needs_auto_rf_change(true);
+        }
+    }
+
+    struct rf_change_candidate {
+        sstring ks_name;
+        locator::replication_strategy_config_options old_options;
+        locator::replication_strategy_config_options new_options;
+    };
+
+    // The next auto-RF change to schedule, if any. Sets `retry_at` to the earliest time
+    // a keyspace held back by the backoff may be retried.
+    future<std::optional<rf_change_candidate>> find_auto_rf_change(const group0_guard& guard, std::optional<lowres_clock::time_point>& retry_at) {
+        if (utils::get_local_injector().enter("skip_auto_rf_change")) {
+            rtlogger.debug("Injection point skip_auto_rf_change enabled, skipping auto RF change check");
+            co_return std::nullopt;
+        }
+        if (!_feature_service.auto_replication_factor) {
+            rtlogger.debug("auto_replication_factor feature is disabled, skipping auto RF change check");
+            co_return std::nullopt;
+        }
+        // Auto-RF is automatic tablet movement, so it honours the switch that stops the
+        // load balancer: an operator who disabled balancing to change replication by hand
+        // must not be fought over the system keyspaces.
         if (!get_token_metadata_ptr()->tablets().balancing_enabled()) {
             rtlogger.debug("auto-rf: tablet balancing is disabled, not scheduling RF changes");
-            if (_topo_sm._topology.needs_auto_rf_change) {
-                co_await clear_needs_auto_rf_change();
-                co_return std::nullopt;
-            }
-            co_return std::move(guard);
+            co_return std::nullopt;
         }
+        const auto racks = get_auto_rf_racks();
+        if (racks.eligible.empty()) {
+            rtlogger.debug("auto-rf: no tablets keyspace to follow");
+            co_return std::nullopt;
+        }
+        rtlogger.debug("auto-rf: allowed racks by DC: {}", racks.allowed);
 
-        auto auto_rf_keyspaces = get_keyspaces_that_require_auto_rf_change(guard);
-        if (auto_rf_keyspaces.empty()) {
+        std::vector<std::pair<lw_shared_ptr<data_dictionary::keyspace_metadata>, size_t>> keyspaces;
+        for (const auto& [ks_name, goal] : auto_rf_keyspaces()) {
+            if (auto ks_md = auto_rf_keyspace_metadata(ks_name); ks_md && may_need_auto_rf_change(*ks_md, goal, racks)) {
+                keyspaces.emplace_back(std::move(ks_md), goal);
+            }
+        }
+        if (keyspaces.empty()) {
             rtlogger.debug("No keyspaces require auto RF change");
-            if (_topo_sm._topology.needs_auto_rf_change) {
-                co_await clear_needs_auto_rf_change();
-                co_return std::nullopt;
-            }
-            co_return std::move(guard);
+            co_return std::nullopt;
         }
 
-        // An RF change is carried out by tablet migrations, and every migration
-        // goes through global_tablet_token_metadata_barrier(), which drains all
-        // normal nodes. With a dead node the barrier cannot pass, the coordinator
-        // fiber retries the migration once a second and does nothing else in the
-        // meantime: no resize decisions, no load balancing, no other requests.
-        // An operator ALTER KEYSPACE has the same effect, but that is the
-        // operator's call. Auto-RF acts on its own, so it must not start work it
-        // knows cannot complete. Defer until every normal node is alive again;
-        // the coordinator wakes up on gossip on_up() and re-evaluates then.
+        // RF changes are carried out by tablet migrations, whose barriers cannot pass a
+        // dead node, so auto-RF does not start one while a node is down. The coordinator
+        // wakes up on gossip on_up() and re-evaluates then.
         if (const auto dead_nodes = get_dead_nodes(); !dead_nodes.empty()) {
-            // Rate limited: the reconciler re-evaluates on every coordinator
-            // iteration, but an operator needs to see why auto-RF is idle.
             static thread_local logger::rate_limit deferral_rate_limit{std::chrono::minutes(1)};
             rtlogger.log(log_level::info, deferral_rate_limit,
                     "auto-rf: deferring RF changes for {} keyspace(s) until dead node(s) {} are alive again",
-                    auto_rf_keyspaces.size(), dead_nodes);
-            if (_topo_sm._topology.needs_auto_rf_change) {
-                co_await clear_needs_auto_rf_change();
-                co_return std::nullopt;
-            }
-            co_return std::move(guard);
+                    keyspaces.size(), dead_nodes);
+            co_return std::nullopt;
         }
 
-        std::unordered_map<sstring, std::set<sstring>> allowed_racks = get_racks_for_auto_rf_change();
-        rtlogger.debug("Eligible rack by DC: {}", allowed_racks);
-        struct rf_change_candidate {
-            sstring ks_name;
-            locator::replication_strategy_config_options old_options;
-            locator::replication_strategy_config_options new_options;
-        };
-        std::optional<rf_change_candidate> candidate;
-        // The earliest moment at which a keyspace skipped below leaves its backoff.
-        std::optional<lowres_clock::time_point> retry_at;
-        for (const auto& [ks_name, goal] : auto_rf_keyspaces) {
-            // Note the backoff is keyed by keyspace only, not by the change which
-            // failed: a keyspace which was just rejected is left alone even if the
-            // topology meanwhile changed such that a different change would be
-            // attempted. That costs at most one backoff interval of delay on a
-            // system keyspace, and keeps the state trivially small.
+        for (const auto& [ks_md, goal] : keyspaces) {
+            const auto& ks_name = ks_md->name();
+            // Keyed by keyspace, not by change: a rejected keyspace is left alone for the
+            // backoff even if a different change would now be attempted.
             if (auto it = _auto_rf_failures.find(ks_name); it != _auto_rf_failures.end() && lowres_clock::now() < it->second.next_attempt) {
                 rtlogger.debug("Keyspace {} had {} failed RF change(s) in a row, backing off", ks_name, it->second.consecutive_failures);
                 retry_at = std::min(retry_at.value_or(it->second.next_attempt), it->second.next_attempt);
@@ -1907,118 +1898,42 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.debug("There is an ongoing RF change for keyspace {}, skipping", ks_name);
                 continue;
             }
-            auto& ks = _db.find_keyspace(ks_name);
-            auto ks_md = ks.metadata();
-
-            auto old_options = ks_md->strategy_options();
-            old_options.emplace("class", ks_md->strategy_name());
-            locator::replication_strategy_config_options new_options = old_options;
-
-            // Schedule rack list colocation.
-            if (std::any_of(ks_md->strategy_options().begin(), ks_md->strategy_options().end(), [] (const auto& rf) { return locator::replication_factor_data(rf.second).is_numeric(); })) {
-                rtlogger.debug("Keyspace {} has some DCs with non-rack-based RF, converting to rack-list", ks_name);
-                bool rf_changed = false;
-                for (const auto& [dc, rf] : ks_md->strategy_options()) {
-                    auto rf_data = locator::replication_factor_data(rf);
-                    if (rf_data.is_rack_based()) {
-                        continue;
-                    }
-                    auto rf_count = rf_data.count();
-                    auto rack_it = allowed_racks.find(dc);
-                    if (rack_it != allowed_racks.end() && rack_it->second.size() >= rf_count) {
-                        rtlogger.debug("Keyspace {} has non-rack-based replication factor for DC {}, converting to rack-list", ks_name, dc);
-                        new_options[dc] = rack_it->second
-                                | std::views::take(rf_count)
-                                | std::ranges::to<locator::rack_list>();
-                        rf_changed = true;
-                    }
-                }
-                if (rf_changed) {
-                    candidate.emplace(ks_name, std::move(old_options), std::move(new_options));
-                }
-            }
-            if (candidate) {
-                break;
-            }
-
-            // Add new rack.
-            for (const auto& [dc, rf] : ks_md->strategy_options()) {
-                auto find_candidate_rack = [&] (const sstring& dc, const locator::rack_list& current_rack_list) -> std::optional<sstring> {
-                    auto rack_it = allowed_racks.find(dc);
-                    const auto& all_racks = rack_it != allowed_racks.end() ? rack_it->second : std::set<sstring>{};
-                    for (const auto& rack : all_racks) {
-                        if (!std::ranges::contains(current_rack_list, rack)) {
-                            return rack;
-                        }
-                    }
-                    return std::nullopt;
-                };
-
-                auto rf_data = locator::replication_factor_data(rf);
-                if (!rf_data.is_rack_based()) {
-                    continue;
-                }
-                auto rack_list = rf_data.get_rack_list();
-                if (rack_list.size() < goal) {
-                    if (auto rack = find_candidate_rack(dc, rack_list)) {
-                        rtlogger.debug("Keyspace {} is below the RF goal {} on DC {}, adding rack {}", ks_name, goal, dc, *rack);
-                        rack_list.push_back(*rack);
-                        new_options[dc] = std::move(rack_list);
-                        candidate.emplace(ks_name, std::move(old_options), std::move(new_options));
-                        break;
-                    }
-                }
-            }
-            if (candidate) {
-                break;
-            }
-
-            // Add new DC.
-            for (const auto& [dc, racks] : allowed_racks) {
-                if (new_options.contains(dc)) {
-                    continue;
-                }
-                new_options[dc] = locator::rack_list{*racks.begin()};
-                candidate.emplace(ks_name, std::move(old_options), std::move(new_options));
-                break;
-            }
-            if (candidate) {
-                break;
+            if (auto new_options = next_auto_rf_change(*ks_md, goal, racks)) {
+                auto old_options = ks_md->strategy_options();
+                old_options.emplace("class", ks_md->strategy_name());
+                new_options->emplace("class", ks_md->strategy_name());
+                co_return rf_change_candidate{ks_name, std::move(old_options), std::move(*new_options)};
             }
         }
+        co_return std::nullopt;
+    }
 
-        if (retry_at) {
-            _auto_rf_retry_timer.rearm(*retry_at);
-        }
-
-        if (!candidate) {
-            // Note the needs_auto_rf_change flag is cleared even when a keyspace is
-            // only backed off. The flag preempts tablet load balancing, and holding
-            // it for the whole backoff would trade one starvation for another; the
-            // request handler sets it again once the change is scheduled.
-            if (_topo_sm._topology.needs_auto_rf_change) {
-                co_await clear_needs_auto_rf_change();
-                co_return std::nullopt;
-            }
+    // Clears needs_auto_rf_change unless auto-RF has a change scheduled. That includes
+    // a backed-off or deferred change: the flag preempts tablet load balancing, and
+    // holding it while auto-RF waits would starve the balancer. Returns the guard
+    // unless the update consumed it.
+    future<std::optional<group0_guard>> maybe_clear_needs_auto_rf_change(group0_guard guard) {
+        if (!_topo_sm._topology.needs_auto_rf_change) {
             co_return std::move(guard);
         }
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.del_needs_auto_rf_change();
+        co_await update_topology_state(std::move(guard), {builder.build()}, "auto-rf: clear needs_auto_rf_change flag");
+        co_return std::nullopt;
+    }
 
-        // Build ALTER KEYSPACE replication options.
+    future<> schedule_auto_rf_change(group0_guard guard, const rf_change_candidate& candidate) {
         cql3::statements::ks_prop_defs props;
-        props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, candidate->new_options);
+        props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, candidate.new_options);
         auto flattened = props.flattened();
 
-        // Schedule a keyspace_rf_change global request.
-        const auto ts = guard.write_timestamp();
         const auto global_request_id = guard.new_group0_state_id();
-
-        topology_mutation_builder builder(ts);
+        topology_mutation_builder builder(guard.write_timestamp());
         topology_request_tracking_mutation_builder rtbuilder{global_request_id, _feature_service.topology_requests_type_column};
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::keyspace_rf_change)
-                 .set_new_keyspace_rf_change_data(candidate->ks_name, flattened);
-
+                 .set_new_keyspace_rf_change_data(candidate.ks_name, flattened);
         builder.queue_global_topology_request_id(global_request_id)
                .set_needs_auto_rf_change(true);
 
@@ -2026,9 +1941,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         muts.emplace_back(builder.build());
         muts.emplace_back(rtbuilder.build());
 
-        rtlogger.info("Scheduling auto RF change for keyspace {}: old replication options={}, new replication options={}", candidate->ks_name, candidate->old_options, candidate->new_options);
+        rtlogger.info("Scheduling auto RF change for keyspace {}: old replication options={}, new replication options={}", candidate.ks_name, candidate.old_options, candidate.new_options);
         co_await update_topology_state(std::move(guard), std::move(muts),
-                seastar::format("auto-rf: schedule keyspace_rf_change for {}", candidate->ks_name));
+                seastar::format("auto-rf: schedule keyspace_rf_change for {}", candidate.ks_name));
+    }
+
+    // Schedules the next auto-RF change, if any. Returns the guard unless it was consumed.
+    future<std::optional<group0_guard>> maybe_schedule_auto_rf_change(group0_guard guard) {
+        std::optional<lowres_clock::time_point> retry_at;
+        auto candidate = co_await find_auto_rf_change(guard, retry_at);
+        if (retry_at) {
+            _auto_rf_retry_timer.rearm(*retry_at);
+        }
+        if (!candidate) {
+            co_return co_await maybe_clear_needs_auto_rf_change(std::move(guard));
+        }
+        co_await schedule_auto_rf_change(std::move(guard), *candidate);
         co_return std::nullopt;
     }
 
@@ -2324,21 +2252,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         topology_mutation_builder builder{guard.write_timestamp()};
         builder.finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id);
-        if (_feature_service.auto_replication_factor && !get_keyspaces_that_require_auto_rf_change(guard).empty()) {
-            builder.set_needs_auto_rf_change(true);
-        }
+        maybe_set_needs_auto_rf_change(builder);
         out.emplace_back(builder.build());
 
-        // A failed RF change leaves the shortfall in place, so the reconciler
-        // re-detects it and re-issues the same request on its next iteration.
-        // Record the outcome here too, not only where the handler rejects a
-        // request outright, or a persistently failing change re-enters the
-        // unbounded loop the backoff exists to stop.
-        if (error.empty()) {
-            clear_auto_rf_change_failures(completion.ks_name);
-        } else {
-            note_auto_rf_change_failure(completion.ks_name);
-        }
+        record_auto_rf_change_outcome(completion.ks_name, !error.empty());
 
         out.emplace_back(topology_request_tracking_mutation_builder(completion.request_id)
                 .done(error)
@@ -2363,8 +2280,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             out.add_small(m);
         }
 
-        // Same reasoning as in generate_rf_change_completion_update().
-        note_auto_rf_change_failure(abort_info.ks_name);
+        record_auto_rf_change_outcome(abort_info.ks_name, true);
 
         out.add(topology_request_tracking_mutation_builder(abort_info.request_id)
                 .abort(abort_info.error)
@@ -3880,12 +3796,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 guard = std::move(*guard_opt);
             }
 
-            // should_preempt_balancing() checks needs_auto_rf_change, so a pending
-            // auto-RF change stops tablet load balancing from being re-entered:
-            // auto-RF has the higher priority of the two. The flag is therefore
-            // cleared on every path that leaves no change scheduled, including the
-            // backoff and dead-node deferral below, so that balancing is not
-            // starved while auto-RF is idle.
             if (auto guard_opt = co_await maybe_schedule_auto_rf_change(std::move(guard)); !guard_opt) {
                 // The guard is consumed, it means we scheduled an auto-RF change request.
                 co_return true;

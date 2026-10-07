@@ -249,9 +249,10 @@ struct topology {
     // hence the need for this field.
     std::unordered_set<raft::server_id> excluded_tablet_nodes;
 
-    // needs_auto_rf_change is set to true, when user keyspace RF is altered
-    // and there are auto-RF-keyspaces that did not reach its target RF.
-    // When true, tablet migrations preempt in order to schedule auto RF change.
+    // Set while the auto-RF reconciler has a change to make, and kept set while that
+    // change runs; tablet load balancing yields to it. Cleared whenever the
+    // reconciler has nothing to schedule, including while it is backed off or
+    // deferred.
     bool needs_auto_rf_change = false;
 
     // Find only nodes in non 'left' state
