@@ -1188,10 +1188,6 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
             )) for follower in followers])
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
-    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
-)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClusterManager):
     """
@@ -1199,6 +1195,11 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
     aborted when their corresponding Raft group is being removed. We test
     that by dropping the table, but it should also correspond to other cases
     like tablet migration.
+
+    apply() is made to wait for the group0 barrier, which is blocked for the
+    whole test, so it can only finish by being aborted. Removing the Raft group
+    must not wait for it: the Raft server aborts the state machine before it
+    waits for the applier fiber (SCYLLADB-1056).
 
     For a similar scenario during a node shutdown, see test_abort_state_machine_apply_during_shutdown.
     """
@@ -1220,7 +1221,7 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
         manager.get_host_id(target_server.server_id)
     ])
 
-    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+    block_barrier_injection = "migration_manager_block_group0_barrier"
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         table_name = "my_table"
@@ -1233,33 +1234,42 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
         assert leader_host_id != target_host_id
 
         await gather_safely(*[
-            manager.api.enable_injection(target_server.ip_addr, wait_before_apply_injection, one_shot=True),
+            manager.api.enable_injection(target_server.ip_addr, block_barrier_injection, one_shot=True),
             manager.api.enable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema", one_shot=True)
         ])
 
         log = await manager.server_open_log(target_server.server_id)
-
-        # We won't wait for the follower to apply the state, so we can await this right away.
-        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
-
-        await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_apply_injection)
         mark = await log.mark()
 
-        await cql.run_async(f"DROP TABLE {table}")
-        # Wait until the Raft group has started being removed.
-        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
-        mark = await log.mark()
+        try:
+            # We won't wait for the follower to apply the state, so we can await this right away.
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
 
-        # At this point, the Raft server should already be getting aborted,
-        # so we can resume state_machine::apply.
-        await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
-        # Verify that state_machine::apply was really aborted.
-        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+            # The follower doesn't find the schema of the mutation, so apply()
+            # waits for the group0 barrier, which is blocked.
+            await log.wait_for(rf"apply\(\): waiting for the group0 barrier for tablet \S+, group_id={group_id}",
+                               from_mark=mark)
+            await manager.api.wait_for_injection_enter(target_server.ip_addr, block_barrier_injection)
+            mark = await log.mark()
+
+            # Coordinated by the leader: nothing on the target may need the
+            # blocked barrier to drop the table.
+            await cql.run_async(f"DROP TABLE {table}", host=leader_host)
+            # Verify that state_machine::apply was really aborted.
+            await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted",
+                               from_mark=mark, timeout=120)
+            # And that the removal of the Raft group finished, still with the
+            # barrier blocked.
+            await log.wait_for(rf"schedule_raft_group_deletion\(\): raft server for group id {group_id} is destroyed",
+                               from_mark=mark, timeout=120)
+        finally:
+            # A shutdown waits for the group0 barrier.
+            await manager.api.message_injection(target_server.ip_addr, block_barrier_injection)
 
 
 @pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
-    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-4459",
+    reason="apply() fails on the group0 barrier joined by the shutdown",
 )
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):

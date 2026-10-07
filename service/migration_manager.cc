@@ -31,6 +31,7 @@
 #include "db/view/view_building_state.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema/schema_builder.hh"
@@ -62,6 +63,8 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         , _sys_ks(sysks)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
+                co_await utils::get_local_injector().inject("migration_manager_block_group0_barrier",
+                        utils::wait_for_message(std::chrono::minutes(5)));
                 // This will run raft barrier and will sync schema with the leader
                 co_await with_scheduling_group(_gossiper.get_scheduling_group(), [this] {
                     return start_group0_operation().discard_result();
