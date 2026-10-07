@@ -88,6 +88,7 @@ PROFILE_VERSION = 4       # bumped when the recorded format changes; older files
 TAIL_SECONDS = 20.0       # below this a test is too short to be worth holding capacity for
 HELD_RESERVE_SECONDS = 60.0  # a test held this long without fitting gets room kept for it
 LOOKAHEAD_TRIES = 3        # tests an idle worker's pick asks admission about before it waits
+MEM_SHORT_SECONDS = 60.0   # memory counts as short this long after it last kept a test from starting
 REFRESH_SECONDS = 0.5      # measurements, forecasts, pressure and the pool are looked at this often at most
 # A reservation is a test's *peak* memory held for its whole life, and
 # peaks rarely coincide.  Measured on a run with no profile: 34 GB
@@ -943,6 +944,7 @@ class DynamicScheduling:
         self.refresh = refresh
         self._refreshed_at = -math.inf             # when measurements etc. were last looked at
         self._pressure_now = False                 # the pressure guard's last verdict
+        self._mem_refused_at = -math.inf           # when memory last kept a test from starting
         self._in_pass = False                      # inside a scheduling pass: what it computes once may be kept
         self._estimate_cache: float | None = None  # this pass's load estimate, until a test is admitted
         self._held_cache: dict | None = None       # this pass's held tests: worker -> (test, cores, memory)
@@ -1522,6 +1524,7 @@ class DynamicScheduling:
         hold_cpu, hold_mem = self._hold_reservation(idx)
         if self._forecast_need(idx, node) + hold_mem + ahead[1] > self._available() - self.mem_reserve:
             self.stats["rejected_mem"] += 1
+            self._mem_refused_at = now
             return False
 
         # --- CPU: reservations with a controlled over-commit band
@@ -1836,15 +1839,23 @@ class DynamicScheduling:
         """Send home a worker holding far more between tests than its
         peers; the pool may grow a fresh one.
 
-        It finishes what it is running and its held test first, as at
-        the end of a run, so the held test has to fit now like any
-        other.
+        Only while memory is short: when it last kept a test from
+        starting under MEM_SHORT_SECONDS ago, or the tests stall on it.
+        Otherwise what a worker holds costs nothing, and replacing it
+        costs a worker start: on a 62 GB host 27 workers were replaced
+        in a debug run, 14 of them within ten minutes.
+
+        Its held test goes back to the queue (see request_eviction): it
+        was chosen for this worker, and starting it on the way out would
+        start it past admission.
         """
         now = self.now()
         # Only a pool that can grow back may send a worker home for
         # this: with a fixed pool (-j) every recycled worker is one
         # lost for the rest of the run.
         if self.max_workers <= 0 or now - self._last_retire < RETIRE_COOLDOWN or len(self._idle_mem) < 3:
+            return
+        if now - self._mem_refused_at >= MEM_SHORT_SECONDS and not self._stalled():
             return
         limit = max(POOL_BLOAT_MIN, POOL_BLOAT_FACTOR * self.worker_cost())
         for node in self._live_workers():
@@ -1853,13 +1864,12 @@ class DynamicScheduling:
                 continue
             held = self._held(node)
             if held is not None and held not in self.committed_at:
-                if self._waits_for_first_run(held):
-                    continue        # its test waits for a scout or a first copy: not now
-                if self._forecast_need(held, node) > self._available() - self.mem_reserve:
-                    continue
-                self._commit(held, node)
-            node.shutdown()
-            self.shutdown_sent.add(node)
+                if not self._send_home(node, held):
+                    continue        # it could not be told to skip it: leave it be
+                self.stats["evicted"] += 1
+            else:
+                node.shutdown()
+                self.shutdown_sent.add(node)
             self._idle_mem.pop(node.gateway.id, None)
             self._last_retire = now
             self.stats["recycled"] += 1

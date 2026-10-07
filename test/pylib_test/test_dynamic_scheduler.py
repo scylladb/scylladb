@@ -731,8 +731,10 @@ def test_a_worker_in_the_middle_of_a_module_is_not_drained(tmp_path):
     assert node not in sched._draining and not node._shutdown_sent
 
 
-def test_a_bloated_worker_is_recycled(tmp_path):
-    """A worker that holds 3 GB when its tests start, against 0.3 GB for its peers, is sent home."""
+def test_a_bloated_worker_is_recycled(tmp_path, monkeypatch):
+    """While memory is short, a worker that holds 3 GB when its tests start, against 0.3 GB
+    for its peers, is sent home, and the test it held goes back to the queue."""
+    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
     clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
     sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=4, n_tests=20,
                                                  one_file=False)
@@ -742,12 +744,31 @@ def test_a_bloated_worker_is_recycled(tmp_path):
         live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
     # every worker finishes its test; the next ones start with the leftovers measured
     clock["t"] = 100.0
+    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
     for node in nodes:
         running = next(i for i in sched.node2pending[node] if i in sched.committed_at)
         sched.mark_test_complete(node, running)
     assert sched.worker_cost() == pytest.approx(0.3 * GB)
     assert sched.stats["recycled"] == 1
     assert nodes[0]._shutdown_sent and not any(n._shutdown_sent for n in nodes[1:])
+    held = sched._evicted.get(nodes[0])
+    assert held is None or held not in sched.committed_at, "its held test is not started on the way out"
+
+
+def test_a_bloated_worker_is_kept_while_memory_is_not_short(tmp_path):
+    """What a worker holds costs nothing while memory keeps no test from starting, and
+    replacing it costs a worker start."""
+    clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=4, n_tests=20,
+                                                 one_file=False)
+    sched._pool_floor = 4
+    sched.live.memory = lambda wid: live.get(wid, 0.0)
+    for i, node in enumerate(nodes):
+        live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
+    clock["t"] = 100.0
+    for node in nodes:
+        sched.mark_test_complete(node, next(i for i in sched.node2pending[node] if i in sched.committed_at))
+    assert sched.stats["recycled"] == 0 and not any(n._shutdown_sent for n in nodes)
 
 
 def test_a_fixed_pool_never_recycles(tmp_path):
@@ -797,8 +818,9 @@ def test_a_worker_holding_its_modules_cluster_adds_only_what_the_test_takes_beyo
     assert len(committed(sched)) == 8
 
 
-def test_a_recycled_worker_is_replaced_to_keep_the_pool_at_its_floor(tmp_path):
+def test_a_recycled_worker_is_replaced_to_keep_the_pool_at_its_floor(tmp_path, monkeypatch):
     """The pool never stays below its floor: a recycled worker is refilled at once."""
+    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
     clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
     sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=8, n_tests=40,
                                                  cores=4.0, one_file=False)   # 4 x 4 cores: the CPU is full, no growth
@@ -808,6 +830,7 @@ def test_a_recycled_worker_is_replaced_to_keep_the_pool_at_its_floor(tmp_path):
     for i, node in enumerate(nodes):
         live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
     clock["t"] = 100.0
+    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
     for node in nodes:
         running = next(i for i in sched.node2pending[node] if i in sched.committed_at)
         sched.mark_test_complete(node, running)
@@ -946,15 +969,22 @@ def test_a_worker_skips_only_the_test_it_was_told_to(tmp_path, monkeypatch):
     assert not take_eviction("gw3", "a.py::t1")
 
 
-def test_recycling_skips_a_worker_whose_test_waits_for_its_scout(tmp_path):
+def test_a_recycled_worker_gives_its_held_test_back(tmp_path, monkeypatch):
+    """A bloated worker is told to skip the test it holds, which goes back to the queue:
+    started on the way out it would go in past admission.  Without a way to tell it, it
+    is left alone."""
     clock, avail = {"t": 5.0}, {"v": 10 * GB}
     sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, {})
+    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
     # gw1 and gw2 both bloated against typical workers at 0.3 GB
     sched._idle_mem = {"gw0": 0.3 * GB, "gwA": 0.3 * GB, "gwB": 0.3 * GB, "gw1": 3 * GB, "gw2": 3 * GB}
     sched._recycle_bloated_worker()
-    assert sched.stats["recycled"] == 1
-    assert nodes[2]._shutdown_sent and not nodes[1]._shutdown_sent
-    assert 1 not in sched.committed_at
+    assert sched.stats["recycled"] == 0 and not any(n._shutdown_sent for n in nodes), "no way to tell it"
+    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
+    sched._recycle_bloated_worker()
+    assert sched.stats["recycled"] == 1 and sched.stats["evicted"] == 1
+    assert nodes[1]._shutdown_sent and sched._evicted[nodes[1]] == 1
+    assert 1 not in sched.committed_at, "its held test is not started"
 
 
 def test_a_first_in_file_sample_still_teaches_the_peak(tmp_path):
