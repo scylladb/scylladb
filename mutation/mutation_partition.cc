@@ -2062,28 +2062,30 @@ deletable_row deletable_row::difference(const schema& s, column_kind kind, const
 row row::difference(const schema& s, column_kind kind, const row& other) const
 {
     row r;
+    cell_appender cells(r);
     for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
         auto& cdef = s.column_at(kind, id);
         auto other_cell = other.find_cell(id);
         if (!other_cell) {
-            r.append_cell(id, c.copy(*cdef.type));
+            cells.append(id, c);
         } else if (cdef.is_counter()) {
             auto cell = counter_cell_view::difference(c.as_atomic_cell(cdef), other_cell->as_atomic_cell(cdef));
             if (cell) {
-                r.append_cell(id, std::move(*cell));
+                cells.append(id, std::move(*cell));
             }
         } else if (cdef.is_atomic()) {
             if (compare_atomic_cell_for_merge(c.as_atomic_cell(cdef), other_cell->as_atomic_cell(cdef)) > 0) {
-                r.append_cell(id, c.copy(*cdef.type));
+                cells.append(id, c);
             }
         } else {
             auto diff = ::difference(*cdef.type,
                     c.as_collection_mutation(), other_cell->as_collection_mutation());
             if (!static_cast<collection_mutation_view>(diff).empty()) {
-                r.append_cell(id, std::move(diff));
+                cells.append(id, std::move(diff));
             }
         }
     });
+    cells.finish();
     return r;
 }
 
