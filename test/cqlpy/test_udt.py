@@ -188,10 +188,6 @@ def test_alter_type_rename_used_in_partition_key(cql, test_keyspace, scylla_only
 # its type, frozen or not.
 # Reproduces SCYLLADB-5202: the text lost the quotes, so "int" was read as the
 # native int, and "byte" or "ttl" failed to parse, which stopped group 0.
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-5202",
-    reason="stops group 0 on the node, so every later schema change fails",
-)
 def test_quoted_user_type_names(cql, test_keyspace):
     with ExitStack() as stack:
         columns = {}

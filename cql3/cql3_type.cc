@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include <algorithm>
 #include <iterator>
 #include <boost/regex.hpp>
 
@@ -521,6 +522,26 @@ sstring maybe_quote(const std::string_view identifier) {
     boost::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
     result.push_back('"');
     return result;
+}
+
+sstring maybe_quote_user_type_name(const std::string_view name) {
+    auto is_lowercase_identifier = !name.empty() && 'a' <= name[0] && name[0] <= 'z' && std::ranges::all_of(name, [] (char c) {
+        return ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || c == '_';
+    });
+    if (is_lowercase_identifier) {
+        // The type parser reads a name as a user type only if maybe_quote()
+        // keeps it unquoted too, so one parse is enough.
+        try {
+            auto type = do_with_parser(name, dialect{}, [] (cql3_parser::CqlParser& parser) {
+                return parser.comparator_type(false);
+            });
+            if (type->is_user_type()) {
+                return sstring(name);
+            }
+        } catch (exceptions::syntax_exception&) {
+        }
+    }
+    return quote(name);
 }
 
 template <char C>
