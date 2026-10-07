@@ -175,19 +175,39 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
 }
 
 
+// Rebuilds the row, replacing each live cell with transform_live(id, cell).
+// Dead cells are copied as is.
+static void transform_live_cells(const schema& s, column_kind kind, row& cells,
+        std::invocable<column_id, atomic_cell_view> auto&& transform_live) {
+    row new_cells;
+    row::cell_appender appender(new_cells);
+    cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view ac_o_c) {
+        auto acv = ac_o_c.as_atomic_cell(s.column_at(kind, id));
+        if (!acv.is_live()) {
+            appender.append(id, ac_o_c);
+        } else {
+            appender.append(id, transform_live(id, acv));
+        }
+    });
+    appender.finish();
+    cells = std::move(new_cells);
+}
+
+static void transform_live_cells(const schema& s, column_kind kind, lazy_row& cells,
+        std::invocable<column_id, atomic_cell_view> auto&& transform_live) {
+    if (!cells.empty()) {
+        transform_live_cells(s, kind, cells.get_existing(), transform_live);
+    }
+}
+
 void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, counter_id local_id) {
     // FIXME: allow current_state to be frozen_mutation
 
     auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& cells) {
-        cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
-            auto& cdef = s.column_at(kind, id);
-            auto acv = ac_o_c.as_atomic_cell(cdef);
-            if (!acv.is_live()) {
-                return; // continue -- we are in lambda
-            }
+        transform_live_cells(s, kind, cells, [&] (column_id, atomic_cell_view acv) {
             auto delta = acv.counter_update_value();
             auto cs = counter_shard(local_id, delta, clock_offset + 1);
-            ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
+            return counter_cell_builder::from_single_shard(acv.timestamp(), cs);
         });
     };
 
@@ -217,12 +237,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
           });
 
-        transformee.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
-            auto& cdef = s.column_at(kind, id);
-            auto acv = ac_o_c.as_atomic_cell(cdef);
-            if (!acv.is_live()) {
-                return; // continue -- we are in lambda
-            }
+        transform_live_cells(s, kind, transformee, [&] (column_id id, atomic_cell_view acv) {
             while (!shards.empty() && shards.front().first < id) {
                 shards.pop_front();
             }
@@ -231,12 +246,13 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
 
             if (shards.empty() || shards.front().first > id) {
                 auto cs = counter_shard(local_id, delta, clock_offset + 1);
-                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
+                return counter_cell_builder::from_single_shard(acv.timestamp(), cs);
             } else {
                 auto& cs = shards.front().second;
                 cs.update(delta, clock_offset + 1);
-                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
+                auto cell = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
                 shards.pop_front();
+                return cell;
             }
         });
     };
