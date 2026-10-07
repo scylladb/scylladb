@@ -47,8 +47,21 @@ private:
     deletable_row* _current_row = nullptr;
     Consumer& _consumer;
     stop_iteration _stop_consuming = stop_iteration::no;
+    // Builds the cells of the static row or the current clustering row, a block at a time.
+    std::optional<row::cell_appender> _cells;
+
+    row::cell_appender& cells(row& r) {
+        if (!_cells) {
+            _cells.emplace(r);
+        }
+        return *_cells;
+    }
 
     stop_iteration flush_rows_and_tombstones(position_in_partition_view pos) {
+        if (_cells) {
+            _cells->finish();
+            _cells.reset();
+        }
         if (!_static_row.empty()) {
             auto row = std::move(_static_row.get_existing());
             _stop_consuming = _consumer.consume(static_row(std::move(row)));
@@ -93,13 +106,11 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell cell) override {
-        row& r = _static_row.maybe_create();
-        r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
+        cells(_static_row.maybe_create()).append(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation collection) override {
-        row& r = _static_row.maybe_create();
-        r.append_cell(id, std::move(collection));
+        cells(_static_row.maybe_create()).append(id, std::move(collection));
     }
 
     virtual stop_iteration accept_row_tombstone(range_tombstone rt) override {
@@ -121,13 +132,11 @@ public:
     }
 
     void accept_row_cell(column_id id, atomic_cell cell) override {
-        row& r = _current_row->cells();
-        r.append_cell(id, std::move(cell));
+        cells(_current_row->cells()).append(id, std::move(cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation collection) override {
-        row& r = _current_row->cells();
-        r.append_cell(id, std::move(collection));
+        cells(_current_row->cells()).append(id, std::move(collection));
     }
 
     auto on_end_of_partition() {
