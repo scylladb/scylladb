@@ -2567,6 +2567,47 @@ end: {}
     }
 }
 
+void cluster_clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("tag")) {
+        throw std::invalid_argument("Missing required parameter \"tag\"");
+    }
+    auto tag = vm["tag"].as<sstring>();
+    std::unordered_map<sstring, sstring> params{{"tag", tag}};
+
+    const auto clear_res = client.del("/storage_service/tablets/snapshots", std::move(params));
+    const auto task_id = rjson::to_string_view(clear_res);
+
+    fmt::print(std::cout, "Requested clearing of cluster snapshot [{}]\n", tag);
+
+    if (vm.contains("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
+        return;
+    }
+
+    const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
+    const auto wait_res = client.get(url);
+    const auto& status = wait_res.GetObject();
+    auto state = rjson::to_string_view(status["state"]);
+    fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
+    if (state != "done") {
+        exit_code = EXIT_FAILURE;
+        fmt::print(": {}", rjson::to_string_view(status["error"]));
+    }
+    fmt::print(R"(
+start: {}
+end: {}
+)",
+               rjson::to_string_view(status["start_time"]),
+               rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
+}
+
 void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm["keyspace"].empty()) {
         throw std::invalid_argument("keyspace is required");
@@ -4200,6 +4241,23 @@ For more information, see: {}
                             typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to backup"),
                         },
                     },
+                    {
+                        "clearsnapshot",
+                        "Clear the cluster-wide snapshot with the given tag",
+fmt::format(R"(
+Clears a cluster snapshot: releases the snapshot's data and deletes its
+entries from the snapshot catalog table. It's meant to be used on both
+local and remote object-storage tables.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/cluster/clearsnapshot.html")),
+                        {
+                            typed_option<sstring>("tag,t", "The name of the snapshot to clear"),
+                            typed_option<>("nowait", "Don't wait on the clear process"),
+                        },
+                        {
+                        },
+                    },
                 }
             },
             {
@@ -4215,6 +4273,9 @@ For more information, see: {}
                     },
                     {
                         "backup", { cluster_backup_operation }
+                    },
+                    {
+                        "clearsnapshot", { cluster_clearsnapshot_operation }
                     },
                 }
             }
