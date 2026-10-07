@@ -3206,7 +3206,7 @@ future<service::topology_change_hint> get_topology_change_hint(const utils::chun
         size_t known_cells = 0;
         // A field already set by an earlier mutation can't be reconciled by vector order: full reload.
         auto set_if_live = [&] (const column_definition& cdef, std::optional<int64_t>& out) {
-            auto* cell = static_row.find_cell(cdef.id);
+            auto cell = static_row.find_cell(cdef.id);
             if (!cell) {
                 return true;
             }

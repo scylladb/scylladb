@@ -20,6 +20,7 @@ class deletable_row;
 class column_definition;
 class abstract_type;
 class atomic_cell_or_collection;
+class atomic_cell_or_collection_view;
 namespace db { class large_data_cache_tracker; }
 
 // Mutation partition visitor which applies visited data into
@@ -56,6 +57,6 @@ public:
 
     // Appends the cell to dst upgrading it to the new schema.
     // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, atomic_cell_or_collection_view cell,
             db::large_data_cache_tracker* tracker = nullptr);
 };

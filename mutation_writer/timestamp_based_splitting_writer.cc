@@ -126,7 +126,7 @@ private:
 private:
     future<> write_to_bucket(bucket_id bucket, mutation_fragment_v2&& mf);
 
-    std::optional<bucket_id> examine_column(const atomic_cell_or_collection& c, const column_definition& cdef);
+    std::optional<bucket_id> examine_column(atomic_cell_or_collection_view c, const column_definition& cdef);
     std::optional<bucket_id> examine_row(const row& r, column_kind kind);
     std::optional<bucket_id> examine_static_row(const static_row& sr);
     std::optional<bucket_id> examine_clustering_row(const clustering_row& cr);
@@ -194,7 +194,7 @@ future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bu
 }
 
 std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_based_splitting_mutation_writer::examine_column(
-        const atomic_cell_or_collection& cell, const column_definition& cdef) {
+        atomic_cell_or_collection_view cell, const column_definition& cdef) {
     if (cdef.is_atomic()) {
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
@@ -219,7 +219,7 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
 std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_based_splitting_mutation_writer::examine_row(const row& r,
         column_kind kind) {
     std::optional<bucket_id> bucket;
-    r.for_each_cell_until([this, &bucket, kind] (column_id id, const atomic_cell_or_collection& cell) {
+    r.for_each_cell_until([this, &bucket, kind] (column_id id, atomic_cell_or_collection_view cell) {
         const auto this_bucket = examine_column(cell, _schema->column_at(kind, id));
         if (!this_bucket || (bucket && *bucket != *this_bucket)) {
             bucket.reset();
