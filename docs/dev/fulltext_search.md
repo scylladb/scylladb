@@ -24,6 +24,13 @@ silently succeeds without creating a duplicate. Because the `IF NOT EXISTS` name
 across the whole keyspace, reusing an existing index name with `IF NOT EXISTS` on a different
 table or column silently does nothing (issue VECTOR-641).
 
+### Only regular columns
+
+Only a regular column can be indexed. The Vector Store's full scan reads the indexed column's
+`writetime()`, which ScyllaDB refuses for a partition or clustering key column. It also fetches
+each row by its full primary key, which ScyllaDB refuses when only static columns are selected.
+Lifting this needs Vector Store changes: a key column has no write time to track its changes by.
+
 ## Implementation overview
 
 ### Authorization

@@ -153,6 +153,9 @@ partition key of the index is of a type allowed for filtering columns and the
 vector column is the first one after the partition key definition, and any
 subsequent columns are filtering columns.
 
+The vector column must be a regular column. Primary-key and static columns
+cannot be indexed.
+
 ScyllaDB allows creating multiple **named** vector indexes on the same vector column.
 This can be used to create a replacement index before dropping an older one.
 Unnamed duplicate vector index definitions are still rejected, and index names
@@ -351,7 +354,7 @@ CDC is enabled automatically on the base table when a full-text index is created
 **Column restrictions:**
 
 * The indexed column must be of type ``text``, ``varchar``, or ``ascii``. Other types are rejected.
-* The indexed column must be a regular or clustering-key column. Partition-key columns cannot be indexed.
+* The indexed column must be a regular column. Primary-key and static columns cannot be indexed.
 * The table must use tablets (not vnodes).
 
 Example::
