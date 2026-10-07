@@ -1228,6 +1228,38 @@ size_t row::external_memory_usage(const schema& s, column_kind kind) const {
     });
 }
 
+size_t row::data_size() const {
+    size_t size = 0;
+    for_each_cell([&] (column_id, atomic_cell_or_collection_view cell) {
+        size += cell.data().size();
+    });
+    return size;
+}
+
+size_t mutation_partition::data_size(const schema& s) const {
+    check_schema(s);
+    constexpr size_t tombstone_size = sizeof(api::timestamp_type) + sizeof(gc_clock::rep);
+    size_t size = 0;
+    if (_tombstone) {
+        size += tombstone_size;
+    }
+    size += static_row().get().data_size();
+    for (const auto& rt : _row_tombstones) {
+        size += rt.tombstone().start.representation().size() + rt.tombstone().end.representation().size() + tombstone_size;
+    }
+    for (const rows_entry& e : non_dummy_rows()) {
+        const auto& r = e.row();
+        size += e.key().representation().size() + r.cells().data_size();
+        if (r.deleted_at()) {
+            size += tombstone_size;
+        }
+        if (!r.marker().is_missing()) {
+            size += sizeof(api::timestamp_type) + (r.marker().is_expiring() ? 2 * sizeof(gc_clock::rep) : 0);
+        }
+    }
+    return size;
+}
+
 size_t rows_entry::memory_usage(const schema& s) const {
     size_t size = 0;
     if (!dummy()) {

@@ -245,6 +245,10 @@ public:
 
     size_t external_memory_usage(const schema&, column_kind) const;
 
+    // The total size of the serialized cells, independent of how they are
+    // represented in memory.
+    size_t data_size() const;
+
     cell_hash_opt cell_hash_for(column_id id) const;
 
     void prepare_hash(const schema& s, column_kind kind) const;
@@ -1533,6 +1537,11 @@ public:
     uint64_t row_count() const;
 
     size_t external_memory_usage(const schema&) const;
+    // The size of the data in the partition (excluding the partition key),
+    // independent of how it is represented in memory: the sizes of the clustering
+    // keys and of the serialized cells, plus the sizes of tombstones and row markers
+    // as timestamps and times.
+    size_t data_size(const schema&) const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;

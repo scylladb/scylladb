@@ -2622,6 +2622,27 @@ SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_data_size) {
+    simple_schema s;
+    auto m = mutation(s.schema(), s.make_pkey(0));
+    auto ck = s.make_ckey(1);
+    const sstring value(100, 'v');
+    s.add_row(m, ck, value);
+    auto& row = m.partition().clustered_row(*s.schema(), ck);
+    const auto& v_def = *s.schema()->get_column_definition("v");
+    const auto cell_size = atomic_cell_type::live_serialized_size(v_def.type->decompose(value).size());
+    // add_row() doesn't add a row marker
+    BOOST_REQUIRE(row.marker().is_missing());
+    BOOST_REQUIRE_EQUAL(m.partition().data_size(*s.schema()), ck.representation().size() + cell_size);
+
+    row.apply(row_marker(1));
+    BOOST_REQUIRE_EQUAL(m.partition().data_size(*s.schema()), ck.representation().size() + cell_size + sizeof(api::timestamp_type));
+
+    // Independent of the in-memory representation: a copy has the same size.
+    auto m2 = mutation(m.schema(), m.decorated_key(), mutation_partition(*s.schema(), m.partition()));
+    BOOST_REQUIRE_EQUAL(m2.partition().data_size(*s.schema()), m.partition().data_size(*s.schema()));
+}
+
 class measuring_allocator final : public allocation_strategy {
     size_t _allocated_bytes = 0;
 public:
