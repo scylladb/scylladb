@@ -955,6 +955,7 @@ mutation_partition mutation_partition_v2::as_mutation_partition(const schema& s)
     tmp.set_static_row_continuous(_static_row_continuous);
     partition_builder v(s, tmp);
     accept(s, v);
+    v.finish();
     return tmp;
 }
 

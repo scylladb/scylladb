@@ -18,11 +18,22 @@
 #include "mutation/collection_mutation.hh"
 
 // Partition visitor which builds mutation_partition corresponding to the data its fed with.
+//
+// finish() must be called after all the data was fed.
 class partition_builder final : public mutation_partition_visitor {
 private:
     const schema& _schema;
     mutation_partition& _partition;
     deletable_row* _current_row;
+    std::optional<row::cell_appender> _static_cells;
+    std::optional<row::cell_appender> _row_cells;
+
+    void finish_row() {
+        if (_row_cells) {
+            _row_cells->finish();
+            _row_cells.reset();
+        }
+    }
 public:
     // @p will hold the result of building.
     // @p must be empty.
@@ -30,6 +41,15 @@ public:
         : _schema(s)
         , _partition(p)
     { }
+
+    // Adds the cells fed since the last row started to the partition.
+    void finish() {
+        if (_static_cells) {
+            _static_cells->finish();
+            _static_cells.reset();
+        }
+        finish_row();
+    }
 
     virtual void accept_partition_tombstone(tombstone t) override {
         _partition.apply(t);
@@ -41,8 +61,7 @@ public:
     }
 
     void accept_static_cell(column_id id, atomic_cell&& cell) {
-        row& r = _partition.static_row().maybe_create();
-        r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
+        static_cells().append(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
@@ -50,8 +69,13 @@ public:
     }
 
     void accept_static_cell(column_id id, collection_mutation&& collection) {
-        row& r = _partition.static_row().maybe_create();
-        r.append_cell(id, std::move(collection));
+        static_cells().append(id, std::move(collection));
+    }
+
+    // Accepts a cell by writing its serialized form, see mutation_partition_view.
+    template <typename Writer>
+    void accept_serialized_static_cell(column_id id, size_t size, Writer&& write) {
+        static_cells().append_serialized(id, size, write);
     }
 
     virtual void accept_row_tombstone(const range_tombstone& rt) override {
@@ -59,6 +83,7 @@ public:
     }
 
     virtual void accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override {
+        finish_row();
         deletable_row& r = _partition.append_clustered_row(_schema, key, dummy, continuous);
         r.apply(rm);
         r.apply(deleted_at);
@@ -71,8 +96,7 @@ public:
     }
 
     void accept_row_cell(column_id id, atomic_cell&& cell) {
-        row& r = _current_row->cells();
-        r.append_cell(id, std::move(cell));
+        row_cells().append(id, std::move(cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
@@ -80,8 +104,25 @@ public:
     }
 
     void accept_row_cell(column_id id, collection_mutation collection) {
-        row& r = _current_row->cells();
-        r.append_cell(id, std::move(collection));
+        row_cells().append(id, std::move(collection));
+    }
+
+    template <typename Writer>
+    void accept_serialized_row_cell(column_id id, size_t size, Writer&& write) {
+        row_cells().append_serialized(id, size, write);
+    }
+private:
+    row::cell_appender& static_cells() {
+        if (!_static_cells) {
+            _static_cells.emplace(_partition.static_row().maybe_create());
+        }
+        return *_static_cells;
+    }
+    row::cell_appender& row_cells() {
+        if (!_row_cells) {
+            _row_cells.emplace(_current_row->cells());
+        }
+        return *_row_cells;
     }
 };
 

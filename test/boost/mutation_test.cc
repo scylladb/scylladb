@@ -2665,6 +2665,94 @@ public:
     size_t allocated_bytes() const { return _allocated_bytes; }
 };
 
+// row::cell_appender must produce the same row as append_cell(), whatever
+// the order of appends, and merge with cells already in the row.
+SEASTAR_THREAD_TEST_CASE(test_row_cell_appender) {
+    constexpr unsigned nr_columns = 3 * atomic_cell_or_collection_block_nr_cells + 1;
+    auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key);
+    for (unsigned i = 0; i < nr_columns; ++i) {
+        builder.with_column(to_bytes(fmt::format("c{:02}", i)), bytes_type);
+    }
+    auto s = builder.build();
+
+    auto make_cell = [&] (column_id id) {
+        // Mix small cells with cells that don't fit a block's inline area.
+        auto size = id % 5 == 0 ? atomic_cell_or_collection_block_builder::inline_budget : id + 1;
+        return atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, id, bytes(size, int8_t(id))));
+    };
+    auto expected_row = [&] (const std::vector<column_id>& ids) {
+        row r;
+        for (auto id : ids) {
+            r.append_cell(id, make_cell(id));
+        }
+        return r;
+    };
+
+    std::vector<column_id> all_ids;
+    for (column_id id = 0; id < nr_columns; ++id) {
+        all_ids.push_back(id);
+    }
+    auto shuffled = all_ids;
+    std::shuffle(shuffled.begin(), shuffled.end(), std::mt19937(nr_columns));
+    auto reversed = all_ids;
+    std::ranges::reverse(reversed);
+
+    for (const auto& order : {all_ids, shuffled, reversed}) {
+        row r;
+        row::cell_appender appender(r);
+        for (auto id : order) {
+            appender.append(id, make_cell(id));
+        }
+        appender.finish();
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected_row(all_ids), *s));
+        BOOST_REQUIRE_EQUAL(r.size(), nr_columns);
+        BOOST_REQUIRE_EQUAL(r.external_memory_usage(*s, column_kind::regular_column),
+                expected_row(all_ids).external_memory_usage(*s, column_kind::regular_column));
+    }
+
+    // Append to a row which already has cells, some in the same blocks.
+    {
+        std::vector<column_id> existing_ids;
+        std::vector<column_id> appended_ids;
+        for (auto id : all_ids) {
+            (id % 3 ? appended_ids : existing_ids).push_back(id);
+        }
+        auto r = expected_row(existing_ids);
+        row::cell_appender appender(r);
+        for (auto id : appended_ids) {
+            // Exercise both the owning and the copying overloads.
+            if (id % 2) {
+                appender.append(id, make_cell(id));
+            } else {
+                auto cell = make_cell(id);
+                appender.append(id, atomic_cell_or_collection_view(cell));
+            }
+        }
+        appender.finish();
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected_row(all_ids), *s));
+        BOOST_REQUIRE_EQUAL(r.size(), nr_columns);
+    }
+
+    // Writing the serialized form directly.
+    {
+        row r;
+        row::cell_appender appender(r);
+        for (auto id : all_ids) {
+            auto value = bytes(id + 1, int8_t(id));
+            appender.append_serialized(id, atomic_cell_type::live_serialized_size(value.size()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, id, single_fragment_range(bytes_view(value)));
+            });
+        }
+        appender.finish();
+        row expected;
+        for (auto id : all_ids) {
+            expected.append_cell(id, atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, id, bytes(id + 1, int8_t(id)))));
+        }
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected, *s));
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     measuring_allocator alloc;
     auto s = simple_schema();

@@ -509,9 +509,11 @@ public:
 
     data_consumer::proceed consume_row_end() {
         auto fill_cells = [this] (column_kind kind, row& cells) {
+            row::cell_appender appender(cells);
             for (auto &&c : _cells) {
-                cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
+                appender.append(c.id, std::move(c.val));
             }
+            appender.finish();
             _cells.clear();
         };
 
