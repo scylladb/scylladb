@@ -7490,7 +7490,7 @@ future<db::hints::sync_point> storage_proxy::create_hint_sync_point(std::vector<
     co_return spoint;
 }
 
-future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline) {
+future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline, hint_kind kind) {
     const auto my_host_id = get_token_metadata_ptr()->get_my_id();
     if (spoint.host_id != my_host_id) {
         throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
@@ -7521,7 +7521,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
 
     bool was_aborted = false;
     unsigned original_shard = this_shard_id();
-    co_await container().invoke_on_all([original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
+    co_await container().invoke_on_all([original_shard, &sources, &spoint, &was_aborted, kind] (storage_proxy& sp) {
         auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
             const unsigned shard = this_shard_id();
             return mgr.wait_for_sync_point(sources[shard], shard_rps[shard]).handle_exception([original_shard, &sources, &was_aborted] (auto eptr) {
@@ -7546,8 +7546,8 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
         };
 
         return when_all_succeed(
-            wait_for(sp._hints_manager, spoint.regular_per_shard_rps),
-            wait_for(sp._hints_for_views_manager, spoint.mv_per_shard_rps)
+            kind != hint_kind::view ? wait_for(sp._hints_manager, spoint.regular_per_shard_rps) : make_ready_future<>(),
+            kind != hint_kind::regular ? wait_for(sp._hints_for_views_manager, spoint.mv_per_shard_rps) : make_ready_future<>()
         ).discard_result();
     }).finally([&t, &timer_gate] {
         t.cancel();
