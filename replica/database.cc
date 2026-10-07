@@ -1193,6 +1193,9 @@ future<> database::create_local_system_table(
         auto& cf = find_column_family(table);
         co_await cf.stop();
     }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
@@ -1278,6 +1281,9 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
     if (ex && column_family_exists(schema->id())) {
         auto& cf = find_column_family(schema);
         co_await cf.stop();
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
     co_await make_column_family_directory(schema);
 }
