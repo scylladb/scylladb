@@ -6030,15 +6030,16 @@ class scylla_sstable_index_cache(gdb.Command):
             loaded_pages += 1
             page = page.get_with_type(partition_index_page_type)
             gdb.write("[{}]: [\n".format(int(n['_key'])))
-            for entry in chunked_managed_vector(page['_entries']):
-                entry = entry['_ptr'].dereference()['_value']
-                key = entry['_key']
-                token = std_optional(entry['_token'])
-                if token:
-                    token = str(int(token.get()['_data']))
-                else:
-                    token = 'null'
-                position = int(entry['_position'])
+            # Keys are packed into _key_storage; entry i spans [key_offset[i], key_offset[i+1]).
+            key_storage = managed_bytes(page['_key_storage']).get()
+            entries = list(chunked_managed_vector(page['_entries']))
+            for i, entry in enumerate(entries):
+                end = int(entries[i + 1]['key_offset']) if i + 1 < len(entries) else len(key_storage)
+                key = key_storage[int(entry['key_offset']):end].hex()
+                token = int(entry['raw_token'])
+                # raw_token is disengaged when equal to INT64_MIN.
+                token = 'null' if token == -2**63 else str(token)
+                position = int(entry['data_file_offset'])
 
                 gdb.write("  {{ key: {}, token: {}, position: {} }}\n".format(key, token, position))
             gdb.write(']\n')
