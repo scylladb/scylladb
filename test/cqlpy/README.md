@@ -271,6 +271,7 @@ test/cqlpy/run-cassandra --docker          # default is latest 5 release
 test/cqlpy/run-cassandra --docker=4.1      # latest 4.1 patch release
 test/cqlpy/run-cassandra --docker=4.1.11   # specific patch release
 test/cqlpy/run-cassandra --docker=3.11
+test/cqlpy/run-cassandra --docker=6.0      # pre-release (no "6" tag yet)
 ```
 
 A small number of tests invoke `nodetool`. When using `--docker`, `nodetool`
