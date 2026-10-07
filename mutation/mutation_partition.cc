@@ -1852,6 +1852,41 @@ compact_and_expire_result row::compact_and_expire(
         tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
     }
     compact_and_expire_result res{};
+
+    // Most compactions change nothing. Check that with a read-only pass first,
+    // which is much cheaper than rebuilding the blocks. Collections always take
+    // the full pass, as checking them is as expensive as compacting them.
+    bool needs_change = false;
+    _cells.for_each_block([&] (block_index_type block_index, const block_type& block) {
+        return block.for_each_cell([&] (const block_type::cell_entry& e) {
+            const column_definition& def = s.column_at(kind, column_of(block_index, e.slot));
+            if (!def.is_atomic()) {
+                needs_change = true;
+                return stop_iteration::yes;
+            }
+            auto cell = atomic_cell_view::from_bytes(e.cell);
+            if (cell.is_covered_by(tomb.regular(), def.is_counter())
+                    || cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())
+                    || cell.has_expired(query_time)) {
+                needs_change = true;
+                return stop_iteration::yes;
+            }
+            if (cell.is_live()) {
+                res.live_cells++;
+            } else if (cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no)) {
+                needs_change = true;
+                return stop_iteration::yes;
+            } else {
+                res.dead_cells++;
+            }
+            return stop_iteration::no;
+        });
+    });
+    if (!needs_change) {
+        return res;
+    }
+    res = {};
+
     _cells.rebuild_blocks([&] (block_index_type block_index, block_ptr& block) {
         // Most compactions change nothing, so start building a new block only on
         // the first change, adding the cells kept until then.
