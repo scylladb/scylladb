@@ -21,9 +21,8 @@ def table1(cql, test_keyspace):
 
 
 # Generates a batch whose size is at least size_in_kb kilobytes. The batch size
-# is measured by the memory used by its mutations, which includes some overhead
-# that depends on their in-memory representation, so use values of 1 KB each,
-# so that the size is reached by the values alone.
+# includes the sizes of keys and cells' metadata, so use values of 1 KB each, so
+# that the size is reached by the values alone.
 def generate_big_batch(table, size_in_kb):
     statements = [f"INSERT INTO {table} (k, t) VALUES ({idx}, '{'x' * 1024}')" for idx in range(size_in_kb)]
     return "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
