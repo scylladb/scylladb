@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
-# Tests for CQL over SSL (TLS). These tests are skipped when the tests are
-# *not* using SSL, so run the tests with "--ssl" to enable them.
+# Tests for CQL over SSL (TLS). test.py always runs them over TLS; with
+# test/cqlpy/run they are skipped unless "--ssl" is given.
 #############################################################################
 
 import pytest
@@ -16,8 +16,41 @@ import re
 import ssl
 import time
 
+from test import TEST_RUNNER
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
+from .util import cql_session
+
+
+if TEST_RUNNER != "runpy":
+    # Under test.py, serve CQL over TLS on an extra port; the framework's
+    # readiness check needs the plain one. All four ports must be explicit,
+    # or the shard-aware port inherits encryption.
+    _TLS_PORT = 9142
+
+    @pytest.fixture(scope="module")
+    async def scylla_cluster(request, testpy_cluster_factory, testpy_uname):
+        async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
+            await cluster.add_server(config={
+                'native_transport_port': 9042,
+                'native_shard_aware_transport_port': 19042,
+                'native_transport_port_ssl': _TLS_PORT,
+                'native_shard_aware_transport_port_ssl': 19142,
+                'client_encryption_options': {
+                    'enabled': True,
+                    'certificate': 'conf/scylla.crt',
+                    'keyfile': 'conf/scylla.key',
+                },
+            })
+            cluster.take_log_savepoint()
+            yield cluster
+
+    @pytest.fixture(scope="module")
+    def cql(host):
+        with cql_session(host=host, port=_TLS_PORT, is_ssl=True,
+                         username="cassandra", password="cassandra") as session:
+            yield session
+            session.shutdown()
 
 
 # This function normalizes the SSL cipher suite name (a string),
