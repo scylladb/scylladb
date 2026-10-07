@@ -564,6 +564,8 @@ class segment_manager_impl {
         uint64_t live_record_count{0};
         uint64_t separator_task_failures{0};
         uint64_t segment_free_failures{0};
+        uint64_t separator_enqueue_waits{0};
+        std::chrono::steady_clock::duration separator_enqueue_wait_time{0};
     };
 
     file_manager _file_mgr;
@@ -1146,6 +1148,10 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of logstor segment references that failed to free the segment.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
+        sm::make_counter("separator_enqueue_waits", _stats.separator_enqueue_waits,
+                       sm::description("Counts number of times a write had to wait for room in the separator task queue, which blocks the writes behind it.")),
+        sm::make_counter("separator_enqueue_wait_time_ms", [this] { return std::chrono::duration<double, std::milli>(_stats.separator_enqueue_wait_time).count(); },
+                       sm::description("Total time in milliseconds writes spent waiting for room in the separator task queue.")),
     });
 }
 
@@ -1314,7 +1320,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         auto records = wb.take_separator_records();
         if (!records.empty()) {
-            co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
+            auto enqueued = with_semaphore(_separator_enqueue_sem, 1, [&] {
                 return _separator_task_queue.push_eventually(separator_task{
                     .records = std::move(records),
                     .chunk_position = pos,
@@ -1323,6 +1329,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
                     .write_op = std::move(write_op),
                 });
             });
+            // The separator is behind and this write - and every write queued after it - waits
+            // for it. Only the waiting case is timed, so the common one costs a branch.
+            if (!enqueued.available()) {
+                ++_stats.separator_enqueue_waits;
+                const auto wait_start = std::chrono::steady_clock::now();
+                co_await std::move(enqueued);
+                _stats.separator_enqueue_wait_time += std::chrono::steady_clock::now() - wait_start;
+            } else {
+                co_await std::move(enqueued);
+            }
         }
         write_to_separator_failed.cancel();
         break;
