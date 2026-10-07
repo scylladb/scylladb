@@ -86,7 +86,8 @@ MEM_DECAY = 0.7
 CONTENDED_STALL_FRAC = 0.10
 PROFILE_VERSION = 4       # bumped when the recorded format changes; older files are ignored
 TAIL_SECONDS = 20.0       # below this a test is too short to be worth holding capacity for
-HELD_FORCE_SECONDS = 60.0 # a worker blocked this long on one test is worth more than the budget
+HELD_RESERVE_SECONDS = 60.0  # a test held this long without fitting gets room kept for it
+LOOKAHEAD_TRIES = 3        # tests an idle worker's pick asks admission about before it waits
 # A reservation is a test's *peak* memory held for its whole life, and
 # peaks rarely coincide.  Measured on a run with no profile: 34 GB
 # reserved against a 36 GB budget while the tests were really using 13
@@ -314,7 +315,6 @@ SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more 
 JOIN_SETUP_FRACTION = 0.1  # a long module is shared only if its setup is at most this much of a test
 RATE_WINDOW = 300.0        # seconds of finished tests the measured work rate is taken over
 RATE_MIN_TESTS = 20        # finished tests needed before the measured rate replaces the prediction
-CHAIN_FRACTION = 0.5       # a module whose rest takes this share of the run's time left goes on despite pressure
 K_SIGMA = 0.5              # standard deviations of cores added to a test's booking
 DEFAULT_COST = (2.0, 2 * GB)   # cores, memory of a test with no profile and no static hint
 METRICS_SECONDS = 2.0      # how often --gather-metrics samples the scheduler
@@ -937,7 +937,9 @@ class DynamicScheduling:
         self._file_held: dict[str, float] = defaultdict(float)  # file -> most any running test of it holds
         self._scout: dict[str, int] = {}               # file -> the index measuring it for its siblings
         self._scout_done: set[str] = set()
-        self._last_forced = -math.inf
+        self._pass_pressure = False                # the pressure the current scheduling pass saw
+        self._primed: list[tuple[WorkerController, int]] = []   # idle workers given a test in this pass
+        self._pass_order: list[str] | None = None   # modules in pick order, sorted once per pass
         self._mem_charged_workers = False
         self.psi_cpu_limit = float(psi_cpu_limit)
         self.psi_mem_limit = float(psi_mem_limit)
@@ -1003,6 +1005,7 @@ class DynamicScheduling:
         self._queued_wall: dict[int, float] = {}
         self.held_since: dict[int, float] = {}          # index -> when a worker was given it to hold
         self.hold_for: int | None = None                # a critical-path test whose capacity is kept free
+        self.reserve_for: int | None = None             # a held test that has waited too long: room is kept for it
         self.committed_at: dict[int, float] = {}        # index -> monotonic time of commit
         self._costs: dict[int, Cost] = {}
         self._costs_by_file: dict[str, set[int]] = defaultdict(set)   # file -> indices with a cached cost
@@ -1269,11 +1272,29 @@ class DynamicScheduling:
                       f"of work left per running slot)")
 
         # Workers that are idle with a held test come first: they can
-        # start right away.
-        def prio(n: WorkerController) -> tuple[int, float]:
+        # start right away.  Among those, whoever gets the room that
+        # frees up: first a worker going on with its module, which
+        # costs no new setup and lets the module's servers go sooner;
+        # then the longest chain of work left behind the held test, the
+        # critical path; a new module's test last.  Pressure holds back
+        # all of them alike: letting every module's next test past it
+        # took the pressure control away, since most tests are some
+        # module's next one, and a debug run spent 5 more CPU-hours on
+        # contention.
+        slow = self._run_slowdown()
+
+        def prio(n: WorkerController) -> tuple[int, int, float]:
             held = self._held(n)
-            return (len(self._committed(n)), self._costs_for(held).cores if held is not None else math.inf)
+            if held is None or self._committed(n):
+                return (len(self._committed(n)), 2, 0.0)
+            module = self._file_of(held)
+            chain = ((self.file_remaining.get(module, 0.0) + self._costs_for(held).wall)
+                     * self._slowdown(self._profile_file_of(held), slow))
+            return (len(self._committed(n)), 0 if self._continues_module(n) else 1, -chain)
         nodes.sort(key=prio)
+        self._pass_pressure = pressure
+        self._primed = []
+        self._pass_order = None
 
         admitted_any = False
         # Two passes: first give every idle worker one held test (so
@@ -1298,37 +1319,28 @@ class DynamicScheduling:
                         self.stats["held_first_run"] += 1
                         break
                     if held is not None and not self._fits(held, node, pressure):
-                        # A test sent to a worker cannot be recalled,
-                        # so a worker whose held test is never
-                        # admissible does nothing at all.  One test
-                        # over budget costs less than one worker idle
-                        # for a whole run.
+                        # A test sent to a worker cannot be recalled, so a
+                        # worker whose held test keeps not fitting does
+                        # nothing.  Smaller tests can starve it: each core
+                        # that frees up goes to one of them, and the room
+                        # it needs never appears.  Once it has waited
+                        # HELD_RESERVE_SECONDS, room is kept for it, as for
+                        # the critical path: tests admitted after that use
+                        # only what is left beside it, so it starts within
+                        # the budget once enough has finished.  It used to
+                        # be started over the CPU budget instead, which
+                        # cannot tell a test that never fits from a
+                        # machine that is full: under pressure a heavy test
+                        # went in every thirty seconds for twenty minutes
+                        # of a debug run, its repeats one after another.
                         waited = self.now() - self.held_since.get(held, self.now())
-                        # Never force past memory.  CPU is
-                        # compressible: a test over the CPU budget
-                        # makes everything a little slower.  Memory is
-                        # not: a test over the memory budget swaps,
-                        # and the machine then spends more CPU on
-                        # reclaim than the test was ever going to use.
-                        # A forced start may override the CPU budget,
-                        # not the forecast: it may dip into half the
-                        # reserve, only while the machine shows no
-                        # memory pressure at all, and only one at a
-                        # time, so each forced test shows what it
-                        # takes before the next one goes.
-                        mem_ok = (not self._stalled()
-                                  and self._forecast_need(held, node) + self._hold_reservation(held)[1]
-                                  <= self._available() - 0.5 * self.mem_reserve
-                                  and self._psi[1] == 0.0
-                                  and self.now() - self._last_forced >= MEM_RAMP_SECONDS)
-                        if waited >= HELD_FORCE_SECONDS and mem_ok:
-                            self.log(f"unblocking {node.gateway.id}: {self.collection[held]} has been "
-                                      f"held {waited:.0f}s without fitting; starting it anyway")
-                            self.stats["forced_held"] += 1
-                            self._last_forced = self.now()
-                        else:
-                            self.stats["held_waiting"] += 1
-                            break
+                        if waited >= HELD_RESERVE_SECONDS and self._reserved() is None and held != self.hold_for:
+                            self.reserve_for = held
+                            self.stats["reservations"] += 1
+                            self.log(f"reserving room for {self.collection[held]} on {node.gateway.id}: held "
+                                      f"{waited:.0f}s without fitting")
+                        self.stats["held_waiting"] += 1
+                        break
                     if held is not None and node in self._draining:
                         # Draining: shutdown is the successor, so the
                         # held test runs and the worker exits.
@@ -1338,7 +1350,12 @@ class DynamicScheduling:
                         self.shutdown_sent.add(node)
                         self._draining.discard(node)
                         break
-                    cand = self._pick(node)
+                    # An idle worker is given only a test that can start
+                    # now: one that cannot would sit on it, off the
+                    # queue, until admission lets it go.  A worker that
+                    # runs a test needs a next one sent to start it, so
+                    # that one is sent whether it fits yet or not.
+                    cand = self._pick(node, park=bool(self._committed(node)) or held is not None)
                     if cand is None:
                         if held is not None:
                             # Nothing left to send: shutdown commits
@@ -1353,6 +1370,8 @@ class DynamicScheduling:
                     if held is not None:
                         self._commit(held, node)
                         admitted_any = True
+                    else:
+                        self._primed.append((node, cand))
                     self._send(node, cand)
                     if held is None:
                         # Just primed an idle worker; the new item is
@@ -1363,6 +1382,14 @@ class DynamicScheduling:
             # test.
             held_nodes = [n for n in nodes if self._held(n) is not None and n not in self.shutdown_sent
                           and not self._waits_for_first_run(self._held(n))]
+            if not held_nodes and self.pending_set:
+                # Nothing fits even an empty machine, so no idle worker
+                # was given a test: give one the next, for this rule.
+                idle = next((n for n in nodes if not self.node2pending[n] and n not in self.shutdown_sent), None)
+                cand = self._pick(idle) if idle is not None else None
+                if cand is not None:
+                    self._send(idle, cand)
+                    held_nodes = [idle]
             if held_nodes:
                 node = min(held_nodes, key=lambda n: self._costs_for(self._held(n)).cores)
                 held = self._held(node)
@@ -1428,7 +1455,7 @@ class DynamicScheduling:
                                 sum(self.res_cpu.values())))
         self._ceiling_t = now
 
-    def _fits(self, idx: int, node: WorkerController, pressure: bool) -> bool:
+    def _fits(self, idx: int, node: WorkerController, pressure: bool, ahead: tuple[float, float] = (0.0, 0.0)) -> bool:
         """Admission.
 
         RAM: what the running tests are still forecast to take, plus
@@ -1452,14 +1479,14 @@ class DynamicScheduling:
         # must fit what is free -- (less the reserve, and less the
         # room kept for the critical-path test).
         hold_cpu, hold_mem = self._hold_reservation(idx)
-        if self._forecast_need(idx, node) + hold_mem > self._available() - self.mem_reserve:
+        if self._forecast_need(idx, node) + hold_mem + ahead[1] > self._available() - self.mem_reserve:
             self.stats["rejected_mem"] += 1
             return False
 
         # --- CPU: reservations with a controlled over-commit band
         # ---------------
         setup_cores = self._setup_for(idx, node)
-        req = cost.cores + setup_cores
+        req = cost.cores + setup_cores + ahead[0]
         reserved = sum(self.res_cpu.values()) + hold_cpu
         if reserved + req > self.cpu_ceiling:
             self.stats["rejected_cpu_ceiling"] += 1
@@ -1486,20 +1513,10 @@ class DynamicScheduling:
         # test ran 1.35-1.6x slower, and the run got less done than
         # with fewer tests running.  Without cuts the limit is as
         # before.
-        # A worker going on with a long module, its last test just
-        # over, replaces that test and adds nothing: pressure limits
-        # what the run adds, not that.  Held back, the next test of a
-        # scylla_gdb module, 10 minutes of tests on one worker, waited
-        # up to 74 seconds at a time and the module ended a release
-        # run at 18.  Only a module long next to the rest of the run:
-        # let every module go on and pressure no longer holds anything
-        # back, since most tests are some module's next one, and a
-        # debug run spent 5 more CPU-hours on contention.
         full_target = self.cpu_target_frac * self.ncpus
-        continuing = self._continues_module(node, idx) and self._long_chain(idx)
-        target = full_target if continuing else self.cpu_target
+        target = self.cpu_target
         headroom_limit = max(float(self.ncpus), full_target) * min(1.0, target / full_target)
-        if self._estimate_now(now) + req > headroom_limit:
+        if self._estimate_now(now) + req + hold_cpu > headroom_limit:
             self.stats["rejected_no_headroom"] += 1
             return False
         if reserved + req > self.ncpus:
@@ -1507,23 +1524,32 @@ class DynamicScheduling:
             # no CPU pressure, and with evidence of real slack;
             # recently admitted tests count at full weight so one
             # stale reading cannot admit a wave.
-            if pressure and not continuing:
+            if pressure:
                 self.stats["rejected_pressure"] += 1
                 return False
-            if self._estimate_now(now) + req > target:
+            if self._estimate_now(now) + req + hold_cpu > target:
                 self.stats["rejected_cpu_band"] += 1
                 return False
-        if continuing and target > self.cpu_target:
-            self.stats["admitted_past_pressure"] += 1
         return True
 
     def _hold_reservation(self, idx: int | None) -> tuple[float, float]:
-        """Capacity kept free for the critical-path test, as seen by
-        any other test."""
-        if self.hold_for is None or self.hold_for == idx:
-            return 0.0, 0.0
-        c = self._costs_for(self.hold_for)
-        return c.cores, c.mem
+        """Capacity kept free for the critical-path test and for a test
+        held too long without fitting, as seen by any other test."""
+        cores = mem = 0.0
+        for kept in (self.hold_for, self._reserved()):
+            if kept is not None and kept != idx:
+                c = self._costs_for(kept)
+                cores += c.cores
+                mem += c.mem
+        return cores, mem
+
+    def _reserved(self) -> int | None:
+        """The test room is being kept for after waiting too long, while
+        it still waits on a worker."""
+        if self.reserve_for is not None and (self.reserve_for in self.committed_at
+                                             or self.reserve_for not in self.held_since):
+            self.reserve_for = None
+        return self.reserve_for
 
     def _free_capacity(self, node: WorkerController | None = None) -> tuple[float, float]:
         """(cores, bytes) a *selection* may still count on.
@@ -1694,6 +1720,20 @@ class DynamicScheduling:
         self.log(f"pool: {len(live)} -> {len(live) + 1} workers ({'refilling' if refill else 'all busy'}, load {self._estimate_now(now):.1f}/"
                   f"{self.cpu_target:.1f} cores, {headroom / GB:.1f}G headroom, a worker holds {cost / GB:.2f}G)")
 
+    def _send_home(self, node: WorkerController, held: int) -> bool:
+        """Shut a worker down without it running the test it holds,
+        which goes back to the queue (see request_eviction); False when
+        the worker could not be told."""
+        if not request_eviction(node.gateway.id, self.collection[held]):
+            return False
+        self._evicted[node] = held
+        self.held_since.pop(held, None)
+        node.shutdown()
+        self.shutdown_sent.add(node)
+        self._draining.discard(node)
+        self._idle_since.pop(node, None)
+        return True
+
     def _maybe_shrink_pool(self) -> None:
         """Drain one worker that has had nothing running for
         POOL_IDLE_SECONDS, while the pool is above its start."""
@@ -1718,10 +1758,16 @@ class DynamicScheduling:
         self.stats["pool_drained"] += 1
         self.log(f"pool: draining {node.gateway.id} (nothing running for {now - self._idle_since[node]:.0f}s); "
                   f"{len(live) - len(self._draining)} workers will remain")
-        if self._held(node) is None:
+        held = self._held(node)
+        if held is None:
             node.shutdown()
             self.shutdown_sent.add(node)
             self._draining.discard(node)
+        elif self._send_home(node, held):
+            # Not in the middle of a module (see above): its held test
+            # needs a setup wherever it runs, so it goes back to the
+            # queue instead of starting here past admission.
+            self.stats["evicted"] += 1
 
     def _spawn_xdist_worker(self) -> str | None:
         """Start one more xdist worker, the way xdist replaces a
@@ -1938,15 +1984,13 @@ class DynamicScheduling:
         node = max(idle, key=lambda n: (self._held(n) is None, self.live.memory(n.gateway.id) or 0.0))
         held = self._held(node)
         wid = node.gateway.id
-        if held is not None:
-            if not request_eviction(wid, self.collection[held]):
-                return False
-            self._evicted[node] = held
-            self.held_since.pop(held, None)
-        node.shutdown()
-        self.shutdown_sent.add(node)
-        self._draining.discard(node)
-        self._idle_since.pop(node, None)
+        if held is None:
+            node.shutdown()
+            self.shutdown_sent.add(node)
+            self._draining.discard(node)
+            self._idle_since.pop(node, None)
+        elif not self._send_home(node, held):
+            return False
         mem = self.live.memory(wid) or 0.0
         if held is None:
             self.stats["retired"] += 1
@@ -2014,7 +2058,7 @@ class DynamicScheduling:
 
     # -- selection ---------------------------------------------------
 
-    def _pick(self, node: WorkerController) -> int | None:
+    def _pick(self, node: WorkerController, park: bool = True) -> int | None:
         """Next test for this worker.
 
         A module offers only its next test, in collection order.  The
@@ -2045,6 +2089,14 @@ class DynamicScheduling:
                     and self._forecast_need(self.hold_for, node) <= self._available() - self.mem_reserve):
                 return self._take(self._file_of(self.hold_for), self.hold_for)
         free_cpu, free_mem = self._free_capacity(node)
+        # Tests handed to other idle workers earlier in this pass, which
+        # admission has not seen yet: each may fit alone, not all
+        # together.  Not the tests that wait on workers already: those
+        # admission keeps refusing, and counting them would stop smaller
+        # tests from filling the room beside them.
+        # Room kept for a test (see _hold_reservation) is counted once.
+        primed = [(n, i) for n, i in self._primed if n is not node and i not in (self.hold_for, self.reserve_for)]
+        ahead = (sum(self._costs_for(i).cores for _, i in primed), sum(self._forecast_new(i, n) for n, i in primed))
         # Selection has to be as strict about memory as admission is.
         # A test sent to a worker cannot be recalled: the worker holds
         # it until it can start.  Picking one that admission will
@@ -2074,13 +2126,17 @@ class DynamicScheduling:
             # A module whose remaining tests together take longer than the
             # rest of the run needs per worker is ordered by that total: it
             # runs on one worker, so it has to start early.
+            # Once per scheduling pass: the picks of one pass share it,
+            # and an idle worker that found nothing to start asks again
+            # on every pass.
             budget = self._time_left()
             slow = self._run_slowdown()
-
-            def order(f: str) -> float:
-                chain = self.file_remaining[f] * self._slowdown(f.split("#", 1)[0], slow)
-                return -max(self._module_max[f], chain if chain > budget else 0.0)
-            by_remaining = sorted(self.files, key=order)
+            if self._pass_order is None:
+                def order(f: str) -> float:
+                    chain = self.file_remaining[f] * self._slowdown(f.split("#", 1)[0], slow)
+                    return -max(self._module_max[f], chain if chain > budget else 0.0)
+                self._pass_order = sorted(self.files, key=order)
+            by_remaining = [f for f in self._pass_order if f in self.files]
             taken = Counter(self.node_file.get(n) for n in self.node2pending if n is not node and not n.shutting_down)
             chains = [f for f in by_remaining if taken[f] and self._joinable(f, taken[f], budget, slow)]
             files = chains + sorted((f for f in by_remaining if f not in chains), key=lambda f: taken[f] > 0)
@@ -2088,6 +2144,7 @@ class DynamicScheduling:
                 self.stats["chain_joins_offered"] += 1
         head = None
         chosen = None
+        tries = 0
         smallest = None            # where to park when nothing fits right now
         waiting = None             # a repeat waiting for its first copy: the very last resort
         # Each module offers only its next test, in collection order.
@@ -2101,9 +2158,22 @@ class DynamicScheduling:
             if smallest is None:
                 smallest = (f, idx)        # parking stays in the order too
             c = self._costs_for(idx)
-            if c.cores <= free_cpu and self._forecast_new(idx, node) <= free_mem:
+            if park:
+                if c.cores <= free_cpu and self._forecast_new(idx, node) <= free_mem:
+                    chosen = (f, idx)
+                    break
+                continue
+            # An idle worker takes only what admission would start now.
+            # Asked on every pick, so only a few times: past that the
+            # machine is full, and the worker waits for the next pass.
+            if self._fits(idx, node, self._pass_pressure, ahead=ahead):
                 chosen = (f, idx)
                 break
+            tries += 1
+            if tries >= LOOKAHEAD_TRIES:
+                break
+        if chosen is None and not park:
+            return None
         if chosen is None:
             # Nothing fits the capacity free right now.  Park the
             # worker on the next test of the first module in order: a
@@ -2225,14 +2295,6 @@ class DynamicScheduling:
         held = self._held(node) if idx is None else idx
         return (held is not None and not self._committed(node)
                 and self._last_file_done.get(node) == self._file_of(held))
-
-    def _long_chain(self, idx: int) -> bool:
-        """Whether what is left of a test's module, this test included,
-        takes at least CHAIN_FRACTION of the run's time left."""
-        module = self._file_of(idx)
-        fkey = self._profile_file_of(idx)
-        rest = (self.file_remaining.get(module, 0.0) + self._costs_for(idx).wall) * self._slowdown(fkey, self._run_slowdown())
-        return rest >= CHAIN_FRACTION * self._time_left()
 
     def _setup_wall(self, fkey: str) -> float | None:
         """Seconds it takes to set a module of this file up, as measured:
