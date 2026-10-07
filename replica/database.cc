@@ -435,6 +435,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
         }
+        // The logstor separator runs in the memtable group but has no memtable backlog, so it
+        // reports the shares it needs instead - none while it is idle.
+        if (_logstor) {
+            backlog = std::max(backlog, _memtable_controller.backlog_of_shares(_logstor->get_segment_manager().separator_wanted_shares()));
+        }
         return backlog;
     }))
     // No timeouts or queue length limits - a failure here can kill an entire repair.
