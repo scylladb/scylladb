@@ -27,6 +27,7 @@
 #include "utils/lru.hh"
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
+#include "mutation/cell_hash.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
 
@@ -43,27 +44,6 @@ class tombstone_gc_state;
 namespace query {
     class clustering_key_filter_ranges;
 } // namespace query
-
-struct cell_hash {
-    using size_type = uint64_t;
-    static constexpr size_type no_hash = 0;
-
-    size_type hash = no_hash;
-
-    explicit operator bool() const noexcept {
-        return hash != no_hash;
-    }
-};
-
-template<>
-struct appending_hash<cell_hash> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const cell_hash& ch) const {
-        feed_hash(h, ch.hash);
-    }
-};
-
-using cell_hash_opt = seastar::optimized_optional<cell_hash>;
 
 struct cell_and_hash {
     atomic_cell_or_collection cell;
