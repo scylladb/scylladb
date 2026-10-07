@@ -4,19 +4,63 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
-# Tests for CQL over SSL (TLS). These tests are skipped when the tests are
-# *not* using SSL, so run the tests with "--ssl" to enable them.
+# Tests for CQL over SSL (TLS). test.py always runs them over TLS; with
+# test/cqlpy/run they are skipped unless "--ssl" is given.
 #############################################################################
 
 import pytest
 
 import cassandra.cluster
 from contextlib import contextmanager
+import signal
 import ssl
 import time
 
+from test import TEST_RUNNER
 from test.pylib.driver_utils import normalize_cipher, safe_driver_shutdown
 from test.pylib.skip_types import skip_env
+from .util import cql_session
+
+
+if TEST_RUNNER != "runpy":
+    # Under test.py, serve CQL over TLS on an extra port; the framework's
+    # readiness check needs the plain one. All four ports must be explicit,
+    # or the shard-aware port inherits encryption.
+    _TLS_PORT = 9142
+
+    @pytest.fixture(scope="module")
+    async def scylla_cluster(request, testpy_cluster_factory, testpy_uname):
+        async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
+            await cluster.add_server(config={
+                'native_transport_port': 9042,
+                'native_shard_aware_transport_port': 19042,
+                'native_transport_port_ssl': _TLS_PORT,
+                'native_shard_aware_transport_port_ssl': 19142,
+                'client_encryption_options': {
+                    'enabled': True,
+                    'certificate': 'conf/scylla.crt',
+                    'keyfile': 'conf/scylla.key',
+                },
+            })
+            cluster.take_log_savepoint()
+            yield cluster
+            processes = [(server, server.cmd) for server in cluster.running.values() if server.cmd]
+
+        # Same server-crash check as test/pylib/runner.py's scylla_cluster.
+        if exits := [f"{server} exited with status code {process.returncode}" for server, process in processes
+                     if process.returncode not in (0, -signal.SIGKILL)]:
+            raise RuntimeError("; ".join(exits))
+
+    @pytest.fixture(scope="module")
+    def cql(host):
+        try:
+            with cql_session(host=host, port=_TLS_PORT, is_ssl=True,
+                             username="cassandra", password="cassandra") as session:
+                yield session
+                session.shutdown()
+        except cassandra.cluster.NoHostAvailable:
+            # Like conftest's cql: one clear exit instead of every test failing.
+            pytest.exit(f"Cannot connect to Scylla over TLS at {host}:{_TLS_PORT}", returncode=pytest.ExitCode.INTERNAL_ERROR)
 
 
 # Test that TLS 1.2 is supported (because this is what "cqlsh --ssl" uses
@@ -77,7 +121,11 @@ def test_system_clients_stores_tls_info(cql):
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             deadline = time.time() + 10  # 10 seconds timeout
             while time.time() < deadline:
-                rows = list(session.execute(f"SELECT * FROM system.clients"))
+                # Under test.py the framework also holds plain-text connections; check only this session's.
+                ports = {c._socket.getsockname()[1]
+                         for h in session.cluster.get_connection_holders()
+                         for c in h.get_connections() if c._socket}
+                rows = [row for row in session.execute("SELECT * FROM system.clients") if row.port in ports]
                 if rows and all(
                     row.ssl_enabled
                     and row.ssl_protocol in ('TLS1.2', 'TLS1.3')
