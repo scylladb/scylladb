@@ -481,7 +481,7 @@ void mutation_partition_json_writer::write(collection_mutation_view cmv, data_ty
     _writer.EndObject();
 }
 
-void mutation_partition_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef, bool include_value) {
+void mutation_partition_json_writer::write(atomic_cell_or_collection_view cell, const column_definition& cdef, bool include_value) {
     if (cdef.is_atomic()) {
         write(cell.as_atomic_cell(cdef), cdef.type, include_value);
     } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
@@ -493,7 +493,7 @@ void mutation_partition_json_writer::write(const atomic_cell_or_collection& cell
 
 void mutation_partition_json_writer::write(const row& r, column_kind kind, bool include_value) {
     _writer.StartObject();
-    r.for_each_cell([this, kind, include_value] (column_id id, const atomic_cell_or_collection& cell) {
+    r.for_each_cell([this, kind, include_value] (column_id id, atomic_cell_or_collection_view cell) {
         auto cdef = _schema.column_at(kind, id);
         _writer.Key(cdef.name_as_text());
         write(cell, cdef, include_value);

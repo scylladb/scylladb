@@ -1417,7 +1417,7 @@ regular_column_transformation::result extract_from_attrs_column_computation::com
         on_internal_error(elogger, "extract_from_attrs_column_computation::compute_value() on a table without an attrs map");
     }
     // Look for the desired attribute _attr_name in the attrs_col map in row:
-    const atomic_cell_or_collection* attrs = row.cells().find_cell(attrs_col->id);
+    auto attrs = row.cells().find_cell(attrs_col->id);
     if (!attrs) {
         return regular_column_transformation::result();
     }

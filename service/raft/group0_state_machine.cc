@@ -97,7 +97,7 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
         }
         auto supported_features_id = s_topology->columns_by_name().at("supported_features")->id;
         for (const auto& r : mut.partition().clustered_rows()) {
-            if (r.row().cells().find_cell(supported_features_id) != nullptr) {
+            if (r.row().cells().find_cell(supported_features_id).has_value()) {
                 return true;
             }
         }

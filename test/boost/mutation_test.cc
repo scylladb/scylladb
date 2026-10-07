@@ -2952,7 +2952,7 @@ private:
                 cell.deletion_time() < _gc_before &&
                 can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
     }
-    void examine_cell(const column_definition& cdef, const atomic_cell_or_collection& cell_or_collection, const row_tombstone& tomb) {
+    void examine_cell(const column_definition& cdef, atomic_cell_or_collection_view cell_or_collection, const row_tombstone& tomb) {
         if (cdef.type->is_atomic()) {
             auto cell = cell_or_collection.as_atomic_cell(cdef);
             if constexpr (OnlyPurged) {
@@ -2975,7 +2975,7 @@ private:
         }
     }
     void examine_row(column_kind kind, const row& r, const row_tombstone& tomb) {
-        r.for_each_cell([&, this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+        r.for_each_cell([&, this, kind] (column_id id, atomic_cell_or_collection_view cell) {
             examine_cell(_schema.column_at(kind, id), cell, tomb);
         });
     }

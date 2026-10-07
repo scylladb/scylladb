@@ -284,7 +284,7 @@ large_data_violation_type large_data_guardrail::check_rows_and_collections(const
 
     if (!mp.static_row().empty()) {
         violations |= check_row_size(s, pk_bytes, pk, bytes_view(), nullptr);
-        mp.static_row().for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
+        mp.static_row().for_each_cell([&](column_id id, atomic_cell_or_collection_view) {
             violations |= check_collection_element_count(s, pk_bytes, pk, s.static_column_at(id), bytes_view(), nullptr);
         });
     }
@@ -293,7 +293,7 @@ large_data_violation_type large_data_guardrail::check_rows_and_collections(const
         auto ck_bytes = cr.key().view().representation().linearize();
         auto ck_bv = bytes_view(ck_bytes);
         violations |= check_row_size(s, pk_bytes, pk, ck_bv, &cr.key());
-        cr.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
+        cr.row().cells().for_each_cell([&](column_id id, atomic_cell_or_collection_view) {
             violations |= check_collection_element_count(s, pk_bytes, pk, s.regular_column_at(id), ck_bv, &cr.key());
         });
     }
@@ -371,7 +371,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         }
     };
 
-    auto check_cell = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
+    auto check_cell = [&](const column_definition& cdef, atomic_cell_or_collection_view cell) {
         if (!cdef.is_atomic()) {
             return;
         }
@@ -384,7 +384,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
             [&] { return seastar::format("column={}", cdef.name_as_text()); }));
     };
 
-    auto check_collection = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
+    auto check_collection = [&](const column_definition& cdef, atomic_cell_or_collection_view cell) {
         if (cdef.is_atomic()) {
             return;
         }
@@ -398,7 +398,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, static_size,
             row_fail, row_warn, "static row size",
             [&] { return seastar::format("partition_key={}", pk); }));
-        mp.static_row().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+        mp.static_row().for_each_cell([&](column_id id, atomic_cell_or_collection_view cell) {
             const column_definition& cdef = s.static_column_at(id);
             check_cell(cdef, cell);
             check_collection(cdef, cell);
@@ -412,7 +412,7 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, e.memory_usage(s),
             row_fail, row_warn, "row size",
             [&] { return seastar::format("clustering_key={}", e.key().with_schema(s)); }));
-        e.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+        e.row().cells().for_each_cell([&](column_id id, atomic_cell_or_collection_view cell) {
             const column_definition& cdef = s.regular_column_at(id);
             check_cell(cdef, cell);
             check_collection(cdef, cell);
@@ -464,7 +464,7 @@ void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& 
 }
 
 void large_data_cache_tracker::on_collection_merged(const column_definition& cdef,
-        const atomic_cell_or_collection& merged_cell) noexcept {
+        atomic_cell_or_collection_view merged_cell) noexcept {
     try {
         const uint64_t coll_warn = uint64_t(_cfg.collection_elements_warn_threshold());
         const uint64_t coll_fail = uint64_t(_cfg.collection_elements_fail_threshold());

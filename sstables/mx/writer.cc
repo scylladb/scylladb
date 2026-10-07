@@ -576,7 +576,7 @@ private:
 
     struct cdef_and_collection {
         const column_definition* cdef;
-        std::reference_wrapper<const atomic_cell_or_collection> collection;
+        atomic_cell_or_collection_view collection;
     };
 
     // Used to defer writing collections until all atomic cells are written
@@ -1433,7 +1433,7 @@ void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clu
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
     write_missing_columns(writer, kind == column_kind::static_column ? _sst_schema.static_columns : _sst_schema.regular_columns, row_body);
-    row_body.for_each_cell([this, &writer, kind, &properties, clustering_key] (column_id id, const atomic_cell_or_collection& c) {
+    row_body.for_each_cell([this, &writer, kind, &properties, clustering_key] (column_id id, atomic_cell_or_collection_view c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
             _collections.push_back({&column_definition, c});
@@ -1446,7 +1446,7 @@ void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clu
     });
 
     for (const auto& col: _collections) {
-        write_collection(writer, clustering_key, *col.cdef, col.collection.get().as_collection_mutation(), properties, has_complex_deletion);
+        write_collection(writer, clustering_key, *col.cdef, col.collection.as_collection_mutation(), properties, has_complex_deletion);
     }
     _collections.clear();
 }
@@ -1478,7 +1478,7 @@ void writer::write_row_body(bytes_ostream& writer, const clustering_row& row, bo
 // Find if any complex column (collection or non-frozen user type) in the row contains a column-wide tombstone
 static bool row_has_complex_deletion(const schema& s, const row& r, column_kind kind) {
     bool result = false;
-    r.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& c) {
+    r.for_each_cell_until([&] (column_id id, atomic_cell_or_collection_view c) {
         auto&& cdef = s.column_at(kind, id);
         if (cdef.is_atomic()) {
             return stop_iteration::no;

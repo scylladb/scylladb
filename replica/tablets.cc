@@ -679,7 +679,7 @@ static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_chang
 }
 
 static std::optional<tablet_replica_set> maybe_deserialize_replica_set(const rows_entry& row, const column_definition& cdef) {
-    const auto* cell = row.row().cells().find_cell(cdef.id);
+    auto cell = row.row().cells().find_cell(cdef.id);
     if (!cell) {
         return std::nullopt;
     }

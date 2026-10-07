@@ -590,7 +590,7 @@ public:
                 on_internal_error(vlogger, format("Tried to get a {} column {} from a {} row update, which is impossible",
                         to_sstring(base_col->kind), base_col->name_as_text(), _update.is_clustering_row() ? "clustering" : "static"));
             }
-            auto& c = _update.cells().cell_at(base_col->id);
+            auto c = _update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
             return {managed_bytes_view{value_view}};
         }
@@ -974,10 +974,10 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         }
 
         // We cannot skip if the value was created or deleted
-        const auto* existing_cell = existing_row.find_cell(cdef.id);
-        const auto* updated_cell = updated_row.find_cell(cdef.id);
-        if (existing_cell == nullptr || updated_cell == nullptr) {
-            return existing_cell == updated_cell;
+        auto existing_cell = existing_row.find_cell(cdef.id);
+        auto updated_cell = updated_row.find_cell(cdef.id);
+        if (!existing_cell || !updated_cell) {
+            return !existing_cell && !updated_cell;
         }
 
         if (!cdef.is_atomic()) {

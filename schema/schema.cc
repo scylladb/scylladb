@@ -2355,7 +2355,7 @@ void collection_column_computation::operate_on_collection_entries(
     using cells_type = utils::chunked_vector<std::pair<managed_bytes_view, atomic_cell_view>>;
     cells_type update_cells, existing_cells;
 
-    const auto* update_cell = update.cells().find_cell(cdef->id);
+    auto update_cell = update.cells().find_cell(cdef->id);
     tombstone update_tombstone = update.tomb().tomb();
     if (update_cell) {
         collection_mutation_view update_col_view = update_cell->as_collection_mutation();
@@ -2363,7 +2363,7 @@ void collection_column_computation::operate_on_collection_entries(
         update_cells = cells_type(std::from_range_t{}, update_col_view);
     }
     if (existing) {
-        const auto* existing_cell = existing->cells().find_cell(cdef->id);
+        auto existing_cell = existing->cells().find_cell(cdef->id);
         if (existing_cell) {
             collection_mutation_view existing_col_view = existing_cell->as_collection_mutation();
             existing_cells = cells_type(std::from_range_t{}, existing_col_view);

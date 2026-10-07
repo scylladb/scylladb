@@ -67,13 +67,21 @@ struct appending_hash<collection_mutation> {
 };
 
 template<>
-struct appending_hash<atomic_cell_or_collection> {
+struct appending_hash<atomic_cell_or_collection_view> {
     template<typename Hasher>
-    void operator()(Hasher& h, const atomic_cell_or_collection& c, const column_definition& cdef) const {
+    void operator()(Hasher& h, atomic_cell_or_collection_view c, const column_definition& cdef) const {
         if (cdef.is_atomic()) {
             feed_hash(h, c.as_atomic_cell(cdef), cdef);
         } else {
             feed_hash(h, c.as_collection_mutation(), cdef);
         }
+    }
+};
+
+template<>
+struct appending_hash<atomic_cell_or_collection> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const atomic_cell_or_collection& c, const column_definition& cdef) const {
+        appending_hash<atomic_cell_or_collection_view>()(h, atomic_cell_or_collection_view(c), cdef);
     }
 };
