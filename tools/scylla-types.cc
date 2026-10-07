@@ -6,11 +6,16 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
+#include <cctype>
+#include <unordered_map>
+
 #include <seastar/core/coroutine.hh>
 
 #include <fmt/ranges.h>
 #include "keys/compound.hh"
 #include "types/tuple.hh"
+#include "cql3/cql3_type.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
@@ -67,6 +72,119 @@ managed_bytes from_string(const data_type& type, const sstring& value) {
     }
     return type->from_string(value);
 }
+
+// Converts a type name in CQL syntax (e.g. map<int, text>) to the equivalent
+// Cassandra type class name (e.g. MapType(Int32Type, UTF8Type)), which can be
+// parsed by db::marshal::type_parser.
+// Names which are not CQL type names (e.g. Int32Type) are passed through as-is,
+// so Cassandra type class names work too, they can even be mixed with CQL names,
+// e.g. ReversedType(timeuuid).
+class cql_type_name_converter {
+    std::string_view _str; // the whole type name, for error messages
+    std::string_view _remaining; // the yet unparsed suffix of _str
+
+private:
+    static const std::unordered_map<sstring, sstring>& native_types() {
+        static thread_local const auto types = [] {
+            std::unordered_map<sstring, sstring> types;
+            for (const auto& t : cql3::cql3_type::values()) {
+                types.emplace(t.to_string(), t.get_type()->name());
+            }
+            types.emplace("varchar", utf8_type->name());
+            return types;
+        }();
+        return types;
+    }
+
+    static const std::unordered_map<sstring, sstring>& parametric_types() {
+        static thread_local const std::unordered_map<sstring, sstring> types{
+            {"frozen", "FrozenType"},
+            {"list", "ListType"},
+            {"set", "SetType"},
+            {"map", "MapType"},
+            {"tuple", "TupleType"},
+            {"vector", "VectorType"},
+        };
+        return types;
+    }
+
+    [[noreturn]] void error(std::string_view msg) const {
+        throw std::invalid_argument(fmt::format("error: failed to parse type '{}' at position {}: {}", _str, _str.size() - _remaining.size(), msg));
+    }
+
+    void skip_blank() {
+        while (!_remaining.empty() && std::isspace(static_cast<unsigned char>(_remaining.front()))) {
+            _remaining.remove_prefix(1);
+        }
+    }
+
+    bool consume(char c) {
+        skip_blank();
+        if (!_remaining.empty() && _remaining.front() == c) {
+            _remaining.remove_prefix(1);
+            return true;
+        }
+        return false;
+    }
+
+    std::string_view read_identifier() {
+        skip_blank();
+        const auto it = std::ranges::find_if_not(_remaining, [] (unsigned char c) {
+            return std::isalnum(c) || c == '_' || c == '.' || c == ':';
+        });
+        const auto identifier = _remaining.substr(0, it - _remaining.begin());
+        _remaining.remove_prefix(identifier.size());
+        return identifier;
+    }
+
+    std::vector<sstring> convert_parameters(char closing_bracket) {
+        std::vector<sstring> params;
+        do {
+            params.push_back(convert_type());
+        } while (consume(','));
+        if (!consume(closing_bracket)) {
+            error(fmt::format("expected '{}'", closing_bracket));
+        }
+        return params;
+    }
+
+    sstring convert_type() {
+        const auto name = read_identifier();
+        if (name.empty()) {
+            error("expected type name");
+        }
+        if (consume('(')) { // Cassandra type with parameters
+            auto params = convert_parameters(')');
+            return seastar::format("{}({})", name, fmt::join(params, ", "));
+        }
+        sstring lower_name(name);
+        std::ranges::transform(lower_name, lower_name.begin(), [] (unsigned char c) { return std::tolower(c); });
+        if (consume('<')) {
+            const auto it = parametric_types().find(lower_name);
+            if (it == parametric_types().end()) {
+                error(fmt::format("unknown parametric type {}", name));
+            }
+            auto params = convert_parameters('>');
+            return seastar::format("{}({})", it->second, fmt::join(params, ", "));
+        }
+        if (const auto it = native_types().find(lower_name); it != native_types().end()) {
+            return it->second;
+        }
+        return sstring(name);
+    }
+
+public:
+    explicit cql_type_name_converter(std::string_view str) : _str(str), _remaining(str) { }
+
+    sstring convert() {
+        auto type_name = convert_type();
+        skip_blank();
+        if (!_remaining.empty()) {
+            error("unexpected trailing characters");
+        }
+        return type_name;
+    }
+};
 
 struct serializing_visitor {
     const std::vector<sstring>& values;
@@ -273,6 +391,7 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
 
 const std::vector<operation_option> global_options{
     typed_option<std::vector<std::string>>("type,t", "the type of the values, all values must be of the same type;"
+            " types can be specified either with their CQL name (e.g. map<int, text>) or with their cassandra type class name (e.g. MapType(Int32Type, UTF8Type));"
             " when values are compounds, multiple types can be specified, one for each type making up the compound, "
             "note that the order of the types on the command line will be their order in the compound too"),
     typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
@@ -392,13 +511,15 @@ Usage: scylla {} {{action}} [--option1] [--option2] ... {{hex_value1}} [{{hex_va
 Allows examining raw values obtained from e.g. sstables, logs or coredumps and
 executing various actions on them. Values should be provided in hex form,
 without a leading 0x prefix, e.g. 00783562. For scylla-types to be able to
-examine the values, their type has to be provided. Types should be provided by
-their cassandra class names, e.g. org.apache.cassandra.db.marshal.Int32Type for
-the int32_type. The org.apache.cassandra.db.marshal. prefix can be omitted.
+examine the values, their type has to be provided. Types can be provided by
+their CQL names, e.g. int or map<int, text>, or by their cassandra class
+names, e.g. org.apache.cassandra.db.marshal.Int32Type for the int32_type. The
+org.apache.cassandra.db.marshal. prefix can be omitted.
 See https://github.com/scylladb/scylla/blob/master/docs/dev/cql3-type-mapping.md
 for a mapping of cql3 types to Cassandra type class names.
-Compound types specify their subtypes inside () separated by comma, e.g.:
-MapType(Int32Type, BytesType). All provided values have to share the same type.
+Compound cassandra types specify their subtypes inside () separated by comma,
+e.g.: MapType(Int32Type, BytesType). CQL and cassandra names can be mixed, e.g.
+ReversedType(timeuuid). All provided values have to share the same type.
 scylla-types executes so called actions on the provided values. Each action has
 a required number of arguments. The supported actions are:
 {}
@@ -425,7 +546,8 @@ $ scylla types {{action}} --help
         }
         type_variant type = [&app_config] () -> type_variant {
             auto types = app_config["type"].as<std::vector<std::string>>()
-                    | std::views::transform([] (const std::string_view type_name) { return db::marshal::type_parser::parse(type_name); })
+                    | std::views::transform([] (const std::string_view type_name) { return cql_type_name_converter(type_name).convert(); })
+                    | std::views::transform([] (const sstring& type_name) { return db::marshal::type_parser::parse(type_name); })
                     | std::ranges::to<std::vector<data_type>>();
             if (app_config.contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
