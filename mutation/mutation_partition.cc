@@ -724,7 +724,7 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
 template<typename Hasher>
 void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
     for (auto id : columns) {
-        const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
+        auto cell_and_hash = cells.find_cell_and_hash(id);
         if (!cell_and_hash) {
             feed_hash(h, appending_hash<row>::null_hash_value);
             continue;
@@ -770,7 +770,7 @@ cell_hash_opt row::cell_hash_for(column_id id) const {
 
 void row::prepare_hash(const schema& s, column_kind kind) const {
     // const to avoid removing const qualifiers on the read path
-    for_each_cell([&s, kind] (column_id id, const cell_and_hash& c_a_h) {
+    for_each_cell([&s, kind] (column_id id, const cell_and_hash_view& c_a_h) {
         if (!c_a_h.hash) {
             query::default_hasher cellh;
             feed_hash(cellh, c_a_h.cell, s.column_at(kind, id));
@@ -780,7 +780,7 @@ void row::prepare_hash(const schema& s, column_kind kind) const {
 }
 
 void row::clear_hash() const {
-    for_each_cell([] (column_id, const cell_and_hash& c_a_h) {
+    for_each_cell([] (column_id, const cell_and_hash_view& c_a_h) {
         c_a_h.hash = { };
     });
 }
@@ -794,7 +794,7 @@ static void get_compacted_row_slice(const schema& s,
     RowWriter& writer)
 {
     for (auto id : columns) {
-        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        auto cell = cells.find_cell(id);
         if (!cell) {
             writer.add().skip();
         } else {
@@ -822,7 +822,7 @@ static void get_compacted_row_slice(const schema& s,
 
 bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
-    cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
+    cells.for_each_cell_until([&] (column_id id, atomic_cell_or_collection_view cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell(def);
@@ -920,11 +920,11 @@ auto fmt::formatter<mutation_partition::printer>::format(const mutation_partitio
     if (!mp.static_row().empty()) {
         out = fmt::format_to(out, "{}static_row: {{\n", indent);
         const auto& srow = mp.static_row().get();
-        srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        srow.for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
             out = fmt::format_to(out, "{}{}'{}':{},\n",
                                  indent, indent, column_def.name_as_text(),
-                                 atomic_cell_or_collection::printer(column_def, cell));
+                                 atomic_cell_or_collection_view::printer(column_def, cell));
         });
         out = fmt::format_to(out, "{}}},\n", indent);
     }
@@ -970,11 +970,11 @@ auto fmt::formatter<mutation_partition::printer>::format(const mutation_partitio
             out = fmt::format_to(out, "{}{}{}}},\n", indent, indent, indent);
         }
 
-        row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        row.cells().for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
             out = fmt::format_to(out, "{}{}{}'{}': {},\n", indent, indent, indent,
                            column_def.name_as_text(),
-                           atomic_cell_or_collection::printer(column_def, cell));
+                           atomic_cell_or_collection_view::printer(column_def, cell));
         });
 
         out = fmt::format_to(out, "{}{}}},\n", indent, indent);
@@ -1203,15 +1203,22 @@ row::append_cell(column_id id, atomic_cell_or_collection value) {
     _size++;
 }
 
-const cell_and_hash*
+std::optional<cell_and_hash_view>
 row::find_cell_and_hash(column_id id) const {
-    return _cells.get(id);
+    const cell_and_hash* cah = _cells.get(id);
+    if (!cah) {
+        return std::nullopt;
+    }
+    return cell_and_hash_view{cah->cell, cah->hash};
 }
 
-const atomic_cell_or_collection*
+std::optional<atomic_cell_or_collection_view>
 row::find_cell(column_id id) const {
-    auto c_a_h = find_cell_and_hash(id);
-    return c_a_h ? &c_a_h->cell : nullptr;
+    const cell_and_hash* cah = _cells.get(id);
+    if (!cah) {
+        return std::nullopt;
+    }
+    return atomic_cell_or_collection_view(cah->cell);
 }
 
 size_t row::external_memory_usage(const schema& s, column_kind kind) const {
@@ -1485,8 +1492,8 @@ row row::construct(const schema& our_schema, const schema& their_schema, column_
 row::~row() {
 }
 
-const atomic_cell_or_collection& row::cell_at(column_id id) const {
-    auto&& cell = find_cell(id);
+atomic_cell_or_collection_view row::cell_at(column_id id) const {
+    auto cell = find_cell(id);
     if (!cell) {
         throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
     }
@@ -1857,7 +1864,7 @@ mutation_partition mutation_partition::difference(const schema& s, const mutatio
 void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) const {
     check_schema(s);
     v.accept_partition_tombstone(_tombstone);
-    _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+    _static_row.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
         const column_definition& def = s.static_column_at(id);
         if (def.is_atomic()) {
             v.accept_static_cell(id, cell.as_atomic_cell(def));
@@ -1871,7 +1878,7 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
     for (const rows_entry& e : _rows) {
         const deletable_row& dr = e.row();
         v.accept_row(e.position(), dr.deleted_at(), dr.marker(), e.dummy(), e.continuous());
-        dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        dr.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
             const column_definition& def = s.regular_column_at(id);
             if (def.is_atomic()) {
                 v.accept_row_cell(id, cell.as_atomic_cell(def));

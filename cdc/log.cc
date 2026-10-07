@@ -2019,7 +2019,7 @@ public:
                     columns.emplace_back(&c);
                 }
             } else {
-                p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                p.static_row().get().for_each_cell([&] (column_id id, atomic_cell_or_collection_view) {
                     auto& cdef =_schema->column_at(column_kind::static_column, id);
                     static_columns.emplace_back(id);
                     columns.emplace_back(&cdef);
@@ -2037,7 +2037,7 @@ public:
                     columns.emplace_back(&c);
                 }
             } else {
-                p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view) {
                     const auto& cdef =_schema->column_at(column_kind::regular_column, id);
                     regular_columns.emplace_back(id);
                     columns.emplace_back(&cdef);
