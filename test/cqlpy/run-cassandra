@@ -188,38 +188,40 @@ def run_cassandra_cmd(pid, dir):
               '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n',
               file=f)
     # On JVM 17 and above, Cassandra 5's cassandra.in.sh reads the
-    # following file instead:
-    with open(os.path.join(confdir, 'jvm17-server.options'), 'w') as f:
-        print('-Djdk.attach.allowAttachSelf=true\n'
-              '-Djava.security.manager=allow\n'
-              '--add-exports java.base/jdk.internal.misc=ALL-UNNAMED\n'
-              '--add-exports java.base/jdk.internal.ref=ALL-UNNAMED\n'
-              '--add-exports java.base/sun.nio.ch=ALL-UNNAMED\n'
-              '--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED\n'
-              '--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED\n'
-              '--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED\n'
-              '--add-exports java.sql/java.sql=ALL-UNNAMED\n'
-              '--add-exports java.base/java.lang.ref=ALL-UNNAMED\n'
-              '--add-exports java.base/java.lang.reflect=ALL-UNNAMED\n'
-              '--add-opens java.base/java.lang.module=ALL-UNNAMED\n'
-              '--add-opens java.base/jdk.internal.loader=ALL-UNNAMED\n'
-              '--add-opens java.base/jdk.internal.ref=ALL-UNNAMED\n'
-              '--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED\n'
-              '--add-opens java.base/jdk.internal.math=ALL-UNNAMED\n'
-              '--add-opens java.base/jdk.internal.module=ALL-UNNAMED\n'
-              '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n'
-              '--add-opens java.base/sun.nio.ch=ALL-UNNAMED\n'
-              '--add-opens java.base/java.io=ALL-UNNAMED\n'
-              '--add-opens java.base/java.nio=ALL-UNNAMED\n'
-              '--add-opens java.base/java.util.concurrent=ALL-UNNAMED\n'
-              '--add-opens java.base/java.util=ALL-UNNAMED\n'
-              '--add-opens java.base/java.util.concurrent.atomic=ALL-UNNAMED\n'
-              '--add-opens java.base/java.lang=ALL-UNNAMED\n'
-              '--add-opens java.base/java.math=ALL-UNNAMED\n'
-              '--add-opens java.base/java.lang.reflect=ALL-UNNAMED\n'
-              '--add-opens java.base/java.net=ALL-UNNAMED\n'
-              '--add-opens java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED\n'
-              ,file=f)
+    # following file instead. Cassandra 6 reads it on JVM 17, but on
+    # JVM 21 it reads jvm21-server.options, which needs the same options.
+    for options_file in ['jvm17-server.options', 'jvm21-server.options']:
+        with open(os.path.join(confdir, options_file), 'w') as f:
+            print('-Djdk.attach.allowAttachSelf=true\n'
+                  '-Djava.security.manager=allow\n'
+                  '--add-exports java.base/jdk.internal.misc=ALL-UNNAMED\n'
+                  '--add-exports java.base/jdk.internal.ref=ALL-UNNAMED\n'
+                  '--add-exports java.base/sun.nio.ch=ALL-UNNAMED\n'
+                  '--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED\n'
+                  '--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED\n'
+                  '--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED\n'
+                  '--add-exports java.sql/java.sql=ALL-UNNAMED\n'
+                  '--add-exports java.base/java.lang.ref=ALL-UNNAMED\n'
+                  '--add-exports java.base/java.lang.reflect=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.lang.module=ALL-UNNAMED\n'
+                  '--add-opens java.base/jdk.internal.loader=ALL-UNNAMED\n'
+                  '--add-opens java.base/jdk.internal.ref=ALL-UNNAMED\n'
+                  '--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED\n'
+                  '--add-opens java.base/jdk.internal.math=ALL-UNNAMED\n'
+                  '--add-opens java.base/jdk.internal.module=ALL-UNNAMED\n'
+                  '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n'
+                  '--add-opens java.base/sun.nio.ch=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.io=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.nio=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.util.concurrent=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.util=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.util.concurrent.atomic=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.lang=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.math=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.lang.reflect=ALL-UNNAMED\n'
+                  '--add-opens java.base/java.net=ALL-UNNAMED\n'
+                  '--add-opens java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED\n'
+                  ,file=f)
     # Cassandra 4.x's cassandra.in.sh greps two separate files: a base
     # "jvm-server.options" (common to all JVM versions) and then a
     # version-specific "jvm11-server.options" or "jvm17-server.options".
@@ -270,7 +272,7 @@ def run_cassandra_cmd_docker(ip, dir, env):
                                   stdout=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             print(f'Error: Failed to pull Docker image {image} for Cassandra {args.docker!r}. '
-                  f'Try versions like 5, 5.1 or 5.1.1.')
+                  f'Try versions like 5, 5.0, 5.0.9 or 6.0.')
             exit(1)
     image_env = subprocess.check_output(
         [docker, 'image', 'inspect', '--format',
