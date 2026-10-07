@@ -11,14 +11,29 @@
 #include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 
+#include <algorithm>
+
 namespace service {
+
+const std::vector<auto_rf_keyspace>& auto_rf_keyspaces() {
+    // FIXME: Currently an empty list, to be populated in the next patches
+    static const std::vector<auto_rf_keyspace> keyspaces = {{
+    }};
+    return keyspaces;
+}
+
+bool is_auto_rf_keyspace(std::string_view ks_name) {
+    return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto_rf_keyspace& ks) { return ks.name == ks_name; });
+}
 
 future<bool> ongoing_rf_change(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard, sstring ks) {
     auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
-        auto req_entry = co_await sys_ks.get_topology_request_entry(request_id);
-        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
-            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::keyspace_rf_change &&
-            req_entry.new_keyspace_rf_change_ks_name.has_value() && req_entry.new_keyspace_rf_change_ks_name.value() == ks;
+        // The row may be gone (it has a TTL); this runs on every pass of the reconciler,
+        // so a missing row must not be an error.
+        auto req_entry = co_await sys_ks.get_topology_request_entry_opt(request_id);
+        co_return req_entry && std::holds_alternative<global_topology_request>(req_entry->request_type) &&
+            std::get<global_topology_request>(req_entry->request_type) == global_topology_request::keyspace_rf_change &&
+            req_entry->new_keyspace_rf_change_ks_name.has_value() && req_entry->new_keyspace_rf_change_ks_name.value() == ks;
     };
     if (topology.global_request_id.has_value()) {
         auto req_id = topology.global_request_id.value();
