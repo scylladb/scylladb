@@ -5066,11 +5066,12 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
-        const rjson::value& action_json = (it->value)["Action"];
-        if (!action_json.IsString()) {
+        // A missing Action defaults to PUT.
+        const rjson::value* action_json = rjson::find(it->value, "Action");
+        if (action_json && !action_json->IsString()) {
             throw api_error::validation("AttributeUpdates Action must be a string");
         }
-        std::string action = rjson::to_string(action_json);
+        std::string action = action_json ? rjson::to_string(*action_json) : "PUT";
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
             // "Value" option, it is used to delete an attribute. With a
