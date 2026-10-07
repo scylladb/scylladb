@@ -428,6 +428,7 @@ public:
     void check_rpc_removed(::check_rpc_removed expected) const;
     void rpc_reset_counters(::rpc_reset_counters nodes);
     future<> reconfigure_all();
+    future<raft::snapshot_reply> receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp);
     future<> partition(::partition p);
     future<> tick(::tick t);
     future<> read(read_value r);
@@ -671,6 +672,10 @@ public:
     }
     void unpublish() {
         _net.erase(_id);
+    }
+    // Feeds an install_snapshot into the local server as if it came from `from`.
+    future<raft::snapshot_reply> receive_snapshot(raft::server_id from, raft::install_snapshot snp) {
+        return _client->apply_snapshot(from, std::move(snp));
     }
     bool drop_packet() {
         return _rpc_config.drops && !(rand() % 5);
@@ -961,6 +966,11 @@ void raft_cluster<Clock>::init_tick_delays(size_t n) {
 template <typename Clock>
 raft::server& raft_cluster<Clock>::get_server(size_t id) {
     return *_servers[id].server;
+}
+
+template <typename Clock>
+future<raft::snapshot_reply> raft_cluster<Clock>::receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp) {
+    return _servers[id].rpc->receive_snapshot(from, std::move(snp));
 }
 
 template <typename Clock>
