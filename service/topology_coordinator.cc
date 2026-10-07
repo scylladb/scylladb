@@ -1747,19 +1747,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return ks_md;
     }
 
-    // Whether the keyspace may need an auto-RF change: it has a numeric RF, a DC below
-    // the goal, or does not replicate to an allowed DC. Unlike next_auto_rf_change(),
-    // this does not check that a change can actually be made.
-    static bool may_need_auto_rf_change(const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
-        const auto& options = ks_md.strategy_options();
-        return std::ranges::any_of(options, [&] (const auto& e) {
-                    auto rf_data = locator::replication_factor_data(e.second);
-                    return !rf_data.is_rack_based() || rf_data.get_rack_list().size() < goal;
-                }) || std::ranges::any_of(racks.allowed, [&] (const auto& e) {
-                    return !options.contains(e.first);
-                });
-    }
-
     // The replication options auto-RF gives the keyspace next, or nullopt if it has
     // nothing to change. One step per change, tried in this order: convert numeric RFs
     // to rack lists, add a rack to a DC below the goal, add a DC.
@@ -1820,7 +1807,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         const auto racks = get_auto_rf_racks();
         return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) {
             auto ks_md = auto_rf_keyspace_metadata(e.first);
-            return ks_md && may_need_auto_rf_change(*ks_md, e.second, racks);
+            return ks_md && next_auto_rf_change(*ks_md, e.second, racks);
         });
     }
 
@@ -1863,13 +1850,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         rtlogger.debug("auto-rf: allowed racks by DC: {}", racks.allowed);
 
-        std::vector<std::pair<lw_shared_ptr<data_dictionary::keyspace_metadata>, size_t>> keyspaces;
+        std::vector<rf_change_candidate> changes;
         for (const auto& [ks_name, goal] : auto_rf_keyspaces()) {
-            if (auto ks_md = auto_rf_keyspace_metadata(ks_name); ks_md && may_need_auto_rf_change(*ks_md, goal, racks)) {
-                keyspaces.emplace_back(std::move(ks_md), goal);
+            auto ks_md = auto_rf_keyspace_metadata(ks_name);
+            if (!ks_md) {
+                continue;
+            }
+            if (auto new_options = next_auto_rf_change(*ks_md, goal, racks)) {
+                auto old_options = ks_md->strategy_options();
+                old_options.emplace("class", ks_md->strategy_name());
+                new_options->emplace("class", ks_md->strategy_name());
+                changes.emplace_back(ks_name, std::move(old_options), std::move(*new_options));
             }
         }
-        if (keyspaces.empty()) {
+        if (changes.empty()) {
             rtlogger.debug("No keyspaces require auto RF change");
             co_return std::nullopt;
         }
@@ -1881,12 +1875,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             static thread_local logger::rate_limit deferral_rate_limit{std::chrono::minutes(1)};
             rtlogger.log(log_level::info, deferral_rate_limit,
                     "auto-rf: deferring RF changes for {} keyspace(s) until dead node(s) {} are alive again",
-                    keyspaces.size(), dead_nodes);
+                    changes.size(), dead_nodes);
             co_return std::nullopt;
         }
 
-        for (const auto& [ks_md, goal] : keyspaces) {
-            const auto& ks_name = ks_md->name();
+        for (auto& change : changes) {
+            const auto& ks_name = change.ks_name;
             // Keyed by keyspace, not by change: a rejected keyspace is left alone for the
             // backoff even if a different change would now be attempted.
             if (auto it = _auto_rf_failures.find(ks_name); it != _auto_rf_failures.end() && lowres_clock::now() < it->second.next_attempt) {
@@ -1898,12 +1892,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.debug("There is an ongoing RF change for keyspace {}, skipping", ks_name);
                 continue;
             }
-            if (auto new_options = next_auto_rf_change(*ks_md, goal, racks)) {
-                auto old_options = ks_md->strategy_options();
-                old_options.emplace("class", ks_md->strategy_name());
-                new_options->emplace("class", ks_md->strategy_name());
-                co_return rf_change_candidate{ks_name, std::move(old_options), std::move(*new_options)};
-            }
+            co_return std::move(change);
         }
         co_return std::nullopt;
     }
