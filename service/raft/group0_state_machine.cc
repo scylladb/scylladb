@@ -407,6 +407,7 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     slogger.trace("apply() is called with {} commands", commands.size());
 
     co_await utils::get_local_injector().inject("group0_state_machine::delay_apply", 1s);
+    co_await utils::get_local_injector().inject("group0_state_machine::block_apply", utils::wait_for_message(300s));
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
 
