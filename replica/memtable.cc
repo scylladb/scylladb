@@ -810,7 +810,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
             guardrails.check(*m_schema, mp, m.key(), violations_out);
             auto& p = find_or_create_partition_slow(m.key());
             _stats_collector.update(*m_schema, mp);
-            p.apply(region(), cleaner(), *_schema, mp, *m_schema, _table_stats.memtable_app_stats, tracker);
+            p.apply(region(), cleaner(), *_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats, tracker);
         });
     });
     update(std::move(h));
