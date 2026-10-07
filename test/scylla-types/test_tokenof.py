@@ -30,4 +30,14 @@ def test_tokenof_multiple_values(scylla_types):
 @pytest.mark.parametrize("compound_args", [[], ["--prefix-compound"]])
 def test_tokenof_requires_full_compound(scylla_types_fails_with, compound_args):
     scylla_types_fails_with("tokenof", *compound_args, "-t", "Int32Type", "00000001",
-                            error="tokenof action requires full-compound input")
+                            error="tokenof action requires full-compound or legacy-composite input")
+
+
+def test_tokenof_legacy_composite(scylla_types):
+    res = scylla_types("tokenof", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "00040000000100000361626300")
+    assert res.stdout == "(1, abc): 8771735466527499816\n"
+
+
+def test_tokenof_legacy_composite_single_component(scylla_types):
+    res = scylla_types("tokenof", "--legacy-composite", "-t", "Int32Type", "00000001")
+    assert res.stdout == "(1): -4069959284402364209\n"

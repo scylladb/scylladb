@@ -20,6 +20,7 @@
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
 #include "dht/i_partitioner.hh"
+#include "sstables/key.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/chunked_string.hh"
 
@@ -40,10 +41,43 @@ namespace {
 
 const auto app_name = "types";
 
+// A full compound, that is, a partition key.
+// Values are serialized either in scylla's in-memory format (see
+// keys/compound.hh), or in the legacy composite format, used in sstables (see
+// keys/compound_compat.hh).
+struct partition_key_type {
+    schema_ptr schema;
+    bool legacy_composite;
+
+    const compound_type<allow_prefixes::no>& type() const {
+        return *schema->partition_key_type();
+    }
+
+    partition_key to_partition_key(bytes_view value) const {
+        if (!legacy_composite) {
+            return partition_key::from_bytes(value);
+        }
+        // The composite iterator invokes on_internal_error() on malformed
+        // input, so validate first. Note that non-compound keys are stored
+        // as-is in the legacy format, there is nothing to validate there.
+        if (schema->partition_key_size() > 1 && !composite_view(value, true).is_valid()) {
+            throw marshal_exception("invalid legacy compound: the sizes of the components don't add up to the size of the value");
+        }
+        return sstables::key_view(value).to_partition_key(*schema);
+    }
+
+    bytes serialize(const partition_key& pk) const {
+        if (!legacy_composite) {
+            return to_bytes(pk.representation());
+        }
+        return sstables::key::from_partition_key(*schema, pk).get_bytes();
+    }
+};
+
 using type_variant = std::variant<
         data_type,
         compound_type<allow_prefixes::yes>,
-        compound_type<allow_prefixes::no>>;
+        partition_key_type>;
 
 using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
 using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
@@ -213,6 +247,10 @@ struct serializing_visitor {
         }
         return type.serialize_value(serialized_values);
     }
+    managed_bytes operator()(const partition_key_type& type) {
+        const auto pk = partition_key::from_bytes((*this)(type.type()));
+        return managed_bytes(type.serialize(pk));
+    }
 
     managed_bytes operator()(const type_variant& type) {
         return std::visit(*this, type);
@@ -241,6 +279,11 @@ sstring to_printable_string(const compound_type<AllowPrefixes>& type, bytes_view
     return seastar::format("({})", fmt::join(printable_values, ", "));
 }
 
+sstring to_printable_string(const partition_key_type& type, bytes_view value) {
+    const auto pk = type.to_partition_key(value);
+    return to_printable_string(type.type(), to_bytes(pk.representation()));
+}
+
 struct printing_visitor {
     bytes_view value;
 
@@ -249,6 +292,9 @@ struct printing_visitor {
     }
     template <allow_prefixes AllowPrefixes>
     sstring operator()(const compound_type<AllowPrefixes>& type) {
+        return to_printable_string(type, value);
+    }
+    sstring operator()(const partition_key_type& type) {
         return to_printable_string(type, value);
     }
 };
@@ -277,8 +323,8 @@ void compare_handler(type_variant type, std::vector<bytes> values, const bpo::va
         std::strong_ordering operator()(const compound_type<allow_prefixes::yes>& type) {
             return type.compare(lhs, rhs);
         }
-        std::strong_ordering operator()(const compound_type<allow_prefixes::no>& type) {
-            return type.compare(lhs, rhs);
+        std::strong_ordering operator()(const partition_key_type& type) {
+            return type.type().compare(type.to_partition_key(lhs).representation(), type.to_partition_key(rhs).representation());
         }
     } compare_visitor{values[0], values[1]};
 
@@ -305,8 +351,8 @@ void validate_handler(type_variant type, std::vector<bytes> values, const bpo::v
         void operator()(const compound_type<allow_prefixes::yes>& type) {
             type.validate(value);
         }
-        void operator()(const compound_type<allow_prefixes::no>& type) {
-            type.validate(value);
+        void operator()(const partition_key_type& type) {
+            type.type().validate(type.to_partition_key(value).representation());
         }
     };
 
@@ -325,10 +371,10 @@ void validate_handler(type_variant type, std::vector<bytes> values, const bpo::v
     }
 }
 
-schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::no>& type) {
+schema_ptr build_dummy_partition_key_schema(const std::vector<data_type>& types) {
     schema_builder builder(this_smp_shard_count(), "ks", "dummy");
     unsigned i = 0;
-    for (const auto& t : type.types()) {
+    for (const auto& t : types) {
         const auto col_name = format("pk{}", i++);
         builder.with_column(bytes(to_bytes_view(col_name)), t, column_kind::partition_key);
     }
@@ -337,55 +383,33 @@ schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::
     return builder.build();
 }
 
-void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
-    struct tokenof_visitor {
-        bytes_view value;
+const partition_key_type& get_partition_key_type(const type_variant& type, std::string_view action) {
+    if (const auto* pk_type = std::get_if<partition_key_type>(&type)) {
+        return *pk_type;
+    }
+    throw std::invalid_argument(fmt::format("{} action requires full-compound or legacy-composite input", action));
+}
 
-        void operator()(const data_type& type) {
-            throw std::invalid_argument("tokenof action requires full-compound input");
-        }
-        void operator()(const compound_type<allow_prefixes::yes>& type) {
-            throw std::invalid_argument("tokenof action requires full-compound input");
-        }
-        void operator()(const compound_type<allow_prefixes::no>& type) {
-            auto s = build_dummy_partition_key_schema(type);
-            auto pk = partition_key::from_bytes(value);
-            auto dk = dht::decorate_key(*s, pk);
-            fmt::print("{}: {}\n", to_printable_string(type, value), dk.token());
-        }
-    };
+void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+    const auto& pk_type = get_partition_key_type(type, "tokenof");
 
     for (const auto& value : values) {
-        std::visit(tokenof_visitor{value}, type);
+        const auto dk = dht::decorate_key(*pk_type.schema, pk_type.to_partition_key(value));
+        fmt::print("{}: {}\n", to_printable_string(type, value), dk.token());
     }
 }
 
 void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
-    struct shardof_visitor {
-        bytes_view value;
-        const bpo::variables_map& vm;
-
-        void operator()(const data_type& type) {
-            throw std::invalid_argument("shardof action requires full-compound input");
-        }
-        void operator()(const compound_type<allow_prefixes::yes>& type) {
-            throw std::invalid_argument("shardof action requires full-compound input");
-        }
-        void operator()(const compound_type<allow_prefixes::no>& type) {
-            auto s = build_dummy_partition_key_schema(type);
-            auto pk = partition_key::from_bytes(value);
-            auto dk = dht::decorate_key(*s, pk);
-            auto shard = dht::shard_of(vm["shards"].as<unsigned>(), vm["ignore-msb-bits"].as<unsigned>(), dk.token());
-            fmt::print("{}: token: {}, shard: {}\n", to_printable_string(type, value), dk.token(), shard);
-        }
-    };
+    const auto& pk_type = get_partition_key_type(type, "shardof");
 
     if (!vm.count("shards")) {
         throw std::invalid_argument("error: missing mandatory argument --shards");
     }
 
     for (const auto& value : values) {
-        std::visit(shardof_visitor{value, vm}, type);
+        const auto dk = dht::decorate_key(*pk_type.schema, pk_type.to_partition_key(value));
+        const auto shard = dht::shard_of(vm["shards"].as<unsigned>(), vm["ignore-msb-bits"].as<unsigned>(), dk.token());
+        fmt::print("{}: token: {}, shard: {}\n", to_printable_string(type, value), dk.token(), shard);
     }
 }
 
@@ -396,6 +420,8 @@ const std::vector<operation_option> global_options{
             "note that the order of the types on the command line will be their order in the compound too"),
     typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
     typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types"),
+    typed_option<>("legacy-composite", "values are full compounds (e.g. partition key), serialized in the legacy composite format, used in sstables,"
+            " instead of scylla's in-memory format"),
     typed_option<unsigned>("shards", "number of shards (only relevant for shardof action)"),
     typed_option<unsigned>("ignore-msb-bits", 12u, "number of the most significant bits of the token to ignore when calculating the shard"
             " (only relevant for shardof action)"),
@@ -474,7 +500,7 @@ b34b62d4: VALID - -1286905132
     {{"tokenof", "tokenof (calculate the token of) the partition-key",
 R"(
 Decorate the key, that is calculate its token.
-Only supports --full-compound.
+Only supports --full-compound and --legacy-composite.
 
 Arguments: 1 or more serialized values.
 
@@ -486,8 +512,8 @@ $ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType
     {{"shardof", "calculate which shard the partition-key belongs to",
 R"(
 Decorate the key and calculate which shard its token belongs to.
-Only supports --full-compound. Use --shards and --ignore-msb-bits to specify
-sharding parameters.
+Only supports --full-compound and --legacy-composite.
+Use --shards and --ignore-msb-bits to specify sharding parameters.
 
 Arguments: 1 or more serialized values.
 
@@ -552,7 +578,9 @@ $ scylla types {{action}} --help
             if (app_config.contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
             } else if (app_config.contains("full-compound")) {
-                return compound_type<allow_prefixes::no>(std::move(types));
+                return partition_key_type{build_dummy_partition_key_schema(types), false};
+            } else if (app_config.contains("legacy-composite")) {
+                return partition_key_type{build_dummy_partition_key_schema(types), true};
             } else { // non-compound type
                 if (types.size() != 1) {
                     throw std::invalid_argument(fmt::format("error: expected a single '--type' argument, got  {}", types.size()));
