@@ -865,14 +865,25 @@ void create_virtual_column(schema_builder& builder, const bytes& name, const dat
     }
 }
 
-static void add_cells_to_view(const schema& base, const schema& view, column_kind kind, row base_cells, row& view_cells) {
-    base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
+static void add_cells_to_view(const schema& base, const schema& view, column_kind kind, const row& base_cells, row& view_cells) {
+    // Build the view's cells a block at a time, then merge them into the view row,
+    // which may already have cells.
+    row cells;
+    row::cell_appender appender(cells);
+    base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
         auto* view_col = view_column(base, view, kind, id);
         if (view_col && !view_col->is_primary_key()) {
-            maybe_make_virtual(c, view_col);
-            view_cells.append_cell(view_col->id, std::move(c));
+            if (view_col->is_view_virtual()) {
+                auto virtual_cell = c.copy(*view_col->type);
+                maybe_make_virtual(virtual_cell, view_col);
+                appender.append(view_col->id, std::move(virtual_cell));
+            } else {
+                appender.append(view_col->id, c);
+            }
         }
     });
+    appender.finish();
+    view_cells.apply(view, kind, std::move(cells));
 }
 
 /**
@@ -893,7 +904,7 @@ void view_updates::create_entry(data_dictionary::database db, const partition_ke
             r->apply(update_marker);
         }
         r->apply(update.tomb());
-        add_cells_to_view(*_base, *_view, kind, row(*_base, kind, update.cells()), r->cells());
+        add_cells_to_view(*_base, *_view, kind, update.cells(), r->cells());
     }
     _op_count += view_rows.size();
 }
