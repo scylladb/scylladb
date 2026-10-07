@@ -151,7 +151,6 @@ def test_mv_quoted_column_names_build(cql, test_keyspace):
 # build the view. A cast to a user type in it must keep the quotes that the
 # type name ("int") and the mixed case keyspace name need, otherwise writes
 # to the base table fail.
-@pytest.mark.xfail(reason="SCYLLADB-5202: the cast type is written out without its quotes")
 def test_mv_where_cast_to_quoted_udt(cql):
     keyspace = f'"{unique_name().capitalize()}"'
     cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")

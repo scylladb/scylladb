@@ -543,7 +543,6 @@ def test_udf_permissions_with_udt(cql):
 # name that is valid only when quoted: "byte" is a reserved type name and
 # "int" is a native type name.
 # scylla_only, because Lua is used as the target language
-@pytest.mark.xfail(reason="SCYLLADB-5202: the argument type is written out with the type name unquoted")
 def test_udf_permissions_with_quoted_udt_name(scylla_only, cql):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         for name in ['"byte"', '"int"']:
