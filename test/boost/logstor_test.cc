@@ -2674,6 +2674,52 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     assert_that(*actual).is_equal_to(expected);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_logstor_separator_shares) {
+    constexpr size_t depth = 16;
+    constexpr float floor_shares = 200;
+    constexpr float max_shares = 1000;
+
+    // An idle separator leaves the group to the memtables.
+    BOOST_REQUIRE_EQUAL(separator_shares_for(false, 0, depth, floor_shares, max_shares), 0.0f);
+
+    // An active one gets the floor with nothing queued and the maximum with the queue full, when
+    // the writes are already waiting for it, and never less as the queue fills.
+    BOOST_REQUIRE_EQUAL(separator_shares_for(true, 0, depth, floor_shares, max_shares), floor_shares);
+    BOOST_REQUIRE_EQUAL(separator_shares_for(true, depth, depth, floor_shares, max_shares), max_shares);
+    BOOST_REQUIRE_EQUAL(separator_shares_for(true, depth / 2, depth, floor_shares, max_shares), (floor_shares + max_shares) / 2);
+    float prev = 0;
+    for (size_t queued = 0; queued <= depth; ++queued) {
+        const auto shares = separator_shares_for(true, queued, depth, floor_shares, max_shares);
+        BOOST_REQUIRE_GE(shares, prev);
+        prev = shares;
+    }
+
+    // A floor above the maximum is capped, the output stays in the range the memtable flush
+    // controller can map back to a backlog.
+    BOOST_REQUIRE_EQUAL(separator_shares_for(true, 0, depth, 2 * max_shares, max_shares), max_shares);
+}
+
+// Checks that the separator asks for shares once it has had work, and none before.
+SEASTAR_THREAD_TEST_CASE(test_logstor_separator_wants_shares_when_active) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    BOOST_REQUIRE_EQUAL(ls.get_segment_manager().separator_wanted_shares(), 0.0f);
+
+    test_logstor_group cg(schema, ls);
+    ls.write(make_kv_mutation(schema, "pk0", "value"), write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+
+    BOOST_REQUIRE_GE(ls.get_segment_manager().separator_wanted_shares(), separator_floor_shares);
+}
+
 // Checks that a group discarded while the separator still holds unflushed records for it gives up
 // what it was holding: its records are left where they are, and the segments they are in are left
 // allocated. The index still points at them there, so freeing one would let it be reallocated over
