@@ -974,7 +974,7 @@ cfamOrdering[cql3::statements::cf_properties& expr]
 createTypeStatement returns [std::unique_ptr<create_type_statement> expr]
     @init { bool if_not_exists = false; }
     : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-         tn=userTypeName { $expr = std::make_unique<create_type_statement>(ut_name(std::move(tn)), if_not_exists); }
+         tn=userTypeName[false] { $expr = std::make_unique<create_type_statement>(ut_name(std::move(tn)), if_not_exists); }
          '(' typeColumns[*expr] ( ',' typeColumns[*expr]? )* ')'
     ;
 
@@ -1168,7 +1168,7 @@ cfisStatic returns [bool isStaticColumn=false]
  * ALTER TYPE <name> RENAME <field> TO <newtype> AND ...;
  */
 alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
-    : K_ALTER K_TYPE name=userTypeName
+    : K_ALTER K_TYPE name=userTypeName[false]
           ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), false, f, v); }
           | K_ADD   f=ident v=comparatorType        { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), true, f, v); }
           | K_RENAME
@@ -1216,7 +1216,7 @@ dropTableStatement returns [std::unique_ptr<drop_table_statement> stmt]
  */
 dropTypeStatement returns [std::unique_ptr<drop_type_statement> stmt]
     @init { bool if_exists = false; }
-    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = std::make_unique<drop_type_statement>(std::move(name), if_exists); }
+    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName[false] { $stmt = std::make_unique<drop_type_statement>(std::move(name), if_exists); }
     ;
 
 /**
@@ -1601,7 +1601,7 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
     | K_INDEX idx=columnFamilyName                  { $stmt = cql3::statements::raw::describe_statement::index(idx);               }
     | K_MATERIALIZED K_VIEW view=columnFamilyName   { $stmt = cql3::statements::raw::describe_statement::view(view);               }
     | (K_TYPES) => K_TYPES                          { $stmt = cql3::statements::raw::describe_statement::types();                  }
-    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(std::move(tn));      }
+    | K_TYPE tn=userTypeName[false]                 { $stmt = cql3::statements::raw::describe_statement::type(std::move(tn));      }
     | (K_FUNCTIONS) => K_FUNCTIONS                  { $stmt = cql3::statements::raw::describe_statement::functions();              }
     | K_FUNCTION fn=functionName                    { $stmt = cql3::statements::raw::describe_statement::function(fn);             }
     | (K_AGGREGATES) => K_AGGREGATES                { $stmt = cql3::statements::raw::describe_statement::aggregates();             }
@@ -1653,8 +1653,8 @@ columnFamilyName returns [cql3::cf_name name]
     : (ksName[name] '.')? cfName[name]
     ;
 
-userTypeName returns [uninitialized<cql3::ut_name> name]
-    : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
+userTypeName [bool internal] returns [uninitialized<cql3::ut_name> name]
+    : (ks=ident '.')? ut=non_type_ident[internal] { $name = cql3::ut_name(ks, ut); }
     ;
 
 userOrRoleName returns [uninitialized<cql3::role_name> name]
@@ -2092,10 +2092,15 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
-    | vt=vector_type                { $t = vt; }
-    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
+    | vt=vector_type[internal]      { $t = vt; }
+    | id=userTypeName[internal]   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
     | K_FROZEN '<' f=comparator_type[internal] '>'
       {
+        if (internal && !f->supports_freezing()) {
+            // Older versions stored user types named like a native type unquoted, like frozen<int>.
+            // f is one native type keyword, the token before '>'.
+            f = cql3::cql3_type::raw::user_type(cql3::ut_name(nullptr, ::make_shared<cql3::column_identifier>(LT(-2)->getText(), false)));
+        }
         try {
             $t = cql3::cql3_type::raw::frozen(f);
         } catch (exceptions::invalid_request_exception& e) {
@@ -2177,8 +2182,8 @@ tuple_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> t]
       '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
-vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
-    : K_VECTOR '<' t=comparator_type[false] ',' d=INTEGER '>'
+vector_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> pt]
+    : K_VECTOR '<' t=comparator_type[internal] ',' d=INTEGER '>'
         {
             if ($d.text[0] == '-')
                 throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
@@ -2209,11 +2214,13 @@ username returns [sstring str]
 
 // Basically the same as cident, but we need to exclude existing CQL3 types
 // (which for some reason are not reserved otherwise)
-non_type_ident returns [shared_ptr<cql3::column_identifier> id]
-    : t=IDENT                    { if (_reserved_type_names().contains($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
+non_type_ident [bool internal] returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT                    { if (!internal && _reserved_type_names().contains($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
     | t=QUOTED_NAME              { $id = ::make_shared<cql3::column_identifier>($t.text, true); }
     | k=basic_unreserved_keyword { $id = ::make_shared<cql3::column_identifier>(k, false); }
     | kk=K_KEY                   { $id = ::make_shared<cql3::column_identifier>($kk.text, false); }
+    // Older versions stored user types named like these keywords, or like a reserved name above, unquoted.
+    | kw=(K_TTL | K_COUNT | K_WRITETIME) { if (!internal) { add_recognition_error("Invalid (reserved) user type name " + $kw.text); } $id = ::make_shared<cql3::column_identifier>($kw.text, false); }
     ;
 
 unreserved_keyword returns [sstring str]

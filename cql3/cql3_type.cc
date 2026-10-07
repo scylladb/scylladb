@@ -530,7 +530,7 @@ sstring maybe_quote_user_type_name(const std::string_view name) {
     }
     try {
         auto type = do_with_parser(name, dialect{}, [] (cql3_parser::CqlParser& parser) {
-            return parser.comparator_type(true);
+            return parser.comparator_type(false);
         });
         if (type->is_user_type()) {
             return cql_name;
