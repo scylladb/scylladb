@@ -7844,6 +7844,7 @@ SEASTAR_THREAD_TEST_CASE(test_get_secondary_replica) {
 SEASTAR_THREAD_TEST_CASE(test_tablet_count_fixed_by_table_properties) {
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_per_shard_goal(16);
+    cfg.need_remote_proxy = true; // DROP TABLE on tablets cleans view building state via proxy remote
     
     do_with_cql_env_thread([&cfg] (auto& e) {
         topology_builder topo(e);
@@ -7977,6 +7978,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
     // in the token metadata snapshot but has been dropped from the live schema.
     // This simulates the race where a DROP TABLE is applied between yield
     // points during load balancer planning.
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true; // DROP TABLE on tablets cleans view building state via proxy remote
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
 
@@ -8026,7 +8029,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
         for (auto& mig : plan.migrations()) {
             BOOST_REQUIRE_NE(mig.tablet.table, table1);
         }
-    }).get();
+    }, cfg).get();
 }
 
 // Tests convergence of a tablet map with arbitrary boundaries to a uniform

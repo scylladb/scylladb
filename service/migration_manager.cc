@@ -719,7 +719,9 @@ static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_
         auto table_views = views | std::views::filter([&] (const view_ptr& v) { return v->view_info()->base_id() == table->id(); }) | std::ranges::to<std::vector>();
         co_await add_cleanup_view_building_state_drop_table_mutations(sp, table->id(), table_views, builder, out, ts);
     }
-    out.emplace_back(builder.build());
+    if (!builder.empty()) {
+        out.emplace_back(builder.build());
+    }
 }
 
 future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
@@ -778,6 +780,15 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
                 mlogger.info("Drop view '{}.{}' of table '{}'", v->ks_name(), v->cf_name(), schema->cf_name());
                 auto m = db::schema_tables::make_drop_view_mutations(keyspace, v, ts);
                 mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
+            }
+        }
+        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+            // Also deletes the table's PROCESS_STAGING tasks, which no view drop removes.
+            db::view::view_building_task_mutation_builder builder(ts);
+            co_await add_cleanup_view_building_state_drop_table_mutations(sp, schema->id(), views, builder, mutations, ts);
+            if (!builder.empty()) {
+                mlogger.info("Deleting view building tasks of dropped table '{}.{}'", schema->ks_name(), schema->cf_name());
+                mutations.emplace_back(builder.build());
             }
         }
 
