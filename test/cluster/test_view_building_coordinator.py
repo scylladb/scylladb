@@ -1404,3 +1404,59 @@ async def test_incremental_repair_rewrites_staging_sstable(manager: ScyllaCluste
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", rows)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", rows)
         await manager.server_start(servers[1].server_id)
+
+# Reproducer for SCYLLADB-4989.
+# If a tablets base table is dropped while it still has pending PROCESS_STAGING
+# tasks, those tasks must be deleted too. Otherwise the view building coordinator
+# keeps selecting the dropped table as the base table to process, and no other
+# view in the cluster is built.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_with_pending_staging_tasks(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(2, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int PRIMARY KEY, c int, v int)")
+        for i in range(100):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+        tab_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'tab'"))[0].id
+
+        # Make node 0 lose its copy of the base table, so repairing it later
+        # writes staging sstables on node 0.
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        cql, hosts = await manager.get_ready_cql(servers)
+
+        # Keep the view's build paused, so its status stays STARTED and the
+        # repair registers the staging sstables as PROCESS_STAGING tasks.
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+        # Make processing the staging sstables fail, so the tasks stay pending.
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+
+        async def staging_tasks():
+            rows = await cql.run_async("SELECT type, base_id FROM system.view_building_tasks")
+            return [r for r in rows if r.type == 'PROCESS_STAGING' and r.base_id == tab_id]
+        async def have_staging_tasks():
+            return bool(await staging_tasks()) or None
+        await wait_for(have_staging_tasks, time.time() + 60)
+
+        await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv")
+        await unpause_view_building_tasks(manager)
+        await cql.run_async(f"DROP TABLE {ks}.tab")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable")
+        assert await staging_tasks() == []
+
+        # Another view must still get built.
+        await cql.run_async(f"CREATE TABLE {ks}.tab2 (key int PRIMARY KEY, c int, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.tab2 (key, c, v) VALUES (1, 1, 1)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv2 AS SELECT * FROM {ks}.tab2 WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
+        await wait_for_view(cql, "mv2", 2, timeout=60)
