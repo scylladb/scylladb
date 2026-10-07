@@ -75,6 +75,9 @@ Supported Operations
   tuples and UDTs, which have fields of such types) is not supported, such values are rejected with an error.
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
+* ``ring-order-compare`` - Compares two partition keys in ring order, the order ScyllaDB orders partitions in, and prints the result, along with the
+  tokens of the keys: partition keys are ordered by their token first and only by the keys themselves on token collision. Required arguments: 2 serialized values. Only accepts partition keys
+  (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
 * ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
 * ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
@@ -224,6 +227,20 @@ Examples
        :class: hide-copy-button
 
        b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
+
+* Comparing two partition keys in ring order. Note that ``compare`` would return the opposite result, as it compares the components of the keys,
+  not their tokens:
+
+    .. code-block:: console
+
+       scylla types ring-order-compare --partition-key -t Int32Type -t UTF8Type 0004000000010003616263 0004000000020003616263
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+       {token: 8771735466527499816, key: (1, abc)} > {token: -3504390351319460166, key: (2, abc)}
 
 * Deserializing and printing a compound value:
 

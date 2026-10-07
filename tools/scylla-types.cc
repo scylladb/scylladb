@@ -321,6 +321,19 @@ void deserialize_handler(type_variant type, std::vector<bytes> values, const bpo
     }
 }
 
+void print_compare_result(std::string_view lhs, std::string_view rhs, std::strong_ordering res) {
+    std::string_view res_str;
+
+    if (res == 0) {
+        res_str = "==";
+    } else if (res < 0) {
+        res_str = "<";
+    } else {
+        res_str = ">";
+    }
+    fmt::print("{} {} {}\n", lhs, res_str, rhs);
+}
+
 void compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("compare_handler(): expected 2 values, got {}", values.size()));
@@ -340,17 +353,7 @@ void compare_handler(type_variant type, std::vector<bytes> values, const bpo::va
         }
     } compare_visitor{values[0], values[1]};
 
-    const auto res = std::visit(compare_visitor, type);
-    std::string_view res_str;
-
-    if (res == 0) {
-        res_str = "==";
-    } else if (res < 0) {
-        res_str = "<";
-    } else {
-        res_str = ">";
-    }
-    fmt::print("{} {} {}\n", to_printable_string(type, values[0]), res_str, to_printable_string(type, values[1]));
+    print_compare_result(to_printable_string(type, values[0]), to_printable_string(type, values[1]), std::visit(compare_visitor, type));
 }
 
 void validate_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
@@ -400,6 +403,23 @@ const partition_key_type& get_partition_key_type(const type_variant& type, std::
         return *pk_type;
     }
     throw std::invalid_argument(fmt::format("{} action requires --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key) input", action));
+}
+
+void ring_order_compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+    if (values.size() != 2) {
+        throw std::runtime_error(fmt::format("ring_order_compare_handler(): expected 2 values, got {}", values.size()));
+    }
+
+    const auto& pk_type = get_partition_key_type(type, "ring-order-compare");
+    const auto& s = *pk_type.schema;
+    const auto lhs_dk = dht::decorate_key(s, pk_type.to_partition_key(values[0]));
+    const auto rhs_dk = dht::decorate_key(s, pk_type.to_partition_key(values[1]));
+
+    // Print the tokens too, they determine the order (in most cases).
+    const auto to_printable_ring_position = [&type] (const dht::decorated_key& dk, bytes_view value) {
+        return seastar::format("{{token: {}, key: {}}}", dk.token(), to_printable_string(type, value));
+    };
+    print_compare_result(to_printable_ring_position(lhs_dk, values[0]), to_printable_ring_position(rhs_dk, values[1]), lhs_dk.tri_compare(s, rhs_dk));
 }
 
 void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
@@ -502,6 +522,22 @@ Examples:
 $ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 )"}, compare_handler},
+    {{"ring-order-compare", "compare two partition keys in ring order",
+R"(
+Compare two partition keys in ring order and print the result.
+Partition keys are ordered by their token first and only by the keys themselves
+on token collision. Same as in scylla, keys with colliding tokens are compared
+byte-wise, in their legacy (sstable) format.
+Only supports --full-compound (or its alias --partition-key) and
+--legacy-composite (or its alias --legacy-partition-key).
+
+Arguments: 2 serialized values.
+
+Examples:
+
+$ scylla types ring-order-compare --full-compound -t int -t text 0004000000010003616263 0004000000020003616263
+{token: 8771735466527499816, key: (1, abc)} > {token: -3504390351319460166, key: (2, abc)}
+)"}, ring_order_compare_handler},
     {{"validate", "validate the value(s)",
 R"(
 Check that the value(s) are valid for the type according to the requirements of
