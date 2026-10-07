@@ -155,3 +155,31 @@ def test_serialize_legacy_composite_single_component(scylla_types):
 def test_serialize_legacy_composite_too_few_values(scylla_types_fails_with):
     scylla_types_fails_with("serialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "--", "1",
                             error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")
+
+
+@pytest.mark.parametrize("column,value,serialized", [
+    ("pk1", "1", "00000001"),
+    ("pk2", "abc", "616263"),
+    ("ck1", "d0081989-6f6b-11ea-0000-0000001c571b", "d00819896f6b11ea00000000001c571b"),
+    ("ck2", "16", "00000010"),
+])
+def test_serialize_schema_file_column(scylla_types, schema_file, column, value, serialized):
+    res = scylla_types("serialize", "--schema-file", schema_file, "--column", column, "--", value)
+    assert res.stdout == f"{serialized}\n"
+
+
+@pytest.mark.parametrize("compound_option", ["--prefix-compound", "--clustering-key"])
+def test_serialize_schema_file_clustering_key(scylla_types, schema_file, compound_option):
+    res = scylla_types("serialize", "--schema-file", schema_file, compound_option, "--", "d0081989-6f6b-11ea-0000-0000001c571b", "16")
+    assert res.stdout == "0010d00819896f6b11ea00000000001c571b000400000010\n"
+
+
+@pytest.mark.parametrize("compound_option,serialized", [
+    ("--full-compound", "0004000000010003616263"),
+    ("--partition-key", "0004000000010003616263"),
+    ("--legacy-composite", "00040000000100000361626300"),
+    ("--legacy-partition-key", "00040000000100000361626300"),
+])
+def test_serialize_schema_file_partition_key(scylla_types, schema_file, compound_option, serialized):
+    res = scylla_types("serialize", "--schema-file", schema_file, compound_option, "--", "1", "abc")
+    assert res.stdout == f"{serialized}\n"

@@ -59,3 +59,12 @@ def test_compare_legacy_composite(scylla_types):
     res = scylla_types("compare", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type",
                        "00040000000100000361626300", "00040000000200000361626300")
     assert res.stdout == "(1, abc) < (2, abc)\n"
+
+
+def test_compare_schema_file_column(scylla_types, schema_file):
+    """The type of the column is used, including its clustering order."""
+    res = scylla_types("compare", "--schema-file", schema_file, "--column", "ck1",
+                       "b34b62d46a8d11ea0000005000237906", "d00819896f6b11ea00000000001c571b")
+    assert res.stdout == "b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b\n"
+    res = scylla_types("compare", "--schema-file", schema_file, "--column", "ck2", "00000001", "00000002")
+    assert res.stdout == "1 < 2\n"

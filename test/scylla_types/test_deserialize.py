@@ -89,3 +89,13 @@ def test_deserialize_legacy_composite_single_component(scylla_types):
 def test_deserialize_legacy_composite_invalid(scylla_types_fails_with):
     scylla_types_fails_with("deserialize", "--legacy-composite", "-t", "Int32Type", "-t", "UTF8Type", "000400000001000003616200",
                             error="invalid legacy compound")
+
+
+def test_deserialize_schema_file_column(scylla_types, schema_file):
+    res = scylla_types("deserialize", "--schema-file", schema_file, "--column", "v", "0000000100000004000000010000000161")
+    assert res.stdout == "{1 : a}\n"
+
+
+def test_deserialize_schema_file_partition_key(scylla_types, schema_file):
+    res = scylla_types("deserialize", "--schema-file", schema_file, "--partition-key", "0004000000010003616263")
+    assert res.stdout == "(1, abc)\n"
