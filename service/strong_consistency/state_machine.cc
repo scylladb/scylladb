@@ -84,6 +84,7 @@ public:
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
+                logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             });
             // Apply mutations sequentially to preserve linearizability.
