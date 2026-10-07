@@ -27,6 +27,15 @@ this tool is again expected to be in the user's path, or be overridden with
 the `NODETOOL` environment variable. Nodetool is **not** needed to test
 Scylla.
 
+If Scylla was built with the frozen toolchain (`tools/toolchain/dbuild`),
+it may need shared libraries which the host doesn't have. "run" notices
+this, and then runs Scylla - still on the host - with the shared libraries
+of dbuild's image. This needs podman or docker, as dbuild itself does. With
+docker, the libraries are first copied to `build/dbuild-libs`. The
+`SCYLLA_DBUILD_LIBS` environment variable can force this choice: set it to
+`1` to always use dbuild's libraries, or `0` to never do so. If Scylla was
+built with `dbuild --image`, set `SCYLLA_DBUILD_IMAGE` to the same image.
+
 Modern Linux distributions usually do not carry a Cassandra package, so if
 you want to install Cassandra to run tests against it, please refer to the
 appendix below on _Installing Cassandra_.
