@@ -88,3 +88,13 @@ def test_serialize_unsupported_type(scylla_types_fails_with, type_name):
 def test_serialize_unsupported_type_in_compound(scylla_types_fails_with):
     scylla_types_fails_with("serialize", "--prefix-compound", "-t", "Int32Type", "-t", "FrozenType(ListType(Int32Type))", "--", "1", "1",
                             error="error: serializing values of type frozen<list<int>> is not supported")
+
+
+def test_serialize_value_with_spaces(scylla_types):
+    res = scylla_types("serialize", "-t", "UTF8Type", "--", "a b c")
+    assert res.stdout == "6120622063\n"
+
+
+def test_serialize_full_compound_value_with_spaces(scylla_types):
+    res = scylla_types("serialize", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "--", "1", "a b")
+    assert res.stdout == "0004000000010003612062\n"

@@ -47,3 +47,8 @@ def test_deserialize_prefix_compound_partial(scylla_types):
 def test_deserialize_full_compound(scylla_types):
     res = scylla_types("deserialize", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "0004000000010003616263")
     assert res.stdout == "(1, abc)\n"
+
+
+def test_deserialize_type_with_spaces(scylla_types):
+    res = scylla_types("deserialize", "-t", "MapType(Int32Type, UTF8Type)", "0000000100000004000000010000000161")
+    assert res.stdout == "{1 : a}\n"

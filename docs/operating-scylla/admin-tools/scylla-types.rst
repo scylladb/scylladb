@@ -32,6 +32,8 @@ You must specify the type of the value(s) you want to examine by adding the ``-t
 Specify the type by providing its Cassandra class name (the prefix can be omitted, for example, you can provide ``Int32Type`` 
 instead of ``org.apache.cassandra.db.marshal.Int32Type``). See `CQL3 Type Mapping <https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md>`_ for a mapping of cql3 types to Cassandra type class names.
 
+Type names and values containing spaces, for example ``MapType(Int32Type, UTF8Type)``, have to be quoted on the command line.
+
 If you provide more than one value, all of the values must share the same type. For example:
 
 .. code-block:: console
