@@ -146,6 +146,12 @@ The API is available after every node in the cluster supports and enables the
 
 For example, the following request creates or updates a route:
 
+.. warning::
+
+   The Admin REST API binds to ``127.0.0.1`` by default. Keep it on loopback
+   or an isolated, trusted management network. Use a secure management path
+   for remote access; do not expose the API publicly.
+
 .. code-block:: console
 
    curl -X POST "http://node-api-address:10000/v2/client-routes" \
