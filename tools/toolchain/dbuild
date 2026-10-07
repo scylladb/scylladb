@@ -135,8 +135,9 @@ else
 fi
 
 MAVEN_LOCAL_REPO="$HOME/.m2"
+CONAN2_REPO="${CONAN_HOME-$HOME/.conan2}"
 
-mkdir -p "$MAVEN_LOCAL_REPO"
+mkdir -p "$MAVEN_LOCAL_REPO" "$CONAN2_REPO"
 
 if [[ -z "$CARGO_HOME" ]]; then
     export CARGO_HOME="$HOME/.cargo"
@@ -302,6 +303,8 @@ docker_common_args+=(
        -v "${XDG_CACHE_HOME}:${XDG_CACHE_HOME}" \
        --env XDG_CONFIG_HOME \
        -v "${XDG_CONFIG_HOME}:${XDG_CONFIG_HOME}" \
+       --env CONAN_HOME \
+       -v "${CONAN2_REPO}:${CONAN2_REPO}" \
        -w "$PWD" \
        -e HOME="$HOME" \
        "${docker_args[@]}" \
