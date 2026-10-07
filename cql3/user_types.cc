@@ -18,12 +18,12 @@
 #include "types/user.hh"
 
 namespace cql3 {
-void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+void user_types::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, value);
 }
 
-void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& ut_value) {
+void user_types::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& ut_value) {
     auto& type = static_cast<const user_type_impl&>(*column.type);
     if (type.is_multi_cell()) {
         // Non-frozen user defined type.
@@ -68,7 +68,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
     }
 }
 
-void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+void user_types::setter_by_field::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     throwing_assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     auto value = expr::evaluate(*_e, params._options);
@@ -83,7 +83,7 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
     m.set_cell(row_key, column, std::move(mut).finish());
 }
 
-void user_types::deleter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+void user_types::deleter_by_field::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     throwing_assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     collection_mutation_writer mut(tombstone{});
