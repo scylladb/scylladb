@@ -58,6 +58,15 @@ using body_writer = noncopyable_function<future<>(output_stream<char>&&)>;
 /// api_error is thrown.
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name);
 
+/// Get the value of an attribute documented as an Integer, or an empty
+/// optional if it is missing. Parsing is lenient: any number is accepted -
+/// a fractional value is truncated toward zero, and a value outside the
+/// range of int32_t (even one too large to fit in 64 bits) is clamped to
+/// that range. The caller should
+/// check that the value is in the range it allows. If the attribute exists
+/// but isn't a number, a descriptive api_error is thrown.
+std::optional<int32_t> get_lenient_int_attribute(const rjson::value& value, std::string_view attribute_name);
+
 /// Get the value of a string attribute.
 /// If the value exists and is a string - it's returned.
 /// If the value is missing and `default_return` is supplied, the `default_return` value is returned.
