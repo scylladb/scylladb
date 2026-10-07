@@ -697,42 +697,30 @@ future<utils::chunked_vector<mutation>> prepare_aggregate_drop_announcement(stor
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
-static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_proxy& sp, lw_shared_ptr<keyspace_metadata> ks_meta, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
-    using namespace db::view;
-    mlogger.info("Cleaning view building state for all views in keyspace {} ", ks_meta->name());
+// Deletes all view building tasks of the base table (view tasks and staging tasks)
+// and the `system.view_build_status_v2` entries of the given views.
+static future<> add_cleanup_view_building_state_drop_table_mutations(storage_proxy& sp, table_id base_id, const std::vector<view_ptr>& views, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    mlogger.info("Cleaning view building state for base table {}", base_id);
 
     db::view::view_building_task_mutation_builder builder(ts);
-    auto& sys_ks = sp.system_keyspace();
-    auto& vb_state_machine = sp.view_building_state_machine();
-
-    auto drop_all_tasks_in_task_map = [&] (const task_map& task_map) {
-        for (auto& [id, _]: task_map) {
-            builder.del_task(id);
-            mlogger.trace("Aborting view building task with ID: {} because the keyspace is being dropped", id);
-        }
-    };
-
-    // Drop view building tasks - this operation will also automatically abort them if any is already started
-    for (auto& table: ks_meta->tables()) {
-        auto tid = table->id();
-        if (!vb_state_machine.building_state.tasks_state.contains(tid)) {
-            continue;
-        }
-
-        for (auto [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(tid)) {
-            for (auto& [_, views_tasks]: replica_tasks.view_tasks) {
-                drop_all_tasks_in_task_map(views_tasks);
-            }
-            drop_all_tasks_in_task_map(replica_tasks.staging_tasks);
-        }
+    auto& tasks_state = sp.view_building_state_machine().building_state.tasks_state;
+    if (auto it = tasks_state.find(base_id); it != tasks_state.end()) {
+        // Dropping the tasks also aborts them if any is already started.
+        builder.del_tasks(it->second);
     }
-
-    for (auto& view: ks_meta->views()) {
-        // Remove entries from `system.view_build_status_v2`
-        auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
-        out.push_back(std::move(build_status_mut));
+    for (auto& view: views) {
+        out.push_back(co_await sp.system_keyspace().make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()}));
     }
     out.emplace_back(builder.build());
+}
+
+static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_proxy& sp, lw_shared_ptr<keyspace_metadata> ks_meta, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    mlogger.info("Cleaning view building state for all views in keyspace {} ", ks_meta->name());
+    auto views = ks_meta->views();
+    for (auto& table: ks_meta->tables()) {
+        auto table_views = views | std::views::filter([&] (const view_ptr& v) { return v->view_info()->base_id() == table->id(); }) | std::ranges::to<std::vector>();
+        co_await add_cleanup_view_building_state_drop_table_mutations(sp, table->id(), table_views, out, ts);
+    }
 }
 
 future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
