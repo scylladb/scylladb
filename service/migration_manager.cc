@@ -781,6 +781,10 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
                 mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
             }
         }
+        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+            // Also deletes the table's PROCESS_STAGING tasks, which no view drop removes.
+            co_await add_cleanup_view_building_state_drop_table_mutations(sp, schema->id(), views, mutations, ts);
+        }
 
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
