@@ -173,8 +173,10 @@ class client : public enable_shared_from_this<client> {
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
 
     http::client::reply_handler wrap_handler(http::request& request,
-                                                           http::client::reply_handler handler,
-                                                           std::optional<http::reply::status_type> expected);
+                                                   http::client::reply_handler handler,
+                                                   std::optional<http::reply::status_type> expected,
+                                                   const http::retry_strategy& rs,
+                                                   std::exception_ptr* dst = nullptr);
 
     future<> make_request(http::request req,
                           http::client::reply_handler handle = ignore_reply,

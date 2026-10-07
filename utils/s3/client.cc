@@ -499,8 +499,10 @@ future<> client::rebalance_connections() {
 
 http::client::reply_handler client::wrap_handler(http::request& request,
                                                                http::client::reply_handler handler,
-                                                               std::optional<http::reply::status_type> expected) {
-    return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+                                                               std::optional<http::reply::status_type> expected,
+                                                               const http::retry_strategy& rs,
+                                                                std::exception_ptr* dst) {
+    return [this, &request, expected, handler = std::move(handler), &rs, dst](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto _in = std::move(in);
         auto status_class = seastar::http::reply::classify_status(rep._status);
         std::optional<aws_error> possible_error;
@@ -546,10 +548,23 @@ http::client::reply_handler client::wrap_handler(http::request& request,
                 aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
         }
 
-        if (expected && rep._status != *expected) {
-            throw seastar::httpd::unexpected_status_error(rep._status);
-        }
         std::exception_ptr eptr;
+
+        if (expected && rep._status != *expected) {
+            eptr = std::make_exception_ptr(seastar::httpd::unexpected_status_error(rep._status));
+
+            // this is a bit lame, but we cannot shortcut any retryable errors,
+            // since that would _not_ retry them. Doh.
+            // But things like 404 we can.
+            if (dst && !aws_error::from_http_code(rep._status).is_retryable()) {
+                // dummy call to ensure stats in handler are updated.
+                co_await rs.should_retry(eptr, 1); // should we assert we get a "no"?
+                *dst = std::move(eptr);
+                co_return;
+            }
+            co_await coroutine::return_exception_ptr(eptr);
+        }
+
         try {
             // We need to be able to simulate a retry in s3 tests
             if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
@@ -558,10 +573,10 @@ http::client::reply_handler client::wrap_handler(http::request& request,
             }
             co_await handler(rep, std::move(_in));
         } catch (...) {
-            eptr = std::current_exception();
+            eptr = std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(std::current_exception())));
         }
         if (eptr) {
-            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
+            co_await coroutine::return_exception_ptr(eptr);
         }
 
         // The only exit from this handler that is not an exception, so the only place a
@@ -589,9 +604,10 @@ future<> client::make_request(http::request req,
                               seastar::abort_source* as) {
     // Held for the whole request. close() waits for the gate before closing
     // the http clients, so no http connection can outlive them.
+    std::exception_ptr eptr;
     auto holder = _requests_gate.hold();
     auto request = std::move(req);
-    auto handler = wrap_handler(request, std::move(handle), expected);
+    auto handler = wrap_handler(request, std::move(handle), expected, rs, &eptr);
     auto& gc = co_await find_or_create_client();
 
     co_await _request_limiter->acquire(as);
@@ -602,9 +618,12 @@ future<> client::make_request(http::request req,
     // dispatch fresh; a stale one there is caught by the REQUEST_TIME_TOO_SKEWED path.
     co_await authorize(request);
 
-    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([&err_handler](auto ex) {
         err_handler(std::move(ex));
     });
+    if (eptr) {
+        err_handler(std::move(eptr));
+    }
 }
 
 future<> client::make_request(http::request req,
