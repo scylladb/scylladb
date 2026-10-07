@@ -1244,9 +1244,26 @@ size_t row::representation_independent_data_size() const {
     return size;
 }
 
+static constexpr size_t tombstone_data_size = sizeof(api::timestamp_type) + sizeof(gc_clock::rep);
+
+size_t rows_entry::representation_independent_data_size() const {
+    const auto& r = row();
+    size_t size = r.cells().representation_independent_data_size();
+    if (!dummy()) {
+        size += key().representation().size();
+    }
+    if (r.deleted_at()) {
+        size += tombstone_data_size;
+    }
+    if (!r.marker().is_missing()) {
+        size += sizeof(api::timestamp_type) + (r.marker().is_expiring() ? 2 * sizeof(gc_clock::rep) : 0);
+    }
+    return size;
+}
+
 size_t mutation_partition::representation_independent_data_size(const schema& s) const {
     check_schema(s);
-    constexpr size_t tombstone_size = sizeof(api::timestamp_type) + sizeof(gc_clock::rep);
+    constexpr size_t tombstone_size = tombstone_data_size;
     size_t size = 0;
     if (_tombstone) {
         size += tombstone_size;
@@ -1256,14 +1273,7 @@ size_t mutation_partition::representation_independent_data_size(const schema& s)
         size += rt.tombstone().start.representation().size() + rt.tombstone().end.representation().size() + tombstone_size;
     }
     for (const rows_entry& e : non_dummy_rows()) {
-        const auto& r = e.row();
-        size += e.key().representation().size() + r.cells().representation_independent_data_size();
-        if (r.deleted_at()) {
-            size += tombstone_size;
-        }
-        if (!r.marker().is_missing()) {
-            size += sizeof(api::timestamp_type) + (r.marker().is_expiring() ? 2 * sizeof(gc_clock::rep) : 0);
-        }
+        size += e.representation_independent_data_size();
     }
     return size;
 }
