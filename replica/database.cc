@@ -2373,6 +2373,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
         }
         if (handler.get("what") == "throw") {
             throw std::runtime_error(format("injected error for {}.{}", s->ks_name(), s->cf_name()));
+        } else if (handler.get("what") == "timeout") {
+            throw seastar::timed_out_error();
         } else if (handler.get("what") == "wait") {
             dblog.info("database_apply: wait");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
