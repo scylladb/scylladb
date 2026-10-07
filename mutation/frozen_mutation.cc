@@ -94,6 +94,7 @@ frozen_mutation::unfreeze(schema_ptr schema) const {
     partition_builder b(*schema, m.partition());
     try {
         partition().accept(*schema, b);
+        b.finish();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
                 "frozen_mutation::unfreeze(): failed unfreezing mutation {} of {}.{}", key(), schema->ks_name(), schema->cf_name())));

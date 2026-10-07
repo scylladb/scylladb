@@ -61,34 +61,42 @@ public:
 };
 
 class mutation_compactor_garbage_collector : public compaction_garbage_collector {
-    const schema& _schema;
-    column_kind _kind;
     std::optional<clustering_key> _ckey;
     row_tombstone _tomb;
     row_marker _marker;
     row _row;
+    // Collected cells come in column order, so build _row a block at a time.
+    std::optional<row::cell_appender> _cells;
 
+    row::cell_appender& cells() {
+        if (!_cells) {
+            _cells.emplace(_row);
+        }
+        return *_cells;
+    }
+    void finish_cells() {
+        if (_cells) {
+            _cells->finish();
+            _cells.reset();
+        }
+    }
 public:
-    explicit mutation_compactor_garbage_collector(const schema& schema)
-        : _schema(schema) {
+    explicit mutation_compactor_garbage_collector(const schema&) {
     }
     void start_collecting_static_row() {
-        _kind = column_kind::static_column;
     }
     void start_collecting_clustering_row(clustering_key ckey) {
-        _kind = column_kind::regular_column;
         _ckey = std::move(ckey);
     }
     void collect(row_tombstone tomb) {
         _tomb = tomb;
     }
     virtual void collect(column_id id, atomic_cell cell) override {
-        _row.apply(_schema.column_at(_kind, id), std::move(cell));
+        cells().append(id, atomic_cell_or_collection(std::move(cell)));
     }
     virtual void collect(column_id id, collection_mutation mut) override {
         if (!collection_mutation_view(mut).empty()) {
-            const auto& cdef = _schema.column_at(_kind, id);
-            _row.apply(cdef, std::move(mut));
+            cells().append(id, atomic_cell_or_collection(std::move(mut)));
         }
     }
     virtual void collect(row_marker marker) override {
@@ -96,6 +104,7 @@ public:
     }
     template <typename Consumer>
     void consume_static_row(Consumer&& consumer) {
+        finish_cells();
         if (!_row.empty()) {
             consumer(static_row(std::move(_row)));
             _row = {};
@@ -103,6 +112,7 @@ public:
     }
     template <typename Consumer>
     void consume_clustering_row(Consumer&& consumer) {
+        finish_cells();
         if (_tomb || !_marker.is_missing() || !_row.empty()) {
             consumer(clustering_row(std::move(*_ckey), _tomb, _marker, std::move(_row)));
             _ckey.reset();

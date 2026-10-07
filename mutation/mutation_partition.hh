@@ -114,6 +114,44 @@ public:
     // Returns a view of cell's value and hash or a disengaged optional if column is not set.
     std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const;
 
+    // Builds the cells of a row a block at a time, rather than rebuilding a
+    // block for every cell, as append_cell() and apply() do.
+    //
+    // Cells are collected until a cell of another block is appended, or finish()
+    // is called, so cells of the same block (columns with the same
+    // id / atomic_cell_or_collection_block_nr_cells) should be appended
+    // consecutively, e.g. in increasing column id order. Appending in another
+    // order works, but is slower.
+    //
+    // The appended columns must not be set in the row. Appended cells are not
+    // visible in the row until finish() is called; neither the row nor the
+    // appender may be used after an exception.
+    class cell_appender {
+        row& _row;
+        atomic_cell_or_collection_block_builder _builder;
+        block_index_type _block_index = 0;
+
+        void flush();
+        // Prepares for appending `id`, returning its slot.
+        unsigned prepare_append(column_id id);
+    public:
+        explicit cell_appender(row& r) noexcept : _row(r) {}
+        cell_appender(const cell_appender&) = delete;
+        cell_appender& operator=(const cell_appender&) = delete;
+        void append(column_id id, atomic_cell_or_collection&& cell);
+        void append(column_id id, atomic_cell_or_collection_view cell);
+        // Appends a cell whose serialized form of `size` bytes is written by
+        // write(managed_bytes_mutable_view). `size` must not be zero.
+        template <std::invocable<managed_bytes_mutable_view> Writer>
+        void append_serialized(column_id id, size_t size, Writer&& write) {
+            auto slot = prepare_append(id);
+            write(_builder.add_uninitialized(slot, size, {}));
+        }
+        void finish();
+        // Whether there are appended cells which finish() would add to the row.
+        bool has_pending_cells() const noexcept { return !_builder.empty(); }
+    };
+
     // Removes cells for which func(column_id, atomic_cell_or_collection&) returns true.
     // func may also modify the cell.
     template<typename Func>

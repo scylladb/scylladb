@@ -268,6 +268,7 @@ static_assert(std::is_trivially_copyable_v<cell_hash_opt>);
 // Cells may be added in any slot order, each slot at most once. Their serialized form
 // may come from:
 //  - add_copy(): bytes copied into the builder's scratch buffer right away;
+//  - add_uninitialized(): bytes the caller writes into the scratch buffer;
 //  - add_borrowed(): bytes which stay valid until build() returns, optionally with the
 //    managed_bytes holding them, which build() may move into the block (and
 //    roll_back() can return);
@@ -331,6 +332,10 @@ public:
 
     // Empty cells represent missing cells and are ignored.
     void add_copy(unsigned slot, managed_bytes_view cell, cell_hash_opt hash);
+    // Reserves `size` bytes for the cell at `slot`, which the caller must fill with its
+    // serialized form. The returned view is valid until the builder is cleared or built.
+    // `size` must not be zero.
+    managed_bytes_mutable_view add_uninitialized(unsigned slot, size_t size, cell_hash_opt hash);
     void add_borrowed(unsigned slot, managed_bytes_view cell, cell_hash_opt hash, managed_bytes* stealable = nullptr) noexcept;
     void add_owned(unsigned slot, managed_bytes&& cell, cell_hash_opt hash) noexcept;
 
