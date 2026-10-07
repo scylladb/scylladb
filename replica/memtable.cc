@@ -807,6 +807,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
             mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
+            pb.finish();
             guardrails.check(*m_schema, mp, m.key(), violations_out);
             auto& p = find_or_create_partition_slow(m.key());
             _stats_collector.update(*m_schema, mp);

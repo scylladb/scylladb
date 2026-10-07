@@ -114,6 +114,18 @@ void atomic_cell_or_collection_block_builder::add_copy(unsigned slot, managed_by
     }
 }
 
+managed_bytes_mutable_view atomic_cell_or_collection_block_builder::add_uninitialized(unsigned slot, size_t size, cell_hash_opt hash) {
+    SCYLLA_ASSERT(size);
+    auto& e = new_entry(slot, size, hash);
+    try {
+        return reserve(e, size);
+    } catch (...) {
+        std::destroy_at(&e);
+        _slots &= ~mask_bit<mask_type>(slot);
+        throw;
+    }
+}
+
 void atomic_cell_or_collection_block_builder::add_borrowed(unsigned slot, managed_bytes_view cell, cell_hash_opt hash, managed_bytes* stealable) noexcept {
     if (cell.empty()) {
         return;

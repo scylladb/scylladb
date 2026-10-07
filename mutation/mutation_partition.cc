@@ -381,6 +381,7 @@ mutation_partition::apply(const schema& s, mutation_partition_view p,
     mutation_partition p2(*this, copy_comparators_only{});
     partition_builder b(p_schema, p2);
     p.accept(p_schema, b);
+    b.finish();
     if (s.version() != p_schema.version()) {
         p2.upgrade(p_schema, s);
     }
@@ -1211,6 +1212,60 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
 void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
     put_cell(id, managed_bytes_view(value.data()), &value.data(), cell_hash_opt());
+}
+
+unsigned
+row::cell_appender::prepare_append(column_id id) {
+    auto block_index = block_index_of(id);
+    if (block_index != _block_index) {
+        flush();
+        _block_index = block_index;
+    }
+    auto slot = slot_of(id);
+    if (_builder.slots() & mask_bit<block_type::mask_type>(slot)) {
+        on_internal_error(mplog, format("row::cell_appender: column {} appended twice", id));
+    }
+    return slot;
+}
+
+void
+row::cell_appender::flush() {
+    if (_builder.empty()) {
+        return;
+    }
+    if (auto* existing = _row._cells.find_block(_block_index)) {
+        existing->for_each_cell([&] (const block_type::cell_entry& e) {
+            if (_builder.slots() & mask_bit<block_type::mask_type>(e.slot)) {
+                on_internal_error(mplog, format("row::cell_appender: column {} is already set", column_of(_block_index, e.slot)));
+            }
+            _builder.add_borrowed(e.slot, e.cell, e.hash, e.external_storage);
+        });
+    }
+    auto new_block = _builder.build();
+    try {
+        _row._cells.set_block(_block_index, std::move(new_block));
+    } catch (...) {
+        _builder.roll_back(std::move(new_block));
+        throw;
+    }
+    _builder.clear();
+}
+
+void
+row::cell_appender::append(column_id id, atomic_cell_or_collection&& cell) {
+    auto slot = prepare_append(id);
+    _builder.add_owned(slot, std::move(cell.data()), {});
+}
+
+void
+row::cell_appender::append(column_id id, atomic_cell_or_collection_view cell) {
+    auto slot = prepare_append(id);
+    _builder.add_copy(slot, cell.data(), {});
+}
+
+void
+row::cell_appender::finish() {
+    flush();
 }
 
 bool

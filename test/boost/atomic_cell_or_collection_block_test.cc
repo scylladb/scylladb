@@ -157,6 +157,27 @@ SEASTAR_THREAD_TEST_CASE(test_layout_is_canonical) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_any_slot_order) {
+    // The builder accepts slots in any order, with the same result.
+    std::vector<size_t> sizes = {10, builder::inline_budget, 3000, 7, 2000, 1, 5000, 100};
+    std::vector<managed_bytes> cells;
+    for (unsigned slot = 0; slot < nr_cells; ++slot) {
+        cells.push_back(make_cell(sizes[slot % sizes.size()], slot));
+    }
+    builder in_order;
+    builder reversed;
+    for (unsigned slot = 0; slot < nr_cells; ++slot) {
+        in_order.add_copy(slot, managed_bytes_view(cells[slot]), cell_hash{slot + 1});
+        auto reversed_slot = nr_cells - 1 - slot;
+        reversed.add_copy(reversed_slot, managed_bytes_view(cells[reversed_slot]), cell_hash{reversed_slot + 1});
+    }
+    auto b1 = in_order.build();
+    auto b2 = reversed.build();
+    BOOST_REQUIRE_EQUAL(b1->external(), b2->external());
+    BOOST_REQUIRE_EQUAL(b1->storage_size(), b2->storage_size());
+    check_contents(*b2, contents(*b1));
+}
+
 SEASTAR_THREAD_TEST_CASE(test_in_place_modification) {
     cells_map expected;
     auto b = build_block({{0, 20}, {2, builder::inline_budget + 100}, {7, 30}}, expected);
