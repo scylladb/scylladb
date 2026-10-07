@@ -1803,13 +1803,7 @@ void row::apply_monotonically(const schema& our_schema, const schema& their_sche
     if (our_schema.version() == their_schema.version()) {
         return apply_monotonically(our_schema, kind, std::move(other), tracker);
     }
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
-        const column_definition& their_col = their_schema.column_at(kind, id);
-        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
-        if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, cell, tracker);
-        }
-    });
+    apply_monotonically(our_schema, kind, converting_mutation_partition_applier::upgrade_row(our_schema, their_schema, kind, other), tracker);
     other._cells.clear();
 }
 
@@ -1817,13 +1811,7 @@ void row::apply_monotonically(const schema& our_schema, const schema& their_sche
     if (our_schema.version() == their_schema.version()) {
         return apply_monotonically(our_schema, kind, other, tracker);
     }
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
-        const column_definition& their_col = their_schema.column_at(kind, id);
-        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
-        if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, cell, tracker);
-        }
-    });
+    apply_monotonically(our_schema, kind, converting_mutation_partition_applier::upgrade_row(our_schema, their_schema, kind, other), tracker);
 }
 
 // When views contain a primary key column that is not part of the base table primary key,
