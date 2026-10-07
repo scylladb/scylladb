@@ -943,8 +943,11 @@ class DynamicScheduling:
         self.refresh = refresh
         self._refreshed_at = -math.inf             # when measurements etc. were last looked at
         self._pressure_now = False                 # the pressure guard's last verdict
+        self._in_pass = False                      # inside a scheduling pass: what it computes once may be kept
+        self._estimate_cache: float | None = None  # this pass's load estimate, until a test is admitted
+        self._held_cache: dict | None = None       # this pass's held tests: worker -> (test, cores, memory)
         self._primed: list[tuple[WorkerController, int]] = []   # idle workers given a test in this pass
-        self._pass_order: list[str] | None = None   # modules in pick order, sorted once per pass
+        self._pass_order: list[str] | None = None   # modules in pick order, sorted on the clock
         self._mem_charged_workers = False
         self.psi_cpu_limit = float(psi_cpu_limit)
         self.psi_mem_limit = float(psi_mem_limit)
@@ -1258,9 +1261,15 @@ class DynamicScheduling:
         if self.collection is None or self._stopped:
             return
         started = time.perf_counter()
+        self._in_pass = True
+        self._estimate_cache = None
+        self._held_cache = None
         try:
             self._schedule_pass()
         finally:
+            self._in_pass = False
+            self._estimate_cache = None
+            self._held_cache = None
             self.stats["controller_ms"] += round(1000 * (time.perf_counter() - started))
 
     def _schedule_pass(self) -> None:
@@ -1285,7 +1294,11 @@ class DynamicScheduling:
             self._pressure_now = self._pressure_guard()
         pressure = self._pressure_now
         was = self.hold_for
-        self.hold_for = self._critical_test()
+        # The critical path moves over minutes: looked for on the clock.
+        # A held test that starts gives its hold up at once (_commit).
+        if refreshing:
+            self.hold_for = self._critical_test()
+            self._pass_order = None
         if self.hold_for is not None and self.hold_for != was:
             c = self._costs_for(self.hold_for)
             self.stats["critical_holds"] += 1
@@ -1322,7 +1335,6 @@ class DynamicScheduling:
         nodes.sort(key=prio)
         self._pass_pressure = pressure
         self._primed = []
-        self._pass_order = None
 
         admitted_any = False
         # Two passes: first give every idle worker one held test (so
@@ -1595,15 +1607,22 @@ class DynamicScheduling:
         """
         held = self._held(node) if node is not None else None
         hc, hm = self._hold_reservation(held)
-        for other, queued in self.node2pending.items():
-            if other is node or not queued:
-                continue
-            idx = queued[-1]
-            # chosen, not started yet -- except the critical test,
-            # already in the hold
-            if idx not in self.committed_at and idx != self.hold_for:
-                hc += self._costs_for(idx).cores
-                hm += self._forecast_new(idx, other)
+        # chosen, not started yet -- except the critical test, already
+        # in the hold.  Walked once a pass, then kept up to date as
+        # tests are handed out and admitted.
+        cache = self._held_cache
+        if cache is None:
+            cache = {}
+            for other, queued in self.node2pending.items():
+                if queued and queued[-1] not in self.committed_at:
+                    idx = queued[-1]
+                    cache[other] = (idx, self._costs_for(idx).cores, self._forecast_new(idx, other))
+            if self._in_pass:
+                self._held_cache = cache
+        for other, (idx, cores, mem) in cache.items():
+            if other is not node and idx != self.hold_for:
+                hc += cores
+                hm += mem
         return (self.ncpus - sum(self.res_cpu.values()) - hc, self._mem_headroom() - hm)
 
     def _mem_headroom(self) -> float:
@@ -1931,6 +1950,14 @@ class DynamicScheduling:
         that did not exist, and the machine sat at 70% while admission
         refused tests.
         """
+        if self._in_pass and self._estimate_cache is not None:
+            return self._estimate_cache
+        estimate = self._estimate_at(now)
+        if self._in_pass:
+            self._estimate_cache = estimate
+        return estimate
+
+    def _estimate_at(self, now: float) -> float:
         window = self.live.window(self.live.base) if self.live.base is not None else None
         if window is None or self._measured_raw is None or window[1] <= window[0]:
             inflight = sum(self._inflight_pred(now, i) * self._ramp_weight(now, i) for i in self._inflight(now))
@@ -2155,9 +2182,9 @@ class DynamicScheduling:
             # A module whose remaining tests together take longer than the
             # rest of the run needs per worker is ordered by that total: it
             # runs on one worker, so it has to start early.
-            # Once per scheduling pass: the picks of one pass share it,
-            # and an idle worker that found nothing to start asks again
-            # on every pass.
+            # Sorted on the clock (see _schedule_pass): every pick shares
+            # it, and an idle worker that found nothing to start asks
+            # again on every pass.
             budget = self._time_left()
             slow = self._run_slowdown()
             if self._pass_order is None:
@@ -2290,6 +2317,8 @@ class DynamicScheduling:
 
     def _add_pending(self, idx: int, front: bool = False) -> None:
         file = self._file_of(idx)
+        if file not in self.files:
+            self._pass_order = None           # a module back in the queue: sort again
         lst = self.files.setdefault(file, [])
         wall = self._costs_for(idx).wall
         if front:
@@ -2447,6 +2476,9 @@ class DynamicScheduling:
         self._fc_mean += fc_mean
         self.res_cpu[idx] = cost.cores
         self.res_mem[idx] = cost.mem
+        self._estimate_cache = None           # it counts in the load from now on
+        if self._held_cache is not None and self._held_cache.get(node, (None,))[0] == idx:
+            del self._held_cache[node]        # no longer held
         if self.hold_for == idx:
             self.hold_for = None
         self.held_since.pop(idx, None)
@@ -2460,6 +2492,8 @@ class DynamicScheduling:
     def _send(self, node: WorkerController, idx: int) -> None:
         self.held_since[idx] = self.now()
         self.node2pending[node].append(idx)
+        if self._held_cache is not None:
+            self._held_cache[node] = (idx, self._costs_for(idx).cores, self._forecast_new(idx, node))
         if self.node_file.get(node) not in (None, self._file_of(idx)):
             self.stats["module_switches"] += 1
         self.node_file[node] = self._file_of(idx)
