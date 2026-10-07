@@ -47,6 +47,16 @@ def test_create_fulltext_index_on_unsupported_column_fails(cql, test_keyspace, c
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'fulltext_index'")
 
 
+def test_create_fulltext_index_on_key_or_static_column_fails(cql, test_keyspace):
+    """Only regular columns can be indexed: key and static columns are rejected."""
+    schema = 'p1 text, p2 text, c text, s text static, v text, PRIMARY KEY ((p1, p2), c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for column, kind in [('p1', 'PARTITION_KEY'), ('c', 'CLUSTERING_COLUMN'), ('s', 'STATIC')]:
+            with pytest.raises(InvalidRequest, match=f"Creating a fulltext index requires a regular column, but column {column} is a {kind} column"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}({column}) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'fulltext_index'")
+
+
 def test_create_fulltext_index_with_analyzer_option(cql, test_keyspace):
     """All supported analyzer values should be accepted."""
     analyzers = [
@@ -608,22 +618,6 @@ def test_bm25_in_select_clause_different_column_rejected(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
         with pytest.raises(InvalidRequest, match="same column"):
             cql.prepare(f"SELECT BM25(col2, 'hello') FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 10")
-
-
-def test_bm25_on_partition_key_rejected(cql, test_keyspace):
-    """Creating a fulltext index on a partition key column must be rejected."""
-    schema = 'p text primary key'
-    with new_test_table(cql, test_keyspace, schema) as table:
-        with pytest.raises(InvalidRequest, match="Cannot create secondary index on partition key column"):
-            cql.execute(f"CREATE CUSTOM INDEX ON {table}(p) USING 'fulltext_index'")
-
-
-def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
-    """A fulltext index on a text clustering key column can be queried with BM25()."""
-    schema = 'p int, c text, primary key (p, c)'
-    with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(c) USING 'fulltext_index'")
-        cql.prepare(f"SELECT * FROM {table} WHERE BM25(c, 'hello') > 0 ORDER BY BM25(c, 'hello') LIMIT 1")
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):

@@ -70,6 +70,19 @@ void external_index::check_uses_tablets(const schema& schema, const data_diction
     }
 }
 
+void external_index::check_regular_column(const column_definition& column) const {
+    // Only a regular column can be served:
+    // - partition and clustering key columns: the Vector Store's full scan reads the column's
+    //   `writetime()`, which ScyllaDB refuses for a key column,
+    // - static columns: the Vector Store fetches each row by its full primary key, which
+    //   ScyllaDB refuses when only static columns are selected.
+    if (!column.is_regular()) {
+        throw exceptions::invalid_request_exception(
+            fmt::format("Creating a {} index requires a regular column, but column {} is a {} column",
+            index_type_name(), column.name_as_text(), to_sstring(column.kind)));
+    }
+}
+
 void external_index::check_cdc_options_if_present(const schema& s) {
     for_each_external_index_type([&]<typename T>() {
         if (T::has_index(s)) {
