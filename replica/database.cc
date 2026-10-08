@@ -3082,10 +3082,6 @@ future<> database::flush_logstor_separator(std::optional<logstor::segment_sequen
     });
 }
 
-future<logstor::table_segment_stats> database::get_logstor_table_segment_stats(table_id table) const {
-    return find_column_family(table).get_logstor_segment_stats();
-}
-
 size_t database::get_logstor_memory_usage() const {
     if (!_logstor) {
         return 0;

@@ -22,6 +22,7 @@
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/segment_stats.hh"
 #include "types.hh"
 #include "utils/updateable_value.hh"
 
@@ -78,35 +79,6 @@ struct segment_manager_usage {
     size_t memory_usage{0};
 };
 
-struct table_segment_histogram_bucket {
-    size_t count;
-    size_t max_data_size;
-
-    table_segment_histogram_bucket& operator+=(table_segment_histogram_bucket& other) {
-        count += other.count;
-        max_data_size = std::max(max_data_size, other.max_data_size);
-        return *this;
-    }
-};
-
-struct table_segment_stats {
-    size_t compaction_group_count{0};
-    size_t segment_count{0};
-    uint64_t live_record_bytes{0};
-    std::vector<table_segment_histogram_bucket> histogram;
-
-    table_segment_stats& operator+=(table_segment_stats& other) {
-        compaction_group_count += other.compaction_group_count;
-        segment_count += other.segment_count;
-        live_record_bytes += other.live_record_bytes;
-        histogram.resize(std::max(histogram.size(), other.histogram.size()));
-        for (size_t i = 0; i < other.histogram.size(); i++) {
-            histogram[i] += other.histogram[i];
-        }
-        return *this;
-    }
-};
-
 struct segment_snapshot {
     log_segment_id segment_id;
     segment_ref seg_ref;
@@ -155,6 +127,12 @@ public:
     const compaction_manager& get_compaction_manager() const noexcept;
 
     uint64_t get_segment_size() const noexcept;
+
+    // The statistics of the segments that the compaction groups of this shard own, with their
+    // distribution by utilization. The segment_set of each group adds its changes to them. A group
+    // gives a pointer to them to the constructor of its segment_set.
+    segment_stats& shard_segment_stats() noexcept;
+    const segment_stats& shard_segment_stats() const noexcept;
 
     // Returns the path of the file holding the given segment (for debug/introspection).
     // The path is computed from the segment id, the segment is not looked up, so the file

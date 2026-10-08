@@ -12,6 +12,7 @@
 #include "utils/chunked_vector.hh"
 #include "write_buffer.hh"
 #include "utils/log_heap.hh"
+#include "segment_stats.hh"
 #include <seastar/core/format.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -259,10 +260,15 @@ struct segment_set {
     // The same segments, in no particular order. Used to iterate efficiently and safely over all segments.
     utils::chunked_vector<segment_descriptor*> _segment_list;
 
-    explicit segment_set(size_t segment_size) noexcept
-        : _segment_size(segment_size) {
-        // The live bytes of a segment are derived from its free space and this, so a set without a
-        // segment size could not account for anything it holds.
+    // `shard_stats` are the shard-wide statistics. All the sets of the shard add their changes to
+    // them. Thus, the shard can read its utilization from one field, and it does not have to walk
+    // over the groups. Use nullptr for a set that is not part of a shard, for example in a test.
+    explicit segment_set(size_t segment_size, segment_stats* shard_stats = nullptr) noexcept
+        : _segment_size(segment_size)
+        , _shard_stats(shard_stats) {
+        // The set calculates the live record bytes and the utilization of a segment from its free
+        // space and from the segment size. Thus, a set without a segment size cannot account for
+        // its segments.
         if (_segment_size == 0) {
             on_fatal_internal_error(logstor_logger, "segment_set created with a zero segment size");
         }
@@ -308,11 +314,17 @@ struct segment_set {
         // Freeing more than the set holds means its live bytes have drifted from its segments, and
         // the wrap that would follow turns them into a huge number rather than a small one, which
         // the size a tablet reports for itself is then read from. Abort over carrying that.
-        if (freed_bytes > _live_bytes) {
-            on_fatal_internal_error(logstor_logger, format("freeing {} bytes from a set holding {} live bytes", freed_bytes, _live_bytes));
+        if (freed_bytes > _stats.live_record_bytes) [[unlikely]] {
+            on_fatal_internal_error(logstor_logger, format("freeing {} bytes from a set holding {} live record bytes", freed_bytes, _stats.live_record_bytes));
         }
-        _live_bytes -= freed_bytes;
         _segments.adjust_up(desc);
+        const auto record_bytes = desc.record_bytes(_segment_size);
+        const auto old_bucket = utilization_bucket_of(record_bytes + freed_bytes, _segment_size);
+        const auto new_bucket = utilization_bucket_of(record_bytes, _segment_size);
+        _stats.free_from_segment(freed_bytes, old_bucket, new_bucket);
+        if (_shard_stats) {
+            _shard_stats->free_from_segment(freed_bytes, old_bucket, new_bucket);
+        }
     }
 
     void remove_segment(segment_descriptor& desc) noexcept {
@@ -337,18 +349,36 @@ struct segment_set {
     // rather than the space it takes: the rest of the space those segments hold is dead records,
     // which compaction has yet to reclaim. Maintained as segments are linked, unlinked and freed
     // from, so reading it is O(1) and exact.
-    uint64_t live_bytes() const noexcept {
-        return _live_bytes;
+    uint64_t live_record_bytes() const noexcept {
+        return _stats.live_record_bytes;
     }
 
     bool empty() const noexcept {
         return _segment_list.empty();
     }
 
+    const segment_stats& stats() const noexcept {
+        return _stats;
+    }
+
+    // Calculates the statistics again from the segments. A test compares the result with the
+    // maintained statistics. All the paths that change the set must keep the two equal.
+    segment_stats recompute_stats_for_test() const noexcept {
+        segment_stats stats;
+        for (const auto* desc : _segment_list) {
+            const auto record_bytes = desc->record_bytes(_segment_size);
+            stats.add_segment(record_bytes, utilization_bucket_of(record_bytes, _segment_size));
+        }
+        return stats;
+    }
+
 private:
-    // The size of a segment, needed to derive the live bytes of one from its free space.
+    // The size of a segment. The set uses it to calculate the live record bytes of a segment from
+    // its free space, and the utilization of a segment from its live record bytes.
     size_t _segment_size;
-    uint64_t _live_bytes{0};
+    // The statistics of this set, and the shard-wide statistics that get the same changes.
+    segment_stats _stats;
+    segment_stats* _shard_stats;
 
     // Makes room for one more segment, so that the following link() cannot fail. Only useful when
     // nothing can be added to the set in between, since the room is not reserved for a caller.
@@ -376,7 +406,12 @@ private:
         desc.owner = this;
         desc.index_in_set = _segment_list.size() - 1;
         _segments.push(desc);
-        _live_bytes += desc.record_bytes(_segment_size);
+        const auto record_bytes = desc.record_bytes(_segment_size);
+        const auto bucket = utilization_bucket_of(record_bytes, _segment_size);
+        _stats.add_segment(record_bytes, bucket);
+        if (_shard_stats) {
+            _shard_stats->add_segment(record_bytes, bucket);
+        }
     }
 
     // Validates the invariants of every removal path, and aborts rather than throwing, both
@@ -389,11 +424,15 @@ private:
             on_fatal_internal_error(logstor_logger, "segment is not at its recorded position in its set");
         }
         const size_t record_bytes = desc.record_bytes(_segment_size);
-        if (record_bytes > _live_bytes) {
-            on_fatal_internal_error(logstor_logger, format("unlinking a segment holding {} bytes from a set holding {} live bytes", record_bytes, _live_bytes));
+        if (record_bytes > _stats.live_record_bytes) [[unlikely]] {
+            on_fatal_internal_error(logstor_logger, format("unlinking a segment holding {} bytes from a set holding {} live record bytes", record_bytes, _stats.live_record_bytes));
         }
         _segments.erase(desc);
-        _live_bytes -= record_bytes;
+        const auto bucket = utilization_bucket_of(record_bytes, _segment_size);
+        _stats.remove_segment(record_bytes, bucket);
+        if (_shard_stats) {
+            _shard_stats->remove_segment(record_bytes, bucket);
+        }
         // Keep the list compact by moving the last segment into the freed slot.
         auto* last = _segment_list.back();
         _segment_list[desc.index_in_set] = last;
@@ -564,8 +603,10 @@ class logstor_group {
     future<> allocate_active_separator_buffer();
 
 protected:
-    explicit logstor_group(size_t segment_size) noexcept
-        : _logstor_segments(segment_size) {
+    // `shard_stats` are the shard-wide segment statistics. The set of this group adds its segments
+    // to them, see segment_set.
+    explicit logstor_group(size_t segment_size, segment_stats* shard_stats) noexcept
+        : _logstor_segments(segment_size, shard_stats) {
     }
 
     virtual compaction_manager& logstor_compaction_manager() noexcept = 0;
