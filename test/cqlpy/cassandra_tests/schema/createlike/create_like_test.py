@@ -721,3 +721,34 @@ def testTableCopyWithIndexesAndTableProperty(cql, keyspaces):
     assert getCdc(cql, targetKs, targetTbWithAll)
     assert not getCdc(cql, sourceKs, sourceTb)
     assert 0.8 == target["params"]["crc_check_chance"]
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and #19999 (SAI indexes on
+# non-vector columns).
+@pytest.mark.xfail(reason="SCYLLADB-5147, #19999")
+def testIndexesNameForCopiedTable(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text, d int, e text)", "sourcetb")
+    idx1 = createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (d)")
+    idx2 = createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (c)")
+    idx3 = createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (b) USING 'sai'")
+    idx4 = createIndex(cql, sourceKs, sourceTb, "CREATE INDEX idx_for_e_column ON %s (e) USING 'sai'")
+    assert sourceTb + "_d_idx" == idx1
+    assert sourceTb + "_c_idx" == idx2
+    assert sourceTb + "_b_idx" == idx3
+    assert "idx_for_e_column" == idx4
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH INDEXES", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, True, True)
+    targetIndexes = indexNames(cql, targetKs, targetTb)
+    assert targetTb + "_d_idx" in targetIndexes
+    assert targetTb + "_c_idx" in targetIndexes
+    assert targetTb + "_b_idx" in targetIndexes
+
+    if differentKs:
+        assert "idx_for_e_column" in targetIndexes
+    else:
+        # if within the same keyspace, the target table will be created with a new
+        # index name in the format oldindexname_number, where the number starts from 1.
+        assert "idx_for_e_column_1" in targetIndexes
+
+# The test testTableCopyWithCustomIndexes was not translated, because it
+# uses a custom index implemented by a Java class (StubIndex).
