@@ -338,3 +338,15 @@ def testNestedFunctions(t):
                                          " RETURNS int" +
                                          " " + java_or_lua(t.cql, "return Integer.valueOf(0);", "return 0"))
     t.assertPermissionsOnNestedFunctions(innerFunctionName, outerFunctionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause). Because the table is empty, the function in the
+# filtering restriction is never evaluated, and Scylla doesn't check the
+# EXECUTE permission on functions in the WHERE clause, so the query succeeds
+# instead of failing with an Unauthorized error.
+@pytest.mark.xfail(reason="#13746")
+def testfunctionInStaticColumnRestrictionInSelect(t):
+    with t.setupTable("(k int, s int STATIC, v1 int, v2 int, PRIMARY KEY(k, v1))"):
+        functionName = t.createSimpleFunction()
+        cql = f"SELECT k FROM {t.table} WHERE k = 0 AND s = {functionCall(functionName)} ALLOW FILTERING"
+        t.assertPermissionsOnFunction(cql, functionName)
