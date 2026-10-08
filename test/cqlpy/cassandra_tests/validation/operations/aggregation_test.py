@@ -1524,3 +1524,61 @@ def testEmptyListAndNullInitcond(cql):
 # Java-specific problem with class loading when the logging configuration
 # is reloaded (CASSANDRA-11033), and its Java function can't be translated
 # meaningfully to Lua.
+
+def testArithmeticCorrectness(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, val decimal)") as table:
+        execute(cql, table, "insert into %s (bucket, val) values (1, 0.25)")
+        execute(cql, table, "insert into %s (bucket, val) values (2, 0.25)")
+        execute(cql, table, "insert into %s (bucket, val) values (3, 0.5);")
+
+        # (0.25 + 0.25 + 0.5) / 3, computed by Java's BigDecimal with the
+        # scale of the sum (2) and HALF_EVEN rounding.
+        a = Decimal("0.33")
+
+        assert_rows(execute(cql, table, "select avg(val) from %s where bucket in (1, 2, 3);"),
+                   row(a))
+
+BYTE_MAX = 127
+BYTE_MIN = -128
+SHORT_MAX = 32767
+SHORT_MIN = -32768
+INT_MAX = 2**31 - 1
+INT_MIN = -2**31
+LONG_MAX = 2**63 - 1
+LONG_MIN = -2**63
+
+def testAggregatesWithoutOverflow(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 tinyint, v2 smallint, v3 int, v4 bigint, v5 varint)") as table:
+        for i in range(1, 4):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3, v4, v5) values (?, ?, ?, ?, ?, ?)", i,
+                    (BYTE_MAX // 3) + i, (SHORT_MAX // 3) + i, (INT_MAX // 3) + i, (LONG_MAX // 3) + i,
+                    LONG_MAX + i)
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (1, 2, 3);"),
+                   row((BYTE_MAX // 3) + 2, (SHORT_MAX // 3) + 2, (INT_MAX // 3) + 2, (LONG_MAX // 3) + 2,
+                       LONG_MAX + 2))
+
+        for i in range(1, 4):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3, v4, v5) values (?, ?, ?, ?, ?, ?)", i + 3,
+                    100 + i, 100 + i, 100 + i, 100 + i, 100 + i)
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (4, 5, 6);"),
+                   row(102, 102, 102, 102, 102))
+
+def testAggregateOverflow(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 tinyint, v2 smallint, v3 int, v4 bigint, v5 varint)") as table:
+        for i in range(1, 4):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3, v4, v5) values (?, ?, ?, ?, ?, ?)", i,
+                    BYTE_MAX, SHORT_MAX, INT_MAX, LONG_MAX, LONG_MAX * 2)
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (1, 2, 3);"),
+                   row(BYTE_MAX, SHORT_MAX, INT_MAX, LONG_MAX, LONG_MAX * 2))
+
+        execute(cql, table, "truncate %s")
+
+        for i in range(1, 4):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3, v4, v5) values (?, ?, ?, ?, ?, ?)", i,
+                    BYTE_MIN, SHORT_MIN, INT_MIN, LONG_MIN, LONG_MIN * 2)
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (1, 2, 3);"),
+                   row(BYTE_MIN, SHORT_MIN, INT_MIN, LONG_MIN, LONG_MIN * 2))
