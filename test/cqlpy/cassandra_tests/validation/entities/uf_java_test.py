@@ -84,3 +84,106 @@ def testJavaFunctionArgumentTypeMismatch(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3)
         assert_invalid_message(cql, table, "val cannot be passed as argument 0 of function",
                                "SELECT key, val, " + fName + "(val) FROM %s")
+
+# The original Java functions in this file use Math.sin(), but Scylla's Lua
+# has no math library. The function's value isn't important for these tests,
+# so we use a simpler function in both languages.
+def sin(x):
+    return x * 2
+
+def testJavaFunction(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
+        if is_scylla(cql):
+            functionBody = ("\n" +
+                            "  -- parameter val is a Lua number\n" +
+                            "  --[[ return type is a Lua number ]]\n" +
+                            "  if val == nil then\n" +
+                            "    return nil\n" +
+                            "  end\n" +
+                            "  return val * 2\n")
+        else:
+            functionBody = ("\n" +
+                            "  // parameter val is of type java.lang.Double\n" +
+                            "  /* return type is of type java.lang.Double */\n" +
+                            "  if (val == null) {\n" +
+                            "    return null;\n" +
+                            "  }\n" +
+                            "  return val * 2;\n")
+
+        fName = createFunction(cql, KEYSPACE,
+                               "CREATE OR REPLACE FUNCTION %s(val double) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS double " +
+                               "LANGUAGE " + language(cql) + " " +
+                               "AS '" + functionBody + "';")
+
+        assert_rows(execute(cql, table, "SELECT language, body FROM system_schema.functions WHERE keyspace_name=? AND function_name=?",
+                            KEYSPACE, shortFunctionName(fName)),
+                    row(language(cql), functionBody))
+
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3.0)
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 1.0, sin(1.0)),
+                    row(2, 2.0, sin(2.0)),
+                    row(3, 3.0, sin(3.0)))
+
+def testJavaFunctionCounter(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_table(cql, test_keyspace, "(key int primary key, val counter)") as table:
+        fName = createFunction(cql, KEYSPACE,
+                               "CREATE OR REPLACE FUNCTION %s(val counter) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS bigint " +
+                               java_or_lua(cql, "return val + 1;", "return val + 1") + ";")
+
+        execute(cql, table, "UPDATE %s SET val = val + 1 WHERE key = 1")
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 1, 2))
+        execute(cql, table, "UPDATE %s SET val = val + 1 WHERE key = 1")
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 2, 3))
+        execute(cql, table, "UPDATE %s SET val = val + 2 WHERE key = 1")
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 4, 5))
+        execute(cql, table, "UPDATE %s SET val = val - 2 WHERE key = 1")
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 2, 3))
+
+def testJavaKeyspaceFunction(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
+        if is_scylla(cql):
+            functionBody = ("\n" +
+                            "  -- parameter val is a Lua number\n" +
+                            "  --[[ return type is a Lua number ]]\n" +
+                            "  if val == nil then\n" +
+                            "    return nil\n" +
+                            "  end\n" +
+                            "  return val * 2\n")
+        else:
+            functionBody = ("\n" +
+                            "  // parameter val is of type java.lang.Double\n" +
+                            "  /* return type is of type java.lang.Double */\n" +
+                            "  if (val == null) {\n" +
+                            "    return null;\n" +
+                            "  }\n" +
+                            "  return val * 2;\n")
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE OR REPLACE FUNCTION %s(val double) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS double " +
+                               "LANGUAGE " + language(cql) + " " +
+                               "AS '" + functionBody + "';")
+
+        assert_rows(execute(cql, table, "SELECT language, body FROM system_schema.functions WHERE keyspace_name=? AND function_name=?",
+                            KEYSPACE_PER_TEST, shortFunctionName(fName)),
+                    row(language(cql), functionBody))
+
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3.0)
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 1.0, sin(1.0)),
+                    row(2, 2.0, sin(2.0)),
+                    row(3, 3.0, sin(3.0)))
