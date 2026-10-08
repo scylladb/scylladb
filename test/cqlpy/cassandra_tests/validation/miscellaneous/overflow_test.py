@@ -59,3 +59,11 @@ def testIdentifiers(cql, test_keyspace):
 
         table_name = unique_name()
         assert_invalid_throw(cql, table, SyntaxException, f"CREATE TABLE {test_keyspace}.{table_name} (select int PRIMARY KEY, column int)")
+
+# Migrated from cql_tests.py:TestCQL.unescaped_string_test()
+def testUnescapedString(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "( k text PRIMARY KEY, c text, )") as table:
+        #The \ in this query string is not forwarded to cassandra.
+        #The ' is being escaped in python, but only ' is forwarded
+        #over the wire instead of \'.
+        assert_invalid_throw(cql, table, SyntaxException, "INSERT INTO %s (k, c) VALUES ('foo', 'CQL is cassandra\'s best friend')")
