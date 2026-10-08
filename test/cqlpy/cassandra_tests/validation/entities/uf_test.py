@@ -503,6 +503,29 @@ def testFunctionInSystemKS(cql, test_keyspace):
     finally:
         execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS " + KEYSPACE + ".to_timestamp")
 
+# Reproduces SCYLLADB-5170 (CREATE FUNCTION in a non-existent keyspace fails
+# with a server error)
+@pytest.mark.xfail(reason="SCYLLADB-5170")
+def testFunctionNonExistingKeyspace(cql):
+    assert_invalid_message(cql, "", "Keyspace 'this_ks_does_not_exist' doesn't exist",
+                           "CREATE OR REPLACE FUNCTION this_ks_does_not_exist.jnft(val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return null;", "return nil") + ";")
+
+# Reproduces SCYLLADB-5170 (CREATE FUNCTION in a non-existent keyspace fails
+# with a server error)
+@pytest.mark.xfail(reason="SCYLLADB-5170")
+def testFunctionAfterOnDropKeyspace(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        pass
+
+    assert_invalid_message(cql, "", "Keyspace '" + KEYSPACE_PER_TEST + "' doesn't exist",
+                           "CREATE OR REPLACE FUNCTION " + KEYSPACE_PER_TEST + ".jnft(val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return null;", "return nil") + ";")
+
 def testWrongKeyspace(cql, test_keyspace):
     KEYSPACE = test_keyspace
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_type(cql, KEYSPACE, "(txt text, i int)") as type:
