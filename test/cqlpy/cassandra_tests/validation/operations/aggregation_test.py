@@ -11,6 +11,8 @@
 
 from ...porting import *
 from decimal import Decimal
+from cassandra.protocol import ResultMessage
+from ....util import new_cql
 import datetime
 
 # Scylla's error messages for dropping a non-existent aggregate are
@@ -483,3 +485,198 @@ def testNestedFunctions(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT max(" + copySign + "(c, d)) FROM %s"), row(1.4))
             assert_rows(execute(cql, table, "SELECT " + copySign + "(c, max(c)) FROM %s"), row(1.2))
             assert_rows(execute(cql, table, "SELECT " + copySign + "(max(c), c) FROM %s"), row(-1.4))
+
+# The following tests create user-defined functions and aggregates. To make
+# cleanup easy - even when a test drops some of them itself - each such test
+# creates them in a new keyspace of its own, using the following helpers
+# which are similar to those of Cassandra's CQLTester: The "%s" in the
+# given statement is replaced by a new unique name in the given keyspace,
+# and that full name is returned.
+REPLICATION = "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+
+def createFunction(cql, keyspace, query):
+    name = keyspace + "." + unique_name()
+    cql.execute(query.replace("%s", name, 1))
+    return name
+
+def createFunctionOverload(cql, name, query):
+    cql.execute(query.replace("%s", name, 1))
+
+def createAggregate(cql, keyspace, query):
+    return createFunction(cql, keyspace, query)
+
+def shortFunctionName(name):
+    return name.split(".")[1]
+
+# In several cases, Scylla's error messages are different from Cassandra's,
+# so the tests below accept either:
+MULTIPLE_FUNCTIONS_MESSAGE = "matches multiple function definitions|There are multiple functions named"
+FUNCTION_DOESNT_EXIST_MESSAGE = "doesn't exist|not found"
+STILL_REFERENCED_MESSAGE = "still referenced by|as it is used by user-defined aggregate"
+NOT_AN_AGGREGATE_MESSAGE = "doesn't exist|is not a user defined aggregate"
+NOT_A_FUNCTION_MESSAGE = "doesn't exist|is not a user defined function"
+NOT_A_SCALAR_FUNCTION_MESSAGE = "isn't a scalar function|not found"
+WRONG_STATE_TYPE_MESSAGE = re.escape("return type must be the same as the first argument type - check STYPE, argument and return types") + "|doesn't return state"
+
+# Java bodies of some functions used in several tests below, and the
+# equivalent Lua bodies we use on Scylla.
+SUM_STATE_JAVA = "return Integer.valueOf((a!=null?a.intValue():0) + b.intValue());"
+SUM_STATE_LUA = "if a == nil then a = 0 end return a + b"
+TO_STRING_JAVA = "return a.toString();"
+TO_STRING_LUA = "return tostring(a)"
+
+# The Java test's assertSchemaChange() checks the SCHEMA_CHANGE result of a
+# schema-changing statement. The Python driver doesn't expose this result,
+# so we use a new session whose protocol handler records it. This is the same
+# as uf_test.py's assertSchemaChange(), but also supports aggregates.
+def assertSchemaChange(cql, query, change, target, keyspace, name, *argTypes):
+    with new_cql(cql) as session:
+        events = []
+        class recording_handler(session.client_protocol_handler):
+            @classmethod
+            def decode_message(cls, *args, **kwargs):
+                msg = super().decode_message(*args, **kwargs)
+                if isinstance(msg, ResultMessage) and msg.schema_change_event:
+                    events.append(msg.schema_change_event)
+                return msg
+        session.client_protocol_handler = recording_handler
+        session.execute(query)
+    assert len(events) == 1
+    event = events[0]
+    assert event['change_type'] == change
+    assert event['target_type'] == target
+    assert event['keyspace'] == keyspace
+    function = event[target.lower()]
+    assert function.name == name
+    # Scylla reports a tuple nested in a collection as frozen<tuple<...>>,
+    # while Cassandra omits the (implied) frozen<>.
+    assert [re.sub(r'<frozen<(tuple<[^<>]*>)>', r'<\1', t) for t in function.argument_types] == list(argTypes)
+
+# Reproduces SCYLLADB-5168 (CREATE OR REPLACE AGGREGATE of an existing
+# aggregate reports CREATED instead of UPDATED)
+@pytest.mark.xfail(reason="SCYLLADB-5168")
+def testSchemaChange(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        f = createFunction(cql, KEYSPACE,
+                           "CREATE OR REPLACE FUNCTION %s(state double, val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return state;", "return state"))
+
+        createFunctionOverload(cql, f,
+                               "CREATE OR REPLACE FUNCTION %s(state int, val int) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS int " +
+                               java_or_lua(cql, "return state;", "return state"))
+
+        a = KEYSPACE + "." + unique_name()
+        aggregateName = shortFunctionName(a)
+
+        assertSchemaChange(cql, "CREATE OR REPLACE AGGREGATE " + a + "(double) " +
+                           "SFUNC " + shortFunctionName(f) + " " +
+                           "STYPE double " +
+                           "INITCOND 0",
+                           "CREATED", "AGGREGATE",
+                           KEYSPACE, aggregateName,
+                           "double")
+
+        assertSchemaChange(cql, "CREATE OR REPLACE AGGREGATE " + a + "(double) " +
+                           "SFUNC " + shortFunctionName(f) + " " +
+                           "STYPE double " +
+                           "INITCOND 1",
+                           "UPDATED", "AGGREGATE",
+                           KEYSPACE, aggregateName,
+                           "double")
+
+        assertSchemaChange(cql, "CREATE OR REPLACE AGGREGATE " + a + "(int) " +
+                           "SFUNC " + shortFunctionName(f) + " " +
+                           "STYPE int " +
+                           "INITCOND 0",
+                           "CREATED", "AGGREGATE",
+                           KEYSPACE, aggregateName,
+                           "int")
+
+        assertSchemaChange(cql, "DROP AGGREGATE " + a + "(double)",
+                           "DROPPED", "AGGREGATE",
+                           KEYSPACE, aggregateName,
+                           "double")
+
+        # The aggregate with nested tuple should be created without throwing InvalidRequestException. See CASSANDRA-15857
+        f1 = createFunction(cql, KEYSPACE,
+                            "CREATE OR REPLACE FUNCTION %s(state double, val list<tuple<int, int>>) " +
+                            "RETURNS NULL ON NULL INPUT " +
+                            "RETURNS double " +
+                            java_or_lua(cql, "return state;", "return state"))
+
+        a1 = KEYSPACE + "." + unique_name()
+
+        assertSchemaChange(cql, "CREATE OR REPLACE AGGREGATE " + a1 + "(list<tuple<int, int>>) " +
+                           "SFUNC " + shortFunctionName(f1) + " " +
+                           "STYPE double " +
+                           "INITCOND 0",
+                           "CREATED", "AGGREGATE",
+                           KEYSPACE, shortFunctionName(a1),
+                           "list<tuple<int, int>>")
+
+def testDropStatements(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        f = createFunction(cql, ks,
+                           "CREATE OR REPLACE FUNCTION %s(state double, val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return state;", "return state"))
+
+        createFunctionOverload(cql, f,
+                               "CREATE OR REPLACE FUNCTION %s(state int, val int) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS int " +
+                               java_or_lua(cql, " return state;", "return state"))
+
+        # DROP AGGREGATE must not succeed against a scalar
+        assert_invalid_message_re(cql, ks, MULTIPLE_FUNCTIONS_MESSAGE, "DROP AGGREGATE " + f)
+        assert_invalid_message_re(cql, ks, NOT_AN_AGGREGATE_MESSAGE, "DROP AGGREGATE " + f + "(double, double)")
+
+        a = createAggregate(cql, ks,
+                            "CREATE OR REPLACE AGGREGATE %s(double) " +
+                            "SFUNC " + shortFunctionName(f) + " " +
+                            "STYPE double " +
+                            "INITCOND 0")
+        createFunctionOverload(cql, a,
+                               "CREATE OR REPLACE AGGREGATE %s(int) " +
+                               "SFUNC " + shortFunctionName(f) + " " +
+                               "STYPE int " +
+                               "INITCOND 0")
+
+        # DROP FUNCTION must not succeed against an aggregate
+        assert_invalid_message_re(cql, ks, MULTIPLE_FUNCTIONS_MESSAGE, "DROP FUNCTION " + a)
+        assert_invalid_message_re(cql, ks, NOT_A_FUNCTION_MESSAGE, "DROP FUNCTION " + a + "(double)")
+
+        # ambigious
+        assert_invalid_message_re(cql, ks, MULTIPLE_FUNCTIONS_MESSAGE, "DROP AGGREGATE " + a)
+        assert_invalid_message_re(cql, ks, MULTIPLE_FUNCTIONS_MESSAGE, "DROP AGGREGATE IF EXISTS " + a)
+
+        execute(cql, ks, "DROP AGGREGATE IF EXISTS " + ks + ".non_existing")
+        execute(cql, ks, "DROP AGGREGATE IF EXISTS " + a + "(int, text)")
+
+        execute(cql, ks, "DROP AGGREGATE " + a + "(double)")
+
+        execute(cql, ks, "DROP AGGREGATE IF EXISTS " + a + "(double)")
+
+def testDropReferenced(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        f = createFunction(cql, ks,
+                           "CREATE OR REPLACE FUNCTION %s(state double, val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, " return state;", "return state"))
+
+        a = createAggregate(cql, ks,
+                            "CREATE OR REPLACE AGGREGATE %s(double) " +
+                            "SFUNC " + shortFunctionName(f) + " " +
+                            "STYPE double " +
+                            "INITCOND 0")
+
+        # DROP FUNCTION must not succeed because the function is still referenced by the aggregate
+        assert_invalid_message_re(cql, ks, STILL_REFERENCED_MESSAGE, "DROP FUNCTION " + f)
+
+        execute(cql, ks, "DROP AGGREGATE " + a + "(double)")
