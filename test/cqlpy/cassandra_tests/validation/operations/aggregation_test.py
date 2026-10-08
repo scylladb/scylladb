@@ -818,6 +818,124 @@ def testJavaAggregateComplex(cql):
 # The test testFunctionDropPreparedStatement was not translated, because it
 # checks Cassandra's internal cache of prepared statements.
 
+# Reproduces SCYLLADB-5158 (CREATE AGGREGATE should reject a RETURNS NULL ON
+# NULL INPUT state function without INITCOND) and #24344 (such a state
+# function called with null should leave the state unchanged).
+@pytest.mark.xfail(reason="SCYLLADB-5158, #24344")
+def testCalledOnNullInput(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fStateNonNull = createFunction(cql, ks,
+                                       "CREATE OR REPLACE FUNCTION %s(state int, val int) " +
+                                       "RETURNS NULL ON NULL INPUT " +
+                                       "RETURNS int " +
+                                       java_or_lua(cql, "return Integer.valueOf(state + val);", "return state + val"))
+        fStateNull = createFunction(cql, ks,
+                                    "CREATE OR REPLACE FUNCTION %s(state int, val int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS int " +
+                                    java_or_lua(cql, "return Integer.valueOf(" +
+                                                "   (state != null ? state.intValue() : 0) " +
+                                                "   + (val != null ? val.intValue() : 0));",
+                                                "if state == nil then state = 0 end if val == nil then val = 0 end return state + val"))
+        fStateAlwaysNull = createFunction(cql, ks,
+                                    "CREATE OR REPLACE FUNCTION %s(state int, val int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS int " +
+                                    java_or_lua(cql, "return null;", "return nil"))
+        fFinalNonNull = createFunction(cql, ks,
+                                       "CREATE OR REPLACE FUNCTION %s(state int) " +
+                                       "RETURNS NULL ON NULL INPUT " +
+                                       "RETURNS int " +
+                                       java_or_lua(cql, "return Integer.valueOf(state);", "return state"))
+        fFinalNull = createFunction(cql, ks,
+                                    "CREATE OR REPLACE FUNCTION %s(state int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS int " +
+                                    java_or_lua(cql, "return state;", "return state"))
+
+        assert_invalid(cql, ks, "CREATE AGGREGATE " + ks + ".invAggr(int) " +
+                      "SFUNC " + shortFunctionName(fStateNonNull) + " " +
+                      "STYPE int")
+        assert_invalid(cql, ks, "CREATE AGGREGATE " + ks + ".invAggr(int) " +
+                      "SFUNC " + shortFunctionName(fStateNonNull) + " " +
+                      "STYPE int " +
+                      "FINALFUNC " + shortFunctionName(fFinalNonNull))
+
+        aStateNull = createAggregate(cql, ks,
+                                     "CREATE AGGREGATE %s(int) " +
+                                     "SFUNC " + shortFunctionName(fStateNull) + " " +
+                                     "STYPE int")
+        aStateNullFinalNull = createAggregate(cql, ks,
+                                              "CREATE AGGREGATE %s(int) " +
+                                              "SFUNC " + shortFunctionName(fStateNull) + " " +
+                                              "STYPE int " +
+                                              "FINALFUNC " + shortFunctionName(fFinalNull))
+        aStateNullFinalNonNull = createAggregate(cql, ks,
+                                                 "CREATE AGGREGATE %s(int) " +
+                                                 "SFUNC " + shortFunctionName(fStateNull) + " " +
+                                                 "STYPE int " +
+                                                 "FINALFUNC " + shortFunctionName(fFinalNonNull))
+        aStateNonNull = createAggregate(cql, ks,
+                                        "CREATE AGGREGATE %s(int) " +
+                                        "SFUNC " + shortFunctionName(fStateNonNull) + " " +
+                                        "STYPE int " +
+                                        "INITCOND 0")
+        aStateNonNullFinalNull = createAggregate(cql, ks,
+                                                 "CREATE AGGREGATE %s(int) " +
+                                                 "SFUNC " + shortFunctionName(fStateNonNull) + " " +
+                                                 "STYPE int " +
+                                                 "FINALFUNC " + shortFunctionName(fFinalNull) + " " +
+                                                 "INITCOND 0")
+        aStateNonNullFinalNonNull = createAggregate(cql, ks,
+                                                    "CREATE AGGREGATE %s(int) " +
+                                                    "SFUNC " + shortFunctionName(fStateNonNull) + " " +
+                                                    "STYPE int " +
+                                                    "FINALFUNC " + shortFunctionName(fFinalNonNull) + " " +
+                                                    "INITCOND 0")
+        aStateAlwaysNullFinalNull = createAggregate(cql, ks,
+                                                    "CREATE AGGREGATE %s(int) " +
+                                                    "SFUNC " + shortFunctionName(fStateAlwaysNull) + " " +
+                                                    "STYPE int " +
+                                                    "FINALFUNC " + shortFunctionName(fFinalNull))
+        aStateAlwaysNullFinalNonNull = createAggregate(cql, ks,
+                                                       "CREATE AGGREGATE %s(int) " +
+                                                       "SFUNC " + shortFunctionName(fStateAlwaysNull) + " " +
+                                                       "STYPE int " +
+                                                       "FINALFUNC " + shortFunctionName(fFinalNonNull))
+
+        with create_table(cql, ks, "(key int PRIMARY KEY, i int)") as table:
+            execute(cql, table, "INSERT INTO %s (key, i) VALUES (0, null)")
+            execute(cql, table, "INSERT INTO %s (key, i) VALUES (1, 1)")
+            execute(cql, table, "INSERT INTO %s (key, i) VALUES (2, 2)")
+            execute(cql, table, "INSERT INTO %s (key, i) VALUES (3, 3)")
+
+            assert_rows(execute(cql, table, "SELECT " + aStateNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNonNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNonNull + "(i) FROM %s WHERE key = 0"), row(0))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNull + "(i) FROM %s WHERE key = 0"), row(None))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNonNull + "(i) FROM %s WHERE key = 0"), row(None))
+
+            assert_rows(execute(cql, table, "SELECT " + aStateNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNonNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNonNull + "(i) FROM %s WHERE key = 1"), row(1))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNull + "(i) FROM %s WHERE key = 1"), row(None))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNonNull + "(i) FROM %s WHERE key = 1"), row(None))
+
+            assert_rows(execute(cql, table, "SELECT " + aStateNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateNullFinalNonNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateNonNullFinalNonNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(6))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(None))
+            assert_rows(execute(cql, table, "SELECT " + aStateAlwaysNullFinalNonNull + "(i) FROM %s WHERE key IN (1, 2, 3)"), row(None))
+
 def testWrongStateType(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(key int primary key, val int)") as table:
         execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1)
