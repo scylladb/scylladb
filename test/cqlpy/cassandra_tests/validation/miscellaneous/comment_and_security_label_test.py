@@ -447,3 +447,22 @@ def testEmptyStringRejection(cql, new_to_cassandra_6):
         assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("COLUMN", columnRef, ""))
         assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("TYPE", typeRef, ""))
         assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("FIELD", fieldRef, ""))
+
+def testCommentAndSecurityLabelNotAllowedInCreateKeyspace(cql, new_to_cassandra_6):
+    # Test that comment property is rejected in CREATE KEYSPACE WITH clause
+    createKsWithComment = f"CREATE KEYSPACE {unique_name()} WITH {REPLICATION} AND comment = 'test comment'"
+    assert_invalid_throw_message(cql, "", "Unknown property 'comment'", SyntaxException, createKsWithComment)
+
+    # Test that security_label property is rejected in CREATE KEYSPACE WITH clause
+    createKsWithLabel = f"CREATE KEYSPACE {unique_name()} WITH {REPLICATION} AND security_label = 'TEST_LABEL'"
+    assert_invalid_throw_message(cql, "", "Unknown property 'security_label'", SyntaxException, createKsWithLabel)
+
+def testCommentAndSecurityLabelNotAllowedInAlterKeyspace(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        # Test that comment property is rejected in ALTER KEYSPACE WITH clause
+        alterKsWithComment = f"ALTER KEYSPACE {ks} WITH comment = 'test comment'"
+        assert_invalid_throw_message(cql, ks, "Unknown property 'comment'", SyntaxException, alterKsWithComment)
+
+        # Test that security_label property is rejected in ALTER KEYSPACE WITH clause
+        alterKsWithLabel = f"ALTER KEYSPACE {ks} WITH security_label = 'TEST_LABEL'"
+        assert_invalid_throw_message(cql, ks, "Unknown property 'security_label'", SyntaxException, alterKsWithLabel)
