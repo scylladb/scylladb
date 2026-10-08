@@ -135,3 +135,67 @@ def testCountStarFunction(cql, test_keyspace):
         # Makes sure that LIMIT does not affect the result of aggregates
         assert_rows(execute(cql, table, "SELECT max(b), COUNT(1), b FROM %s LIMIT 2"), row(5, 4, 1))
         assert_rows(execute(cql, table, "SELECT max(b), COUNT(1), b FROM %s WHERE a = 1 LIMIT 2"), row(5, 4, 1))
+
+def testMaxAggregationDescending(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, primary key (a, b)) WITH CLUSTERING ORDER BY (b DESC)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max FROM %s WHERE a = 1"),
+                   row(3, 1000))
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 4000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, 0)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max FROM %s"),
+                   row(6, 4000))
+
+def testMinAggregationDescending(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, primary key (a, b)) WITH CLUSTERING ORDER BY (b DESC)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), min(b) as min FROM %s WHERE a = 1"),
+                   row(3, 1))
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 4000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, 0)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), min(b) as min FROM %s"),
+                   row(6, 0))
+
+def testMaxAggregationAscending(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, primary key (a, b)) WITH CLUSTERING ORDER BY (b ASC)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max FROM %s WHERE a = 1"),
+                   row(3, 1000))
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 4000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, 5)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max FROM %s"),
+                   row(6, 4000))
+
+def testMinAggregationAscending(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, primary key (a, b)) WITH CLUSTERING ORDER BY (b ASC)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), min(b) as min FROM %s WHERE a = 1"),
+                   row(3, 1))
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 4000)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 100)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, 0)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), min(b) as min FROM %s"),
+                   row(6, 0))
