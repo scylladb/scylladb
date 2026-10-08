@@ -283,6 +283,9 @@ def test_ttl_map_element_null_subscript(cql, table1, cassandra_bug):
 # of an entire unfrozen map, but returns an array of timestamps, where you
 # can't even tell which timestamp belongs to which element. So we'll mark
 # this test cassandra_bug - see CASSANDRA-21240.
+# SCYLLADB-5166 documents this deliberate difference from Cassandra.
+# Cassandra's own tests for this feature are translated (and marked xfail)
+# in cassandra_tests/validation/entities/writetime_or_ttl_test.py.
 def test_writetime_ttl_whole_collection_forbidden(cql, table1, cassandra_bug):
     p = unique_key_int()
     timestamp = int(time.time() * 1000000) - 1234 # a reasonable timestamp
