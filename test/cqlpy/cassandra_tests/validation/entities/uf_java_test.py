@@ -218,3 +218,33 @@ def testJavaRuntimeException(cql, test_keyspace):
         # doesn't mention java.lang.RuntimeException.)
         assert_invalid_throw_message_re(cql, table, "java.lang.RuntimeException: oh no|oh no!", FunctionFailure,
                                         "SELECT key, val, " + fName + "(val) FROM %s")
+
+def testJavaDollarQuotedFunction(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        if is_scylla(cql):
+            functionBody = ("\n" +
+                            "  -- parameter val is a Lua number\n" +
+                            "  --[[ return type is a Lua string ]]\n" +
+                            "  if input == nil then\n" +
+                            "    return nil\n" +
+                            "  end\n" +
+                            "  return \"'\"..tostring(input * 2)..'\\''\n")
+        else:
+            functionBody = ("\n" +
+                            "  // parameter val is of type java.lang.Double\n" +
+                            "  /* return type is of type java.lang.Double */\n" +
+                            "  if (input == null) {\n" +
+                            "    return null;\n" +
+                            "  }\n" +
+                            "  return \"'\"+(input * 2)+'\\'';\n")
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE FUNCTION %s( input double ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS text " +
+                               "LANGUAGE " + language(cql) + "\n" +
+                               "AS $$" + functionBody + "$$;")
+
+        assert_rows(execute(cql, KEYSPACE_PER_TEST, "SELECT language, body FROM system_schema.functions WHERE keyspace_name=? AND function_name=?",
+                            KEYSPACE_PER_TEST, shortFunctionName(fName)),
+                    row(language(cql), functionBody))
