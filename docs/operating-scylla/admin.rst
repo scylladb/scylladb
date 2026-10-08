@@ -237,12 +237,19 @@ Tuning options
      - empty
      - The list of endpoints described above. Live-updateable: endpoints can be
        added without restarting the node.
-   * - ``object_storage_connections_per_shard``
-     - 128
-     - Maximum number of connections per shard for **S3** endpoints, distributed
-       across scheduling groups in proportion to their shares so that compaction
-       and streaming traffic does not starve user reads. Live-updateable. The
-       GCS backend ignores this option.
+   * - ``object_storage_connections``
+     - empty
+     - Maximum number of connections per shard for **S3** endpoints, per connection
+       pool, as a map from the pool name to a positive count. A scheduling group uses
+       the pool named after it, except that every service-level group uses
+       ``service_levels`` and a group with no pool of its own uses ``general``; the
+       node then logs a warning naming that group and counts it in
+       ``scylla_s3_unclassified_groups``. Entries override the built-in values:
+       ``service_levels: 128``, ``main: 8``, ``memtable: 16``,
+       ``memtable_to_cache: 8``, ``compaction: 16``, ``maintenance_compaction: 16``,
+       ``streaming: 64``, ``backup: 32``, ``maintenance: 16``, ``general: 16``.
+       Live-updateable; removing an entry keeps the cap of a pool that already
+       exists. The GCS backend ignores this option.
 
 .. _admin-oci-object-storage:
 
