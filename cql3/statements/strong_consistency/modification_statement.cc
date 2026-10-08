@@ -70,7 +70,8 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         token,
         [&](api::timestamp_type ts) {
             return get_mutation(options, ts, json_cache, keys);
-        }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));
+        }, timeout, qs.get_client_state().get_abort_source(),
+        tablet_version_block_for(qs, options, _statement->_may_use_token_aware_routing));
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
