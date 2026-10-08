@@ -10,8 +10,6 @@
 
 from .porting import *
 from cassandra.concurrent import execute_concurrent_with_args
-import random
-import string
 
 # The tests testTombstoneBoundariesInIndexCached and
 # testTombstoneBoundariesInIndexNotCached were not translated, because they
@@ -92,13 +90,3 @@ def verifyExpectedActiveTombstoneRows(cql, table, ROWS, text, minDeleted1, minDe
             v1Expected = text if i < minDeleted1 or i >= maxDeleted2 else None
             v2Expected = text if i < minDeleted2 or i >= maxDeleted2 else None
             assert_rows(result, row(v1Expected, v2Expected, text))
-
-def makeRandomString(length):
-    # Note that the original Java function only sets every second character
-    # (the rest are null characters), probably by mistake. We do the same.
-    chars = ['\0'] * length
-    i = 0
-    while i < length:
-        chars[i] = random.choice(string.ascii_lowercase)
-        i += 2
-    return ''.join(chars)
