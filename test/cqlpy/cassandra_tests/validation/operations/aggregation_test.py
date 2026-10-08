@@ -1422,3 +1422,72 @@ def testFunctionWithFrozenUDFType(cql):
 
             assert_invalid_message_re(cql, table, re.escape(f"Argument 'frozen<{myType}>' cannot be frozen; remove frozen<> modifier from 'frozen<{myType}>'") + "|" + FROZEN_UDT_MESSAGE,
                                  "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<" + myType + ">);")
+
+# The Java function concatenates strings with "+", which converts a null
+# argument to the string "null". The equivalent Lua function needs to do
+# this explicitly.
+CONCAT_JAVA = "return a + \"x\" + b + \"y\";"
+CONCAT_LUA = "if a == nil then a = \"null\" end if b == nil then b = \"null\" end return a .. \"x\" .. b .. \"y\""
+FIN_JAVA = "return \"fin\" + a;"
+FIN_LUA = "return \"fin\" .. a"
+
+# Reproduces #24344 (null input to a RETURNS NULL ON NULL INPUT state function)
+@pytest.mark.xfail(reason="#24344")
+def testEmptyValues(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        with create_table(cql, ks, "(a int primary key, b text)") as table:
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, '')")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, '')")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, '')")
+
+            fCON = createFunction(cql, ks,
+                                  "CREATE FUNCTION %s(a text, b text) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, CONCAT_JAVA, CONCAT_LUA))
+
+            fCONf = createFunction(cql, ks,
+                                   "CREATE FUNCTION %s(a text) " +
+                                   "CALLED ON NULL INPUT " +
+                                   "RETURNS text " +
+                                   java_or_lua(cql, FIN_JAVA, FIN_LUA))
+
+            aCON = createAggregate(cql, ks,
+                                   "CREATE AGGREGATE %s(text) " +
+                                   "SFUNC " + shortFunctionName(fCON) + ' ' +
+                                   "STYPE text " +
+                                   "FINALFUNC " + shortFunctionName(fCONf) + ' ' +
+                                   "INITCOND ''")
+
+            assert_rows(execute(cql, table, "SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(aCON)),
+                       row("''"))
+
+            fRNON = createFunction(cql, ks,
+                                   "CREATE FUNCTION %s(a text, b text) " +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS text " +
+                                   java_or_lua(cql, CONCAT_JAVA, CONCAT_LUA))
+
+            fRNONf = createFunction(cql, ks,
+                                    "CREATE FUNCTION %s(a text) " +
+                                    "RETURNS NULL ON NULL INPUT " +
+                                    "RETURNS text " +
+                                    java_or_lua(cql, FIN_JAVA, FIN_LUA))
+
+            aRNON = createAggregate(cql, ks,
+                                    "CREATE AGGREGATE %s(text) " +
+                                    "SFUNC " + shortFunctionName(fRNON) + ' ' +
+                                    "STYPE text " +
+                                    "FINALFUNC " + shortFunctionName(fRNONf) + ' ' +
+                                    "INITCOND ''")
+
+            assert_rows(execute(cql, table, "SELECT " + aCON + "(b) FROM %s"), row("finxyxyxy"))
+            assert_rows(execute(cql, table, "SELECT " + aRNON + "(b) FROM %s"), row("finxyxyxy"))
+
+        with create_table(cql, ks, "(a int primary key, b text)") as table:
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, null)")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, null)")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, null)")
+
+            assert_rows(execute(cql, table, "SELECT " + aCON + "(b) FROM %s"), row("finxnullyxnullyxnully"))
+            assert_rows(execute(cql, table, "SELECT " + aRNON + "(b) FROM %s"), row("fin"))
