@@ -9,7 +9,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from ..util import cql_session
+from ..util import cql_session, new_cql
+from cassandra.cluster import ResponseFuture
+from cassandra.protocol import PrepareMessage
 
 REPLICATION = "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
 
@@ -66,3 +68,75 @@ def testBatchPreparedStatementsEmitWarnings(cql):
 
     assertWarningsOnPreparedStatements(cql, "BEGIN BATCH INSERT INTO %keyspace%.%s (id, v1, v2) VALUES (1,2,3) APPLY BATCH;", False, True, True)
     assertWarningsOnPreparedStatements(cql, "BEGIN BATCH INSERT INTO %keyspace%.%s (id, v1, v2) VALUES (1,2,3) APPLY BATCH;", False, True, False)
+
+# The Java test prepares the statement through Cassandra's internal API, with
+# a client state which may have a current keyspace, and captures the warnings
+# through an internal API. We prepare the statement in a new session (with
+# "USE" if a current keyspace is needed). The Python driver's
+# Session.prepare() doesn't return the warnings of the PREPARE response, so
+# prepareWithWarnings() sends the PREPARE request like Session.prepare() does,
+# and returns the warnings from the request's ResponseFuture.
+def prepareWithWarnings(session, query):
+    future = ResponseFuture(session, PrepareMessage(query=query), query=None, timeout=session.default_timeout)
+    future.send_request()
+    future.result()
+    return future.warnings or []
+
+def assertWarningsOnPreparedStatements(cql, query, expectWarn, forModificationOrSelectStatement, useUse):
+    with create_keyspace(cql, REPLICATION) as keyspace, create_table(cql, keyspace, "(id int, v1 int, v2 int, primary key (id))") as table, new_cql(cql) as session:
+        if useUse:
+            session.execute("USE " + keyspace)
+
+        maybeQueryWithKeyspace = query.replace("%keyspace%", keyspace)
+        queryWithTable = maybeQueryWithKeyspace.replace("%s", table.split(".")[1])
+
+        # two times is not a mistake, a warning is emitted just once
+        warnings = prepareWithWarnings(session, queryWithTable)
+        warnings += prepareWithWarnings(session, queryWithTable)
+
+        if expectWarn and forModificationOrSelectStatement:
+            assert len(warnings) == 1 and warnings[0].startswith("`USE <keyspace>` with prepared statements is considered to be an anti-pattern"), warnings
+        elif expectWarn:
+            assert len(warnings) == 1 and warnings[0].startswith("Prepared statements for other than modification and selection statements should be avoided,"), warnings
+        else:
+            assert warnings == []
+
+# The Java test uses protocol version 5, but nothing in it is specific to this
+# version. Scylla doesn't support version 5 (SCYLLADB-442), so to also check
+# Scylla we run the test with both versions 4 and 5. The Java test (in
+# Cassandra 6) also checks a prepared Accord transaction, which we don't.
+@pytest.mark.parametrize("version", [V4, V5])
+def testInvalidatePreparedStatementsOnDrop(cql, version):
+    KEYSPACE = unique_name()
+    createKsStatement = "CREATE KEYSPACE " + KEYSPACE + " WITH " + REPLICATION
+    dropKsStatement = "DROP KEYSPACE IF EXISTS " + KEYSPACE
+    with sessionNet(cql, version) as session:
+        session.execute(dropKsStatement)
+        session.execute(createKsStatement)
+        try:
+            createTableStatement = "CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".qp_cleanup (id int PRIMARY KEY, cid int, val text);"
+            dropTableStatement = "DROP TABLE IF EXISTS " + KEYSPACE + ".qp_cleanup;"
+
+            session.execute(createTableStatement)
+
+            insert = "INSERT INTO " + KEYSPACE + ".qp_cleanup (id, cid, val) VALUES (?, ?, ?)"
+            prepared = session.prepare(insert)
+            preparedBatch = session.prepare("BEGIN BATCH\n  " + insert + ";\nAPPLY BATCH")
+
+            session.execute(dropTableStatement)
+            session.execute(createTableStatement)
+
+            session.execute(prepared.bind((1, 1, "value")))
+            session.execute(preparedBatch.bind((2, 2, "value2")))
+
+            session.execute(dropKsStatement)
+            session.execute(createKsStatement)
+            session.execute(createTableStatement)
+
+            # The driver will get a response about the prepared statement being invalid, causing it to transparently
+            # re-prepare the statement.  We'll rely on the fact that we get no errors while executing this to show that
+            # the statements have been invalidated.
+            session.execute(prepared.bind((1, 1, "value")))
+            session.execute(preparedBatch.bind((2, 2, "value2")))
+        finally:
+            session.execute(dropKsStatement)
