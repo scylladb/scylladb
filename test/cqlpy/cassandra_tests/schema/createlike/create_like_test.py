@@ -544,3 +544,78 @@ def testColumnMaskTableCopy(cql, keyspaces):
                                      "fm frozen<map<int, int>> MASKED WITH DEFAULT)")
     targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
     assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE).
+@pytest.mark.xfail(reason="SCYLLADB-5147")
+def testUDTTableCopy(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    #normal udt
+    udt = createType(cql, sourceKs, "CREATE TYPE %s (a int, b uuid, c text)")
+    udtNew = createType(cql, sourceKs, "CREATE TYPE %s (a int, b text)")
+    #collection udt
+    udtSet = createType(cql, sourceKs, "CREATE TYPE %s (a int, c frozen <set<text>>)")
+    #frozen udt
+    udtFrozen = createType(cql, sourceKs, "CREATE TYPE %s (a int, c frozen<" + udt + ">)")
+    udtFrozenNotExist = createType(cql, sourceKs, "CREATE TYPE %s (a int, c frozen<" + udtNew + ">)")
+
+    # source table's column's data type is udt, and its subtypes are all native type
+    sourceTbUdt = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udt + ");")
+    # source table's column's data type is udt, and its subtypes are native type and collection type
+    sourceTbUdtSet = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtSet + ");")
+    # source table's column's data type is udt, and its subtypes are native type and udt
+    sourceTbUdtFrozen = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtFrozen + ");")
+    # source table's column's data type is udt, and its subtypes are native type and  more than one udt
+    sourceTbUdtComb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtFrozen + ", d " + udt + ");")
+    # source table's column's data type is udt, and its subtypes are native type and  more than one udt
+    sourceTbUdtCombNotExist = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtFrozen + ", d " + udtFrozenNotExist + ");")
+
+    if differentKs:
+        assert_invalid_throw_message(cql, "", "UDTs " + udt + " do not exist in target keyspace '" + targetKs + "'.",
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbudt LIKE " + sourceKs + "." + sourceTbUdt)
+        assert_invalid_throw_message(cql, "", "UDTs " + udtSet + " do not exist in target keyspace '" + targetKs + "'.",
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbdtset LIKE " + sourceKs + "." + sourceTbUdtSet)
+        assert_invalid_throw_message(cql, "", "UDTs %s do not exist in target keyspace '%s'." % (", ".join(sorted({udt, udtFrozen})), targetKs),
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbudtfrozen LIKE " + sourceKs + "." + sourceTbUdtFrozen)
+        assert_invalid_throw_message(cql, "", "UDTs %s do not exist in target keyspace '%s'." % (", ".join(sorted({udt, udtFrozen})), targetKs),
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbudtfrozen LIKE " + sourceKs + "." + sourceTbUdtFrozen)
+        assert_invalid_throw_message(cql, "", "UDTs %s do not exist in target keyspace '%s'." % (", ".join(sorted({udt, udtFrozen})), targetKs),
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbudtcomb LIKE " + sourceKs + "." + sourceTbUdtComb)
+        assert_invalid_throw_message(cql, "", "UDTs %s do not exist in target keyspace '%s'." % (", ".join(sorted({udtNew, udt, udtFrozenNotExist, udtFrozen})), targetKs),
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbudtcomb LIKE " + sourceKs + "." + sourceTbUdtCombNotExist)
+        # different keyspaces with udts that have same udt name, different fields
+        udtWithDifferentField = createType(cql, sourceKs, "CREATE TYPE %s (aa int, bb text)")
+        cql.execute("CREATE TYPE IF NOT EXISTS " + targetKs + "." + udtWithDifferentField + " (aa int, cc text)")
+        sourceTbDiffUdt = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtWithDifferentField + ");")
+        assert_invalid_throw_message(cql, "", "Target keyspace '" + targetKs + "' has same UDT name '" + udtWithDifferentField + "' as source keyspace '" + sourceKs + "' but with different structure.",
+                                  InvalidRequest,
+                                  "CREATE TABLE " + targetKs + ".tbdiffudt LIKE " + sourceKs + "." + sourceTbDiffUdt)
+    else:
+        # copy table that have udt, and udt's subtype are all native type, target table will create this udt
+        targetTbUdt = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbUdt, sourceKs, targetKs, "tbudt")
+        # copy table that have udt, and udt's subtype are all native type and collection typ, target table will create this udt
+        targetTbUdtSet = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbUdtSet, sourceKs, targetKs, "tbdtset")
+        # copy table that have udt, and udt's subtype are all native type and udt, target table will create udt in order
+        targetTbUdtFrozen = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbUdtFrozen, sourceKs, targetKs, "tbudtfrozen")
+        # copy table that have udt, and udt's subtype are all native type and more than one udt, target table will create udt in order
+        targetTbUdtComb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbUdtComb, sourceKs, targetKs, "tbudtcomb")
+        # copy table that have udt, and udt's subtype are all native type and udt, target table will create udt in order
+        targetTbUdtCombNotExist = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbUdtCombNotExist, sourceKs, targetKs, "tbudtcombnotexist")
+
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbUdt, targetTbUdt)
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbUdtSet, targetTbUdtSet)
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbUdtFrozen, targetTbUdtFrozen)
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbUdtComb, targetTbUdtComb)
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbUdtCombNotExist, targetTbUdtCombNotExist)
+
+        # same udt already exist in target ks, the existed udt will be used
+        udtWithSameField = createType(cql, sourceKs, "CREATE TYPE %s (a int, b text)")
+        cql.execute("CREATE TYPE IF NOT EXISTS " + targetKs + "." + udtWithSameField + " (a int, b text)")
+        sourceTbSameUdt = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtWithSameField + ");")
+        targetTbSameUdt = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbSameUdt, sourceKs, targetKs, "tbsameudt")
+        assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbSameUdt, targetTbSameUdt)
