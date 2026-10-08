@@ -70,3 +70,17 @@ def testJavaFunctionNoParameters(cql, test_keyspace):
 # The tests testJavaFunctionInvalidBodies and testJavaFunctionInvalidReturn
 # were not translated, because they check errors from compiling the Java
 # function body.
+
+def testJavaFunctionArgumentTypeMismatch(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_table(cql, test_keyspace, "(key int primary key, val bigint)") as table:
+        fName = createFunction(cql, KEYSPACE,
+                               "CREATE OR REPLACE FUNCTION %s(val double)" +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql, "return Double.valueOf(val);", "return val") + ";")
+
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3)
+        assert_invalid_message(cql, table, "val cannot be passed as argument 0 of function",
+                               "SELECT key, val, " + fName + "(val) FROM %s")
