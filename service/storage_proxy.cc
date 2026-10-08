@@ -7423,6 +7423,14 @@ future<> storage_proxy::drain_hints_for_left_nodes() {
     return _hints_resource_manager.drain_hints_for_left_nodes();
 }
 
+future<> storage_proxy::drain_all_hints() {
+    const auto my_id = get_token_metadata_ptr()->get_my_id();
+    auto drain = [my_id] (db::hints::manager& m) {
+        return m.replay_allowed() ? m.drain_for(my_id) : make_ready_future<>();
+    };
+    co_await when_all_succeed(drain(_hints_manager), drain(_hints_for_views_manager)).discard_result();
+}
+
 future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
     if (new_filter == _hints_manager.get_host_filter()) {
         co_return;

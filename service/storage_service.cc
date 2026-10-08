@@ -2780,6 +2780,12 @@ future<> storage_service::raft_decommission() {
     }
 }
 
+future<> storage_service::drain_hints_before_leaving() {
+    slogger.info("DECOMMISSIONING: draining hints");
+    co_await _qp.proxy().container().invoke_on_all(&storage_proxy::drain_all_hints);
+    slogger.info("DECOMMISSIONING: draining hints done");
+}
+
 future<> storage_service::decommission(sharded<db::snapshot_ctl>& snapshot_ctl) {
     return run_with_api_lock(sstring("decommission"), [&] (storage_service& ss) {
         return seastar::async([&] {
@@ -5319,6 +5325,15 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     co_await wait_for_gossiper(id, _gossiper, _abort_source);
                 }
                 rtlogger.debug("raft_topology_cmd::wait_for_ip done [{}]", ids);
+                result.status = raft_topology_cmd_result::command_status::success;
+                break;
+            }
+            case raft_topology_cmd::command::drain_hints: {
+                // A new coordinator may repeat the command; join the drain already running.
+                if (!_decommission_hints_drain) {
+                    _decommission_hints_drain.emplace(drain_hints_before_leaving());
+                }
+                co_await _decommission_hints_drain->get_future(_abort_source);
                 result.status = raft_topology_cmd_result::command_status::success;
                 break;
             }

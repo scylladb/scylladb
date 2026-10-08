@@ -61,7 +61,8 @@ struct raft_topology_cmd {
         barrier,
         barrier_and_drain,
         stream_ranges,
-        wait_for_ip
+        wait_for_ip,
+        drain_hints
     };
     service::raft_topology_cmd::command cmd;
 };

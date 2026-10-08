@@ -4077,6 +4077,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     node = retake_node(co_await start_operation(), node.id);
                 }
 
+                // The node is no longer a replica, so draining cannot make it refuse
+                // hints for its own writes, and it is not banned yet, so the sends go
+                // through. The handler returns when the drain is over.
+                if (node_rs_state == node_state::decommissioning && _feature_service.hints_drain_on_decommission) {
+                    bool drain_failed = false;
+                    try {
+                        node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::drain_hints);
+                    } catch (term_changed_error&) {
+                        throw;
+                    } catch (raft::request_aborted&) {
+                        throw;
+                    } catch (seastar::abort_requested_exception&) {
+                        throw;
+                    } catch (...) {
+                        rtlogger.warn("failed to tell node {} to drain hints, its undelivered hints will be lost: {:t}",
+                                node.id, std::current_exception());
+                        drain_failed = true;
+                    }
+                    if (drain_failed) {
+                        node = retake_node(co_await start_operation(), node.id);
+                    }
+                }
+
                 // Make decommissioning/removed node a non voter before reporting operation completion below.
                 // Otherwise the node may see the completion and exit before it is removed from
                 // the config at which point the removal from the config will hang if the cluster had only two
