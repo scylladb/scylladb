@@ -11,6 +11,7 @@
 
 from ...porting import *
 from decimal import Decimal
+from cassandra.protocol import FunctionFailure
 import datetime
 
 # Scylla's error messages for dropping a non-existent aggregate are
@@ -775,6 +776,68 @@ def testJavaAggregateNonExistingFuncs(cql, cassandra_bug):
                 "STYPE int " +
                 "FINALFUNC " + shortFunctionName(fFinal))
         execute(cql, ks, "DROP AGGREGATE " + ks + ".aggrInvalid(int)")
+
+# On Scylla, the failing functions below are written in Lua, so the error
+# message doesn't mention java.lang.RuntimeException, but it does include
+# the message thrown by the function.
+FAILING_FUNCTION_MESSAGE = "java.lang.RuntimeException|thrown to unit test - not a bug"
+
+# Reproduces SCYLLADB-5159 (wrong error code for a failing function)
+@pytest.mark.xfail(reason="SCYLLADB-5159")
+def testJavaAggregateFailingFuncs(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, "throw new RuntimeException(\"thrown to unit test - not a bug\");",
+                                            "error(\"thrown to unit test - not a bug\")"))
+
+        fStateOK = createFunction(cql, ks,
+                                  "CREATE FUNCTION %s(a int, b int) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS int " +
+                                  java_or_lua(cql, "return Integer.valueOf(42);", "return 42"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, "throw new RuntimeException(\"thrown to unit test - not a bug\");",
+                                            "error(\"thrown to unit test - not a bug\")"))
+
+        fFinalOK = createFunction(cql, ks,
+                                  "CREATE FUNCTION %s(a int) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, "return \"foobar\";", "return \"foobar\""))
+
+        a0 = createAggregate(cql, ks,
+                             "CREATE AGGREGATE %s(int) " +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                             "INITCOND null")
+        a1 = createAggregate(cql, ks,
+                             "CREATE AGGREGATE %s(int) " +
+                             "SFUNC " + shortFunctionName(fStateOK) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                             "INITCOND null")
+        a2 = createAggregate(cql, ks,
+                             "CREATE AGGREGATE %s(int) " +
+                             "SFUNC " + shortFunctionName(fStateOK) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinalOK) + " " +
+                             "INITCOND null")
+
+        assert_invalid_throw_message_re(cql, table, FAILING_FUNCTION_MESSAGE, FunctionFailure, "SELECT " + a0 + "(b) FROM %s")
+        assert_invalid_throw_message_re(cql, table, FAILING_FUNCTION_MESSAGE, FunctionFailure, "SELECT " + a1 + "(b) FROM %s")
+        assert_rows(execute(cql, table, "SELECT " + a2 + "(b) FROM %s"), row("foobar"))
 
 # This test fails on Cassandra because of a Cassandra bug: when an authorizer
 # is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
