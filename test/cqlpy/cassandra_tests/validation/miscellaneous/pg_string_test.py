@@ -23,3 +23,35 @@ def testPgSyleFunction(cql, test_keyspace):
     cql.execute("create or replace function " + fun + " ( input double ) called on null input returns text language " + language + "\n" +
                 "AS $$" + body + "$$")
     cql.execute("DROP FUNCTION " + fun)
+
+def testPgSyleInsert(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(key ascii primary key, val text)") as table:
+        # some non-terminated pg-strings
+        assert_invalid_syntax(cql, table, "INSERT INTO %s (key, val) VALUES ($ $key_empty$$, $$'' value for empty$$)")
+        assert_invalid_syntax(cql, table, "INSERT INTO %s (key, val) VALUES ($$key_empty$$, $$'' value for empty$ $)")
+        assert_invalid_syntax(cql, table, "INSERT INTO %s (key, val) VALUES ($$key_empty$ $, $$'' value for empty$$)")
+
+        # different pg-style markers for multiple strings
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES ($$prim$ $ $key$$, $$some '' arbitrary value$$)")
+        # same empty pg-style marker for multiple strings
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES ($$key_empty$$, $$'' value for empty$$)")
+        # stange but valid pg-style
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES ($$$foo$_$foo$$, $$$'' value for empty$$)")
+        # these are conventional quoted strings
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES ('$txt$key$$$$txt$', '$txt$'' other value$txt$')")
+
+        assert_rows(execute(cql, table, "SELECT key, val FROM %s WHERE key='prim$ $ $key'"),
+                   row("prim$ $ $key", "some '' arbitrary value")
+        )
+        assert_rows(execute(cql, table, "SELECT key, val FROM %s WHERE key='key_empty'"),
+                   row("key_empty", "'' value for empty")
+        )
+        assert_rows(execute(cql, table, "SELECT key, val FROM %s WHERE key='$foo$_$foo'"),
+                   row("$foo$_$foo", "$'' value for empty")
+        )
+        assert_rows(execute(cql, table, "SELECT key, val FROM %s WHERE key='$txt$key$$$$txt$'"),
+                   row("$txt$key$$$$txt$", "$txt$' other value$txt$")
+        )
+
+        # invalid syntax
+        assert_invalid_syntax(cql, table, "INSERT INTO %s (key, val) VALUES ($ascii$prim$$$key$invterm$, $txt$some '' arbitrary value$txt$)")
