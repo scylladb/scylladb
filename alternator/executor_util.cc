@@ -237,13 +237,13 @@ search_schema_info get_search_schema_info(const index_metadata& index) {
     if (types_it == opts.end()) {
         return info;
     }
-    if (std::optional<rjson::value> types_json = rjson::try_parse(types_it->second); types_json && types_json->IsObject()) {
+    if (auto types_json = rjson::try_parse(types_it->second); types_json && types_json->IsObject()) {
         for (const auto& m : types_json->GetObject()) {
             info.attribute_types[rjson::to_string(m.name)] = rjson::to_string(m.value);
         }
     }
     if (auto target_it = opts.find(cql3::statements::index_target::target_option_name); target_it != opts.end()) {
-        if (std::optional<rjson::value> json_value = rjson::try_parse(target_it->second); json_value && json_value->IsObject()) {
+        if (auto json_value = rjson::try_parse(target_it->second); json_value && json_value->IsObject()) {
             if (const rjson::value* pk = rjson::find(*json_value, "pk"); pk && pk->IsArray() && !pk->Empty()) {
                 info.hash_attribute = rjson::to_string((*pk)[0]);
             }
@@ -273,7 +273,7 @@ std::optional<std::vector<std::string>> get_vector_index_non_key_attributes(cons
         return std::nullopt;
     }
     std::vector<std::string> non_key_attributes;
-    if (std::optional<rjson::value> json_value = rjson::try_parse(it->second); json_value && json_value->IsArray()) {
+    if (auto json_value = rjson::try_parse(it->second); json_value && json_value->IsArray()) {
         for (const rjson::value& attr : json_value->GetArray()) {
             non_key_attributes.emplace_back(rjson::to_string(attr));
         }
@@ -284,7 +284,7 @@ std::optional<std::vector<std::string>> get_vector_index_non_key_attributes(cons
 std::string get_vector_index_target_column(std::string_view target) {
     // build_vector_index_target() always writes this JSON, so anything else
     // means a corrupt schema - there is no other encoding to fall back to.
-    std::optional<rjson::value> json_value = rjson::try_parse(target);
+    auto json_value = rjson::try_parse(target);
     throwing_assert(json_value && json_value->IsObject());
     const rjson::value* tc = rjson::find(*json_value, "tc");
     throwing_assert(tc && tc->IsString());
