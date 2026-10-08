@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 
+import math
 from ...porting import *
 from ....util import is_scylla, is_cassandra_older_than
 from cassandra.protocol import ConfigurationException
@@ -61,3 +62,40 @@ def testTTLDefaultLimit(cql, test_keyspace):
 # change Cassandra's expiration date overflow policy through an internal
 # Java API. (They are also only enabled in Cassandra once the current time
 # plus the maximum TTL exceeds the maximum supported expiration date).
+
+# This test writes with the maximum TTL of 20 years, so the expiration time
+# is beyond the year 2038 - beyond what a 32-bit signed count of seconds can
+# represent - and checks that TTL() reads it back correctly, both from the
+# memtable and, after a flush, from an sstable. Scylla has supported such
+# expiration times since its gc_clock became 64-bit (#3353), and this test
+# verifies that, while Scylla's own tests of #3353 in test_cql_query.py
+# only read the value back, without checking TTL() or flushing.
+# The original Java test is skipped when Cassandra's storage compatibility
+# mode is CASSANDRA_4 (the default in Cassandra 5.0), in which expiration
+# times beyond the year 2038 are not supported, so we skip it too on
+# Cassandra in that mode.
+def testImprovedMaxTTL(cql, test_keyspace):
+    if not is_scylla(cql):
+        # When storage_compatibility_mode isn't set in the configuration file,
+        # system_views.settings shows it as "None", and the actual default is
+        # CASSANDRA_4 in Cassandra 5.0 (and NONE in Cassandra 6).
+        mode = cql.execute("SELECT value FROM system_views.settings WHERE name = 'storage_compatibility_mode'").one()
+        mode = mode.value if mode else None
+        if mode in (None, "None"):
+            mode = "CASSANDRA_4" if is_cassandra_older_than(cql, (6, 0)) else "NONE"
+        if mode == "CASSANDRA_4":
+            skip_env("Cassandra's storage_compatibility_mode is CASSANDRA_4")
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i int)") as table:
+        t0 = time.time()
+        execute(cql, table, "INSERT INTO %s (k, i) VALUES (1, 1) USING TTL " + str(MAX_TTL))
+        ttlMemtable = execute(cql, table, "SELECT TTL(i) FROM %s WHERE k = 1").one()[0]
+        flush(cql, table)
+        ttlSSTable = execute(cql, table, "SELECT TTL(i) FROM %s WHERE k = 1").one()[0]
+        t1 = time.time()
+        delta = math.ceil(t1 - t0) + 1
+        assert abs(ttlMemtable - MAX_TTL) <= delta
+        assert abs(ttlSSTable - MAX_TTL) <= delta
+
+# The test testRecoverOverflowedExpirationWithScrub was not translated,
+# because it copies prepared sstable files into the table's directory, and
+# runs Cassandra's scrub operation and sstablescrub tool on them.
