@@ -280,13 +280,14 @@ class file_manager {
     // One handle per file, opened read-write, kept open for the life of the shard and shared by
     // the read and the write paths. Both go through it, so it is always opened for writing: a file
     // first touched by a read would otherwise hold a read-only handle the write path cannot use.
+    // A file is opened when it is allocated, thus only the allocated files are open.
     std::vector<seastar::file> _open_files;
 
     std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
     size_t _zero_buf_size{0};
 
-    // Allocates the file if it is the next one, which waits for it to be formatted and starts
-    // formatting the one after it in the background.
+    // Allocates the file if it is the next one, which waits for it to be formatted, opens it and
+    // starts formatting the one after it in the background.
     future<> allocate_file(file_id_t);
 
 public:
@@ -413,16 +414,11 @@ future<> file_manager::format_file(file_id_t file_id) {
         // move the temp file to the final location
         co_await seastar::rename_file(tmp_path, file_path);
     }
-
-    // A file is opened where it comes into existence, so that allocating a segment out of it later
-    // never has to. This also covers the file formatted in the background while the shard runs.
-    if (!_open_files[file_id]) {
-        co_await do_open_file(file_id);
-    }
 }
 
-// Opens every file that has been allocated, so that no read and no segment allocation opens one
-// during normal operation. Files are formatted before they are allocated, so they all exist here.
+// Opens every file that has been allocated, so that no read opens one during normal operation. A
+// file that is allocated later is opened by allocate_file(). Files are formatted before they are
+// allocated, so they all exist here.
 future<> file_manager::open_allocated_files() {
     return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
             [this] (file_id_t file_id) -> future<> {
@@ -505,6 +501,11 @@ future<> file_manager::allocate_file(file_id_t file_id) {
         co_await _next_file_formatter.get_future();
 
         if (file_id == _next_file_id) {
+            // The format does not open the file, thus only the allocated files are open. If the
+            // open fails, the file stays the next one, and the next attempt opens it again.
+            if (!_open_files[file_id]) {
+                co_await do_open_file(file_id);
+            }
             _next_file_id++;
 
             if (_next_file_id < _max_files.configured) {
@@ -551,6 +552,10 @@ future<seastar::file> file_manager::get_file(file_id_t file_id) {
 // It is not opened with O_CREAT: files are created by format_file() alone, and a read of a file that
 // is missing must fail rather than quietly create an empty one.
 future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
+    utils::get_local_injector().inject("logstor_open_file_fail", [] {
+        throw std::runtime_error("file open failed by injection");
+    });
+
     auto file = co_await open_checked_file_dma(logstor_error_handler,
         get_file_path(file_id).string(),
         seastar::open_flags::rw | seastar::open_flags::dsync
