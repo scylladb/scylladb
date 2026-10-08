@@ -275,3 +275,34 @@ def testFieldWithUseKeyspace(cql, new_to_cassandra_6):
         assertSecurityLabel(cql, "FIELD", ks, "address.street", "PUBLIC")
         assertComment(cql, "FIELD", ks, "address.city", "City name")
         assertSecurityLabel(cql, "FIELD", ks, "address.city", "PUBLIC")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testErrorCases(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        cql.execute(f"CREATE TYPE {ks}.test_type (field1 text, field2 int)")
+
+        # Test non-existent keyspace
+        commentOnKeyspace = "COMMENT ON KEYSPACE nonexistent IS 'comment'"
+        assert_invalid_message(cql, ks, "Keyspace 'nonexistent' doesn't exist", commentOnKeyspace)
+
+        # Test non-existent table
+        commentOnTableQuery = f"COMMENT ON TABLE {ks}.nonexistent IS 'comment'"
+        assert_invalid_message(cql, ks, f"Table '{ks}.nonexistent' doesn't exist", commentOnTableQuery)
+
+        # Test non-existent column
+        commentOnColumnQuery = f"COMMENT ON COLUMN {ks}.{TABLE_NAME}.nonexistent IS 'comment'"
+        assert_invalid_message(cql, ks, "Column 'nonexistent' doesn't exist", commentOnColumnQuery)
+
+        # Test non-existent type
+        commentOnType = f"COMMENT ON TYPE {ks}.nonexistent IS 'comment'"
+        assert_invalid_message(cql, ks, "Type", commentOnType)
+
+        # Test non-existent type for field
+        commentOnNonExistentType = f"COMMENT ON FIELD {ks}.nonexistent.somefield IS 'comment'"
+        assert_invalid_message(cql, ks, "doesn't exist", commentOnNonExistentType)
+
+        # Test non-existent field
+        commentOnNonExistentField = f"COMMENT ON FIELD {ks}.test_type.nonexistent IS 'comment'"
+        assert_invalid_message(cql, ks, "doesn't exist", commentOnNonExistentField)
