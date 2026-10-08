@@ -93,7 +93,9 @@ def create_materialized_view(cql, keyspace, arg):
 # table write, so the Java tests' updateView() can be a simple execute().
 # With wait=False, this is the translation of CQLTester.createViewAsync(),
 # and the caller can wait with wait_for_view_built() - e.g., to wait for
-# several views being built in parallel.
+# several views being built in parallel. Given a name, the view gets this
+# name (in the table's keyspace) instead of a unique name, like
+# CQLTester.createView(viewName, query).
 #
 # Some Cassandra view tests create views restricting non-key columns of the
 # base table (e.g., "WHERE c = 1" where c is a regular column), which
@@ -101,9 +103,9 @@ def create_materialized_view(cql, keyspace, arg):
 # system property is set. We can't set it through CQL, so if it isn't set,
 # create_view() skips the test when running on Cassandra.
 @contextmanager
-def create_view(cql, table, query, wait=True):
+def create_view(cql, table, query, wait=True, name=None):
     keyspace = table.split('.')[0]
-    view = keyspace + "." + unique_name()
+    view = keyspace + "." + (name or unique_name())
     try:
         cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
     except InvalidRequest as e:
