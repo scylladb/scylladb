@@ -133,3 +133,71 @@ def testFunctionExecutionWithReversedTypeAsOutput(cql, test_keyspace):
                                  java_or_lua(cql, "return v + v;", "return v .. v"))
 
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, " + fRepeat + "(?))", 1, "a")
+
+# Reproduces #13746 (a function in WHERE or in INSERT values)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testFunctionOverloading(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(k text PRIMARY KEY, v int)") as table:
+        execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", "f2", 1)
+
+        fOverload = createFunction(cql, KEYSPACE_PER_TEST,
+                                   "CREATE FUNCTION %s ( input varchar ) " +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS text " +
+                                   java_or_lua(cql, 'return "f1";', 'return "f1"'))
+        createFunctionOverload(cql, fOverload,
+                               "CREATE OR REPLACE FUNCTION %s(i int) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, 'return "f2";', 'return "f2"'))
+        createFunctionOverload(cql, fOverload,
+                               "CREATE OR REPLACE FUNCTION %s(v1 text, v2 text) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, 'return "f3";', 'return "f3"'))
+        createFunctionOverload(cql, fOverload,
+                               "CREATE OR REPLACE FUNCTION %s(v ascii) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, 'return "f1";', 'return "f1"'))
+
+        # text == varchar, so this should be considered as a duplicate
+        assert_invalid_message(cql, table, "already exists",
+                               "CREATE FUNCTION " + fOverload + "(v varchar) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, 'return "f1";', 'return "f1"'))
+
+        assert_rows(execute(cql, table, "SELECT " + fOverload + "(k), " + fOverload + "(v), " + fOverload + "(k, k) FROM %s"),
+                    row("f1", "f2", "f3"))
+
+        # This shouldn't work if we use preparation since there no way to know which overload to use
+        assert_invalid_message(cql, table, "Ambiguous call to function", "SELECT v FROM %s WHERE k = " + fOverload + "(?)", "foo")
+
+        # but those should since we specifically cast
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo"))
+        assert_rows(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1))
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo"))
+        # And since varchar == text, this should work too
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((varchar)?)", "foo"))
+
+        # no such functions exist...
+        assert_invalid_message_re(cql, table, doesntExistMessage(f"{fOverload}(boolean)"), "DROP FUNCTION " + fOverload + "(boolean)")
+        assert_invalid_message_re(cql, table, doesntExistMessage(f"{fOverload}(bigint)"), "DROP FUNCTION " + fOverload + "(bigint)")
+
+        # 'overloaded' has multiple overloads - so it has to fail (CASSANDRA-7812)
+        # Scylla's error message is "There are multiple functions named ..."
+        assert_invalid_message_re(cql, table, "matches multiple function definitions|There are multiple functions named", "DROP FUNCTION " + fOverload)
+        execute(cql, table, "DROP FUNCTION " + fOverload + "(varchar)")
+        assert_invalid_message(cql, table, "none of its type signatures match", "SELECT v FROM %s WHERE k = " + fOverload + "((text)?)", "foo")
+        execute(cql, table, "DROP FUNCTION " + fOverload + "(text, text)")
+        assert_invalid_message(cql, table, "none of its type signatures match", "SELECT v FROM %s WHERE k = " + fOverload + "((text)?,(text)?)", "foo", "bar")
+        execute(cql, table, "DROP FUNCTION " + fOverload + "(ascii)")
+        assert_invalid_message(cql, table, "cannot be passed as argument 0 of function", "SELECT v FROM %s WHERE k = " + fOverload + "((ascii)?)", "foo")
+        # single-int-overload must still work
+        assert_rows(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1))
+        # overloaded has just one overload now - so the following DROP FUNCTION is not ambigious (CASSANDRA-7812)
+        execute(cql, table, "DROP FUNCTION " + fOverload)
