@@ -255,3 +255,47 @@ def testfunctionInSelectTokenSliceRestriction(t):
     functionName = t.createSimpleFunction()
     cql = f"SELECT * FROM {t.table} WHERE token(k) < token({functionCall(functionName)})"
     t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInPKForInsert(t):
+    functionName = t.createSimpleFunction()
+    cql = f"INSERT INTO {t.table} (k, v1, v2) VALUES ({functionCall(functionName)}, 0, 0)"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInClusteringValuesForInsert(t):
+    functionName = t.createSimpleFunction()
+    cql = f"INSERT INTO {t.table} (k, v1, v2) VALUES (0, {functionCall(functionName)}, 0)"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInPKForDelete(t):
+    functionName = t.createSimpleFunction()
+    cql = f"DELETE FROM {t.table} WHERE k = {functionCall(functionName)}"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInClusteringValuesForDelete(t):
+    functionName = t.createSimpleFunction()
+    cql = f"DELETE FROM {t.table} WHERE k = 0 AND v1 = {functionCall(functionName)}"
+    t.assertPermissionsOnFunction(cql, functionName)
