@@ -104,6 +104,22 @@ def testEmptyTimestampJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
         verifyJsonInsert(cql, table, "timestamp", "")
 
+def testEmptyUUID(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v UUID)") as table:
+        verifyPlainInsert(cql, table, "uuid", "")
+
+def testEmptyUUIDJson(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v UUID)") as table:
+        verifyJsonInsert(cql, table, "uuid", "")
+
+def testEmptyInetAddress(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INET)") as table:
+        verifyPlainInsert(cql, table, "inet", "")
+
+def testEmptyInetAddressJson(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INET)") as table:
+        verifyJsonInsert(cql, table, "inet", "")
+
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
 @pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyLong(cql, test_keyspace):
@@ -153,3 +169,11 @@ def testEmptyFloat(cql, test_keyspace):
 def testEmptyFloatJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
         verifyJsonInsert(cql, table, "float", "")
+
+def testEmptyTimeUUID(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMEUUID)") as table:
+        verifyPlainInsert(cql, table, "timeuuid", "")
+
+def testEmptyTimeUUIDJson(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMEUUID)") as table:
+        verifyJsonInsert(cql, table, "timeuuid", "")
