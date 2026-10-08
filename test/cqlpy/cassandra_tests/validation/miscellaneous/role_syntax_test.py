@@ -60,3 +60,16 @@ def testcreateSyntaxTest(cql):
     assertValidSyntax(cql, "CREATE USER $$ u1 ' x $ x ' $$")
     # user names may not be quoted names
     assertInvalidSyntax(cql, "CREATE USER \"u1\"")
+
+def testdropSyntaxTest(cql):
+    assertValidSyntax(cql, "DROP ROLE r1")
+    assertValidSyntax(cql, "DROP ROLE 'r1'")
+    assertValidSyntax(cql, "DROP ROLE \"r1\"")
+    assertValidSyntax(cql, "DROP ROLE $$r1$$")
+    assertValidSyntax(cql, "DROP ROLE $$ r1 ' x $ x ' $$")
+    assertValidSyntax(cql, "DROP USER u1")
+    assertValidSyntax(cql, "DROP USER 'u1'")
+    assertValidSyntax(cql, "DROP USER $$u1$$")
+    assertValidSyntax(cql, "DROP USER $$ u1 ' x $ x ' $$")
+    # user names may not be quoted names
+    assertInvalidSyntax(cql, "DROP USER \"u1\"")
