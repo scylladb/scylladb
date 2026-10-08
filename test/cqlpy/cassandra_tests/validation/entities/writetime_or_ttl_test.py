@@ -585,6 +585,162 @@ def testFrozenMap(cql, test_keyspace):
                     row(4, NO_TIMESTAMP),
                     row(3, TIMESTAMP_1))
 
+# Reproduces #10953 (MAXWRITETIME), #22075 (slice selection), SCYLLADB-5166
+# (WRITETIME and TTL of a whole non-frozen collection or UDT) and SCYLLADB-5167
+# (WRITETIME and TTL of an element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, #22075, SCYLLADB-5166, SCYLLADB-5167")
+def testNestedCollections(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v map<int,frozen<set<int>>>)") as table:
+        # Null column
+        execute(cql, table, "INSERT INTO %s (k) VALUES (1) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][0]", NO_TIMESTAMP, NO_TTL)
+
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, {1:{1,2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        execute(cql, table, "UPDATE %s USING TIMESTAMP ? AND TTL ? SET v=v+{2:{1, 2}} WHERE k=1", TIMESTAMP_2, TTL_2)
+
+        assertWritetimeAndTTL(cql, table, "v", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2])
+
+        assertWritetimeAndTTL(cql, table, "v[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..1]", [TIMESTAMP_1], [TTL_1])
+        assertWritetimeAndTTL(cql, table, "v[0..2]", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2])
+        assertWritetimeAndTTL(cql, table, "v[0..3]", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2])
+        assertWritetimeAndTTL(cql, table, "v[1..3]", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2])
+        assertWritetimeAndTTL(cql, table, "v[2..3]", [TIMESTAMP_2], [TTL_2])
+        assertWritetimeAndTTL(cql, table, "v[3..3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[1][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[2][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[2][1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[2][2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[2][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[3][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][0..1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][1..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][2..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[1][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1][0..1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][1..2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][2..3]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[2][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[2][0..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[2][1..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[2][2..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[2][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[3][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][0..1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][1..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][2..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0..1][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..1][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[0..1][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..2][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..2][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[0..2][2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v[0..2][3]", NO_TIMESTAMP, NO_TTL)
+
+# Reproduces #10953 (MAXWRITETIME), #22075 (slice selection) and SCYLLADB-5167
+# (WRITETIME and TTL of an element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, #22075, SCYLLADB-5167")
+def testFrozenNestedCollections(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v frozen<map<int,frozen<set<int>>>>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, {1:{1,2}, 2:{1,2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+
+        assertWritetimeAndTTL(cql, table, "v", TIMESTAMP_1, TTL_1)
+
+        assertWritetimeAndTTL(cql, table, "v[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[1][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[2][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[2][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2][2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[3][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][3]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][0..1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][1..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][2..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[1][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1][0..1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][1..2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][2..3]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[2][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[2][0..1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2][1..2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2][2..3]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[3][0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][0..1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][1..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][2..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[3][3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1..2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[2..3]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[3..4]", NO_TIMESTAMP, NO_TTL)
+
+        assertWritetimeAndTTL(cql, table, "v[0..0][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..0][1]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..1][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[0..1][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[0..1][2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1..2][0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "v[1..2][1]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1..2][2]", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v[1..2][3]", NO_TIMESTAMP, NO_TTL)
+
 # Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5166 (WRITETIME and TTL of a
 # whole non-frozen collection or UDT)
 @pytest.mark.xfail(reason="#10953, SCYLLADB-5166")
