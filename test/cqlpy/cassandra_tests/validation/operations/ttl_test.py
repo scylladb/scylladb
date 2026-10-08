@@ -33,3 +33,31 @@ def testTTLPerRequestLimit(cql, test_keyspace):
         assert_invalid_message(cql, table, "ttl is too large.", "UPDATE %s USING TTL ? SET i = 1 WHERE k = 2", MAX_TTL + 1)
 
         assert_invalid_message(cql, table, "A TTL must be greater or equal to 0", "UPDATE %s USING TTL ? SET i = 1 WHERE k = 2", -1)
+
+# Reproduces SCYLLADB-5152 (default_time_to_live not limited to the maximum TTL).
+@pytest.mark.xfail(reason="SCYLLADB-5152")
+def testTTLDefaultLimit(cql, test_keyspace):
+    # Scylla's error message is different from Cassandra's:
+    # "default_time_to_live cannot be smaller than 0, (default 0)"
+    with pytest.raises(ConfigurationException, match=re.escape("default_time_to_live must be greater than or equal to 0 (got -1)") + "|" +
+                                                     re.escape("default_time_to_live cannot be smaller than 0")):
+        with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i int) WITH default_time_to_live=-1"):
+            pass
+
+    with pytest.raises(ConfigurationException, match=re.escape("default_time_to_live must be less than or equal to " + str(MAX_TTL) + " (got "
+                              + str(MAX_TTL + 1) + ")")):
+        with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i int) WITH default_time_to_live="
+                    + str(MAX_TTL + 1)):
+            pass
+
+    # table with default low TTL should not be denied
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i int) WITH default_time_to_live=" + str(5)) as table:
+        execute(cql, table, "INSERT INTO %s (k, i) VALUES (1, 1)")
+
+# The tests testCapWarnExpirationOverflowPolicy,
+# testCapNoWarnExpirationOverflowPolicy,
+# testCapNoWarnExpirationOverflowPolicyDefaultTTL and
+# testRejectExpirationOverflowPolicy were not translated, because they
+# change Cassandra's expiration date overflow policy through an internal
+# Java API. (They are also only enabled in Cassandra once the current time
+# plus the maximum TTL exceeds the maximum supported expiration date).
