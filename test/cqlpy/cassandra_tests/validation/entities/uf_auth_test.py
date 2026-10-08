@@ -330,3 +330,11 @@ def testBatchStatement(t):
 
     t.grantExecuteOnFunction(functions[2])
     t.assertAuthorized(batch)
+
+def testNestedFunctions(t):
+    innerFunctionName = t.createSimpleFunction()
+    outerFunctionName = t.createFunction("CREATE FUNCTION %s(input int) " +
+                                         " CALLED ON NULL INPUT" +
+                                         " RETURNS int" +
+                                         " " + java_or_lua(t.cql, "return Integer.valueOf(0);", "return 0"))
+    t.assertPermissionsOnNestedFunctions(innerFunctionName, outerFunctionName)
