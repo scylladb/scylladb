@@ -1,0 +1,16 @@
+# ScyllaDB Python Driver
+
+The ScyllaDB Python driver is shard aware and contains extensions for a `tokenAwareHostPolicy`.
+Using this policy, the driver can select a connection to a particular shard based on the shard’s token.
+As a result, latency is significantly reduced because there is no need to pass data between the shards.
+
+Read the [documentation](https://python-driver.docs.scylladb.com/) to get started or visit the Github project [ScyllaDB Python driver](https://github.com/scylladb/python-driver/).
+
+As the ScyllaDB Python Driver is a drop-in replacement for DataStax Python Driver, no code changes are needed to use the driver.
+Use the ScyllaDB Python driver for better compatibility and support for ScyllaDB with Python-based applications.
+
+## More information
+
+* [ScyllaDB Python Driver Documentation](https://python-driver.docs.scylladb.com/)
+* [ScyllaDB Python Driver on GitHub](https://github.com/scylladb/python-driver/)
+* [ScyllaDB University: Coding with Python](https://university.scylladb.com/courses/using-scylla-drivers/lessons/coding-with-python/)
