@@ -13,6 +13,8 @@ import re
 import collections
 import struct
 import time
+import random
+import string
 from ..util import unique_name, is_scylla
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
@@ -396,3 +398,15 @@ def unset():
 # Java true and false are lowercase
 true = True
 false = False
+
+# Translation of TombstonesWithIndexedSSTableTest.makeRandomString(), which
+# other Cassandra tests use too.
+def makeRandomString(length):
+    # Note that the original Java function only sets every second character
+    # (the rest are null characters), probably by mistake. We do the same.
+    chars = ['\0'] * length
+    i = 0
+    while i < length:
+        chars[i] = random.choice(string.ascii_lowercase)
+        i += 2
+    return ''.join(chars)
