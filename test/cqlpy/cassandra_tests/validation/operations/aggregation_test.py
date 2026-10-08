@@ -1526,6 +1526,62 @@ def testEmptyListAndNullInitcond(cql):
 # is reloaded (CASSANDRA-11033), and its Java function can't be translated
 # meaningfully to Lua.
 
+# Reproduces #14404 (empty collection INITCOND) and SCYLLADB-5162
+# (CREATE OR REPLACE AGGREGATE doesn't remove FINALFUNC or INITCOND)
+@pytest.mark.xfail(reason="#14404, SCYLLADB-5162")
+def testOrReplaceOptionals(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(s list<text>, i int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS list<text> " +
+                                java_or_lua(cql, APPEND_JAVA, APPEND_LUA))
+
+        fFinal = shortFunctionName(createFunction(cql, ks,
+                                                  "CREATE FUNCTION %s(s list<text>) " +
+                                                  "CALLED ON NULL INPUT " +
+                                                  "RETURNS list<text> " +
+                                                  java_or_lua(cql, "return s;", "return s")))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + ' ' +
+                            "STYPE list<text> ")
+
+        def checkOptionals(aggregateName, finalFunc, initCond):
+            assert_rows(execute(cql, ks, "SELECT final_func, initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(aggregateName)),
+                       row(finalFunc, initCond))
+
+        checkOptionals(a, None, None)
+
+        ddlPrefix = ("CREATE OR REPLACE AGGREGATE " + a + "(int) " +
+                     "SFUNC " + shortFunctionName(fState) + ' ' +
+                     "STYPE list<text> ")
+
+        # Test replacing INITCOND
+        execute(cql, ks, ddlPrefix + "INITCOND [  ] ")
+        checkOptionals(a, None, "[]")
+
+        execute(cql, ks, ddlPrefix)
+        checkOptionals(a, None, None)
+
+        execute(cql, ks, ddlPrefix + "INITCOND [  ] ")
+        checkOptionals(a, None, "[]")
+
+        execute(cql, ks, ddlPrefix + "INITCOND null")
+        checkOptionals(a, None, None)
+
+        # Test replacing FINALFUNC
+        execute(cql, ks, ddlPrefix + "FINALFUNC " + fFinal + ' ')
+        checkOptionals(a, fFinal, None)
+
+        execute(cql, ks, ddlPrefix)
+        checkOptionals(a, None, None)
+
+# The test testCustomTypeInitcond was not translated, because it uses a
+# Cassandra-specific custom type (DynamicCompositeType) and Cassandra's
+# internal type parser to build the expected value.
+
 def testArithmeticCorrectness(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(bucket int primary key, val decimal)") as table:
         execute(cql, table, "insert into %s (bucket, val) values (1, 0.25)")
