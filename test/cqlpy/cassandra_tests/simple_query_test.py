@@ -427,3 +427,16 @@ def testSStableTimestampOrdering(cql, test_keyspace):
         execute(cql, table, "DELETE FROM %s USING TIMESTAMP 6 WHERE k1 = 1")
 
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1=1"), row(1, 1, 2))
+
+LONG_MIN_VALUE = -2**63
+
+# Reproduces SCYLLADB-5153 (BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testTokenRestriction(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(id int primary key)") as table:
+        for i in range(10):
+            execute(cql, table, "INSERT INTO %s (id) values (?)", i)
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s where token(id) > 0 AND token(id) < " + str(LONG_MIN_VALUE)), row(7), row(6), row(9), row(3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s where token(id) > 0 AND token(id) <= " + str(LONG_MIN_VALUE)), row(7), row(6), row(9), row(3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s where token(id) BETWEEN 0 AND " + str(LONG_MIN_VALUE)), row(7), row(6), row(9), row(3))
