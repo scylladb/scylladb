@@ -382,3 +382,17 @@ def testUseKeyspaceContext(cql, new_to_cassandra_6):
         assertSecurityLabel(cql, "COLUMN", ks, TABLE_NAME + ".name", "COLUMN_LABEL")
         assertComment(cql, "TYPE", ks, "test_type", "Type comment via USE")
         assertSecurityLabel(cql, "TYPE", ks, "test_type", "TYPE_LABEL")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentAndSecurityLabelOnVirtualTableFails(cql, new_to_cassandra_6):
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "COMMENT ON TABLE system_views.settings IS 'fail'")
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON TABLE system_views.settings IS 'fail'")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentAndSecurityLabelOnSystemTableFails(cql, new_to_cassandra_6):
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "COMMENT ON TABLE system.local IS 'fail'")
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON TABLE system.local IS 'fail'")
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "COMMENT ON COLUMN system.local.key IS 'fail'")
+    assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON COLUMN system.local.key IS 'fail'")
