@@ -481,3 +481,11 @@ def testSelectUDTLiteral(cql, test_keyspace):
                         row(user_type("a", 5, "b", "max")))
             assert_rows(execute(cql, table, "SELECT (" + type + "){ a: min(v.a) , b: 'min'} FROM %s"),
                         row(user_type("a", 3, "b", "min")))
+
+def testInvalidSelect(cql, test_keyspace):
+    # Creates a table just so we can reference it in the (invalid) SELECT below
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY)") as table:
+        assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT ? FROM %s")
+        assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT k, ? FROM %s")
+
+        assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT k, null FROM %s")
