@@ -644,3 +644,106 @@ def testConstantFunctionArgsTimeuuid(cql, test_keyspace, cassandra_bug):
             execute(cql, table, "INSERT INTO %s (pk, valTimeuuid) VALUES (1, 2deb23e0-96b5-11e5-b26d-a939dd1405a3)")
             assert_rows(execute(cql, table, "SELECT pk, " + fTimeuuid + "(valTimeuuid, (timeuuid)34617f80-96b5-11e5-b26d-a939dd1405a3) FROM %s"),
                         row(1, uuid.UUID("34617f80-96b5-11e5-b26d-a939dd1405a3")))
+
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause) and #13746 (a function in the WHERE clause)
+@pytest.mark.xfail(reason="#5411, #13746")
+def testPreparedFunctionArgs(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_table(cql, test_keyspace, "(pk int, ck int, t text, i int, PRIMARY KEY (pk, ck) )") as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, t, i) VALUES (1, 1, 'one', 50)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, t, i) VALUES (1, 2, 'two', 100)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, t, i) VALUES (1, 3, 'three', 150)")
+
+        fIntMax = createFunction(cql, KEYSPACE,
+                                 "CREATE FUNCTION %s (val1 int, val2 int) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS int " +
+                                 java_or_lua(cql, MAX_JAVA, MAX_LUA) + ";")
+
+        # weak typing
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s", 0),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s", 100),
+                    row(1, 1, 100),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s", 200),
+                    row(1, 1, 200),
+                    row(1, 2, 200),
+                    row(1, 3, 200))
+
+        # explicit typing
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s", 0),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s", 100),
+                    row(1, 1, 100),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s", 200),
+                    row(1, 1, 200),
+                    row(1, 2, 200),
+                    row(1, 3, 200))
+
+        # weak typing
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s WHERE pk = " + fIntMax + "(1,1)", 0),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_empty(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s WHERE pk = " + fIntMax + "(2,1)", 0))
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s WHERE pk = " + fIntMax + "(?,1)", 0, 1),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_empty(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, ?) FROM %s WHERE pk = " + fIntMax + "(?,1)", 0, 2))
+
+        # explicit typing
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s WHERE pk = " + fIntMax + "((int)1,(int)1)", 0),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_empty(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s WHERE pk = " + fIntMax + "((int)2,(int)1)", 0))
+
+        assert_rows(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s WHERE pk = " + fIntMax + "((int)?,(int)1)", 0, 1),
+                    row(1, 1, 50),
+                    row(1, 2, 100),
+                    row(1, 3, 150))
+        assert_empty(execute(cql, table, "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s WHERE pk = " + fIntMax + "((int)?,(int)1)", 0, 2))
+
+        assert_invalid_message(cql, table, "Invalid unset value for argument", "SELECT pk, ck, " + fIntMax + "(i, (int)?) FROM %s WHERE pk = " + fIntMax + "((int)1,(int)1)", UNSET_VALUE)
+
+# Reproduces #13746 (a function in UPDATE, DELETE or INSERT)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testInsertUpdateDelete(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_table(cql, test_keyspace, "(pk int, ck int, t text, i int, PRIMARY KEY (pk, ck) )") as table:
+        fIntMax = createFunction(cql, KEYSPACE,
+                                 "CREATE FUNCTION %s (val1 int, val2 int) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS int " +
+                                 java_or_lua(cql, MAX_JAVA, MAX_LUA) + ";")
+
+        execute(cql, table, "UPDATE %s SET i = " + fIntMax + "(100, 200) WHERE pk = 1 AND ck = 1")
+        assert_rows(execute(cql, table, "SELECT i FROM %s WHERE pk = 1 AND ck = 1"),
+                    row(200))
+
+        execute(cql, table, "UPDATE %s SET i = " + fIntMax + "(100, 300) WHERE pk = 1 AND ck = " + fIntMax + "(1,2)")
+        assert_rows(execute(cql, table, "SELECT i FROM %s WHERE pk = 1 AND ck = 2"),
+                    row(300))
+
+        execute(cql, table, "DELETE FROM %s WHERE pk = 1 AND ck = " + fIntMax + "(1,2)")
+        assert_empty(execute(cql, table, "SELECT i FROM %s WHERE pk = 1 AND ck = 2"))
+
+        execute(cql, table, "INSERT INTO %s (pk, ck, i) VALUES (1, " + fIntMax + "(1,2), " + fIntMax + "(100, 300))")
+        assert_rows(execute(cql, table, "SELECT i FROM %s WHERE pk = 1 AND ck = 2"),
+                    row(300))
