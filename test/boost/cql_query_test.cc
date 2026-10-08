@@ -1412,6 +1412,84 @@ SEASTAR_TEST_CASE(test_tablets_routing_v2_partition_key_bind_markers) {
     }, tablet_v2_cql_test_config());
 }
 
+// Conditional (LWT) statements used to return only tablets-routing-v1
+// information. A driver that negotiated TABLETS_ROUTING_V2 doesn't negotiate
+// V1, so it got no routing information at all for them.
+//
+// Conditional statements exist only for eventually consistent tables; strongly
+// consistent keyspaces reject them. As for any other statement, routing
+// information must be returned exactly when the partition key is fully bound
+// by markers.
+//
+// Reproduces SCYLLADB-5096.
+SEASTAR_TEST_CASE(test_tablets_routing_v2_conditional_statements) {
+    auto cfg = tablet_v2_cql_test_config();
+    // Paxos needs storage_proxy::remote.
+    cfg.need_remote_proxy = true;
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_tablet WITH replication = "
+            "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+            "AND tablets = {'initial': 1}").get();
+        e.execute_cql("CREATE TABLE ks_tablet.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        const auto schema = e.local_db().find_schema("ks_tablet", "tbl");
+        const auto pk = partition_key::from_singular(*schema, int32_t{1});
+        // The table has a single tablet, so this is the shard hosting its replica.
+        const auto shard = schema->table().shard_for_reads(dht::get_token(*schema, pk.view()));
+
+        smp::submit_to(shard, [&e] {
+            return seastar::async([&e] {
+                cql_transport::cql_protocol_extension_enum_set exts = e.local_client_state().get_protocol_extensions();
+                exts.remove(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
+                exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
+                e.local_client_state().set_protocol_extensions(std::move(exts));
+
+                struct conditional_case {
+                    std::string_view cql;
+                    size_t marker_count;
+                    bool routing_information;
+                };
+                static constexpr std::array<conditional_case, 6> conditional_cases = {{
+                    {"INSERT INTO {} (pk, ck, v) VALUES (?, ?, ?) IF NOT EXISTS", 3, true},
+                    {"UPDATE {} SET v = ? WHERE pk = ? AND ck = ? IF v = ?",      4, true},
+                    {"DELETE FROM {} WHERE pk = ? AND ck = ? IF EXISTS",          2, true},
+                    {"INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?) IF NOT EXISTS", 2, false},
+                    {"UPDATE {} SET v = ? WHERE pk = 1 AND ck = ? IF v = ?",      3, false},
+                    {"DELETE FROM {} WHERE pk = 1 AND ck = ? IF EXISTS",          1, false},
+                }};
+
+                for (const auto& c : conditional_cases) {
+                    const auto stmt = seastar::format(fmt::runtime(c.cql), "ks_tablet.tbl");
+                    const auto id = e.prepare(stmt).get();
+                    const cql3::raw_value value = cql3::raw_value::make_value(int32_type->decompose(int32_t{1}));
+                    const std::vector<cql3::raw_value> values(c.marker_count, value);
+
+                    // Execute the statement once with each of two blocks that differ only in their
+                    // value nibble. They can't both match the tablet's version, so if the version
+                    // is checked, at least one of the responses carries routing information.
+                    bool routing_information = false;
+                    for (const auto block : {locator::tablet_version_block{0x00}, locator::tablet_version_block{0x01}}) {
+                        auto options = std::make_unique<cql3::query_options>(
+                            db::consistency_level::QUORUM,
+                            cql3::raw_value_vector_with_unset(values),
+                            cql3::query_options::specific_options::DEFAULT);
+                        options->set_tablet_version_block(block);
+                        const auto result = e.execute_prepared_with_qo(id, std::move(options)).get();
+                        const auto msg = seastar::format("{}: did not expect a tablets-routing-v1 payload on a V2 connection", stmt);
+                        BOOST_REQUIRE_MESSAGE(!has_tablet_routing(result), msg);
+                        routing_information |= has_tablets_routing_v2(result);
+                    }
+
+                    const auto msg = seastar::format("{}: tablets-routing-v2 payload was{}expected",
+                            stmt, c.routing_information ? " " : " not ");
+                    BOOST_REQUIRE_MESSAGE(routing_information == c.routing_information, msg);
+                }
+            });
+        }).get();
+    }, std::move(cfg));
+}
+
 // The parser counts markers for one statement at a time, but used to hand
 // every statement of a multi-statement parse all the markers it had seen so
 // far, so a later statement inherited the markers of the ones before it.
