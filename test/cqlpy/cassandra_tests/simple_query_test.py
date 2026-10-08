@@ -327,6 +327,28 @@ def testDistinct(cql, test_keyspace):
                     row("key1"),
                     row("key2"))
 
+def testcollectionDeletionTest(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s set<int>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (?, ?)", 1, {1})
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (?, ?)", 1, {2})
+
+        assert_rows(execute(cql, table, "SELECT s FROM %s WHERE k = ?", 1),
+                    row({2}))
+
+def testlimitWithMultigetTest(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 0, 0)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 1, 1)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 2, 2)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 3, 3)
+
+        assert_rows(execute(cql, table, "SELECT v FROM %s WHERE k IN ? LIMIT ?", [0, 1, 2, 3], 2),
+                    row(0),
+                    row(1))
+
 def teststaticDistinctTest(cql, test_keyspace):
     with create_table(cql, test_keyspace, "( k int, p int, s int static, PRIMARY KEY (k, p))") as table:
         execute(cql, table, "INSERT INTO %s (k, p) VALUES (?, ?)", 1, 1)
