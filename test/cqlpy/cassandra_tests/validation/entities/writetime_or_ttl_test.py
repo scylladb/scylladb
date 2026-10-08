@@ -310,6 +310,97 @@ def testSet(cql, test_keyspace):
                     row(4, NO_TIMESTAMP),
                     row(3, TIMESTAMP_1))
 
+# Reproduces #10953 (MAXWRITETIME), #22075 (slice selection) and SCYLLADB-5167
+# (WRITETIME and TTL of an element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, #22075, SCYLLADB-5167")
+def testFrozenSet(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s frozen<set<int>>)") as table:
+        # Null column
+        execute(cql, table, "INSERT INTO %s (k) VALUES (1) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "s", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..0]", NO_TIMESTAMP, NO_TTL)
+
+        # Create empty
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (1, {}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "s", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "s[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..0]", NO_TIMESTAMP, NO_TTL)
+
+        # truncate, since previous columns would win on reconcilliation because of their TTL (CASSANDRA-14592)
+        execute(cql, table, "TRUNCATE TABLE %s")
+
+        # Update with a single element without TTL
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (1, {1}) USING TIMESTAMP ?", TIMESTAMP_1)
+        assertWritetimeAndTTL(cql, table, "s", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[1..]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[2..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[1..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[1..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[2..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[2..3]", NO_TIMESTAMP, NO_TTL)
+
+        # Add a new element to the set with a new timestamp and a TTL
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (1, {1, 2}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[0..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[1..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[2..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[3..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[0..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[0..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[0..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[1..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[1..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[1..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[2..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[2..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "s[3..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "s[3..4]", NO_TIMESTAMP, NO_TTL)
+
+        # Read multiple rows to verify selector reset
+        execute(cql, table, "TRUNCATE TABLE %s")
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (1, {1, 2, 3}) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (2, {1, 2}) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (3, {1}) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (4, {}) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (5, null) USING TIMESTAMP ?", TIMESTAMP_2)
+        assert_rows(execute(cql, table, "SELECT k, WRITETIME(s) FROM %s"),
+                    row(5, NO_TIMESTAMP),
+                    row(1, TIMESTAMP_1),
+                    row(2, TIMESTAMP_2),
+                    row(4, TIMESTAMP_2),
+                    row(3, TIMESTAMP_1))
+        assert_rows(execute(cql, table, "SELECT k, WRITETIME(s[1]) FROM %s"),
+                    row(5, NO_TIMESTAMP),
+                    row(1, TIMESTAMP_1),
+                    row(2, TIMESTAMP_2),
+                    row(4, NO_TIMESTAMP),
+                    row(3, TIMESTAMP_1))
+
 # Reproduces #10953 (MAXWRITETIME), #22075 (slice selection) and SCYLLADB-5166
 # (WRITETIME and TTL of a whole non-frozen collection or UDT)
 @pytest.mark.xfail(reason="#10953, #22075, SCYLLADB-5166")
@@ -396,6 +487,97 @@ def testMap(cql, test_keyspace):
                     row(2, [TIMESTAMP_2, TIMESTAMP_2]),
                     row(4, NO_TIMESTAMP),
                     row(3, [TIMESTAMP_1]))
+        assert_rows(execute(cql, table, "SELECT k, WRITETIME(m[1]) FROM %s"),
+                    row(5, NO_TIMESTAMP),
+                    row(1, TIMESTAMP_1),
+                    row(2, TIMESTAMP_2),
+                    row(4, NO_TIMESTAMP),
+                    row(3, TIMESTAMP_1))
+
+# Reproduces #10953 (MAXWRITETIME), #22075 (slice selection) and SCYLLADB-5167
+# (WRITETIME and TTL of an element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, #22075, SCYLLADB-5167")
+def testFrozenMap(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m frozen<map<int,int>>)") as table:
+        # Null column
+        execute(cql, table, "INSERT INTO %s (k) VALUES (1) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "m", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..0]", NO_TIMESTAMP, NO_TTL)
+
+        # Create empty
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, {}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "m", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "m[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..0]", NO_TIMESTAMP, NO_TTL)
+
+        # truncate, since previous columns would win on reconcilliation because of their TTL (CASSANDRA-14592)
+        execute(cql, table, "TRUNCATE TABLE %s")
+
+        # Create with a single element without TTL
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, {1:10}) USING TIMESTAMP ?", TIMESTAMP_1)
+        assertWritetimeAndTTL(cql, table, "m", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[1..]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[2..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[1..1]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[1..2]", TIMESTAMP_1, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[2..2]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[2..3]", NO_TIMESTAMP, NO_TTL)
+
+        # Add a new element to the map with a new timestamp and a TTL
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, {1:10, 2:20}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[0..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[1..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[2..]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[3..]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..0]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[0..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[0..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[0..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[1..1]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[1..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[1..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[2..2]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[2..3]", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "m[3..3]", NO_TIMESTAMP, NO_TTL)
+        assertWritetimeAndTTL(cql, table, "m[3..4]", NO_TIMESTAMP, NO_TTL)
+
+        # Read multiple rows to verify selector reset
+        execute(cql, table, "TRUNCATE TABLE %s")
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, {1:10, 2:20, 3:30}) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (2, {1:10, 2:20}) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (3, {1:10}) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (4, {}) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (5, null) USING TIMESTAMP ?", TIMESTAMP_2)
+        assert_rows(execute(cql, table, "SELECT k, WRITETIME(m) FROM %s"),
+                    row(5, NO_TIMESTAMP),
+                    row(1, TIMESTAMP_1),
+                    row(2, TIMESTAMP_2),
+                    row(4, TIMESTAMP_2),
+                    row(3, TIMESTAMP_1))
         assert_rows(execute(cql, table, "SELECT k, WRITETIME(m[1]) FROM %s"),
                     row(5, NO_TIMESTAMP),
                     row(1, TIMESTAMP_1),
