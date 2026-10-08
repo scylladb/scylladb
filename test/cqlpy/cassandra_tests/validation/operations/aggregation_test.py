@@ -13,6 +13,7 @@ from ...porting import *
 from decimal import Decimal
 from cassandra.protocol import FunctionFailure
 import datetime
+import math
 
 # Scylla's error messages for dropping a non-existent aggregate are
 # different from Cassandra's: "No function named ks.f found" when no
@@ -1582,3 +1583,45 @@ def testAggregateOverflow(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (1, 2, 3);"),
                    row(BYTE_MIN, SHORT_MIN, INT_MIN, LONG_MIN, LONG_MIN * 2))
+
+def testNan(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double)") as table:
+        for i in range(1, 11):
+            if i != 5:
+                execute(cql, table, "insert into %s (bucket, v1, v2) values (?, ?, ?)", i, float(i), float(i))
+
+        execute(cql, table, "insert into %s (bucket, v1, v2) values (?, ?, ?)", 5, math.nan, math.nan)
+
+        # NaN isn't equal to itself, so we check for it explicitly instead
+        # of using assert_rows()
+        r = execute(cql, table, "select avg(v1), avg(v2) from %s where bucket in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);").one()
+        assert math.isnan(r[0]) and math.isnan(r[1])
+        r = execute(cql, table, "select sum(v1), sum(v2) from %s where bucket in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);").one()
+        assert math.isnan(r[0]) and math.isnan(r[1])
+
+def testInfinity(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double)") as table:
+        for positive in [True, False]:
+            FLOAT_INFINITY = math.inf if positive else -math.inf
+            DOUBLE_INFINITY = math.inf if positive else -math.inf
+
+            for i in range(1, 11):
+                if i != 5:
+                    execute(cql, table, "insert into %s (bucket, v1, v2) values (?, ?, ?)", i, float(i), float(i))
+
+            execute(cql, table, "insert into %s (bucket, v1, v2) values (?, ?, ?)", 5, FLOAT_INFINITY, DOUBLE_INFINITY)
+
+            assert_rows(execute(cql, table, "select avg(v1), avg(v2) from %s where bucket in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);"),
+                       row(FLOAT_INFINITY, DOUBLE_INFINITY))
+            assert_rows(execute(cql, table, "select sum(v1), avg(v2) from %s where bucket in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);"),
+                       row(FLOAT_INFINITY, DOUBLE_INFINITY))
+
+            execute(cql, table, "truncate %s")
+
+def testSumPrecision(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double, v3 decimal)") as table:
+        for i in range(1, 18):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3) values (?, ?, ?, ?)", i, to_float(i / 10.0), i / 10.0, Decimal(repr(i / 10.0)))
+
+        assert_rows(execute(cql, table, "select sum(v1), sum(v2), sum(v3) from %s;"),
+                   row(to_float(15.3), 15.3, Decimal("15.3")))
