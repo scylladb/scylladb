@@ -92,7 +92,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     };
 
     struct connections_updater_sync {
-        utils::observer<unsigned> observer;
+        utils::observer<std::unordered_map<sstring, unsigned>> observer;
         connections_updater_sync(const db::config& cfg, storage_manager&);
     };
 
