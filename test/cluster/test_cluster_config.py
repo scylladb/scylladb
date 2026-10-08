@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 from cassandra.protocol import InvalidRequest, SyntaxException  # type: ignore # pylint: disable=no-name-in-module
 
-from test.cluster.util import reconnect_driver
+from test.cluster.util import reconnect_driver, wait_for_config_map_value, wait_for_config_map_value_on_hosts, \
+    CLUSTER_CONFIGS_QUERY, KEYSPACE_CONFIGS_QUERY, TABLE_CONFIGS_QUERY
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_server import ScyllaVersionDescription, get_current_version_description
@@ -27,33 +28,6 @@ def get_old_scylla_version(scylla_binary: Path, fallback: ScyllaVersionDescripti
         return old_scylla_binary, ScyllaVersionDescription(path=str(old_scylla_binary), config={}, argv=[])
 
     return Path(fallback.path), fallback
-
-
-CLUSTER_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_clusters"
-KEYSPACE_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = %s"
-TABLE_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = %s AND table_name = %s"
-
-
-async def wait_for_config_map_value(cql, host, query: str, params: list[str], config_name: str, expected_value: str | None) -> None:
-    async def configs_map_value_equal():
-        rows = await cql.run_async(query, params, host=host)
-        configs = (rows[0].configs if rows else None) or {}
-        value = configs.get(config_name)
-        if value == expected_value:
-            return True
-        logger.info("Observed config map value for %s: %s on host=%s expected=%s", config_name, value, host, expected_value)
-        return None
-
-    # 120s to match the schema-agreement waits below: debug and sanitize builds
-    # propagate schema-backed config much more slowly than dev builds.
-    await wait_for(configs_map_value_equal, deadline=time.time() + 120)
-
-
-async def wait_for_config_map_value_on_hosts(cql, hosts, query: str, params: list[str], config_name: str, expected_value: str | None) -> None:
-    await asyncio.gather(*[
-        wait_for_config_map_value(cql, host, query, params, config_name, expected_value)
-        for host in hosts
-    ])
 
 
 async def get_schema_version(manager: ScyllaClusterManager, server) -> str:
