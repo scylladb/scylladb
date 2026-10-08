@@ -1810,6 +1810,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum number of S3 connections per shard for each connection pool, as a map from the pool name to a positive count. "
         "A scheduling group uses the pool named after it, except that every service-level group uses service_levels and a group "
         "with no pool of its own uses general, which logs a warning naming that group. Entries override the built-in values.")
+    , object_storage_connections_per_shard(this, "object_storage_connections_per_shard", liveness::LiveUpdate, value_status::Used, 128,
+        "Deprecated, superseded by object_storage_connections. This set one budget for the whole shard, which was "
+        "split across the scheduling groups by their shares. Setting it at all is still honored as a shard budget: "
+        "the value is spread over the built-in per-pool values in their own proportions, and no pool is lowered "
+        "below its built-in value, so a budget at or under their total leaves them as they are. Ignored once "
+        "object_storage_connections is set, which names the caps itself.")
     , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
         "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")

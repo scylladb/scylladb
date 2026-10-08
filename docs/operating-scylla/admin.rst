@@ -250,6 +250,19 @@ Tuning options
        ``streaming: 64``, ``backup: 32``, ``maintenance: 16``, ``general: 16``.
        Live-updateable; removing an entry keeps the cap of a pool that already
        exists. The GCS backend ignores this option.
+   * - ``object_storage_connections_per_shard``
+     - 128
+     - Deprecated, superseded by ``object_storage_connections``. This set one
+       budget for the whole shard, which was split across the scheduling groups
+       by their shares. Setting it at all still honors it as a shard budget: the
+       value is spread over the built-in per-pool values in their own proportions,
+       and no pool is lowered below its built-in value. The built-in values total
+       320, so a node configured with 512 gets ``streaming`` 102 instead of 64 and
+       ``backup`` 51 instead of 32, while a value at or under 320 leaves every pool
+       as it is -- the built-in table already asks for more than this option's own
+       default of 128. Setting ``object_storage_connections`` replaces this
+       entirely: the caps come from there and the old budget is not consulted.
+       Live-updateable.
 
 .. _admin-oci-object-storage:
 
