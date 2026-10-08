@@ -333,3 +333,24 @@ def testMultipleOperations(cql, new_to_cassandra_6):
         assertSecurityLabel(cql, "COLUMN", ks, columnRef, "PUBLIC")
         assertComment(cql, "TYPE", ks, typeRef, "Contact information")
         assertSecurityLabel(cql, "TYPE", ks, typeRef, "PERSONAL")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testEmptyAndSpecialCharacters(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        tableRef = f"{ks}.{TABLE_NAME}"
+
+        # Test empty string - should be rejected
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("TABLE", tableRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("TABLE", tableRef, ""))
+
+        # Test special characters
+        specialComment = "Comment with \"quotes\" and '' and \nnewlines"
+        setComment(cql, "TABLE", tableRef, specialComment)
+        assertComment(cql, "TABLE", ks, tableRef, "Comment with \"quotes\" and '' and \nnewlines")
+
+        # Test Unicode characters
+        unicodeComment = "Unicode comment: 测试 ñoño 🚀"
+        setComment(cql, "TABLE", tableRef, unicodeComment)
+        assertComment(cql, "TABLE", ks, tableRef, unicodeComment)
