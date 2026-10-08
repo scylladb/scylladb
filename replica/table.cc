@@ -2881,42 +2881,6 @@ future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num
     });
 }
 
-future<logstor::table_segment_stats> table::get_logstor_segment_stats() const {
-    logstor::table_segment_stats result;
-    if (!uses_logstor()) {
-        co_return std::move(result);
-    }
-
-    result.live_record_bytes = logstor_live_record_bytes();
-
-    const auto segment_size = get_logstor_segment_manager().get_segment_size();
-    const auto bucket_count = 32;
-    const auto bucket_size = segment_size / bucket_count;
-
-    result.histogram.resize(bucket_count);
-
-    co_await const_cast<table*>(this)->parallel_foreach_compaction_group([&] (const compaction_group& cg) -> future<> {
-        const auto& cg_segments = cg.logstor_segments();
-
-        result.compaction_group_count++;
-        result.segment_count += cg_segments.segment_count();
-
-        // iterate the segment list by index - safe to do with yields.
-        // segments may be added or removed. such changes during the loop may leave
-        // a segment counted twice or not at all, which is fine for a histogram.
-        for (size_t i = 0; i < cg_segments.segment_count(); ++i) {
-            auto record_bytes = cg_segments._segment_list[i]->record_bytes(segment_size);
-            auto bucket_index = std::min<size_t>(record_bytes / bucket_size, bucket_count - 1);
-            auto& bucket = result.histogram[bucket_index];
-            bucket.count++;
-            bucket.max_data_size = std::max(bucket.max_data_size, record_bytes);
-            co_await coroutine::maybe_yield();
-        }
-    });
-
-    co_return std::move(result);
-}
-
 void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
