@@ -10,6 +10,7 @@
 
 from ..porting import *
 from cassandra.util import Duration
+from decimal import Decimal
 import time
 
 # Notes on the translation of expected results with nested collections:
@@ -489,3 +490,56 @@ def testInvalidSelect(cql, test_keyspace):
         assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT k, ? FROM %s")
 
         assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT k, null FROM %s")
+
+# The Java test checks the names and types of the prepared statement's bound
+# variables and result columns, which in Python are in the PreparedStatement
+# object's column_metadata and result_metadata. A type's CQL name may be
+# either "text" or its alias "varchar", and a tuple type may be described as
+# frozen (tuples are always frozen).
+def assertColumnSpec(spec, expectedName, expectedType):
+    assert spec[2] == expectedName
+    actualType = spec[3].cql_parameterized_type().replace("varchar", "text")
+    actualType = re.sub(r'^frozen<(tuple<.*>)>$', r'\1', actualType)
+    assert actualType == expectedType
+
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause)
+@pytest.mark.xfail(reason="#5411")
+def testSelectPrepared(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, t text, PRIMARY KEY (pk, ck) )") as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, t) VALUES (1, 1, 'one')")
+        execute(cql, table, "INSERT INTO %s (pk, ck, t) VALUES (1, 2, 'two')")
+        execute(cql, table, "INSERT INTO %s (pk, ck, t) VALUES (1, 3, 'three')")
+
+        query = f"SELECT (int)?, (decimal):adecimal, (text)?, (tuple<int,text>):atuple, pk, ck, t FROM {table} WHERE pk = ?"
+        prepared = cql.prepare(query)
+
+        boundNames = prepared.column_metadata
+
+        # 5 bound variables
+        assert len(boundNames) == 5
+        assertColumnSpec(boundNames[0], "[selection]", "int")
+        assertColumnSpec(boundNames[1], "adecimal", "decimal")
+        assertColumnSpec(boundNames[2], "[selection]", "text")
+        assertColumnSpec(boundNames[3], "atuple", "tuple<int, text>")
+        assertColumnSpec(boundNames[4], "pk", "int")
+
+        resultNames = prepared.result_metadata
+
+        # 7 result "columns"
+        assert len(resultNames) == 7
+        assertColumnSpec(resultNames[0], "(int)?", "int")
+        assertColumnSpec(resultNames[1], "(decimal)?", "decimal")
+        assertColumnSpec(resultNames[2], "(text)?", "text")
+        assertColumnSpec(resultNames[3], "(tuple<int, text>)?", "tuple<int, text>")
+        assertColumnSpec(resultNames[4], "pk", "int")
+        assertColumnSpec(resultNames[5], "ck", "int")
+        assertColumnSpec(resultNames[6], "t", "text")
+
+        assert_rows(cql.execute(prepared, (88, Decimal(10), "foo bar baz", (42, "ursus"), 1)),
+                    row(88, Decimal(10), "foo bar baz", (42, "ursus"),
+                        1, 1, "one"),
+                    row(88, Decimal(10), "foo bar baz", (42, "ursus"),
+                        1, 2, "two"),
+                    row(88, Decimal(10), "foo bar baz", (42, "ursus"),
+                        1, 3, "three"))
