@@ -817,3 +817,83 @@ def testJavaAggregateComplex(cql):
 
 # The test testFunctionDropPreparedStatement was not translated, because it
 # checks Cassandra's internal cache of prepared statements.
+
+def testWrongStateType(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(key int primary key, val int)") as table:
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1)
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS double " +
+                                java_or_lua(cql, "return Double.valueOf(1.0);", "return 1.0"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, "return Integer.valueOf(1);", "return 1"))
+
+        assert_invalid_message_re(cql, ks, WRONG_STATE_TYPE_MESSAGE,
+                             "CREATE AGGREGATE " + ks + "." + unique_name() + "(int) " +
+                             "SFUNC " + shortFunctionName(fState) + ' ' +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                             "INITCOND 1")
+
+def testWrongKeyspace(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE, create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        with create_type(cql, KEYSPACE, "(txt text, i int)") as type:
+            fState = createFunction(cql, KEYSPACE_PER_TEST,
+                                    "CREATE FUNCTION %s(a int, b int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS double " +
+                                    java_or_lua(cql, "return Double.valueOf(1.0);", "return 1.0"))
+
+            fFinal = createFunction(cql, KEYSPACE_PER_TEST,
+                                    "CREATE FUNCTION %s(a int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS int " +
+                                    java_or_lua(cql, "return Integer.valueOf(1);", "return 1"))
+
+            fStateWrong = createFunction(cql, KEYSPACE,
+                                    "CREATE FUNCTION %s(a int, b int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS double " +
+                                    java_or_lua(cql, "return Double.valueOf(1.0);", "return 1.0"))
+
+            fFinalWrong = createFunction(cql, KEYSPACE,
+                                    "CREATE FUNCTION %s(a int) " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS int " +
+                                    java_or_lua(cql, "return Integer.valueOf(1);", "return 1"))
+
+            assert_invalid_message(cql, KEYSPACE, f"Statement on keyspace {KEYSPACE_PER_TEST} cannot refer to a user type in keyspace {KEYSPACE}; user types can only be used in the keyspace they are defined in",
+                                 "CREATE AGGREGATE " + KEYSPACE_PER_TEST + ".test_wrong_ks(int) " +
+                                 "SFUNC " + shortFunctionName(fState) + ' ' +
+                                 "STYPE " + type + " " +
+                                 "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                 "INITCOND 1")
+
+            # Scylla's syntax error messages are different from Cassandra's, so we
+            # don't check the messages of the following syntax errors
+            assert_invalid_syntax(cql, KEYSPACE, # specifying a function using "keyspace.functionname" is a syntax error
+                                 "CREATE AGGREGATE " + KEYSPACE_PER_TEST + ".test_wrong_ks(int) " +
+                                 "SFUNC " + fStateWrong + ' ' +
+                                 "STYPE " + type + " " +
+                                 "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                 "INITCOND 1")
+
+            assert_invalid_syntax(cql, KEYSPACE, # specifying a function using "keyspace.functionname" is a syntax error
+                                 "CREATE AGGREGATE " + KEYSPACE_PER_TEST + ".test_wrong_ks(int) " +
+                                 "SFUNC " + shortFunctionName(fState) + ' ' +
+                                 "STYPE " + type + " " +
+                                 "FINALFUNC " + fFinalWrong + ' ' +
+                                 "INITCOND 1")
+
+            assert_invalid_syntax(cql, KEYSPACE, # specifying a function using "keyspace.functionname" is a syntax error
+                                 "CREATE AGGREGATE " + KEYSPACE_PER_TEST + ".test_wrong_ks(int) " +
+                                 "SFUNC " + shortFunctionName(fState) + ' ' +
+                                 "STYPE " + type + ' ' +
+                                 "FINALFUNC system.min " +
+                                 "INITCOND 1")
