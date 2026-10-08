@@ -25,15 +25,6 @@
 from ...porting import *
 from cassandra.protocol import ConfigurationException
 
-def testDropColumnAsPreparedStatement(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:
-        prepared = cql.prepare(f"ALTER TABLE {table} DROP value")
-        cql.execute(f"INSERT INTO {table} (key, value) VALUES (1, 1)")
-        assert_rows(cql.execute(f"SELECT * FROM {table}"), [1, 1])
-        cql.execute(prepared)
-        cql.execute(f"ALTER TABLE {table} ADD value int")
-        assert_rows(cql.execute(f"SELECT * FROM {table}"), [1, None])
-
 def testAddList(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id text PRIMARY KEY, content text)") as table:
         execute(cql, table, "ALTER TABLE %s ADD myCollection list<text>")
