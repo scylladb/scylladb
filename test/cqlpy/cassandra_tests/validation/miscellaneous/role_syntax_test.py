@@ -142,3 +142,12 @@ def testlistPermissionsSyntaxTest(cql):
             assertValidSyntax(cql, f"LIST ALL PERMISSIONS ON ROLE {r1} OF {r2}")
             assertValidSyntax(cql, f"LIST ALTER PERMISSION ON ROLE {r1} OF {r2}")
             assertValidSyntax(cql, f"LIST ALTER, DROP PERMISSION ON ROLE {r1} OF {r2}")
+
+def testlistRolesSyntaxTest(cql):
+    assertValidSyntax(cql, "LIST ROLES OF r1")
+    assertValidSyntax(cql, "LIST ROLES OF 'r1'")
+    assertValidSyntax(cql, "LIST ROLES OF \"r1\"")
+    assertValidSyntax(cql, "LIST ROLES OF $$ r '1' $$")
+
+# The test roleNameTest was not translated, because it tests an internal
+# Cassandra class (RoleResource), not CQL.
