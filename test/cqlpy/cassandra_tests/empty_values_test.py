@@ -56,6 +56,18 @@ def verifyJsonInsert(cql, table, typ, emptyValue):
 
     verify(cql, table, typ, emptyValue)
 
+# The Java test also has tests for empty values of the types text, blob,
+# date, smallint and time (testEmptyText, testEmptyBytes, testEmptyDate,
+# testEmptySmallInt and testEmptyTime), which we did not translate: Each of
+# them starts with an assumption that an empty value of the type is
+# "meaningless" (Cassandra's AbstractType.isEmptyValueMeaningless()), which
+# is false for these types, so Cassandra always skips them. It is false for
+# different reasons: For text and blob, an empty value is a normal value (an
+# empty string or blob), not something like a null. Date, smallint and time,
+# on the other hand, don't have an empty value at all in Cassandra, which
+# rejects an empty value of these types as invalid. Scylla does accept an
+# empty value of these types, as it does for the other types tested here.
+
 # Each of the original Java tests checks an empty value written both with
 # INSERT JSON with an empty string, and with a plain INSERT. Cassandra accepts
 # an empty string in INSERT JSON as an empty value of any type, but issue
