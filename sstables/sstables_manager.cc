@@ -9,6 +9,9 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <cctype>
+#include <cmath>
+#include <numeric>
+#include <optional>
 #include <ranges>
 #include <unordered_map>
 #include <unordered_set>
@@ -148,8 +151,39 @@ static const s3::group_connections default_group_connections = {
     {"maintenance", 16},
 };
 
-static s3::group_connections make_group_connections(const std::unordered_map<sstring, unsigned>& overrides) {
+static constexpr unsigned deprecated_connections_per_shard_default = 128;
+
+// The option's value is a budget for the whole shard, not a per-group cap, so it is
+// spread over the table above in that table's own proportions. Returns nothing once
+// object_storage_connections is set, which names the caps itself.
+static std::optional<unsigned> deprecated_per_shard_budget(const db::config& cfg) {
+    auto per_shard = cfg.object_storage_connections_per_shard();
+    if (per_shard == deprecated_connections_per_shard_default) {
+        return std::nullopt;
+    }
+    return per_shard;
+}
+
+static s3::group_connections make_group_connections(const std::unordered_map<sstring, unsigned>& overrides,
+        std::optional<unsigned> per_shard_budget) {
     auto connections = default_group_connections;
+    if (overrides.empty() && per_shard_budget) {
+        auto total = std::accumulate(connections.begin(), connections.end(), 0u,
+                [] (unsigned sum, const auto& e) { return sum + e.second; });
+        unsigned scaled = 0;
+        for (auto& [group, limit] : connections) {
+            // Never below the built-in value: the table already asks for more than
+            // the option's own default of 128, so a smaller budget would otherwise
+            // shrink every group on an upgrade that changed nothing.
+            limit = std::max(limit, static_cast<unsigned>(std::lround(double(limit) * per_shard_budget.value() / total)));
+            scaled += limit;
+        }
+        smlogger.warn("object_storage_connections_per_shard is deprecated and no longer caps connections directly; "
+                "its value {} is spread over the built-in groups, which ask for {}, lowering none of them: "
+                "{} connections per shard in total. Set object_storage_connections instead.",
+                per_shard_budget.value(), total, scaled);
+        return connections;
+    }
     for (const auto& [group, limit] : overrides) {
         // A pool capped at zero can never connect, so it would hang rather than fail.
         if (limit == 0) {
@@ -162,7 +196,8 @@ static s3::group_connections make_group_connections(const std::unordered_map<sst
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
-    , _group_connections(make_group_connections(cfg.object_storage_connections()))
+    , _deprecated_per_shard(deprecated_per_shard_budget(cfg))
+    , _group_connections(make_group_connections(cfg.object_storage_connections(), _deprecated_per_shard))
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
     , _connections_updater(std::make_unique<connections_updater_sync>(cfg, *this))
 {
@@ -253,7 +288,7 @@ storage_manager::connections_updater_sync::connections_updater_sync(const db::co
     : observer(cfg.object_storage_connections.observe([&sstm] (const std::unordered_map<sstring, unsigned>& new_value) {
         s3::group_connections connections;
         try {
-            connections = make_group_connections(new_value);
+            connections = make_group_connections(new_value, sstm._deprecated_per_shard);
         } catch (...) {
             smlogger.error("connections_updater: ignoring object_storage_connections update: {}", std::current_exception());
             return;
