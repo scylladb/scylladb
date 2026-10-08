@@ -2031,6 +2031,39 @@ SEASTAR_TEST_CASE(test_raft_replayed_up_to_overwrites) {
     }, sc_replay_config());
 }
 
+// Test: clear_truncations() empties the truncation history of every row and keeps the
+// rest of the descriptor, also over a cell stamped above the current time, as the
+// per-group release counter can stamp it.
+SEASTAR_TEST_CASE(test_clear_truncations_empties_every_row) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        using service::strong_consistency::raft_groups_storage;
+        auto& qp = env.local_qp();
+        const auto stored_gid = make_group_id();
+        const auto stamped_gid = make_group_id();
+        raft_groups_storage::store_descriptor(qp, stored_gid, this_shard_id(), raft::index_t(9), raft::term_t(1),
+                raft::configuration{}, std::vector<service::strong_consistency::truncation_record>{
+                    {.segment = 5, .from = raft::index_t(10), .to = raft::index_t(12)}}).get();
+        const api::timestamp_type ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+        qp.execute_internal(format("INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, truncations) "
+                "VALUES (?, ?, 7, 2, [(6, 3, 4)]) USING TIMESTAMP ?", db::system_keyspace::RAFT_GROUPS),
+                {int16_t(this_shard_id()), stamped_gid.id, int64_t(ahead)},
+                cql3::query_processor::cache_internal::no).get();
+
+        raft_groups_storage::clear_truncations(qp).get();
+
+        const auto stored = raft_groups_storage::load_descriptor(qp, stored_gid, this_shard_id()).get();
+        BOOST_REQUIRE(stored.exists);
+        BOOST_REQUIRE_EQUAL(stored.idx, raft::index_t(9));
+        BOOST_REQUIRE_EQUAL(stored.term, raft::term_t(1));
+        BOOST_REQUIRE(stored.truncations.empty());
+        const auto stamped = raft_groups_storage::load_descriptor(qp, stamped_gid, this_shard_id()).get();
+        BOOST_REQUIRE(stamped.exists);
+        BOOST_REQUIRE_EQUAL(stamped.idx, raft::index_t(7));
+        BOOST_REQUIRE(stamped.truncations.empty());
+    }, sc_replay_config());
+}
+
 // Test: strongly_consistent_tables_start_on_damaged_commitlog starts the node the
 // refusal above stops. The commitlog still reports an intact segment as damaged on some
 // paths (SCYLLADB-4853), so an operator needs a way past the refusal.

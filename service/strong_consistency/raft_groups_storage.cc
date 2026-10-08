@@ -454,6 +454,28 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
             cql3::query_processor::cache_internal::yes);
 }
 
+future<> raft_groups_storage::clear_truncations(cql3::query_processor& qp) {
+    static const auto select_cql = format(
+            "SELECT shard, group_id, truncations, writetime(truncations) AS ts FROM system.{}",
+            db::system_keyspace::RAFT_GROUPS);
+    static const auto clear_cql = format(
+            "UPDATE system.{} USING TIMESTAMP ? SET truncations = ? WHERE shard = ? AND group_id = ?",
+            db::system_keyspace::RAFT_GROUPS);
+    const auto rows = co_await qp.execute_internal(select_cql, cql3::query_processor::cache_internal::no);
+    for (const auto& row : *rows) {
+        if (!row.has("truncations") || deserialize_truncations(row.get_view("truncations")).empty()) {
+            continue;
+        }
+        // Above the cell's own timestamp: releases stamp the row from a per-group
+        // counter (see _last_row_timestamp), which can run ahead of this clock.
+        const api::timestamp_type timestamp = std::max(api::new_timestamp(), row.get_as<int64_t>("ts") + 1);
+        co_await qp.execute_internal(clear_cql,
+                {int64_t(timestamp), serialize_truncations({}), row.get_as<int16_t>("shard"),
+                 row.get_as<utils::UUID>("group_id")},
+                cql3::query_processor::cache_internal::no);
+    }
+}
+
 future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {
     promise<> task_promise;
     auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());

@@ -122,6 +122,7 @@
 #include "db/virtual_tables.hh"
 
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -2218,6 +2219,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // below this boot's segment ids, or a later boot with the feature enabled
                 // ignores those segments.
                 const db::segment_id_type raft_replayed_up_to = sys_ks.local().get_raft_replayed_up_to().get();
+                // system.raft_groups exists only with strongly consistent tables enabled.
+                const bool strongly_consistent_tables = db.local().get_config().check_experimental(
+                        db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
                     db::segment_id_type max_replayed_base_id = 0;
@@ -2256,9 +2260,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // subset of the segments, and replaying a subset can resurrect copies
                     // a truncation superseded. Every segment this run writes, on every
                     // shard, has a higher base id than the replayed ones.
-                    if (raft_replayed_up_to != 0 || db.local().get_config().check_experimental(
-                            db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+                    if (raft_replayed_up_to != 0 || strongly_consistent_tables) {
                         sys_ks.local().set_raft_replayed_up_to(max_replayed_base_id).get();
+                    }
+                    if (strongly_consistent_tables) {
+                        // Every truncation record names a replayed segment or one already
+                        // gone, and no replay reads either again.
+                        service::strong_consistency::raft_groups_storage::clear_truncations(qp.local()).get();
                     }
                     supervisor::notify("replaying commit log - removing old commitlog segments");
 
@@ -2271,11 +2279,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         }
                         return make_ready_future<>();
                     }).get();
-                } else if (raft_replayed_up_to != 0) {
+                } else {
                     // No segment is left, so this run's base ids start from the machine's
                     // uptime (steady_clock). After a machine reboot they can fall under the
-                    // stored value.
-                    sys_ks.local().set_raft_replayed_up_to(0).get();
+                    // stored value, and under the segments truncation records name.
+                    if (raft_replayed_up_to != 0) {
+                        sys_ks.local().set_raft_replayed_up_to(0).get();
+                    }
+                    if (strongly_consistent_tables) {
+                        service::strong_consistency::raft_groups_storage::clear_truncations(qp.local()).get();
+                    }
                 }
             }
 

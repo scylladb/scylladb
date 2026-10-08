@@ -367,6 +367,13 @@ machine reboot they can fall under the stored value. A boot with strongly consis
 tables disabled still maintains a stored value, so that a later boot that enables them
 does not ignore its segments.
 
+Only replay reads truncation records, and every record persisted before a boot names a
+segment of an earlier run. Once the base id is recorded, or when the boot finds no
+segment, no replay reads those segments again, so the boot clears the `truncations` of
+every `system.raft_groups` row before any group starts. Without that, a record would
+survive a machine reboot: `purge_stale_truncations()` drops records below
+`commitlog::min_position()`, and the new ids can start below the record's segment.
+
 A group this shard no longer hosts is discarded rather than recovered: its entries
 belong to whoever holds the tablet now. The test is `hosts_raft_group()`, the same one
 that decides whether the running group is torn down, and it is stage-aware - a leaving

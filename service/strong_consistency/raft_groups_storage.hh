@@ -166,6 +166,9 @@ public:
     static future<> store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t idx, raft::term_t term, const raft::configuration& config,
         const std::vector<truncation_record>& truncations);
+    // Empty the truncation history of every row on this node. Called at startup once no
+    // replay can read the segments of an earlier run again: only replay reads the records.
+    static future<> clear_truncations(cql3::query_processor& qp);
 
 private:
     // Write the released record's descriptor and the group's truncation history into
