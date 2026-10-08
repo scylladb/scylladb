@@ -13,6 +13,7 @@
 #include "cql3/stats.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/statements/modification_spec.hh"
 #include "cql3/statements/statement_type.hh"
 #include "exceptions/coordinator_result.hh"
 
@@ -34,16 +35,27 @@ class operation;
 namespace statements {
 
 
-namespace raw { class modification_statement; }
+namespace raw {
+class modification_statement;
+class update_statement;
+class delete_statement;
+class insert_statement;
+}
+
+class modification_executor;
 
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
+ *
+ * Knows what to write and deliberately not how to commit it. The
+ * modification_executor below does that, chosen when the statement is prepared
+ * from the keyspace it addresses.
  */
 class modification_statement : public cql_statement {
 public:
     const statement_type type;
-    bool _may_use_token_aware_routing;
 private:
+    bool _may_use_token_aware_routing;
     const uint32_t _bound_terms;
     // If we have operation on list entries, such as adding or
     // removing an entry, the modification statement must prefetch
@@ -96,7 +108,7 @@ private:
     std::optional<bool> _is_raw_counter_shard_write;
 
 public:
-    typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
+    using json_cache_opt = modification_spec::json_cache_opt;
 
     modification_statement(
             statement_type type_,
@@ -132,20 +144,11 @@ public:
 
     bool should_reclassify_control_connection() const override;
 
-    void add_operation(std::unique_ptr<operation> op);
-
     void inc_cql_stats(bool is_internal) const;
 
     bool is_conditional() const override;
 
-public:
-    void analyze_condition(expr::expression cond);
-
-    void set_if_not_exist_condition();
-
     bool has_if_not_exist_condition() const;
-
-    void set_if_exist_condition();
 
     bool has_if_exist_condition() const;
 
@@ -153,18 +156,9 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
-    /// row or about a clustering row.  Must run before the checks that read
-    /// applies_only_to_static_columns(), which this can change.
-    void classify_exists_condition(bool restricts_clustering_columns);
-
     /// Checks that the primary key the statement names has no null values, throwing
     /// invalid_request_exception otherwise.
     virtual void validate_primary_key(const query_options& options) const = 0;
-
-    // CAS statement returns a result set. Prepare result set metadata
-    // so that get_result_metadata() returns a meaningful value.
-    void build_cas_result_set_metadata();
 
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const = 0;
@@ -196,6 +190,10 @@ public:
     // returns a result set).
     const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
 
+    // The result set metadata a conditional modification answers with, for a
+    // modification_executor building that result set.
+    const seastar::shared_ptr<metadata>& cas_result_metadata() const { return _metadata; }
+
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
     lw_shared_ptr<query::read_command> read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const;
@@ -204,10 +202,8 @@ public:
     // of mutations, one per partition key, for statements which affect multiple partition keys,
     // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
     virtual utils::chunked_vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
-            const std::vector<query::clustering_range>& ranges,
-            const update_parameters& params,
-            const json_cache_opt& json_cache) const = 0;
+            const modification_spec& spec,
+            const update_parameters& params) const = 0;
 
 protected:
     // One empty mutation per partition the statement addresses, for apply_updates()
@@ -246,25 +242,13 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
-private:
-    future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys, db::large_data_violation_type* violations) const;
-
-    future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
-
 public:
-    /**
-     * Convert statement into a list of mutations to apply on the server
-     *
-     * @param options value for prepared statement markers
-     * @param local if true, any requests (for collections) performed by getMutation should be done locally only.
-     * @param now the current timestamp in microseconds to use if no timestamp is user provided.
-     *
-     * @return vector of the mutations
-     * @throws invalid_request_exception on invalid requests
-     */
-    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
+    // How this modification reaches storage. Set when the statement is prepared
+    // and never null afterwards; see cql3::statements::modification_executor.
+    const modification_executor& executor() const { return *_executor; }
+
+    // Whether a client can route the request by token.
+    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
@@ -279,7 +263,33 @@ protected:
      */
     void reject_in_relations_with_conditions(bool key_is_in_relation, bool clustering_key_has_IN) const;
 
+    /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
+    /// row or about a clustering row.  Must run before the checks that read
+    /// applies_only_to_static_columns(), which this can change.
+    void classify_exists_condition(bool restricts_clustering_columns);
+
+private:
+    const modification_executor* _executor;
+
+    // Prepared statements are shared, so only prepare may build one.
     friend class raw::modification_statement;
+    friend class raw::update_statement;
+    friend class raw::delete_statement;
+    friend class raw::insert_statement;
+
+    void add_operation(std::unique_ptr<operation> op);
+
+    void analyze_condition(expr::expression cond);
+
+    void set_if_not_exist_condition();
+
+    void set_if_exist_condition();
+
+    // CAS statement returns a result set. Prepare result set metadata
+    // so that get_result_metadata() returns a meaningful value.
+    void build_cas_result_set_metadata();
+
+    void set_executor(const modification_executor& e) { _executor = &e; }
 };
 
 }

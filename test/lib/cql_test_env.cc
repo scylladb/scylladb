@@ -22,6 +22,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "cql3/cql_config.hh"
 #include "timeout_config.hh"
 #include <fmt/ranges.h>
@@ -328,10 +329,9 @@ public:
         }
         auto& qo = cql3::query_options::DEFAULT;
         auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
-        cql3::statements::modification_statement::json_cache_opt json_cache = modif_stmt->maybe_prepare_json_cache(qo);
-        std::vector<dht::partition_range> keys = modif_stmt->build_partition_keys(qo, json_cache);
+        cql3::statements::modification_spec spec(*modif_stmt, qo);
 
-        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, json_cache, keys)
+        return cql3::statements::eventual_consistency::get_mutations(*modif_stmt, local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, std::move(spec))
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 
