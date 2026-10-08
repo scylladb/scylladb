@@ -421,3 +421,29 @@ def testCommentAndSecurityLabelOnVirtualKeyspaceFails(cql, new_to_cassandra_6):
     # Test comment and security label on virtual keyspaces
     assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "COMMENT ON KEYSPACE system_views IS 'fail'")
     assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON KEYSPACE system_views IS 'fail'")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testEmptyStringRejection(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        cql.execute(f"CREATE TYPE {ks}.test_type (field1 text, field2 int)")
+
+        tableRef = f"{ks}.{TABLE_NAME}"
+        columnRef = f"{ks}.{TABLE_NAME}.name"
+        typeRef = f"{ks}.test_type"
+        fieldRef = f"{ks}.test_type.field1"
+
+        # Test that empty strings are rejected for comments on all schema elements
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("KEYSPACE", ks, ""))
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("TABLE", tableRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("COLUMN", columnRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("TYPE", typeRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set comment to empty string", buildCommentStatement("FIELD", fieldRef, ""))
+
+        # Test that empty strings are rejected for security labels on all schema elements
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("KEYSPACE", ks, ""))
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("TABLE", tableRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("COLUMN", columnRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("TYPE", typeRef, ""))
+        assert_invalid_message(cql, ks, "Cannot set security label to empty string", buildSecurityLabelStatement("FIELD", fieldRef, ""))
