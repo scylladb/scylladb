@@ -1491,3 +1491,36 @@ def testEmptyValues(cql):
 
             assert_rows(execute(cql, table, "SELECT " + aCON + "(b) FROM %s"), row("finxnullyxnullyxnully"))
             assert_rows(execute(cql, table, "SELECT " + aRNON + "(b) FROM %s"), row("fin"))
+
+APPEND_JAVA = "if (i != null) s.add(String.valueOf(i)); return s;"
+APPEND_LUA = "if i ~= nil then s[#s+1] = tostring(i) end return s"
+
+# Reproduces #14404 (empty collection INITCOND)
+@pytest.mark.xfail(reason="#14404")
+def testEmptyListAndNullInitcond(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        f = createFunction(cql, ks,
+                           "CREATE FUNCTION %s(s list<text>, i int) " +
+                           "CALLED ON NULL INPUT " +
+                           "RETURNS list<text> " +
+                           java_or_lua(cql, APPEND_JAVA, APPEND_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(f) + ' ' +
+                            "STYPE list<text> " +
+                            "INITCOND [  ]")
+
+        assert_rows(execute(cql, ks, "SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(a)),
+                   row("[]"))
+
+        with create_table(cql, ks, "(a int primary key, b int)") as table:
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, null)")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 2)")
+            assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row(["1", "2"]))
+
+# The test testLogbackReload was not translated, because it reproduces a
+# Java-specific problem with class loading when the logging configuration
+# is reloaded (CASSANDRA-11033), and its Java function can't be translated
+# meaningfully to Lua.
