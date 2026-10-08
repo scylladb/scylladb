@@ -268,6 +268,79 @@ def test2ndaryIndexes(cql, test_keyspace):
                     row("key1", 2, "bar"),
                     row("key2", 3, "bar"))
 
+def testStaticColumns(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k text, t int, s text static, v text, PRIMARY KEY (k, t))") as table:
+        execute(cql, table, "INSERT INTO %s (k, t, v, s) values (?, ?, ?, ?)", "key1", 1, "foo1", "st1")
+        execute(cql, table, "INSERT INTO %s (k, t, v, s) values (?, ?, ?, ?)", "key1", 2, "foo2", "st2")
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s (k, t, v, s) values (?, ?, ?, ?)", "key1", 3, "foo3", "st3")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 4, "foo4")
+        execute(cql, table, "INSERT INTO %s (k, t, v, s) values (?, ?, ?, ?)", "key1", 2, "foo2", "st2-repeat")
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s (k, t, v, s) values (?, ?, ?, ?)", "key1", 5, "foo5", "st5")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 6, "foo6")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"),
+                    row("key1", 1, "st5", "foo1"),
+                    row("key1", 2, "st5", "foo2"),
+                    row("key1", 3, "st5", "foo3"),
+                    row("key1", 4, "st5", "foo4"),
+                    row("key1", 5, "st5", "foo5"),
+                    row("key1", 6, "st5", "foo6"))
+
+        assert_rows(execute(cql, table, "SELECT s FROM %s WHERE k = ?", "key1"),
+                    row("st5"),
+                    row("st5"),
+                    row("st5"),
+                    row("st5"),
+                    row("st5"),
+                    row("st5"))
+
+        assert_rows(execute(cql, table, "SELECT DISTINCT s FROM %s WHERE k = ?", "key1"),
+                    row("st5"))
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE k = ? AND t > ? AND t < ?", "key1", 7, 5))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE k = ? AND t > ? AND t < ? ORDER BY t DESC", "key1", 7, 5))
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k = ? AND t = ?", "key1", 2),
+                    row("key1", 2, "st5", "foo2"))
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k = ? AND t = ? ORDER BY t DESC", "key1", 2),
+                    row("key1", 2, "st5", "foo2"))
+
+def testDistinct(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k text, t int, v text, PRIMARY KEY (k, t))") as table:
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 1, "foo1")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 2, "foo2")
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 3, "foo3")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key2", 4, "foo4")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key2", 5, "foo5")
+
+        assert_rows(execute(cql, table, "SELECT DISTINCT k FROM %s"),
+                    row("key1"),
+                    row("key2"))
+
+def teststaticDistinctTest(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "( k int, p int, s int static, PRIMARY KEY (k, p))") as table:
+        execute(cql, table, "INSERT INTO %s (k, p) VALUES (?, ?)", 1, 1)
+        execute(cql, table, "INSERT INTO %s (k, p) VALUES (?, ?)", 1, 2)
+
+        assert_rows(execute(cql, table, "SELECT k, s FROM %s"),
+                    row(1, None),
+                    row(1, None))
+        assert_rows(execute(cql, table, "SELECT DISTINCT k, s FROM %s"),
+                    row(1, None))
+        assert_rows(execute(cql, table, "SELECT DISTINCT s FROM %s WHERE k=?", 1),
+                    row(None))
+        assert_empty(execute(cql, table, "SELECT DISTINCT s FROM %s WHERE k=?", 2))
+
 def test2ndaryIndexBug(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c1 int, c2 int, v int, PRIMARY KEY(k, c1, c2))") as table:
         execute(cql, table, "CREATE INDEX ON %s(v)")
