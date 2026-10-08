@@ -669,3 +669,30 @@ def testJavaUTCollections(cql):
 
             # The Java test repeats this check with each protocol version. We
             # only use the driver's protocol version.
+
+# The CQL native types (Cassandra's CQL3Type.Native), except "empty".
+NATIVE_TYPES = ["ascii", "bigint", "blob", "boolean", "counter", "date", "decimal", "double", "duration",
+                "float", "inet", "int", "smallint", "text", "time", "timestamp", "timeuuid", "tinyint",
+                "uuid", "varchar", "varint"]
+
+def testAllNativeTypes(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        sig = ",".join(NATIVE_TYPES)
+        args = ",".join("arg" + type + " " + type for type in NATIVE_TYPES)
+        f = createFunction(cql, test_keyspace,
+                           "CREATE OR REPLACE FUNCTION %s(" + args + ") " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS int " +
+                           java_or_lua(cql, "return 0;", "return 0"))
+        cql.execute("DROP FUNCTION " + f)
+
+        for type in NATIVE_TYPES:
+            createFunction(cql, KEYSPACE_PER_TEST,
+                           "CREATE OR REPLACE FUNCTION %s(val " + type + ") " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS int " +
+                           java_or_lua(cql, "return 0;", "return 0"))
+
+# The tests testUDFToCqlString and testUDAToCqlString were not translated,
+# because they check the toCqlString() method of Cassandra's internal Java
+# objects for functions and aggregates.
