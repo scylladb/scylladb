@@ -717,4 +717,65 @@ SEASTAR_TEST_CASE(test_prepare_accepts_repair_tombstone_gc_view) {
     });
 }
 
+// Creates a vnode keyspace holding a table, a materialized view and a local
+// secondary index, and starts its migration.
+static sstring start_migration_with_views(cql_test_env& e, const sstring& ks_name) {
+    create_vnode_keyspace_with_table(e, ks_name);
+    e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+            "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v) "
+            "WITH tombstone_gc = {{'mode': 'timeout'}}", ks_name, ks_name)).get();
+    e.execute_cql(format("CREATE INDEX local_idx ON {}.t ((pk), v)", ks_name)).get();
+    e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH tombstone_gc = {{'mode': 'timeout'}}", ks_name)).get();
+    for (auto view_name : {"mv", "local_idx_index"}) {
+        wait_until_view_build_status_success(e, ks_name, view_name);
+    }
+    e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+    return ks_name;
+}
+
+// Schema changes in a keyspace undergoing migration would break the
+// correspondence between its tables and their tablet maps, so they must be
+// rejected until the migration is finalized or rolled back.
+static void require_rejected_during_migration(cql_test_env& e, const sstring& cql) {
+    BOOST_TEST_CONTEXT(cql) {
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql(cql).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("undergoing vnodes-to-tablets migration"));
+    }
+}
+
+SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
+        require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
+        require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
+        // Enabling CDC creates the CDC log table.
+        require_rejected_during_migration(e, format("ALTER TABLE {}.t WITH cdc = {{'enabled': true}}", ks));
+        // Other table updates don't change the set of tables.
+        e.execute_cql(format("ALTER TABLE {}.t ADD w int", ks)).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
+        require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
+        // Altering a view doesn't change the set of tables.
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
+        require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
+        // Altering the backing view of an index doesn't change the set of tables.
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
