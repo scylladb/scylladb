@@ -418,3 +418,66 @@ def testSelectLiteral(cql, test_keyspace):
                                "SELECT min(ck).min FROM %s")
         assert_invalid_message(cql, table, "Invalid field selection: (map<text, int>){'min': system.min(ck), 'max': system.max(ck)} of type frozen<map<text, int>> is not a user type",
                                "SELECT (map<text, int>) {'min' : min(ck), 'max' : max(ck)}.min FROM %s")
+
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause)
+@pytest.mark.xfail(reason="#5411")
+def testCollectionLiteralsWithDurations(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, d1 duration, d2 duration, PRIMARY KEY (pk, ck) )") as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, d1, d2) VALUES (1, 1, 15h, 13h)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, d1, d2) VALUES (1, 2, 10h, 12h)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, d1, d2) VALUES (1, 3, 11h, 13h)")
+
+        h = 3600 * 1000000000   # nanoseconds per hour
+        assert_rows(execute(cql, table, "SELECT [d1, d2] FROM %s"),
+                    row([Duration(0, 0, 15 * h), Duration(0, 0, 13 * h)]),
+                    row([Duration(0, 0, 10 * h), Duration(0, 0, 12 * h)]),
+                    row([Duration(0, 0, 11 * h), Duration(0, 0, 13 * h)]))
+
+        assert_invalid_message(cql, table, "Durations are not allowed inside sets: frozen<set<duration>>", "SELECT {d1, d2} FROM %s")
+
+        assert_rows(execute(cql, table, "SELECT (map<int, duration>){ck : d1} FROM %s"),
+                    row({1: Duration(0, 0, 15 * h)}),
+                    row({2: Duration(0, 0, 10 * h)}),
+                    row({3: Duration(0, 0, 11 * h)}))
+
+        assert_invalid_message(cql, table, "Durations are not allowed as map keys: map<duration, int>",
+                               "SELECT (map<duration, int>){d1 : ck, d2 :ck} FROM %s")
+
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause). Moreover, since Scylla infers the types of tuple literals
+# in the selection clause (SCYLLADB-1229), it interprets the parenthesized
+# ((type){...}) as a tuple with one element, so it can't select a field of it.
+@pytest.mark.xfail(reason="#5411")
+def testSelectUDTLiteral(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int, b text)") as type:
+        with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v " + type + ")") as table:
+            execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 0, user_type("a", 3, "b", "foo"))
+
+            assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT { a: 4, b: 'bar'} FROM %s")
+
+            assert_rows(execute(cql, table, "SELECT k, v, (" + type + "){ a: 4, b: 'bar'} FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), user_type("a", 4, "b", "bar")))
+
+            assert_rows(execute(cql, table, "SELECT k, v, (" + type + ")({ a: 4, b: 'bar'}) FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), user_type("a", 4, "b", "bar")))
+
+            assert_rows(execute(cql, table, "SELECT k, v, ((" + type + "){ a: 4, b: 'bar'}).a FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), 4))
+
+            assert_rows(execute(cql, table, "SELECT k, v, (" + type + "){ a: 4, b: 'bar'}.a FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), 4))
+
+            assert_invalid_message_re(cql, table, CANNOT_INFER, "SELECT { a: 4} FROM %s")
+
+            assert_rows(execute(cql, table, "SELECT k, v, (" + type + "){ a: 4} FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), user_type("a", 4, "b", None)))
+
+            assert_rows(execute(cql, table, "SELECT k, v, (" + type + "){ b: 'bar'} FROM %s"),
+                        row(0, user_type("a", 3, "b", "foo"), user_type("a", None, "b", "bar")))
+
+            execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 1, user_type("a", 5, "b", "foo"))
+            assert_rows(execute(cql, table, "SELECT (" + type + "){ a: max(v.a) , b: 'max'} FROM %s"),
+                        row(user_type("a", 5, "b", "max")))
+            assert_rows(execute(cql, table, "SELECT (" + type + "){ a: min(v.a) , b: 'min'} FROM %s"),
+                        row(user_type("a", 3, "b", "min")))
