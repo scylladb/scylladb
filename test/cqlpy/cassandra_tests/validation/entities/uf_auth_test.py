@@ -350,3 +350,50 @@ def testfunctionInStaticColumnRestrictionInSelect(t):
         functionName = t.createSimpleFunction()
         cql = f"SELECT k FROM {t.table} WHERE k = 0 AND s = {functionCall(functionName)} ALLOW FILTERING"
         t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInRegularCondition(t):
+    functionName = t.createSimpleFunction()
+    cql = f"UPDATE {t.table} SET v2 = 0 WHERE k = 0 AND v1 = 0 IF v2 = {functionCall(functionName)}"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInStaticColumnCondition(t):
+    with t.setupTable("(k int, s int STATIC, v1 int, v2 int, PRIMARY KEY(k, v1))"):
+        functionName = t.createSimpleFunction()
+        cql = f"UPDATE {t.table} SET v2 = 0 WHERE k = 0 AND v1 = 0 IF s = {functionCall(functionName)}"
+        t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInCollectionLiteralCondition(t):
+    with t.setupTable("(k int, v1 int, m_val map<int, int>, PRIMARY KEY(k))"):
+        functionName = t.createSimpleFunction()
+        cql = f"UPDATE {t.table} SET v1 = 0 WHERE k = 0 IF m_val = {{{functionCall(functionName)} : {functionCall(functionName)}}}"
+        t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInCollectionElementCondition(t):
+    with t.setupTable("(k int, v1 int, m_val map<int, int>, PRIMARY KEY(k))"):
+        functionName = t.createSimpleFunction()
+        cql = f"UPDATE {t.table} SET v1 = 0 WHERE k = 0 IF m_val[{functionCall(functionName)}] = {functionCall(functionName)}"
+        t.assertPermissionsOnFunction(cql, functionName)
