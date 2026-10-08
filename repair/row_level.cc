@@ -3786,6 +3786,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         service::migration_manager& mm,
+        sharded<db::cluster_config_manager>& ccm,
         size_t max_repair_memory,
         config cfg)
     : _tsm(tsm)
@@ -3799,6 +3800,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _view_building_worker(vbw)
     , _repair_module(seastar::make_shared<repair::task_manager_module>(tm, *this, max_repair_memory))
     , _mm(mm)
+    , _cluster_config(ccm)
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)

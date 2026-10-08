@@ -24,6 +24,8 @@
 #include "service/storage_service.hh"
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/from_chars_exactly.hh"
@@ -455,6 +457,21 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
+std::chrono::seconds repair_hints_batchlog_flush_timeout(const db::cluster_config_manager& ccm) {
+    const auto* option = db::cluster_config_registry::find("repair_hints_batchlog_flush_timeout_in_seconds");
+    if (!option) {
+        on_internal_error(rlogger, "repair_hints_batchlog_flush_timeout_in_seconds is not a registered cluster config option");
+    }
+    auto timeout = ccm.resolve_integer_config(*option, {});
+    // The registry checks the type of a stored value, not its range.
+    if (timeout <= 0) {
+        auto fallback = db::cluster_config_registry::to_integer(*option, std::nullopt);
+        rlogger.warn("Ignoring repair_hints_batchlog_flush_timeout_in_seconds={}, which is not positive; using {}", timeout, fallback);
+        timeout = fallback;
+    }
+    return std::chrono::seconds(timeout);
+}
+
 future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
         std::unordered_set<locator::host_id> ignore_nodes) {
@@ -480,19 +497,8 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
         });
-        auto hints_timeout = std::chrono::seconds(300);
-        auto batchlog_timeout = std::chrono::seconds(300);
-        // Lets a test shorten the timeouts it would otherwise have to wait out.
-        co_await utils::get_local_injector().inject("repair_flush_hints_batchlog_timeout", [&] (auto& handler) -> future<> {
-            if (auto v = handler.template get<int64_t>("hints_timeout_in_s")) {
-                hints_timeout = std::chrono::seconds(*v);
-            }
-            if (auto v = handler.template get<int64_t>("batchlog_timeout_in_s")) {
-                batchlog_timeout = std::chrono::seconds(*v);
-            }
-            co_return;
-        });
-        repair_flush_hints_batchlog_request req{id.uuid(), {}, hints_timeout, batchlog_timeout};
+        auto timeout = repair_hints_batchlog_flush_timeout(_cluster_config.local());
+        repair_flush_hints_batchlog_request req{id.uuid(), {}, timeout, timeout};
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
