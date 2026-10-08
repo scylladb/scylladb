@@ -253,7 +253,8 @@ const std::vector<operation_option> global_options{
     typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
     typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types"),
     typed_option<unsigned>("shards", "number of shards (only relevant for shardof action)"),
-    typed_option<unsigned>("ignore-msb-bits", 12u, "number of shards (only relevant for shardof action)"),
+    typed_option<unsigned>("ignore-msb-bits", 12u, "number of the most significant bits of the token to ignore when calculating the shard"
+            " (only relevant for shardof action)"),
 };
 
 const std::vector<operation_option> global_positional_options{
