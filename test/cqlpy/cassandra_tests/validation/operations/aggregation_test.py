@@ -674,6 +674,133 @@ def testJavaAggregateInvalidInitcond(cql):
                              "FINALFUNC " + shortFunctionName(fFinal) + " " +
                              "INITCOND 'foobar'")
 
+# This test fails on Cassandra because of a Cassandra bug: when an authorizer
+# is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
+# SFUNC or FINALFUNC fails with a NoSuchElementException server error,
+# instead of an InvalidRequest. This is CASSANDRA-21734.
+def testJavaAggregateIncompatibleTypes(cql, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        fState2 = createFunction(cql, ks,
+                                 "CREATE FUNCTION %s(a double, b double) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS double " +
+                                 java_or_lua(cql, "return Double.valueOf((a!=null?a.doubleValue():0d) + b.doubleValue());", SUM_STATE_LUA))
+
+        fFinal2 = createFunction(cql, ks,
+                                 "CREATE FUNCTION %s(a double) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS text " +
+                                 java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(double)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE double " +
+                             "FINALFUNC " + shortFunctionName(fFinal))
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE double " +
+                             "FINALFUNC " + shortFunctionName(fFinal))
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(double)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal))
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(double)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int")
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE double")
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(double)" +
+                             "SFUNC " + shortFunctionName(fState2) + " " +
+                             "STYPE double " +
+                             "FINALFUNC " + shortFunctionName(fFinal))
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(double)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE double " +
+                             "FINALFUNC " + shortFunctionName(fFinal2))
+
+# This test fails on Cassandra because of a Cassandra bug: when an authorizer
+# is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
+# SFUNC or FINALFUNC fails with a NoSuchElementException server error,
+# instead of an InvalidRequest. This is CASSANDRA-21734.
+def testJavaAggregateNonExistingFuncs(cql, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                             "SFUNC " + shortFunctionName(fState) + "_not_there " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal))
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + "_not_there")
+
+        execute(cql, ks, "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                "SFUNC " + shortFunctionName(fState) + " " +
+                "STYPE int " +
+                "FINALFUNC " + shortFunctionName(fFinal))
+        execute(cql, ks, "DROP AGGREGATE " + ks + ".aggrInvalid(int)")
+
+# This test fails on Cassandra because of a Cassandra bug: when an authorizer
+# is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
+# SFUNC or FINALFUNC fails with a NoSuchElementException server error,
+# instead of an InvalidRequest. This is CASSANDRA-21734.
+def testJavaAggregateWithoutStateOrFinal(cql, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as ks:
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".jSumFooNE1(int) " +
+                             "SFUNC jSumFooNEstate " +
+                             "STYPE int")
+
+        f = createFunction(cql, ks,
+                           "CREATE FUNCTION %s(a int, b int) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS int " +
+                           java_or_lua(cql, "return Integer.valueOf(a + b);", "return a + b"))
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".jSumFooNE2(int) " +
+                             "SFUNC " + shortFunctionName(f) + " " +
+                             "STYPE int " +
+                             "FINALFUNC jSumFooNEfinal")
+
+        execute(cql, ks, "DROP FUNCTION " + f + "(int, int)")
+
 def testJavaAggregate(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
