@@ -25,28 +25,6 @@ class reshard_shard_descriptor;
 
 namespace compaction {
 
-class compaction_task_impl : public tasks::task_manager::task::impl {
-public:
-    compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : tasks::task_manager::task::impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        _status.progress_units = "bytes";
-    }
-
-    virtual std::string type() const override = 0;
-    virtual tasks::is_abortable is_abortable() const noexcept override;
-protected:
-    virtual future<> run() override = 0;
-    future<tasks::task_manager::task::progress> get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const;
-};
-
 using current_task_type = tasks::task_manager::task_ptr;
 
 // The state through which a task waits for its turn among its siblings.
@@ -63,99 +41,11 @@ enum class flush_mode {
 
 inline constexpr auto major_compaction_task_type = "major compaction";
 
-class major_compaction_task_impl : public compaction_task_impl {
-public:
-    major_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id,
-            flush_mode fm = flush_mode::compacted_tables,
-            bool consider_only_existing_data = false) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-        , _flush_mode(fm)
-        , _consider_only_existing_data(consider_only_existing_data)
-    {}
-
-    virtual std::string type() const override {
-        return major_compaction_task_type;
-    }
-
-protected:
-    flush_mode _flush_mode;
-    bool _consider_only_existing_data;
-
-    virtual future<> run() override = 0;
-};
-
 inline constexpr auto cleanup_compaction_task_type = "cleanup compaction";
 
 inline constexpr auto global_cleanup_compaction_task_type = "global cleanup compaction";
 
-class cleanup_compaction_task_impl : public compaction_task_impl {
-public:
-    cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return cleanup_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override = 0;
-};
-
 inline constexpr auto offstrategy_compaction_task_type = "offstrategy compaction";
-
-class offstrategy_compaction_task_impl : public compaction_task_impl {
-public:
-    offstrategy_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return offstrategy_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override = 0;
-};
-
-class sstables_compaction_task_impl : public compaction_task_impl {
-public:
-    sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return "sstables compaction";
-    }
-protected:
-    virtual future<> run() override = 0;
-};
 
 inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables compaction";
 
@@ -240,29 +130,6 @@ public:
     // Starts a reshard of the sstables that destinations assigns to this shard.
     // The sstables are moved out of this shard's entry of destinations.
     future<tasks::task_manager::task_ptr> start_shard_resharding_compaction(sharded<sstables::sstable_directory>& dir, replica::database& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr local_owned_ranges_ptr, bool vnodes_resharding, std::vector<replica::reshard_shard_descriptor>& destinations, tasks::task_info parent_info);
-};
-
-class regular_compaction_task_impl : public compaction_task_impl {
-public:
-    regular_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, "compaction group", std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return "regular compaction";
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::yes;
-    }
-protected:
-    virtual future<> run() override = 0;
 };
 
 } // namespace compaction
