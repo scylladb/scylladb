@@ -31,6 +31,7 @@
 #include <seastar/core/timer.hh>
 #include "locator/host_id.hh"
 #include "service/client_routes.hh"
+#include "service/client_state.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
@@ -38,6 +39,7 @@
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
 #include "utils/only_on_shard0.hh"
+#include "utils/UUID_gen.hh"
 #include "supervisor.hh"
 #include "timeout_config.hh"
 #include "replica/database.hh"
@@ -1119,8 +1121,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // forward instead of really waiting - e.g., to expire a TTL. It is
             // live-updatable, so a test can set it through the system.config
             // virtual table and reset it back to 0 when it is done.
-            auto test_clocks_offset_observer = cfg->test_clocks_offset_seconds.observe([] (int64_t val) {
-                set_clocks_offset(std::chrono::seconds(val));
+            // When it changes, each shard also forgets the last write timestamp
+            // and time UUID it generated: these never go backward, so after a
+            // test undoes a forward jump they would otherwise stay in the future
+            // until the real time catches up. Config values, and therefore their
+            // observers, are per shard, so we observe the option on every shard.
+            static thread_local std::optional<utils::observer<int64_t>> test_clocks_offset_observer;
+            smp::invoke_on_all([&cfg] {
+                test_clocks_offset_observer = cfg->test_clocks_offset_seconds.observe([] (int64_t val) {
+                    set_clocks_offset(std::chrono::seconds(val));
+                    service::client_state::reset_last_timestamp();
+                    utils::UUID_gen::reset_last_used_time();
+                });
+            }).get();
+            auto stop_test_clocks_offset_observer = defer_verbose_shutdown("test clocks offset observer", [] {
+                smp::invoke_on_all([] { test_clocks_offset_observer.reset(); }).get();
             });
             set_clocks_offset(std::chrono::seconds(cfg->test_clocks_offset_seconds()));
 #endif

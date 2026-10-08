@@ -34,6 +34,7 @@ from cassandra import InvalidRequest
 
 from test.pylib.skip_types import skip_env
 from .util import new_test_keyspace, new_test_table, local_process_id
+from . import nodetool
 from .test_batch import generate_big_batch
 
 # A fixture to find the Scylla log file, returning the log file's path.
@@ -123,10 +124,18 @@ def test_log_table_operations(cql, test_keyspace, logfile):
 # which is the case here. We must use it because changing the RF in this test to any other value
 # would result in an error since the keyspace would stop being RF-rack-valid.
 def test_log_alter_keyspace_operation(cql, this_dc, logfile, scylla_only):
-    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
-    with new_test_keyspace(cql, ksdef) as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 0}}")
-        wait_for_log(logfile, r'Update Keyspace.*name=%s.*tablets={\"initial\":\d+' % keyspace)
+    # The "Update Keyspace" message is logged at INFO level by the
+    # migration_manager logger, which the test environment may have
+    # silenced (test/cqlpy/run sets it to "warn"), so enable it here.
+    original_level = nodetool.getlogginglevel(cql, "migration_manager").strip('"')
+    nodetool.setlogginglevel(cql, "migration_manager", "info")
+    try:
+        ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
+        with new_test_keyspace(cql, ksdef) as keyspace:
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 0}}")
+            wait_for_log(logfile, r'Update Keyspace.*name=%s.*tablets={\"initial\":\d+' % keyspace)
+    finally:
+        nodetool.setlogginglevel(cql, "migration_manager", original_level)
 
 
 @pytest.fixture(scope="module")

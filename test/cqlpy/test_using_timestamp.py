@@ -10,7 +10,8 @@
 # aiming to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int, new_test_table, config_value_context
+from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest
 import pytest
 import time
@@ -248,3 +249,33 @@ def test_rewrite_multiple_cells_using_same_timestamp(cql, table1):
     cql.execute(f"INSERT INTO {table} (k, v, w) VALUES ({k}, {values[0]['v']}, {values[0]['w']}) USING TIMESTAMP {ts} AND TTL {ttl1}")
     cql.execute(f"INSERT INTO {table} (k, v, w) VALUES ({k}, {values[1]['v']}, {values[1]['w']}) USING TIMESTAMP {ts} AND TTL {ttl2}")
     assert_values(k, values[1])
+
+# The test-only test_clocks_offset_seconds option lets a test move the
+# server's clocks forward, and then undo this jump by setting the option back.
+# Server-generated write timestamps and time UUIDs never go backward, so
+# without special care, after the jump was undone they would stay in the
+# future until the real time caught up, while the server's clock is already
+# back in the present. Such timestamps broke later unrelated tests - e.g., a
+# CDC test failed because an LWT's write timestamp was "from the future".
+# Check that after the jump is undone, the server's timestamps follow its
+# clock again. We use LWT writes because they use a server-generated
+# timestamp, and now() to generate a time UUID, and use many different
+# partitions so that every shard generates both before and after the jump
+# is undone. We need different partitions after the jump because Paxos
+# rightly never uses a timestamp lower than an earlier one on the same
+# partition.
+def test_clocks_offset_undo(scylla_only, cql, test_keyspace):
+    offset = cql.execute("SELECT value FROM system.config WHERE name = 'test_clocks_offset_seconds'").one()
+    if offset is None:
+        skip_env("Scylla is missing the test_clocks_offset_seconds option - try compiling in dev/debug/sanitize mode")
+    jump = 1000
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u timeuuid") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, v, u) VALUES (?, 1, now()) IF NOT EXISTS")
+        with config_value_context(cql, 'test_clocks_offset_seconds', str(int(offset.value) + jump)):
+            for p in range(20):
+                cql.execute(insert, [p])
+        for p in range(20, 40):
+            cql.execute(insert, [p])
+        for row in cql.execute(f"SELECT p, writetime(v) AS w, tounixtimestamp(u) AS t FROM {table} WHERE p >= 20 ALLOW FILTERING"):
+            assert abs(row.w / 1e6 - time.time()) < jump / 10
+            assert abs(row.t / 1e3 - time.time()) < jump / 10
