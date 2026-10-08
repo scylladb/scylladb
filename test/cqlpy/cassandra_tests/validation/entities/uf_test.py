@@ -10,7 +10,7 @@
 
 from ...porting import *
 from ....util import new_cql
-from cassandra.protocol import Unauthorized
+from cassandra.protocol import FunctionFailure, Unauthorized
 
 # Functions are created in a new keyspace (KEYSPACE_PER_TEST in the original
 # Java test), which is dropped at the end of the test.
@@ -324,3 +324,21 @@ def testUserTypeDrop(cql):
 
         # UT still referenced by UDF
         assert_invalid_message(cql, KEYSPACE, "as it is still used by function", "DROP TYPE " + type)
+
+# The Java test checks the error with each of the protocol versions. We only
+# check the protocol version used by the driver, where the error should be a
+# FunctionFailure.
+# Reproduces SCYLLADB-5159 (wrong error code for a failing function)
+@pytest.mark.xfail(reason="SCYLLADB-5159")
+def testFunctionExecutionExceptionNet(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, dval double)") as table:
+        execute(cql, table, "INSERT INTO %s (key, dval) VALUES (?, ?)", 1, 1.0)
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE OR REPLACE FUNCTION %s(val double) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql, "throw new RuntimeException();", 'error("thrown to unit test - not a bug")'))
+
+        with pytest.raises(FunctionFailure):
+            execute(cql, table, "SELECT " + fName + "(dval) FROM %s WHERE key = 1")
