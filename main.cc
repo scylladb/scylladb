@@ -27,6 +27,7 @@
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
 #include "locator/host_id.hh"
@@ -62,6 +63,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_manifest.hh"
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
@@ -709,6 +711,30 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     const auto host_id = linfo.host_id;
     sys_ks.local().save_local_info(std::move(linfo), broadcast_address, broadcast_rpc_address).get();
     return host_id;
+}
+
+// Starts a new manifest generation in the data and schema commitlogs and seals it.
+// The commitlog_manifest marker is written last: once set, a start that finds no
+// manifest refuses, so the marker must not exist before a sealed generation does.
+static future<> enable_commitlog_manifests(sharded<replica::database>& db, db::system_keyspace& sys_ks) {
+    try {
+        auto& cl = *db.local().commitlog();
+        auto gen = cl.next_manifest_generation();
+        co_await db.invoke_on_all([gen] (replica::database& db) {
+            return db.commitlog()->enable_manifest(gen);
+        });
+        co_await cl.seal_manifest(this_smp_shard_count());
+        if (auto sch_cl = db.local().schema_commitlog(); sch_cl != nullptr) {
+            co_await sch_cl->enable_manifest(sch_cl->next_manifest_generation());
+            co_await sch_cl->seal_manifest(1);
+        }
+        co_await sys_ks.set_scylla_local_param("commitlog_manifest", "1", true);
+        startlog.info("Commitlog manifests enabled, generation {} in {}", gen, cl.active_config().commit_log_location);
+    } catch (...) {
+        // A runtime activation is awaited only at shutdown; log the failure when it happens.
+        startlog.error("Enabling commitlog manifests failed: {}", std::current_exception());
+        throw;
+    }
 }
 
 extern "C" void __attribute__((weak)) __llvm_profile_dump();
@@ -1595,12 +1621,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sys_ks.invoke_on_all(&db::system_keyspace::mark_writable).get();
 
             auto sch_cl = db.local().schema_commitlog();
+            std::vector<sstring> sch_paths;
             if (sch_cl != nullptr) {
-              auto paths = sch_cl->get_segments_to_replay().get();
-              if (!paths.empty()) {
+              sch_paths = sch_cl->get_segments_to_replay().get();
+              if (!sch_paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
                   auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
-                  rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
+                  rp.recover(sch_paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
                   // This is enforced when the table is marked to use
@@ -1608,9 +1635,70 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                   // also sets the use_null_sharder property.
                   // This means only the local memtables need to be flushed.
                   db.local().flush_all_memtables().get();
-                  supervisor::notify("replaying schema commit log - removing old commitlog segments");
-                  sch_cl->delete_segments(std::move(paths)).get();
               }
+            }
+
+            // The marker is set once this node sealed a manifest generation. A commitlog
+            // without any manifest file then means its directory was wiped or replaced.
+            checkpoint(stop_signal, "checking commitlog manifests");
+            // The option is meant for one start: left in place, every later refusal becomes a log line.
+            if (cfg->unsafe_ignore_commitlog_manifest()) {
+                startlog.warn("unsafe_ignore_commitlog_manifest is set: a missing or incomplete commitlog manifest is logged "
+                        "instead of refusing to start. Remove the option after this start.");
+            }
+            if (sys_ks.local().get_scylla_local_param("commitlog_manifest").get()) {
+                for (auto* c : {db.local().commitlog(), sch_cl}) {
+                    if (c == nullptr || c->manifest_found_on_startup()) {
+                        continue;
+                    }
+                    const auto& dir = c->active_config().commit_log_location;
+                    if (!cfg->unsafe_ignore_commitlog_manifest()) {
+                        throw db::commitlog_manifest_error(fmt::format("Commitlog manifest expected in {} but none found. Refusing to start: "
+                                "the commitlog directory was wiped or replaced, and the data it held is lost. Set unsafe_ignore_commitlog_manifest: true to start anyway; "
+                                "a node serving strongly consistent tables should be replaced instead.", dir));
+                    }
+                    startlog.error("Commitlog manifest expected in {} but none found; starting anyway because "
+                            "unsafe_ignore_commitlog_manifest is set, the data in the lost segments is gone", dir);
+                }
+            }
+
+            // Declared before the shutdown hook and the listener: the hook waits for a
+            // runtime activation, and the listener sets manifest_activation.
+            std::optional<shared_future<>> manifest_activation;
+            auto wait_for_manifest_activation = defer_verbose_shutdown("commitlog manifest activation", [&manifest_activation] {
+                if (!manifest_activation) {
+                    return;
+                }
+                try {
+                    manifest_activation->get_future().get();
+                } catch (...) {
+                    // enable_commitlog_manifests() already logged the failure.
+                    startlog.warn("Commitlog manifest activation had failed: {}", std::current_exception());
+                }
+            });
+            // Runs the callback at once when the feature is already enabled, so the
+            // listener is the single trigger at boot and at runtime.
+            auto manifest_listener = feature_service.local().commitlog_manifest.when_enabled([&db, &manifest_activation] {
+                if (!manifest_activation) {
+                    manifest_activation = enable_commitlog_manifests(db, sys_ks.local());
+                }
+            });
+            // A node that has manifest generations keeps maintaining them even without the
+            // feature: the drops below need a sealed new generation to replace the old ones.
+            if (!manifest_activation && (db.local().commitlog()->has_old_manifest_generations() || (sch_cl && sch_cl->has_old_manifest_generations()))) {
+                manifest_activation = enable_commitlog_manifests(db, sys_ks.local());
+            }
+            if (manifest_activation) {
+                manifest_activation->get_future().get();
+            }
+
+            if (sch_cl != nullptr) {
+                // The old generations list the replayed segments, so drop them before the unlink.
+                sch_cl->drop_old_manifest_generations().get();
+                if (!sch_paths.empty()) {
+                    supervisor::notify("replaying schema commit log - removing old commitlog segments");
+                    sch_cl->delete_segments(std::move(sch_paths)).get();
+                }
             }
 
             static sharded<gms::gossip_address_map> gossip_address_map;
@@ -2249,6 +2337,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
                     startlog.info("replaying commit log - flushing memtables");
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
+                }
+                // The old generations list the replayed segments, so drop them before the unlink.
+                // Runs without replay too: a clean shutdown still leaves old generations.
+                cl->drop_old_manifest_generations().get();
+                if (!paths.empty()) {
                     supervisor::notify("replaying commit log - removing old commitlog segments");
 
                     auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/this_smp_shard_count())));

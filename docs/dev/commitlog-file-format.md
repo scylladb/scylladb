@@ -144,3 +144,100 @@ The replayer needs to be called with a state storage (replay_state) to handle
 fragmented entries. When encountering one, we store the data into the state
 buffer for the id, and once we have all fragments (as defined by id, offset and
 remaining), we can report the full entry back to caller.
+
+Manifest
+--------
+
+The data commitlog and the schema commitlog each keep a manifest: the set of segment
+files that may hold data. Hints commitlogs keep none. A segment listed in the manifest
+but missing from disk was removed outside the commitlog, so its data is lost. A node
+that finds such a segment refuses to start.
+
+### Layout
+
+```
+commitlog/
+  CommitLog-4-<id>.log              segments
+  Recycled-CommitLog-4-<id>.log     recycled segments, never listed
+  CommitLog-manifest-<gen>/         one directory per manifest generation
+      0                             shard 0's manifest
+      1                             shard 1's manifest
+      ...
+      record                        written last
+  schema/
+      SchemaLog-4-<id>.log
+      SchemaLog-manifest-<gen>/0, record
+```
+
+A per-shard file is JSON, `{"version":1,"shard":k,"segments":["CommitLog-4-123.log", ...]}`,
+with sorted basenames. `record` is `{"version":1,"shard_count":N}`. Every file is written
+atomically: write `<name>.tmp`, flush, close, rename, sync the directory. Readers ignore
+`*.tmp`. Older binaries skip the generation directories, because segment listing only
+looks at regular files.
+
+### Invariants
+
+- A segment name is added to the manifest, and the manifest is written, before the
+  segment can hold data. A new file is listed only after the commitlog directory is
+  synced.
+- A segment name is removed from the manifest, and the manifest is written, before the
+  file is renamed to `Recycled-*` or unlinked. If that write fails, the files stay on
+  disk and listed, and the next disposal pass retries.
+- A shard writes only its own file and lists only segments it allocated.
+
+Unlisted segments on disk hold no data, or only data that is already flushed. They are
+replayed with a warning.
+
+### Generations and record
+
+Each start that enables manifests creates a new generation, numbered above every
+generation found on disk. Every shard writes its file, then shard 0 writes `record`
+with the shard count. A generation with `record` is sealed and must contain a file for
+every shard. A generation without `record` is an activation that did not finish: its
+names are expected on disk, but the generation is not checked for completeness.
+
+After the commitlog is replayed and flushed, and before the replayed segments are
+deleted, shard 0 removes the old generations. It removes `record` first, so a partially
+removed generation reads as unsealed. Changing the shard count needs nothing extra: the
+old generations are dropped and the new one is written by the current shards.
+
+Once both manifests are sealed, the node sets `commitlog_manifest` in
+`system.scylla_local` and flushes the table, so the marker survives a wiped
+commitlog directory.
+
+### When the node refuses to start
+
+- A listed segment is missing from disk.
+- A sealed generation has no file for one of its shards.
+- A manifest file cannot be parsed, has an unknown version, or `record` has a shard
+  count outside [1, 1024].
+- The `commitlog_manifest` marker is set, but the data or schema commitlog directory
+  has no manifest file at all. An empty generation directory, as left by
+  `find commitlog -type f -delete`, does not count. A new, empty `commitlog_directory`
+  trips the same check; start once with `unsafe_ignore_commitlog_manifest`.
+
+Manifests are created only once the `COMMITLOG_MANIFEST` cluster feature is enabled. A
+node that already has manifests keeps maintaining them.
+
+The `unsafe_ignore_commitlog_manifest` option turns every refusal into an error log
+line. The data in the missing segments is lost. A node serving strongly consistent
+tables may have acknowledged writes it no longer holds, so replace such a node instead.
+The next start drops the old generations and writes a new one, so remove the option
+after the first start.
+
+### Crash windows
+
+| crash point | next start sees | outcome |
+|---|---|---|
+| after file create or recycle rename, before the name is added | unlisted file, no data | warn, replay (skipped by header check) |
+| after the removal is written, before rename or unlink | unlisted file, flushed data only | warn, replay, harmless |
+| unlink failed | same as above | same |
+| during activation, before `record` | unsealed generation | names expected, not completeness-checked |
+| after `record`, before the marker | sealed generation, no marker | verified; activation repeats, marker written |
+| while dropping old generations, before the segments are deleted | unsealed or absent old generation, old segments present | replayed again, as without a manifest |
+| while deleting replayed segments | unlisted old segments | replayed again, as without a manifest |
+| file removed by an operator | listed, absent | refuse |
+| per-shard manifest removed | sealed generation incomplete | refuse |
+| `rm -rf commitlog/*` | marker, no generation | refuse |
+| `find commitlog -type f -delete` | marker, empty generation directories | refuse |
+| `record` removed together with a per-shard file | unsealed generation | not detected (known limit) |

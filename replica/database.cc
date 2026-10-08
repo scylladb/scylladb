@@ -936,6 +936,7 @@ database::init_commitlog() {
     if (_cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         config.descriptor_tag = detail::variant_format_tag;
     }
+    config.use_manifest = true;
     return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
 
@@ -1086,6 +1087,8 @@ void database::init_schema_commitlog() {
     if (features().fragmented_commitlog_entries) {
         c.allow_fragmented_entries = true;
     }
+    c.use_manifest = true;
+    c.ignore_manifest_errors = _cfg.unsafe_ignore_commitlog_manifest();
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(c).get());
 
