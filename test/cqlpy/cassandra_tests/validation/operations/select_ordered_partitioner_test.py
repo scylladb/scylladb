@@ -82,6 +82,166 @@ def testTokenFunctionWithPartitionKeyAndClusteringKeyArguments(cql, test_keyspac
         assert_invalid_message_re(cql, table, ONLY_PARTITION_KEY_MESSAGE,
                              "SELECT * FROM %s WHERE token(a, b) > token(0, 'c')")
 
+# Reproduces SCYLLADB-5153 (the BETWEEN operator).
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testTokenFunctionWithMultiColumnPartitionKey(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b text, PRIMARY KEY ((a, b)))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'a')")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'b')")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'c')")
+
+        # The following three checks depend on the order of tokens:
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?)", 0, "a"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?) and token(a, b) < token(?, ?)", 0, "a", 0, "d"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) between token(?, ?) and token(?, ?)", 0, "b", 0, "d"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?) and token(b) > token(?)", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(a) < token(?, ?) and token(b) > token(?, ?) ",
+                             0, "a", 0, "d", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) BETWEEN token(?, ?) AND token(?, ?) and token(b) > token(?, ?) ",
+                             0, "a", 0, "d", 0, "a")
+        assert_invalid_message_re(cql, table, ARGUMENTS_ORDER_MESSAGE,
+                             "SELECT * FROM %s WHERE token(b, a) > token(0, 'c')")
+        assert_invalid_message_re(cql, table, ARGUMENTS_ORDER_MESSAGE,
+                             "SELECT * FROM %s WHERE token(b, a) BETWEEN token(0, 'c') AND token(0, 'f')")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a, b) > token(?, ?) and token(b) < token(?, ?)", 0, "a", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(b) > token(?, ?)", 0, "a", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(b) > token(?, ?)", 0, "a", 0, "a")
+
+REQUIRES_ALLOW_FILTERING_MESSAGE = "Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
+# For a slice restriction on the partition key, Scylla's error message is
+# "Only EQ and IN relation are supported on the partition key (unless you use
+# the token() function or ALLOW FILTERING)" - even when the query also uses
+# the token() function - instead of Cassandra's message above.
+PARTITION_KEY_SLICE_MESSAGE = re.escape(REQUIRES_ALLOW_FILTERING_MESSAGE) + "|" + re.escape("Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)")
+
+# Reproduces #2060 (restricting both token(a) and the partition key a) and
+# SCYLLADB-5153 (the BETWEEN operator).
+@pytest.mark.xfail(reason="#2060, SCYLLADB-5153")
+def testSingleColumnPartitionKeyWithTokenNonTokenRestrictionsMix(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 0);")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1);")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2);")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3);")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, 4);")
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?);", 1),
+        #           row(2, 2),
+        #           row(3, 3),
+        #           row(4, 4))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) < token(?);", 1),
+        #           row(0, 0))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) >= token(?) AND token(a) <= token(?);",1, 1),
+                   row(1, 1))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) < token(?);",1, 1))
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE a IN (?, ?);", 1, 3),
+                   row(1, 1),
+                   row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a)> token(?) and token(a) <= token(?);", 1, 3),
+        #           row(2, 2),
+        #           row(3, 3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a)= token(2);"),
+                   row(2, 2))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) <= token(?) AND a IN (?, ?);",
+        #                   1, 3, 1, 3),
+        #           row(3, 3))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) < token(?) AND token(a) >= token(?);",
+        #                   1, 3))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) < token(?) AND token(a) >= token(?) AND a IN (?, ?);",
+        #                   1, 3, 1, 3))
+        assert_invalid_message_re(cql, table, PARTITION_KEY_SLICE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) <= token(?) AND a > ?;", 1, 3, 1)
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) <= token(?) AND a IN ?;",
+        #                   1, 3, [1, 3]),
+        #           row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND a = ?;", 1, 3),
+        #           row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND token(a) > token(?);", 3, 1),
+        #           row(3, 3))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND a = ?;", 3, 1))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND token(a) > token(?);", 1, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND a IN (?, ?);", 2, 1, 3),
+        #           row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) < token(?) AND a IN (?, ?) ;", 2, 5, 1, 3),
+        #           row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (?, ?) AND token(a) > token(?) AND token(a) < token(?);", 1, 3, 2, 5),
+        #           row(3, 3))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND a IN (?, ?) AND token(a) < token(?);", 2, 1, 3, 5),
+        #           row(3, 3))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a IN (?, ?) AND token(a) > token(?);", 1, 3, 3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) <= token(?) AND a = ?;", 2, 2),
+                   row(2, 2))
+        #assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) <= token(?) AND a = ?;", 2, 3))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) = token(?) AND a = ?;", 2, 3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) >= token(?) AND token(a) <= token(?) AND a = ?;", 2, 2, 2),
+                   row(2, 2))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a) BETWEEN token(?) AND token(?) AND a = ?;", 2, 2, 2),
+                   row(2, 2))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) >= token(?) AND token(a) < token(?) AND a = ?;", 2, 2, 2))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) <= token(?) AND a = ?;", 2, 2, 2))
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE token(a) > token(?) AND token(a) < token(?) AND a = ?;", 2, 2, 2))
+
+# Reproduces #2060 (restricting both token(a, b) and the partition key
+# columns a and b)
+@pytest.mark.xfail(reason="#2060")
+def testMultiColumnPartitionKeyWithTokenNonTokenRestrictionsMix(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key((a, b)))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 0, 0);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 1, 1);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 2, 2);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 0, 3);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1, 4);")
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?);", 0, 0),
+        #           row(0, 1, 1),
+        #           row(0, 2, 2),
+        #           row(1, 0, 3),
+        #           row(1, 1, 4))
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?) AND a = ? AND b IN (?, ?);",
+        #                   0, 0, 1, 0, 1),
+        #           row(1, 0, 3),
+        #           row(1, 1, 4))
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND token(a, b) > token(?, ?) AND b IN (?, ?);",
+        #                   1, 0, 0, 0, 1),
+        #           row(1, 0, 3),
+        #           row(1, 1, 4))
+
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b IN (?, ?) AND token(a, b) > token(?, ?) AND a = ?;",
+        #                   0, 1, 0, 0, 1),
+        #           row(1, 0, 3),
+        #           row(1, 1, 4))
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IN (?, ?) AND token(a, b) > token(?, ?) AND token(a, b) < token(?, ?) AND a = ?;",
+                            0, 1, 0, 0, 0, 0, 1))
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IN (?, ?) AND token(a, b) > token(?, ?) AND token(a, b) <= token(?, ?) AND a = ?;",
+                            0, 1, 0, 0, 0, 0, 1))
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IN (?, ?) AND token(a, b) >= token(?, ?) AND token(a, b) < token(?, ?) AND a = ?;",
+                            0, 1, 0, 0, 0, 0, 1))
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IN (?, ?) AND token(a, b) = token(?, ?) AND a = ?;",
+                            0, 1, 0, 0, 1))
+
+        assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a, b) > token(?, ?) AND a = ?;", 0, 0, 1)
+
 def testMultiColumnPartitionKeyWithIndexAndTokenNonTokenRestrictionsMix(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, primary key((a, b)))") as table:
         execute(cql, table, "CREATE INDEX ON %s(b)")
