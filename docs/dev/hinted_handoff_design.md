@@ -65,7 +65,7 @@ Hints to the specific destination are stored under the _hints_directory_/\<shard
    * Local node is decommissioned (see "When the current node is decommissioned" below).
 
 ## When the current node is decommissioned (in the absence of Hints Streaming)
- * Send all pending hints out:
+ * Once the node has left the token ring and no longer receives writes, the topology coordinator tells it to drain all pending hints and waits until that is done before marking it as left:
    * If the destination node is not ALIVE or the mutation times out - drop the hint and move on to the next one.
 
 ## Hints streaming (optional)
