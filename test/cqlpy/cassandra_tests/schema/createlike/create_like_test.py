@@ -640,3 +640,20 @@ def testIndexOperationOnCopiedTable(cql, keyspaces):
 # The test testTriggerOperationOnCopiedTable was not translated, because it
 # creates a trigger implemented by a Java class, which Scylla does not
 # support.
+
+# The original Java test executes its statements internally, skipping the
+# permission checks of a client request. Through the CQL protocol, the
+# permission check rejects the statements on system keyspaces first, with an
+# Unauthorized error and a slightly different message.
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE).
+@pytest.mark.xfail(reason="SCYLLADB-5147")
+def testUnSupportedSchema(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text)", "tb")
+    index = createIndex(cql, sourceKs, "tb", "CREATE INDEX ON %s (c)")
+    assert_invalid_throw_message(cql, "", "Source Table '" + targetKs + "." + index + "' doesn't exist", InvalidRequest,
+                              "CREATE TABLE " + sourceKs + ".newtb LIKE  " + targetKs + "." + index + ";")
+    assert_invalid_throw_message(cql, "", "system keyspace is not user-modifiable", Unauthorized,
+                              "CREATE TABLE system.local_clone LIKE system.local ;")
+    assert_invalid_throw_message(cql, "", "system_views keyspace is not user-modifiable", Unauthorized,
+                              "CREATE TABLE system_views.newtb LIKE system_views.snapshots ;")
