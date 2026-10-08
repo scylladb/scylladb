@@ -135,9 +135,46 @@ storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_sto
     : cfg(ep)
 {}
 
+// Every scheduling group that sends S3 requests of its own. A request from any other
+// group shares the general pool below, unless object_storage_connections names it.
+static const s3::group_connections default_group_connections = {
+    {"service_levels", 128},
+    {"memtable", 16},
+    {"memtable_to_cache", 8},
+    {"compaction", 16},
+    {"maintenance_compaction", 16},
+    {"streaming", 64},
+    {"backup", 32},
+    {"maintenance", 16},
+    // Shared by every group with no entry of its own; utils/s3/client.cc falls back to it.
+    // main is one of them: it reaches object storage only while loading sstables at startup,
+    // so it gets the shared pool rather than one that sits idle for the node's whole life.
+    {std::string(s3::general_pool_name), 16},
+};
+
+static s3::group_connections make_group_connections(const std::unordered_map<sstring, unsigned>& overrides) {
+    auto connections = default_group_connections;
+    for (const auto& [group, limit] : overrides) {
+        // A pool capped at zero can never connect, so it would hang rather than fail.
+        if (limit == 0) {
+            throw std::invalid_argument(fmt::format("object_storage_connections: '{}' is 0, expected a positive integer", group));
+        }
+        // Any name is accepted, because a scheduling group may be named after something not in
+        // the table. A misspelled built-in pool is therefore silent: it caps nothing and leaves
+        // the pool it was meant for at its default, so say so rather than let it pass.
+        if (!default_group_connections.contains(group)) {
+            smlogger.warn("object_storage_connections names '{}', which is not a built-in pool. It caps a pool only if "
+                    "a scheduling group of that name sends S3 requests; check the spelling if a built-in pool was meant.",
+                    group);
+        }
+        connections[group] = limit;
+    }
+    return connections;
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
-    , _group_connections(cfg.object_storage_connections_per_shard())
+    , _group_connections(make_group_connections(cfg.object_storage_connections()))
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
     , _connections_updater(std::make_unique<connections_updater_sync>(cfg, *this))
 {
@@ -225,12 +262,19 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
 {}
 
 storage_manager::connections_updater_sync::connections_updater_sync(const db::config& cfg, storage_manager& sstm)
-    : observer(cfg.object_storage_connections_per_shard.observe([&sstm] (unsigned new_value) {
-        smlogger.info("connections_updater: updating connections_per_shard to {}", new_value);
-        sstm._group_connections = new_value;
+    : observer(cfg.object_storage_connections.observe([&sstm] (const std::unordered_map<sstring, unsigned>& new_value) {
+        s3::group_connections connections;
+        try {
+            connections = make_group_connections(new_value);
+        } catch (...) {
+            smlogger.error("connections_updater: ignoring object_storage_connections update: {}", std::current_exception());
+            return;
+        }
+        smlogger.info("connections_updater: updating object_storage_connections to {}", connections);
+        sstm._group_connections = std::move(connections);
         for (auto& [endpoint, ep] : sstm._object_storage_endpoints) {
             if (ep.client) {
-                ep.client->update_group_connections(new_value);
+                ep.client->update_group_connections(sstm._group_connections);
             }
         }
     }))

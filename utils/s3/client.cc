@@ -12,7 +12,7 @@
 #include <cctype>
 #include <initializer_list>
 #include <memory>
-#include <numeric>
+#include <ranges>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
 #include <rapidxml.h>
@@ -90,6 +90,22 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
 
 static constexpr expected_status whole_or_ranged_object = {http::reply::status_type::ok, http::reply::status_type::partial_content};
 
+// A client always has a table to look a pool up in, so looking one up needs no special
+// cases. Nothing but the storage manager hands a client a table - every other client is a
+// test - and one built without it shares a single pool. endpoint_config::max_connections
+// caps every pool alike, so it is folded in here rather than tested on each lookup.
+static group_connections resolve_group_connections(group_connections connections, const endpoint_config& cfg) {
+    if (connections.empty()) {
+        connections.emplace(general_pool_name, endpoint_config::default_max_connections);
+    }
+    if (cfg.max_connections) {
+        for (auto& limit : connections | std::views::values) {
+            limit = *cfg.max_connections;
+        }
+    }
+    return connections;
+}
+
 client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs,
                std::unique_ptr<throttling_controller> tc)
         : _host(std::move(host))
@@ -122,6 +138,7 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
+    _group_connections = resolve_group_connections({}, *_cfg);
     _creds_update_timer.arm(lowres_clock::now());
     register_client_metrics();
 }
@@ -160,18 +177,25 @@ void client::update_group_connections(group_connections connections) {
         s3l.info("config update gate is closed");
         return;
     }
-    auto holder = _config_update_gate.hold();
-    (void)with_semaphore(_rebalance_sem, 1, [this, connections] {
-        _cfg->connections_per_shard = connections;
-        return rebalance_connections();
-    }).handle_exception([holder = std::move(holder)](auto ex) {
-        s3l.warn("Failed to rebalance connections after config update: {}", ex);
-    });
+    _group_connections = resolve_group_connections(std::move(connections), *_cfg);
+    for (auto& [name, gc] : _pools) {
+        auto max_conn = max_connections(name);
+        if (!max_conn) {
+            s3l.warn("Connection pool '{}' has no entry in the new configuration, keeping its current limit of {:d}", name, gc.max_connections);
+            continue;
+        }
+        s3l.debug("Updating connection pool '{}': max_connections={}", name, *max_conn);
+        gc.max_connections = *max_conn;
+        // Not awaited: lowering a cap waits for the pool's busy connections to return.
+        (void)gc.http.set_maximum_connections(*max_conn).handle_exception([holder = _config_update_gate.hold(), &name] (auto ex) {
+            s3l.warn("Failed to update connection pool '{}': {}", name, ex);
+        });
+    }
 }
 
 utils::object_storage_bytes client::bytes() const {
     utils::object_storage_bytes total;
-    for (auto& [sg, gc] : _https) {
+    for (auto& [name, gc] : _pools) {
         total.read += gc.read_bytes;
         total.written += gc.write_bytes;
     }
@@ -180,9 +204,9 @@ utils::object_storage_bytes client::bytes() const {
 
 void client::report_object_storage_metrics(utils::object_storage_metrics_labels labels) {
     _object_storage_metrics_labels = std::move(labels);
-    for (auto& [sg, gc] : _https) {
+    for (auto& [name, gc] : _pools) {
         auto group_labels = *_object_storage_metrics_labels;
-        group_labels.class_name = sg.name();
+        group_labels.class_name = name;
         gc.object_storage_metrics.emplace(gc.http, std::move(group_labels));
     }
 }
@@ -220,9 +244,10 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
         .use_https = url.is_https(),
         .region = std::move(region),
         .role_arn = std::move(iam_role_arn),
-        .connections_per_shard = connections,
     };
-    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
+    auto c = make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
+    c->_group_connections = resolve_group_connections(std::move(connections), *c->_cfg);
+    return c;
 }
 
 future<> client::update_credentials_and_rearm() {
@@ -287,7 +312,7 @@ static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_sourc
     return as ? get_units(sem, 1, *as) : get_units(sem, 1);
 }
 
-client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn), max_connections(max_conn) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -387,76 +412,71 @@ void client::register_client_metrics() {
     // be checked against a real workload.
     defs.emplace_back(sm::make_gauge("refused_request_ratio", [this] { return _request_limiter->refused_ratio(); },
             sm::description("Smoothed share of S3 requests the endpoint is refusing"), {ep_label, request_op}));
+    // Deliberately not skip_when_empty: monitoring alerts on this leaving zero, so it
+    // has to be exported while it still is zero.
+    defs.emplace_back(sm::make_counter("unclassified_groups", [this] { return _unclassified_groups; },
+            sm::description("Scheduling groups with no object_storage_connections entry, which fell back to the shared pool"), {ep_label}));
 
     _client_metrics.add_group("s3", defs);
 }
 
-future<client::group_client&> client::find_or_create_client() {
+client::group_client& client::find_or_create_client() {
     auto sg = current_scheduling_group();
     if (const auto it = _https.find(sg); it != _https.end()) [[likely]] {
-        return make_ready_future<client::group_client&>(it->second);
+        return *it->second;
     }
     return find_or_create_client_slow();
 }
 
-future<client::group_client&> client::find_or_create_client_slow() {
-    // Slow path: serialize creation + rebalance
-    auto sg = current_scheduling_group();
-    auto units = co_await get_units(_rebalance_sem, 1);
-    // Re-check after acquiring lock (another fiber may have created it)
-    auto it = _https.find(sg);
-    if (it != _https.end()) {
-        co_return it->second;
+// Every service-level group shares one pool, including a group renamed by DROP SERVICE LEVEL
+// while its queries still run. The prefixes follow the name patterns in service_level_controller.cc.
+static std::string_view pool_name(const scheduling_group& sg) {
+    std::string_view name = sg.name();
+    if (name.starts_with("sl:") || name.starts_with("sl_deleted:")) {
+        return "service_levels";
     }
-
-    auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
-    unsigned max_connections = _cfg->max_connections.value_or(1);
-    it = _https.emplace(std::piecewise_construct,
-        std::forward_as_tuple(sg),
-        std::forward_as_tuple(std::move(factory), max_connections)
-    ).first;
-    it->second.register_metrics(sg.name(), _host);
-    if (_object_storage_metrics_labels) {
-        auto labels = *_object_storage_metrics_labels;
-        labels.class_name = sg.name();
-        it->second.object_storage_metrics.emplace(it->second.http, std::move(labels));
-    }
-    if (!_cfg->max_connections) {
-        co_await rebalance_connections();
-    }
-    co_return it->second;
+    return name;
 }
 
-future<> client::rebalance_connections() {
-    auto total_shares = std::accumulate(_https.begin(), _https.end(), 0.0f, [](float sum, const auto& entry) { return sum + entry.first.get_shares(); });
-    unsigned total_assigned = 0;
-    scheduling_group max_shares_sg;
-    float max_shares = 0;
-    unsigned max_shares_connections = 0;
+std::optional<unsigned> client::max_connections(std::string_view name) const {
+    auto it = _group_connections.find(std::string(name));
+    if (it == _group_connections.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
 
-    for (auto& [sg, gc] : _https) {
-        unsigned max_connections = std::max(static_cast<unsigned>(_cfg->connections_per_shard * sg.get_shares() / total_shares), 1u);
-        total_assigned += max_connections;
-        if (sg.get_shares() > max_shares) {
-            max_shares = sg.get_shares();
-            max_shares_sg = sg;
-            max_shares_connections = max_connections;
+client::group_client& client::find_or_create_client_slow() {
+    auto sg = current_scheduling_group();
+    auto name = pool_name(sg);
+    auto max_conn = max_connections(name);
+    if (!max_conn) {
+        // Runs once per scheduling group, because _https caches the group's pool below.
+        _unclassified_groups++;
+        s3l.warn("S3 request from scheduling group '{}', which has no object_storage_connections entry; "
+                "it shares the '{}' pool. Give it an entry, or find out why it reaches object storage.",
+                sg.name(), general_pool_name);
+        name = general_pool_name;
+        // Every table carries this entry, so the lookup cannot come back empty.
+        max_conn = max_connections(name);
+    }
+    auto it = _pools.find(sstring(name));
+    if (it == _pools.end()) {
+        auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
+        it = _pools.emplace(std::piecewise_construct,
+            std::forward_as_tuple(name),
+            std::forward_as_tuple(std::move(factory), *max_conn)
+        ).first;
+        it->second.register_metrics(it->first, _host);
+        if (_object_storage_metrics_labels) {
+            auto labels = *_object_storage_metrics_labels;
+            labels.class_name = it->first;
+            it->second.object_storage_metrics.emplace(it->second.http, std::move(labels));
         }
-        s3l.debug("Rebalancing S3 client for scheduling group '{}' (shares={}, total_shares={}, connections_per_shard={}): max_connections={}",
-                  sg.name(),
-                  sg.get_shares(),
-                  total_shares,
-                  _cfg->connections_per_shard,
-                  max_connections);
-        co_await gc.http.set_maximum_connections(max_connections);
+        s3l.debug("Created connection pool '{}' for scheduling group '{}': max_connections={}", it->first, sg.name(), *max_conn);
     }
-
-    // Assign remainder to the group with the most shares
-    unsigned remainder;
-    if (!__builtin_sub_overflow(_cfg->connections_per_shard, total_assigned, &remainder) && remainder > 0) {
-        s3l.debug("Assigning {} remainder connections to scheduling group '{}'", remainder, max_shares_sg.name());
-        co_await _https.at(max_shares_sg).http.set_maximum_connections(max_shares_connections + remainder);
-    }
+    _https.emplace(sg, &it->second);
+    return it->second;
 }
 
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex) {
@@ -598,7 +618,7 @@ future<> client::make_request(http::request req,
     auto holder = _requests_gate.hold();
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
-    auto& gc = co_await find_or_create_client();
+    auto& gc = find_or_create_client();
 
     co_await _request_limiter->acquire(as);
 
@@ -619,10 +639,10 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               expected_status expected,
                               seastar::abort_source* as) {
-    // Held across the lookup as well: find_or_create_client() can suspend and
-    // insert into _https, which close() must not drain in that window.
+    // Held across the lookup, which can create a pool: close() closes this gate and only
+    // then walks _pools, so an insertion after that would rehash the map it is walking.
     auto holder = _requests_gate.hold();
-    auto& gc = co_await find_or_create_client();
+    auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
@@ -1787,7 +1807,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
 
                 if (!_is_finished && !_buffers.empty() && !units) {
-                    auto& gc = co_await _client->find_or_create_client();
+                    auto& gc = _client->find_or_create_client();
                     ++gc.downloads_starving_on_max_concurrency;
                     co_await _bg_fiber_cv.when([this, &units] {
                         if (_is_finished || _buffers.empty())
@@ -2389,7 +2409,7 @@ future<> client::close() noexcept {
         _creds_invalidation_timer.cancel();
         _creds_update_timer.cancel();
     }
-    co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
+    co_await coroutine::parallel_for_each(_pools, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
 
