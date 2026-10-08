@@ -396,3 +396,14 @@ def testCommentAndSecurityLabelOnSystemTableFails(cql, new_to_cassandra_6):
     assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON TABLE system.local IS 'fail'")
     assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "COMMENT ON COLUMN system.local.key IS 'fail'")
     assert_invalid_throw_message(cql, "", "is not user-modifiable", Unauthorized, "SECURITY LABEL ON COLUMN system.local.key IS 'fail'")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testMaterializedViewFails(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int, ck int, v int, PRIMARY KEY (pk, ck))") as table:
+        with create_materialized_view(cql, test_keyspace, f"AS SELECT * FROM {table} WHERE pk IS NOT NULL AND ck IS NOT NULL PRIMARY KEY (ck, pk)") as mvFullName:
+            # Test that comment and security label statements fail
+            assert_invalid_message(cql, table, "Cannot set comment on non-regular table",
+                               "COMMENT ON TABLE " + mvFullName + " IS 'fail'")
+            assert_invalid_message(cql, table, "Cannot set security label on non-regular table",
+                               "SECURITY LABEL ON TABLE " + mvFullName + " IS 'fail'")
