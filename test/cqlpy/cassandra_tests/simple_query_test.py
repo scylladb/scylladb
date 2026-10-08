@@ -382,3 +382,31 @@ def test2ndaryIndexBug(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v=?", 0),
                     row(0, 0, 0, 0))
+
+# Test for Cassandra issue 10958
+def testrestrictionOnRegularColumnWithStaticColumnPresentTest(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id int, id2 int, age int static, extra int, PRIMARY KEY(id, id2))") as table:
+        execute(cql, table, "INSERT INTO %s (id, id2, age, extra) VALUES (?, ?, ?, ?)", 1, 1, 1, 1)
+        execute(cql, table, "INSERT INTO %s (id, id2, age, extra) VALUES (?, ?, ?, ?)", 2, 2, 2, 2)
+        execute(cql, table, "UPDATE %s SET age=? WHERE id=?", 3, 3)
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"),
+                    row(1, 1, 1, 1),
+                    row(2, 2, 2, 2),
+                    row(3, None, 3, None))
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE extra > 1 ALLOW FILTERING"),
+                    row(2, 2, 2, 2))
+
+def testRowFilteringOnStaticColumn(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id int, name text, age int static, PRIMARY KEY (id, name))") as table:
+        for i in range(5):
+            execute(cql, table, "INSERT INTO %s (id, name, age) VALUES (?, ?, ?)", i, "NameDoesNotMatter", i)
+
+        assert_invalid(cql, table, "SELECT id, age FROM %s WHERE age < 1")
+        assert_rows(execute(cql, table, "SELECT id, age FROM %s WHERE age < 1 ALLOW FILTERING"),
+                    row(0, 0))
+        assert_rows(execute(cql, table, "SELECT id, age FROM %s WHERE age > 0 AND age < 3 ALLOW FILTERING"),
+                    row(1, 1), row(2, 2))
+        assert_rows(execute(cql, table, "SELECT id, age FROM %s WHERE age > 3 ALLOW FILTERING"),
+                    row(4, 4))
