@@ -686,3 +686,20 @@ def testTableCopyWithMultiIndexOnSameColumn(cql, keyspaces):
 # The test testTableCopyWithOutIndexes was not translated, because it uses
 # a SASI index, which Scylla does not support, and a custom index
 # implemented by a Java class (StubIndex).
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE), #19999 (SAI indexes on
+# non-vector columns) and #9859 (USING 'legacy_local_table').
+@pytest.mark.xfail(reason="SCYLLADB-5147, #19999, #9859")
+def testManyTableCopyWithIndex(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c int)", "sourcetb")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX myindex ON %s (b) USING 'legacy_local_table'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX myindex_1 ON %s (b) USING 'sai'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX myindex_1_1 ON %s (c) USING 'sai'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX myindex__1 ON %s (c) USING 'legacy_local_table'")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH indexes", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, False, False)
+    resultIndexNames = indexNames(cql, targetKs, targetTb)
+    expectedIndexNames = {"myindex", "myindex_1", "myindex_1_1", "myindex__1"} if differentKs else \
+                         {"myindex_2", "myindex_3", "myindex_1_2", "myindex__2"}
+    assert 0 == len(resultIndexNames - expectedIndexNames)
