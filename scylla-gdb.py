@@ -3329,18 +3329,19 @@ names = {}  # addr (int) -> name (str)
 
 
 def resolve(addr, cache=True, startswith=None):
+    addr = int(addr)  # gdb.Value hashes by identity, so it would never hit the cache
     if addr in names:
-        return names[addr]
+        name = names[addr]
+    else:
+        infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
+        if infosym.startswith('No symbol'):
+            return None
 
-    infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
-    if infosym.startswith('No symbol'):
-        return None
-
-    name = infosym[:infosym.find('in section')]
+        name = infosym[:infosym.find('in section')]
+        if cache:
+            names[addr] = name
     if startswith and not name.startswith(startswith):
         return None
-    if cache:
-        names[addr] = name
     return name
 
 
