@@ -441,6 +441,180 @@ def testJavaUserType(cql):
             # The Java test repeats these checks with each protocol version. We
             # only use the driver's protocol version.
 
+# In Java, UDTValue.getString() of a field which doesn't exist throws an
+# exception, while in Lua reading a missing field just returns nil. So the
+# Lua function checks for this case and raises an error itself.
+GET_TXT_JAVA = "return udt.getString(\"txt\");"
+GET_TXT_LUA = "if udt.txt == nil then error(\"txt is not a field defined in this UDT\") end return udt.txt"
+
+# Reproduces #12787 (a function isn't updated when its UDT is altered) and
+# SCYLLADB-5159 (wrong error code for a failing function)
+@pytest.mark.xfail(reason="#12787, SCYLLADB-5159")
+def testJavaUserTypeRenameField(cql):
+    # The type, table and function are created in a new keyspace instead of
+    # KEYSPACE, so that they will all be dropped at the end of the test.
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = KEYSPACE + "." + unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + type + " (txt text, i int)")
+
+        with create_table(cql, KEYSPACE, "(key int primary key, udt frozen<" + type + ">)") as table:
+            fName = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s( udt " + type + " ) " +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS text " +
+                                   java_or_lua_dollar(cql, GET_TXT_JAVA, GET_TXT_LUA) + ";")
+
+            execute(cql, table, "INSERT INTO %s (key, udt) VALUES (1, {txt: 'one', i:1})")
+
+            assert_rows(execute(cql, table, "SELECT " + fName + "(udt) FROM %s WHERE key = 1"),
+                        row("one"))
+
+            execute(cql, table, "ALTER TYPE " + type + " RENAME txt TO str")
+
+            # The Java test expects an InvalidRequestException, but through the
+            # CQL protocol, Cassandra returns a FunctionFailure error.
+            assert_invalid_throw_message(cql, table, "txt is not a field defined in this UDT", FunctionFailure,
+                                         "SELECT " + fName + "(udt) FROM %s WHERE key = 1")
+
+            execute(cql, table, "ALTER TYPE " + type + " RENAME str TO txt")
+
+            assert_rows(execute(cql, table, "SELECT " + fName + "(udt) FROM %s WHERE key = 1"),
+                        row("one"))
+
+# In Java, UDTValue.getDouble() of a null field returns 0.0, while in Lua
+# reading a null field returns nil. So the Lua function converts nil to 0.
+GET_ADDED_JAVA = "return Double.valueOf(udt.getDouble(\"added\"));"
+GET_ADDED_LUA = "return udt.added or 0"
+
+# Reproduces #12787 (a function isn't updated when its UDT is altered)
+@pytest.mark.xfail(reason="#12787")
+def testJavaUserTypeAddFieldWithReplace(cql):
+    # The type, table and functions are created in a new keyspace instead of
+    # KEYSPACE, so that they will all be dropped at the end of the test.
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = KEYSPACE + "." + unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + type + " (txt text, i int)")
+
+        with create_table(cql, KEYSPACE, "(key int primary key, udt frozen<" + type + ">)") as table:
+            fName1replace = createFunction(cql, KEYSPACE,
+                                           "CREATE FUNCTION %s( udt " + type + ") " +
+                                           "RETURNS NULL ON NULL INPUT " +
+                                           "RETURNS text " +
+                                           java_or_lua_dollar(cql, "return udt.getString(\"txt\");", "return udt.txt") + ";")
+            fName2replace = createFunction(cql, KEYSPACE,
+                                           "CREATE FUNCTION %s( udt " + type + " ) " +
+                                           "CALLED ON NULL INPUT " +
+                                           "RETURNS int " +
+                                           java_or_lua_dollar(cql, "return Integer.valueOf(udt.getInt(\"i\"));", "return udt.i") + ";")
+            fName3replace = createFunction(cql, KEYSPACE,
+                                           "CREATE FUNCTION %s( udt " + type + " ) " +
+                                           "CALLED ON NULL INPUT " +
+                                           "RETURNS double " +
+                                           java_or_lua_dollar(cql, GET_ADDED_JAVA, GET_ADDED_LUA) + ";")
+            fName4replace = createFunction(cql, KEYSPACE,
+                                           "CREATE FUNCTION %s( udt " + type + " ) " +
+                                           "RETURNS NULL ON NULL INPUT " +
+                                           "RETURNS " + type + " " +
+                                           java_or_lua_dollar(cql, "return udt;", "return udt") + ";")
+
+            fName1noReplace = createFunction(cql, KEYSPACE,
+                                             "CREATE FUNCTION %s( udt " + type + " ) " +
+                                             "RETURNS NULL ON NULL INPUT " +
+                                             "RETURNS text " +
+                                             java_or_lua_dollar(cql, "return udt.getString(\"txt\");", "return udt.txt") + ";")
+            fName2noReplace = createFunction(cql, KEYSPACE,
+                                             "CREATE FUNCTION %s( udt " + type + " ) " +
+                                             "CALLED ON NULL INPUT " +
+                                             "RETURNS int " +
+                                             java_or_lua_dollar(cql, "return Integer.valueOf(udt.getInt(\"i\"));", "return udt.i") + ";")
+            fName3noReplace = createFunction(cql, KEYSPACE,
+                                             "CREATE FUNCTION %s( udt " + type + " ) " +
+                                             "CALLED ON NULL INPUT " +
+                                             "RETURNS double " +
+                                             java_or_lua_dollar(cql, GET_ADDED_JAVA, GET_ADDED_LUA) + ";")
+            fName4noReplace = createFunction(cql, KEYSPACE,
+                                             "CREATE FUNCTION %s( udt " + type + " ) " +
+                                             "RETURNS NULL ON NULL INPUT " +
+                                             "RETURNS " + type + " " +
+                                             java_or_lua_dollar(cql, "return udt;", "return udt") + ";")
+
+            execute(cql, table, "INSERT INTO %s (key, udt) VALUES (1, {txt: 'one', i:1})")
+
+            assert_rows(execute(cql, table, "SELECT " + fName1replace + "(udt) FROM %s WHERE key = 1"),
+                        row("one"))
+            assert_rows(execute(cql, table, "SELECT " + fName2replace + "(udt) FROM %s WHERE key = 1"),
+                        row(1))
+
+            # add field
+
+            execute(cql, table, "ALTER TYPE " + type + " ADD added double")
+
+            execute(cql, table, "INSERT INTO %s (key, udt) VALUES (2, {txt: 'two', i:2, added: 2})")
+
+            # note: type references of functions remain at the state _before_ the type mutation
+            # means we need to recreate the functions
+
+            execute(cql, table, f"CREATE OR REPLACE FUNCTION {fName1replace}( udt {type} ) " +
+                    "RETURNS NULL ON NULL INPUT " +
+                    "RETURNS text " +
+                    java_or_lua_dollar(cql, "return " +
+                                            "     udt.getString(\"txt\");",
+                                            "return " +
+                                            "     udt.txt") + ";")
+            execute(cql, table, f"CREATE OR REPLACE FUNCTION {fName2replace}( udt {type} ) " +
+                    "CALLED ON NULL INPUT " +
+                    "RETURNS int " +
+                    java_or_lua_dollar(cql, "return " +
+                                            "     Integer.valueOf(udt.getInt(\"i\"));",
+                                            "return " +
+                                            "     udt.i") + ";")
+            execute(cql, table, f"CREATE OR REPLACE FUNCTION {fName3replace}( udt {type} ) " +
+                    "CALLED ON NULL INPUT " +
+                    "RETURNS double " +
+                    java_or_lua_dollar(cql, "return " +
+                                            "     Double.valueOf(udt.getDouble(\"added\"));",
+                                            "return " +
+                                            "     udt.added or 0") + ";")
+            execute(cql, table, f"CREATE OR REPLACE FUNCTION {fName4replace}( udt {type} ) " +
+                    "RETURNS NULL ON NULL INPUT " +
+                    f"RETURNS {type} " +
+                    java_or_lua_dollar(cql, "return " +
+                                            "     udt;",
+                                            "return " +
+                                            "     udt") + ";")
+            # The Java test also checks Cassandra's internal schema objects
+            # after each of the above statements, which we can't do.
+
+            assert_rows(execute(cql, table, "SELECT " + fName1replace + "(udt) FROM %s WHERE key = 2"),
+                        row("two"))
+            assert_rows(execute(cql, table, "SELECT " + fName2replace + "(udt) FROM %s WHERE key = 2"),
+                        row(2))
+            assert_rows(execute(cql, table, "SELECT " + fName3replace + "(udt) FROM %s WHERE key = 2"),
+                        row(2.0))
+            assert_rows(execute(cql, table, "SELECT " + fName3replace + "(udt) FROM %s WHERE key = 1"),
+                        row(0.0))
+
+            # un-replaced functions will work since the user type has changed
+            # and the UDF has exchanged the user type reference
+
+            assert_rows(execute(cql, table, "SELECT " + fName1noReplace + "(udt) FROM %s WHERE key = 2"),
+                        row("two"))
+            assert_rows(execute(cql, table, "SELECT " + fName2noReplace + "(udt) FROM %s WHERE key = 2"),
+                        row(2))
+            assert_rows(execute(cql, table, "SELECT " + fName3noReplace + "(udt) FROM %s WHERE key = 2"),
+                        row(2.0))
+            assert_rows(execute(cql, table, "SELECT " + fName3noReplace + "(udt) FROM %s WHERE key = 1"),
+                        row(0.0))
+
+            execute(cql, table, "DROP FUNCTION " + fName1replace)
+            execute(cql, table, "DROP FUNCTION " + fName2replace)
+            execute(cql, table, "DROP FUNCTION " + fName3replace)
+            execute(cql, table, "DROP FUNCTION " + fName4replace)
+            execute(cql, table, "DROP FUNCTION " + fName1noReplace)
+            execute(cql, table, "DROP FUNCTION " + fName2noReplace)
+            execute(cql, table, "DROP FUNCTION " + fName3noReplace)
+            execute(cql, table, "DROP FUNCTION " + fName4noReplace)
+
 # The Java functions in this test intentionally mix the package names of two
 # Java UDTValue classes, which isn't relevant for the Lua functions.
 def testJavaUTCollections(cql):
