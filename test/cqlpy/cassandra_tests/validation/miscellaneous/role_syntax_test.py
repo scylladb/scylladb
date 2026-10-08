@@ -126,3 +126,19 @@ def testgrantRevokePermissionsSyntaxTest(cql):
         assertValidSyntax(cql, f"REVOKE MODIFY PERMISSION, SELECT PERMISSION ON KEYSPACE ks FROM {r1}")
         assertValidSyntax(cql, f"REVOKE MODIFY, SELECT ON ALL KEYSPACES FROM {r1}")
         assertValidSyntax(cql, f"REVOKE MODIFY PERMISSION, SELECT PERMISSION ON ALL KEYSPACES FROM {r1}")
+
+# Reproduces SCYLLADB-5145 (multiple permissions in one statement).
+@pytest.mark.xfail(reason="SCYLLADB-5145")
+def testlistPermissionsSyntaxTest(cql):
+    for r1 in ["r1", "'r1'", "\"r1\"", "$$r1$$", "$$ r '1' $$"]:
+        assertValidSyntax(cql, f"LIST ALL PERMISSIONS ON ALL ROLES OF {r1}")
+        assertValidSyntax(cql, f"LIST ALL PERMISSIONS ON ALL KEYSPACES OF {r1}")
+        assertValidSyntax(cql, f"LIST ALL PERMISSIONS OF {r1}")
+        assertValidSyntax(cql, f"LIST MODIFY PERMISSION ON KEYSPACE ks OF {r1}")
+        assertValidSyntax(cql, f"LIST MODIFY, SELECT OF {r1}")
+        assertValidSyntax(cql, f"LIST MODIFY, SELECT PERMISSION ON KEYSPACE ks OF {r1}")
+
+        for r2 in ["r2", "\"r2\"", "'r2'", "$$ r '2' $$"]:
+            assertValidSyntax(cql, f"LIST ALL PERMISSIONS ON ROLE {r1} OF {r2}")
+            assertValidSyntax(cql, f"LIST ALTER PERMISSION ON ROLE {r1} OF {r2}")
+            assertValidSyntax(cql, f"LIST ALTER, DROP PERMISSION ON ROLE {r1} OF {r2}")
