@@ -245,3 +245,45 @@ def testRangeTombstones(cql, test_keyspace):
                     [row("key", 2, t2, "someSemiLargeTextForValue_2_" + str(t2)) for t2 in range(N)])
 
         assert_rows(execute(cql, table, "SELECT * FROM %s"), *expected)
+
+def test2ndaryIndexes(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k text, t int, v text, PRIMARY KEY (k, t))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(v)")
+
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 1, "foo")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key1", 2, "bar")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key2", 1, "foo")
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key2", 2, "foo")
+        execute(cql, table, "INSERT INTO %s (k, t, v) values (?, ?, ?)", "key2", 3, "bar")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v = ?", "foo"),
+                    row("key1", 1, "foo"),
+                    row("key2", 1, "foo"),
+                    row("key2", 2, "foo"))
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v = ?", "bar"),
+                    row("key1", 2, "bar"),
+                    row("key2", 3, "bar"))
+
+def test2ndaryIndexBug(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c1 int, c2 int, v int, PRIMARY KEY(k, c1, c2))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(v)")
+
+        execute(cql, table, "INSERT INTO %s (k, c1, c2, v) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
+        execute(cql, table, "INSERT INTO %s (k, c1, c2, v) VALUES (?, ?, ?, ?)", 0, 1, 0, 0)
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v=?", 0),
+                    row(0, 0, 0, 0),
+                    row(0, 1, 0, 0))
+
+        flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE k=? AND c1=?", 0, 1)
+
+        flush(cql, table)
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v=?", 0),
+                    row(0, 0, 0, 0))
