@@ -299,3 +299,34 @@ def testfunctionInClusteringValuesForDelete(t):
     functionName = t.createSimpleFunction()
     cql = f"DELETE FROM {t.table} WHERE k = 0 AND v1 = {functionCall(functionName)}"
     t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testBatchStatement(t):
+    statements = []
+    functions = []
+    for i in range(3):
+        functionName = t.createSimpleFunction()
+        statements.append(f"INSERT INTO {t.table} (k, v1, v2) VALUES ({i}, {i}, {functionCall(functionName)})")
+        functions.append(functionName)
+    batch = "BEGIN BATCH " + "; ".join(statements) + "; APPLY BATCH"
+
+    def assertUnauthorizedBatch(functionNames):
+        fns = "(" + "|".join(re.escape(f) for f in functionNames) + ")"
+        eventually_unauthorized(lambda: t.session.execute(batch),
+                                f"User {t.role} has no EXECUTE permission on <function {fns}\\(\\)> or any of its parents")
+
+    assertUnauthorizedBatch(functions)
+
+    t.grantExecuteOnFunction(functions[0])
+    assertUnauthorizedBatch(functions[1:])
+
+    t.grantExecuteOnFunction(functions[1])
+    assertUnauthorizedBatch(functions[2:])
+
+    t.grantExecuteOnFunction(functions[2])
+    t.assertAuthorized(batch)
