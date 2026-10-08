@@ -254,3 +254,24 @@ def testSecurityLabelOnField(cql, new_to_cassandra_6):
         result = cql.execute(f"SECURITY LABEL FOR healthcare_provider ON FIELD {fieldRef} IS 'PHI'")
         assertWarningsContain(result, "Provider functionality not implemented.")
         assertSecurityLabel(cql, "FIELD", ks, fieldRef, "PHI")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testFieldWithUseKeyspace(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        cql.execute(f"CREATE TYPE {ks}.address (street text, city text, zip int)")
+        # "USE" cannot be undone, so we do it on a separate connection
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {ks}")
+
+            # Test unqualified field reference with USE KEYSPACE context
+            setComment(ncql, "FIELD", "address.street", "Street address")
+            setSecurityLabel(ncql, "FIELD", "address.street", "PUBLIC")
+            setComment(ncql, "FIELD", "address.city", "City name")
+            setSecurityLabel(ncql, "FIELD", "address.city", "PUBLIC")
+
+        # Verify
+        assertComment(cql, "FIELD", ks, "address.street", "Street address")
+        assertSecurityLabel(cql, "FIELD", ks, "address.street", "PUBLIC")
+        assertComment(cql, "FIELD", ks, "address.city", "City name")
+        assertSecurityLabel(cql, "FIELD", ks, "address.city", "PUBLIC")
