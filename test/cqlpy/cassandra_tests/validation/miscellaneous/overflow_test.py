@@ -12,6 +12,7 @@
 # migrated from python dtests, CASSANDRA-9160
 
 from ...porting import *
+import math
 
 # Test support for nulls
 # migrated from cql_tests.py:TestCQL.null_support_test()
@@ -143,3 +144,25 @@ def testColumnNameValidation(cql, test_keyspace):
 
         # Insert a non-version 1 uuid
         assert_invalid(cql, table, "INSERT INTO %s (k, c, v) VALUES (0, 0, 550e8400-e29b-41d4-a716-446655440000)")
+
+# Migrated from cql_tests.py:TestCQL.nan_infinity_test()
+def testNanInfinityValues(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(f float PRIMARY KEY)") as table:
+        execute(cql, table, "INSERT INTO %s (f) VALUES (NaN)")
+        execute(cql, table, "INSERT INTO %s (f) VALUES (-NaN)")
+        execute(cql, table, "INSERT INTO %s (f) VALUES (Infinity)")
+        execute(cql, table, "INSERT INTO %s (f) VALUES (-Infinity)")
+
+        selected = getRows(execute(cql, table, "SELECT * FROM %s"))
+
+        # selected should be[[nan],[inf],[-inf]],
+        # but assert element - wise because NaN!=NaN
+        assert len(selected) == 3
+        assert len(selected[0]) == 1
+        assert math.isnan(selected[0][0])
+
+        assert math.isinf(selected[1][0]) #inf
+        assert selected[1][0] > 0
+
+        assert math.isinf(selected[2][0]) #-inf
+        assert selected[2][0] < 0
