@@ -98,3 +98,28 @@ def testEmptyBlob(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT * FROM %s"),
                    row(0, b""))
+
+def fill(cql, table):
+    for i in range(2):
+        for j in range(2):
+            execute(cql, table, "INSERT INTO %s (k1, k2, v) VALUES (?, ?, ?)", i, j, i + j)
+
+    return getRows(execute(cql, table, "SELECT * FROM %s"))
+
+# Migrated from cql_tests.py:TestCQL.empty_in_test()
+def testEmpty(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k1 int, k2 int, v int, PRIMARY KEY (k1, k2))") as table:
+        # Inserts a few rows to make sure we don 't actually query something
+        rows = fill(cql, table)
+
+        # Test empty IN() in SELECT
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE k1 IN ()"))
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE k1 = 0 AND k2 IN ()"))
+
+        # Test empty IN() in DELETE
+        execute(cql, table, "DELETE FROM %s WHERE k1 IN ()")
+        assertArrayEquals(rows, getRows(execute(cql, table, "SELECT * FROM %s")))
+
+        # Test empty IN() in UPDATE
+        execute(cql, table, "UPDATE %s SET v = 3 WHERE k1 IN () AND k2 = 2")
+        assertArrayEquals(rows, getRows(execute(cql, table, "SELECT * FROM %s")))
