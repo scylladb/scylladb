@@ -717,7 +717,7 @@ class std_unordered_set:
         while p:
             pc = p.cast(self.node_ptr_type)
             pc = deref_libcpp_hashtable_nodes_data_member(pc)
-            pc = p.cast(self.value_ptr_type)
+            pc = pc.cast(self.value_ptr_type)
             yield pc.dereference()
             p = p['_M_nxt']
 
