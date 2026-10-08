@@ -244,3 +244,37 @@ def testInvalidatePreparedStatementOnAlterUnchangedMetadataV4(cql):
 @pytest.mark.parametrize("version", [V5])
 def testInvalidatePreparedStatementOnAlterUnchangedMetadataV5(cql, version):
     invalidatePreparedStatementOnAlterUnchangedMetadata(cql, version)
+
+# The Java test uses protocol version 5, but nothing in it is specific to
+# this version, so like testInvalidatePreparedStatementsOnDrop we run it with
+# both versions 4 and 5. The Java test (in Cassandra 6) also checks a
+# prepared Accord transaction, which we don't.
+@pytest.mark.parametrize("version", [V4, V5])
+def testStatementRePreparationOnReconnect(cql, test_keyspace, version):
+    with sessionNet(cql, version) as session:
+        session.execute("USE " + test_keyspace)
+
+        with create_table(cql, test_keyspace, "(id int PRIMARY KEY, cid int, val text)") as table:
+            insertCQL = "INSERT INTO " + table + " (id, cid, val) VALUES (?, ?, ?)"
+            selectCQL = "Select * from " + table + " where id = ?"
+
+            preparedInsert = session.prepare(insertCQL)
+            preparedSelect = session.prepare(selectCQL)
+
+            session.execute(preparedInsert.bind((1, 1, "value")))
+            assert len(list(session.execute(preparedSelect.bind((1,))))) == 1
+
+            with sessionNet(cql, version) as newSession:
+                newSession.execute("USE " + test_keyspace)
+                preparedInsert = newSession.prepare(insertCQL)
+                preparedSelect = newSession.prepare(selectCQL)
+                newSession.execute(preparedInsert.bind((1, 1, "value")))
+
+                assert len(list(newSession.execute(preparedSelect.bind((1,))))) == 1
+
+# The test prepareAndExecuteWithCustomExpressions was not translated, because
+# it uses a custom index implemented by a Java class in Cassandra's test code.
+
+# The test testMetadataFlagsWithLWTs was not translated, because it checks
+# the flags in the result metadata of protocol messages, using Cassandra's
+# internal protocol client.
