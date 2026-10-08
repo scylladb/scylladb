@@ -903,3 +903,17 @@ async def wait_for_config_map_value_on_hosts(cql, hosts, query: str, params: lis
         wait_for_config_map_value(cql, host, query, params, config_name, expected_value)
         for host in hosts
     ])
+
+
+async def set_cluster_config(manager: ScyllaClusterManager, cql, servers: list[ServerInfo], hosts, name: str, value: str) -> None:
+    """
+    Sets a cluster scope option and waits until every node resolves the new value. The schema map
+    holds the value before the cluster config cache, which is refreshed in the background, does.
+    Needs cluster_config_manager logging at debug level.
+    """
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+    await cql.run_async(f"ALTER CLUSTER WITH {name} = {value}")
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], name, value)
+    for log, mark in zip(logs, marks):
+        await log.wait_for(rf"Refreshed cluster config cache.*\b{name}={value}\b", from_mark=mark, timeout=60)

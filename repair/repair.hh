@@ -48,6 +48,7 @@ class database;
 
 class repair_service;
 namespace db {
+class cluster_config_manager;
     namespace view {
         class view_builder;
     }
@@ -283,6 +284,11 @@ struct repair_flush_hints_batchlog_request {
 struct repair_flush_hints_batchlog_response {
     gc_clock::time_point flush_time;
 };
+
+// The timeout a flush request gives each node for its hints and for its
+// batchlog, from the repair_hints_batchlog_flush_timeout_in_seconds cluster
+// config option.
+std::chrono::seconds repair_hints_batchlog_flush_timeout(const db::cluster_config_manager& ccm);
 
 struct tablet_repair_task_meta {
     sstring keyspace_name;
