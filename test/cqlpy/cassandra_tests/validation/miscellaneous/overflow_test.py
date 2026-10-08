@@ -67,3 +67,10 @@ def testUnescapedString(cql, test_keyspace):
         #The ' is being escaped in python, but only ' is forwarded
         #over the wire instead of \'.
         assert_invalid_throw(cql, table, SyntaxException, "INSERT INTO %s (k, c) VALUES ('foo', 'CQL is cassandra\'s best friend')")
+
+# Migrated from cql_tests.py:TestCQL.boolean_test()
+def testBoolean(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k boolean PRIMARY KEY, b boolean)") as table:
+        execute(cql, table, "INSERT INTO %s (k, b) VALUES (true, false)")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k = true"),
+                   row(true, false))
