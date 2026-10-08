@@ -22,6 +22,7 @@ from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
 
 from .. import nodetool
+from test.pylib.skip_types import skip_env
 from ..test_materialized_view import wait_for_view_built
 
 # A utility function for creating a new temporary table with a given schema.
@@ -93,11 +94,22 @@ def create_materialized_view(cql, keyspace, arg):
 # With wait=False, this is the translation of CQLTester.createViewAsync(),
 # and the caller can wait with wait_for_view_built() - e.g., to wait for
 # several views being built in parallel.
+#
+# Some Cassandra view tests create views restricting non-key columns of the
+# base table (e.g., "WHERE c = 1" where c is a regular column), which
+# Cassandra allows only if its "cassandra.mv.allow_filtering_nonkey_columns_unsafe"
+# system property is set. We can't set it through CQL, so if it isn't set,
+# create_view() skips the test when running on Cassandra.
 @contextmanager
 def create_view(cql, table, query, wait=True):
     keyspace = table.split('.')[0]
     view = keyspace + "." + unique_name()
-    cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
+    try:
+        cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
+    except InvalidRequest as e:
+        if not is_scylla(cql) and "Non-primary key columns can only be restricted with 'IS NOT NULL'" in str(e):
+            skip_env("Cassandra's cassandra.mv.allow_filtering_nonkey_columns_unsafe system property is not set")
+        raise
     try:
         if wait:
             wait_for_view_built(cql, view)
