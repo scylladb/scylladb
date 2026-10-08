@@ -541,6 +541,44 @@ def testUserTypeDrop(cql):
         # UT still referenced by UDF
         assert_invalid_message(cql, KEYSPACE, "as it is still used by function", "DROP TYPE " + type)
 
+# Reproduces SCYLLADB-5169 (CREATE OR REPLACE FUNCTION should not change the
+# return type or null-input behavior)
+@pytest.mark.xfail(reason="SCYLLADB-5169")
+def testReplaceAllowNulls(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        fNulls = createFunction(cql, KEYSPACE,
+                                "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+        fNoNulls = createFunction(cql, KEYSPACE,
+                                  "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+
+        assert_invalid(cql, KEYSPACE, "CREATE OR REPLACE FUNCTION " + fNulls + "(val int) " +
+                       "RETURNS NULL ON NULL INPUT " +
+                       "RETURNS text " +
+                       java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+        assert_invalid(cql, KEYSPACE, "CREATE OR REPLACE FUNCTION " + fNoNulls + "(val int) " +
+                       "CALLED ON NULL INPUT " +
+                       "RETURNS text " +
+                       java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+
+        execute(cql, KEYSPACE, "CREATE OR REPLACE FUNCTION " + fNulls + "(val int) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS text " +
+                java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+        execute(cql, KEYSPACE, "CREATE OR REPLACE FUNCTION " + fNoNulls + "(val int) " +
+                "RETURNS NULL ON NULL INPUT " +
+                "RETURNS text " +
+                java_or_lua(cql, 'return "foo bar";', 'return "foo bar"') + ";")
+
+# The test testBrokenFunction was not translated, because it replaces a
+# function in Cassandra's internal schema by a "broken" one, which can't be
+# done through CQL.
+
 # The Java test checks the error with each of the protocol versions. We only
 # check the protocol version used by the driver, where the error should be a
 # FunctionFailure.
