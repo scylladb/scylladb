@@ -703,3 +703,21 @@ def testManyTableCopyWithIndex(cql, keyspaces):
     expectedIndexNames = {"myindex", "myindex_1", "myindex_1_1", "myindex__1"} if differentKs else \
                          {"myindex_2", "myindex_3", "myindex_1_2", "myindex__2"}
     assert 0 == len(resultIndexNames - expectedIndexNames)
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and #9859 (Cassandra's table
+# option cdc = true).
+@pytest.mark.xfail(reason="SCYLLADB-5147, #9859")
+def testTableCopyWithIndexesAndTableProperty(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text, d int)", "sourcetb")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (b)")
+
+    targetTbWithAll = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH INDEXES AND crc_check_chance = 0.8 AND cdc = true", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTbWithAll, False, True, True)
+
+    source = getTableMetadata(cql, sourceKs, sourceTb)
+    target = getTableMetadata(cql, targetKs, targetTbWithAll)
+    assert source["params"] != target["params"]
+    assert getCdc(cql, targetKs, targetTbWithAll)
+    assert not getCdc(cql, sourceKs, sourceTb)
+    assert 0.8 == target["params"]["crc_check_chance"]
