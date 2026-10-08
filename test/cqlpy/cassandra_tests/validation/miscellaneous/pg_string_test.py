@@ -55,3 +55,9 @@ def testPgSyleInsert(cql, test_keyspace):
 
         # invalid syntax
         assert_invalid_syntax(cql, table, "INSERT INTO %s (key, val) VALUES ($ascii$prim$$$key$invterm$, $txt$some '' arbitrary value$txt$)")
+
+def testMarkerPgFail(cql, test_keyspace):
+    # must throw SyntaxException - not StringIndexOutOfBoundsException or similar
+    with pytest.raises(SyntaxException):
+        cql.execute("create function " + test_keyspace + "." + unique_name() + " ( input double ) called on null input returns bigint language java\n" +
+                "AS $javasrc$return 0L;$javasrc$;")
