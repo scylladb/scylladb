@@ -253,3 +253,115 @@ def testAggregateOnCounters(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
                    row(2, 4, 2, 3, 6))
+
+def testAggregateWithSets(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s set<int>, fs frozen<set<int>>)") as table:
+        # Test with empty table
+        select = "SELECT count(s), count(fs), min(s), min(fs), max(s), max(fs) FROM %s"
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, select),
+                          "system.count(s)", "system.count(fs)",
+                          "system.min(s)", "system.min(fs)",
+                          "system.max(s)", "system.max(fs)")
+        assert_rows(execute(cql, table, select), row(0, 0, null, null, null, null))
+
+        # Test with not-empty table
+        execute(cql, table, "INSERT INTO %s (k, s, fs) VALUES (1, {1, 2}, {1, 2})")
+        execute(cql, table, "INSERT INTO %s (k, s, fs) VALUES (2, {1, 2, 3}, {1, 2, 3})")
+        execute(cql, table, "INSERT INTO %s (k, s, fs) VALUES (3, {2, 1}, {2, 1})")
+        assert_rows(execute(cql, table, select), row(3, 3, {1, 2}, {1, 2}, {1, 2, 3}, {1, 2, 3}))
+
+def testAggregateWithLists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l list<int>, fl frozen<list<int>>)") as table:
+        # Test with empty table
+        select = "SELECT count(l), count(fl), min(l), min(fl), max(l), max(fl) FROM %s"
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, select),
+                          "system.count(l)", "system.count(fl)",
+                          "system.min(l)", "system.min(fl)",
+                          "system.max(l)", "system.max(fl)")
+        assert_rows(execute(cql, table, select), row(0, 0, null, null, null, null))
+
+        # Test with not-empty table
+        execute(cql, table, "INSERT INTO %s (k, l, fl) VALUES (1, [1, 2], [1, 2])")
+        execute(cql, table, "INSERT INTO %s (k, l, fl) VALUES (2, [1, 2, 3], [1, 2, 3])")
+        execute(cql, table, "INSERT INTO %s (k, l, fl) VALUES (3, [2, 1], [2, 1])")
+        assert_rows(execute(cql, table, select),
+                   row(3, 3, [1, 2], [1, 2], [2, 1], [2, 1]))
+
+def testAggregateWithMaps(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<int, int>, fm frozen<map<int, int>>)") as table:
+        # Test with empty table
+        select = "SELECT count(m), count(fm), min(m), min(fm), max(m), max(fm) FROM %s"
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, select),
+                          "system.count(m)", "system.count(fm)",
+                          "system.min(m)", "system.min(fm)",
+                          "system.max(m)", "system.max(fm)")
+        assert_rows(execute(cql, table, select), row(0, 0, null, null, null, null))
+
+        # Test with not-empty table
+        execute(cql, table, "INSERT INTO %s (k, m, fm) VALUES (1, {1:10, 2:20}, {1:10, 2:20})")
+        execute(cql, table, "INSERT INTO %s (k, m, fm) VALUES (2, {1:10, 2:20, 3:30}, {1:10, 2:20, 3:30})")
+        execute(cql, table, "INSERT INTO %s (k, m, fm) VALUES (3, {2:20, 1:10}, {2:20, 1:10})")
+        assert_rows(execute(cql, table, select),
+                   row(3, 3,
+                       {1: 10, 2: 20}, {1: 10, 2: 20},
+                       {1: 10, 2: 20, 3: 30}, {1: 10, 2: 20, 3: 30}))
+
+def testAggregateWithTuples(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t tuple<int, text, boolean>)") as table:
+        # Test with empty table
+        select = "SELECT count(t), min(t), max(t) FROM %s"
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, select), "system.count(t)", "system.min(t)", "system.max(t)")
+        assert_rows(execute(cql, table, select), row(0, null, null))
+
+        # Test with not-empty table
+        execute(cql, table, "INSERT INTO %s (k, t) VALUES (1, (1, 'a', false))")
+        execute(cql, table, "INSERT INTO %s (k, t) VALUES (2, (2, 'b', true))")
+        execute(cql, table, "INSERT INTO %s (k, t) VALUES (3, (3, null, true))")
+        assert_rows(execute(cql, table, select), row(3, (1, "a", False), (3, None, True)))
+
+def testAggregateWithUDTs(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(x int)") as udt:
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, u frozen<{udt}>, fu frozen<{udt}>)") as table:
+            # Test with empty table
+            select = "SELECT count(u), count(fu), min(u), min(fu), max(u), max(fu) FROM %s"
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, select),
+                              "system.count(u)", "system.count(fu)",
+                              "system.min(u)", "system.min(fu)",
+                              "system.max(u)", "system.max(fu)")
+            assert_rows(execute(cql, table, select), row(0, 0, null, null, null, null))
+
+            # Test with not-empty table
+            execute(cql, table, "INSERT INTO %s (k, u, fu) VALUES (1, {x: 2}, null)")
+            execute(cql, table, "INSERT INTO %s (k, u, fu) VALUES (2, {x: 4}, {x: 6})")
+            execute(cql, table, "INSERT INTO %s (k, u, fu) VALUES (3, null, {x: 8})")
+            assert_rows(execute(cql, table, select),
+                       row(2, 2, user_type("x", 2), user_type("x", 6), user_type("x", 4), user_type("x", 8)))
+
+def testAggregateWithUdtFields(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(x int)") as myType:
+        with create_table(cql, test_keyspace, f"(a int primary key, b frozen<{myType}>, c frozen<{myType}>)") as table:
+            # Test with empty table
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, "SELECT count(b.x), max(b.x) as max, b.x, c.x as first FROM %s"),
+                              "system.count(b.x)", "max", "b.x", "first")
+            assert_rows(execute(cql, table, "SELECT count(b.x), max(b.x) as max, b.x, c.x as first FROM %s"),
+                               row(0, null, null, null))
+
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, {x:2}, null)")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (2, {x:4}, {x:6})")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (4, {x:8}, {x:12})")
+
+            assert_rows(execute(cql, table, "SELECT count(b.x), max(b.x) as max, b.x, c.x as first FROM %s"),
+                       row(3, 8, 2, null))
+
+            assert_rows(execute(cql, table, "SELECT count(b), min(b).x, max(b).x, count(c), min(c).x, max(c).x FROM %s"),
+                       row(3, 2, 8, 2, 6, 12))
+
+COPY_SIGN_JAVA = "return Double.valueOf(Math.copySign(magnitude, sign));"
+# (Scylla's Lua environment doesn't include Lua's "math" library)
+COPY_SIGN_LUA = "if magnitude < 0 then magnitude = -magnitude end if sign < 0 then return -magnitude else return magnitude end"
