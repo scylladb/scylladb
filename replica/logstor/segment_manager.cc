@@ -285,6 +285,10 @@ class file_manager {
     std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
     size_t _zero_buf_size{0};
 
+    // Allocates the file if it is the next one, which waits for it to be formatted and starts
+    // formatting the one after it in the background.
+    future<> allocate_file(file_id_t);
+
 public:
     file_manager(segment_manager_config cfg)
         : _segments_per_file(cfg.file_size / cfg.segment_size)
@@ -300,10 +304,11 @@ public:
     future<> start();
     future<> stop();
 
-    // Allocates the file if it is the next one, which waits for it to be formatted and starts
-    // formatting the one after it in the background. Only the first segment taken out of a file
-    // needs this; every later one finds the file already allocated and open.
-    future<> allocate_file(file_id_t);
+    // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
+    // format_on_startup also the files that it formats. A file that is formatted in the background
+    // is allocated here, by the first segment taken from it. Each later segment finds the file
+    // allocated and open.
+    future<seastar::file> get_file_for_new_segment(file_id_t);
 
     future<seastar::file> get_file(file_id_t);
 
@@ -312,8 +317,8 @@ public:
 
     // The file, if it is already open, which after startup it always is. A caller that finds it here
     // gets at it without the call and the future that get_file() costs even when it waits for
-    // nothing. Returns an unset file otherwise, which is what tells a caller that has something to
-    // do about it - allocate the file, or refuse - that get_file() would have to open it.
+    // nothing. Otherwise it returns an unset file, which tells the caller that get_file() must open
+    // the file.
     seastar::file opened_file(file_id_t file_id) const {
         if (file_id >= _open_files.size()) [[unlikely]] {
             on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
@@ -515,6 +520,15 @@ future<> file_manager::allocate_file(file_id_t file_id) {
     } else if (file_id > _next_file_id) {
         on_internal_error(logstor_logger, "files must be allocated in sequential order");
     }
+}
+
+future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) {
+    if (file_id >= _next_file_id) [[unlikely]] {
+        return allocate_file(file_id).then([this, file_id] {
+            return get_file(file_id);
+        });
+    }
+    return get_file(file_id);
 }
 
 // Not a coroutine: every file is opened at startup and held for the life of the shard, so this ends
@@ -1765,13 +1779,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
     auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
         try {
             auto seg_loc = segment_id_to_file_location(seg_id);
-            // Only the first segment taken out of a file has to allocate it, and only a file that
-            // is formatted while the shard runs is not open yet.
-            auto file = _file_mgr.opened_file(seg_loc.file_id);
-            if (!file) [[unlikely]] {
-                co_await _file_mgr.allocate_file(seg_loc.file_id);
-                file = co_await _file_mgr.get_file(seg_loc.file_id);
-            }
+            auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
             auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
             get_segment_descriptor(seg_id).reset(_cfg.segment_size);
             _stats.segments_allocated++;
