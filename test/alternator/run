@@ -41,15 +41,20 @@ print('Scylla is: ' + run.find_scylla() + '.')
 extra_scylla_options = []
 remove_scylla_options = []
 
-# If the "--vnodes" option is given, drop the "tablets" experimental
-# feature (turned on in run.py) so that all tests will be run with the
-# old vnode-based replication instead of tablets. This option only has
-# temporary usefulness, and should eventually be removed.
+# If the "--vnodes" option is given, disable tablets (turned on in run.py)
+# so that all tests will be run with the old vnode-based replication
+# instead of tablets. This option only has temporary usefulness, and should
+# eventually be removed.
 if '--vnodes' in sys.argv:
     sys.argv.remove('--vnodes')
     remove_scylla_options.append('--enable-tablets=true')
     # Tablets are now enabled by default on some releases, it is not enough to remove the enable above.
     extra_scylla_options.append('--enable-tablets=false')
+    # In newer versions, the tablets_mode_for_new_keyspaces option, which
+    # conf/scylla.yaml sets to "enabled", takes precedence over
+    # enable_tablets, so we need to override it as well. Releases older
+    # than 2025.2 may not have this option (see below).
+    extra_scylla_options.append('--tablets-mode-for-new-keyspaces=disabled')
 # test/alternator/run --interactive will not run any test. It will instead
 # leave the server running and allow the user to connect to it. This server
 # will be more practical to use if we do NOT enforce authorization.
@@ -118,6 +123,8 @@ def run_alternator_cmd(pid, dir):
             cmd.remove('--alternator-allow-system-table-write=1')
         if major < [2026,3]:
             cmd.remove('--tablet-load-stats-refresh-interval-in-seconds=1')
+        if major < [2025,2] and '--tablets-mode-for-new-keyspaces=disabled' in cmd:
+            cmd.remove('--tablets-mode-for-new-keyspaces=disabled')
 
     return (cmd, env)
 

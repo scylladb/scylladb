@@ -792,7 +792,10 @@ def test_sai_entries_on_map_with_options_rejected(cql, test_keyspace, scylla_onl
                 )
 
 
-def test_cassio_setup_mode_sync_simulation(cql, test_keyspace, scylla_only):
+# Like the other tests here which create a vector index, this test needs
+# tablets: Scylla requires a vector index's base table to use tablets - its
+# vector search is not supported on vnodes (see docs/dev/vector_search.md).
+def test_cassio_setup_mode_sync_simulation(cql, test_keyspace, skip_without_tablets):
     """Replay the exact DDL sequence that CassIO runs during SetupMode.SYNC
     for LangChain vector stores (SCYLLADB-2113). This validates end-to-end
     that the SAI rewrite allows the full CassIO setup flow to succeed."""

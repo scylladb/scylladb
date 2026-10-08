@@ -11,6 +11,7 @@
 
 import pytest
 from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import SyntaxException, ConfigurationException, InvalidRequest
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import json
 import os
@@ -22,7 +23,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -62,6 +63,17 @@ def cql(request, host):
                 username=request.config.getoption("--auth_username") or "cassandra",
                 password=request.config.getoption("--auth_password") or "cassandra",
         ) as session:
+            # Many tests do a non-LWT write followed by an LWT write to the
+            # same row. On Cassandra, an LWT's write uses a timestamp with
+            # millisecond granularity, so it may be older than the driver's
+            # microsecond-granularity client-side timestamp of the preceding
+            # non-LWT write in the same millisecond. The LWT is then reported
+            # as applied but loses to the earlier write (CASSANDRA-11000,
+            # "Won't Fix"). Avoid this by letting Cassandra generate all timestamps,
+            # as Cassandra's own unit tests do: server-side timestamps and LWT
+            # timestamps come from the same monotonic clock.
+            if not is_scylla(session):
+                session.use_client_timestamp = False
             yield session
             session.shutdown()
     except NoHostAvailable:
@@ -116,14 +128,27 @@ cql_test_connection.scylla_crashed = False
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
+# A keyspace using tablets, or None if tablets aren't supported (Cassandra,
+# or old versions of Scylla). Tablets don't need to be enabled by default
+# (see has_tablets) - a keyspace can explicitly ask to use tablets.
 @pytest.fixture(scope=dynamic_scope())
 def test_keyspace_tablets(cql, this_dc, has_tablets):
-    if not is_scylla(cql) or not has_tablets:
+    if not is_scylla(cql):
         yield None
         return
 
     name = unique_name()
-    cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true}")
+    try:
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true}")
+    except (SyntaxException, ConfigurationException, InvalidRequest):
+        # Old versions of Scylla (e.g., test/cqlpy/run --release) may not
+        # support tablets, or not enable them. But if tablets are the
+        # default, creating a keyspace with tablets must work, so don't
+        # hide its failure - which would silently skip tablets tests.
+        if has_tablets:
+            raise
+        yield None
+        return
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
@@ -179,6 +204,14 @@ def cassandra_bug(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
+
+# "new_to_cassandra_6" can be used by tests of features which Cassandra added
+# only in Cassandra 6. A test using this fixture is skipped when running on
+# an older version of Cassandra, but runs on Scylla and on Cassandra 6 or newer.
+@pytest.fixture(scope=dynamic_scope())
+def new_to_cassandra_6(cql):
+    if is_cassandra_older_than(cql, (6, 0)):
+        skip_env('Test needs Cassandra 6 or newer')
 
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was
@@ -259,6 +292,11 @@ def temp_workdir():
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
 
+# "has_tablets" is true if new keyspaces use tablets *by default*. Note that
+# it doesn't mean whether tablets are supported at all: when it's false, it
+# may be Cassandra or an old Scylla without tablets, but also a Scylla where
+# the default is vnodes (e.g., test/cqlpy/run --vnodes), where a keyspace can
+# still explicitly ask to use tablets (see test_keyspace_tablets).
 @pytest.fixture(scope=dynamic_scope())
 def has_tablets(cql, this_dc):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1}") as keyspace:
@@ -267,7 +305,7 @@ def has_tablets(cql, this_dc):
 @pytest.fixture(scope="function")
 def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
 
 # Like skip_without_tablets but does not require scylla_only, so Cassandra
@@ -275,7 +313,7 @@ def skip_without_tablets(scylla_only, has_tablets):
 @pytest.fixture(scope="function")
 def skip_on_scylla_vnodes(cql, has_tablets):
     if is_scylla(cql) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
 # Recent versions of Scylla deprecated the "WITH COMPACT STORAGE" feature,
 # but it can be enabled temporarily for a test. So to keep our old compact

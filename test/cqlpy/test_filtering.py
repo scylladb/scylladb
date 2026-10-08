@@ -154,7 +154,9 @@ def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
 
 # Test that NOT IN restrictions are supported with filtering and return the
 # correct results.
-def test_filtering_with_not_in_relation(cql, test_keyspace):
+# Cassandra added support for NOT IN in WHERE in Cassandra 6.0
+# (CASSANDRA-18584), so we skip this test on older Cassandra.
+def test_filtering_with_not_in_relation(cql, test_keyspace, new_to_cassandra_6):
     schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
@@ -172,7 +174,17 @@ def test_filtering_with_not_in_relation(cql, test_keyspace):
         assert set(res) == set([(1,2,3,4), (3,4,5,6)])
         with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
             cql.execute(f"select * from {table} where p1 NOT IN (2,4)")
-        # Since NULL is unknown, it could have matched p1, so NOT IN returns NULL too.
+
+# Scylla allows a NULL in a NOT IN list, while Cassandra rejects it ("Invalid
+# null value for column v"), as it does for IN (see test_null.py), so this
+# test is Scylla-only.
+def test_filtering_with_not_in_relation_null(cql, test_keyspace, scylla_only):
+    schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (5, 6, 7, NULL)")
+        # Since NULL is unknown, it could have matched v, so NOT IN returns NULL too.
         res = cql.execute(f"select * from {table} where v NOT IN (5,NULL) ALLOW FILTERING")
         assert set(res) == set()
 

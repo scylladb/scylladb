@@ -17,7 +17,6 @@ from contextlib import ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
     new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
     new_secondary_index, is_scylla
-from .conftest import has_tablets
 from .test_service_levels import MAX_USER_SERVICE_LEVELS
 from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest, Unauthorized
@@ -1027,7 +1026,7 @@ def test_table_options_quoting(cql, test_keyspace):
                          ids=["alter", "create_index"])
 def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
     if is_create_index(cdc_enablement_query) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
     cdc_table_suffix = "_scylla_cdc_log"
     with new_test_table(cql, test_keyspace, "a int primary key, b vector<float, 3>") as t:
@@ -1080,7 +1079,7 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query, h
                          ids=["alter", "create_index"])
 def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
     if is_create_index(cdc_enablement_query) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
         log_table = f"{table}_scylla_cdc_log"
         _, log_table_name = log_table.split(".")
@@ -1110,7 +1109,7 @@ def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enab
                          ids=["alter", "create_index"])
 def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
     if is_create_index(cdc_enablement_query) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
     def format_create_statement(stmt: str) -> str:
         stmt = " ".join(stmt.split("\n"))
@@ -1174,7 +1173,7 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
                          ids=["alter", "create_index"])
 def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace, cdc_enablement_query, has_tablets):
     if is_create_index(cdc_enablement_query) and not has_tablets:
-        skip_env("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets enabled by default")
 
     def test_config(altered_cdc_log_table_opt):
         with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
@@ -1628,8 +1627,11 @@ def new_random_keyspace(cql):
     options["replication_factor"] = random.randrange(1, 6)
     options_str = ", ".join([f"'{k}': '{v}'" for (k, v) in options.items()])
     extra = ""
-    # Cassandra does not have tablets and thus does not even support tablets syntax.
-    if not has_tablets or options["class"] == "SimpleStrategy" or options["replication_factor"] != 1:
+    # Tablets don't support SimpleStrategy, and in our single-rack test
+    # cluster they don't support RF > 1 either, so disable tablets in these
+    # cases. Scylla accepts this syntax even when it doesn't use tablets,
+    # but Cassandra doesn't have tablets and doesn't support this syntax.
+    if is_scylla(cql) and (options["class"] == "SimpleStrategy" or options["replication_factor"] != 1):
         extra = " and tablets = { 'enabled': false }"
 
     write = random.choice(writes)
@@ -1684,7 +1686,11 @@ def new_random_table(cql, keyspace, udts=[], tablet_options={}):
     extras["speculative_retry"] = f"'{random.choice(speculative_retries)}'"
 
     compressions = ["LZ4Compressor", "SnappyCompressor", "DeflateCompressor"]
-    extras["compression"] = f"{{'sstable_compression': '{random.choice(compressions)}'}}"
+    # Cassandra renamed the compression option "sstable_compression" to
+    # "class" and no longer supports the old name, but Scylla doesn't yet
+    # support the new name (issue #8948).
+    compression_key = "sstable_compression" if is_scylla(cql) else "class"
+    extras["compression"] = f"{{'{compression_key}': '{random.choice(compressions)}'}}"
 
     # see the last element of `probs` defined by scylladb/utils/bloom_calculation.cc,
     # the minimum false positive rate supported by the bloom filter is determined by
@@ -1830,7 +1836,9 @@ class AuthSLContext:
     def __enter__(self):
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
-        self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
+        # Service levels are a Scylla-only feature.
+        if is_scylla(self.cql):
+            self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -1915,9 +1923,12 @@ def test_create_role_with_hashed_password_authorization(cql):
                     ncql.execute("CREATE ROLE some_unused_name WITH HASHED PASSWORD = '$2a$10$JSJEMFm6GeaW9XxT5JIheuEtPvat6i7uKbnTcxX3c1wshIIsGyUtG'")
 
         # List of form (role name, list of permission grants to the role)
-        r1 = "andrew"
-        r2 = "jane"
-        r3 = "bob"
+        # We use unique role names, because roles with the same names created
+        # and dropped by a previous test may still be in Cassandra's roles
+        # cache, which would make logging in with them fail.
+        r1 = unique_name()
+        r2 = unique_name()
+        r3 = unique_name()
 
         for r in [r1, r2]:
             cql.execute(f"CREATE ROLE {r} WITH LOGIN = true AND PASSWORD = '{r}'")
@@ -3429,7 +3440,11 @@ def test_hide_paxos_table(cql, test_keyspace):
 
 # It is allowed to directly describe a Paxos state table with `DESC ks."tbl$paxos"`
 # but it should contain only commented-out CQL statements, so executing them is a no-op.
-def test_paxos_table_described_in_comment(scylla_only, cql, test_keyspace):
+# A separate "tbl$paxos" table only exists for tables using tablets - tables
+# using vnodes keep their Paxos state in the system.paxos table (see "Paxos
+# State Tables" in docs/features/lwt.rst), and Cassandra has neither tablets
+# nor such tables. So this test is skipped unless tablets are enabled.
+def test_paxos_table_described_in_comment(skip_without_tablets, cql, test_keyspace):
     paxos_table_desc = ""
     with new_test_table(cql, test_keyspace, "p int primary key, x int") as table:
         # The extra "...$paxos" table only appears after a real LWT write is

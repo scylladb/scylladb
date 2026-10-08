@@ -148,3 +148,16 @@ def test_ttl_frozen_udt(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table}(p, x) VALUES ({p}, {{a: 1, b: 2}}) USING TTL {ttl}")
             [(t,)] = cql.execute(f"SELECT TTL(x) FROM {table} WHERE p={p}")
             assert t is not None and t <= ttl and t > ttl - 100
+
+# Renaming a field of a UDT used in a partition key should be allowed:
+# Unlike adding a field (which is forbidden, because it can change how
+# keys are serialized - see CASSANDRA-15933 and Scylla #6941), renaming a
+# field doesn't change the serialized keys. Cassandra allows it, Scylla
+# doesn't. Reproduces issue #9633.
+@pytest.mark.xfail(reason="issue #9633")
+def test_rename_field_of_udt_in_partition_key(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p frozen<{typ}> PRIMARY KEY, v int") as table:
+            cql.execute(f"INSERT INTO {table}(p, v) VALUES ({{a: 1}}, 2)")
+            cql.execute(f"ALTER TYPE {typ} RENAME a TO b")
+            assert list(cql.execute(f"SELECT p.b, v FROM {table}")) == [(1, 2)]

@@ -13,6 +13,7 @@ import socket
 import os
 import requests
 import collections
+import re
 import ssl
 from contextlib import contextmanager
 
@@ -71,6 +72,23 @@ def is_scylla(cql):
     # contains the word "scylla":
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     return any('scylla' in name for name in names)
+
+# Scylla's system.clients table lists the clients connected to it.
+# Cassandra (4.0 and above) has a similar table, called system_views.clients.
+def clients_table(cql):
+    return 'system.clients' if is_scylla(cql) else 'system_views.clients'
+
+# Check whether we are running against Cassandra older than the given
+# version (a tuple, e.g., (6, 0)). Always false on Scylla (whose system.local
+# reports a fake old release_version). Useful for tests of features which
+# Cassandra added only in a recent version - see also the new_to_cassandra_6
+# fixture.
+def is_cassandra_older_than(cql, version):
+    if is_scylla(cql):
+        return False
+    release_version = cql.execute("SELECT release_version FROM system.local").one().release_version
+    # release_version looks like "5.0.4" or "6.0-alpha1"
+    return tuple(int(x) for x in re.findall(r'\d+', release_version)[:len(version)]) < version
 
 def keyspace_has_tablets(cql, keyspace):
     """ Return true if the keyspace was created with tablets.

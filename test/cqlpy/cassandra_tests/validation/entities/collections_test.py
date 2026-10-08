@@ -451,7 +451,13 @@ def testAlterCollections(cql, test_keyspace):
         execute(cql, table, "ALTER TABLE %s ADD alist list<text>")
 
 # Migrated from cql_tests.py:TestCQL.collection_function_test()
-def testFunctionsOnCollections(cql, test_keyspace):
+# Cassandra 5.0 started to allow ttl() and writetime() of an entire unfrozen
+# collection, returning a list of values with one per element, and removed
+# this test (CASSANDRA-8877). We consider this a Cassandra bug - see
+# CASSANDRA-21240 and test_writetime_ttl_whole_collection_forbidden in
+# test_select_collection_element.py - so we keep this test, marked
+# cassandra_bug.
+def testFunctionsOnCollections(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l set<int>)") as table:
         assert_invalid(cql, table, "SELECT ttl(l) FROM %s WHERE k = 0")
         assert_invalid(cql, table, "SELECT writetime(l) FROM %s WHERE k = 0")

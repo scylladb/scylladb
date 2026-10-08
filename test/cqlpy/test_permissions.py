@@ -11,7 +11,7 @@ import time
 from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
 from cassandra.query import BatchStatement, BatchType
-from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla
+from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla, clients_table
 from contextlib import contextmanager
 from test.pylib.skip_types import skip_env
 
@@ -118,8 +118,9 @@ def test_user_displays_as_authenticated(cql):
                 # and we must handle this case as well,
                 # so we simply sleep and retry later.
                 for retry in range(0, 5):
-                    res = user_session_1.execute("SELECT connection_stage FROM system.clients")
-                    if all([r[0] == "READY" for r in res]):
+                    res = user_session_1.execute(f"SELECT connection_stage FROM {clients_table(cql)}")
+                    # Cassandra uses lowercase stage names, Scylla uppercase.
+                    if all([r[0].upper() == "READY" for r in res]):
                         return
                     else:
                         time.sleep(2)
@@ -195,7 +196,10 @@ def test_udf_permissions_serialization(cql):
                     for permission in permissions:
                         cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
-                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system.role_permissions")}
+                # Scylla moved its auth tables from the system_auth keyspace,
+                # where Cassandra keeps them, to the system keyspace.
+                auth_ks = 'system' if is_scylla(cql) else 'system_auth'
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM {auth_ks}.role_permissions")}
                 assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])
