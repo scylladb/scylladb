@@ -458,3 +458,20 @@ def testTableOptionsCopy(cql, keyspaces):
     tbNormal = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))")
     assert_invalid_throw_message(cql, "", "Cannot alter table id.", ConfigurationException,
                               "CREATE TABLE " + targetKs + ".targetnormal LIKE " + sourceKs + "." + tbNormal + " WITH ID = " + str(id))
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE).
+@pytest.mark.xfail(reason="SCYLLADB-5147")
+def testStaticColumnCopy(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    # create with static column
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int , b int , c int static, d int, e list<text>, PRIMARY KEY(a, b));", "tb1")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+    execute(cql, "", "INSERT INTO " + targetKs + "." + targetTb + " (a, b, c, d, e) VALUES (0, 1, 2, 3, ?)", ["1", "2", "3", "4"])
+    assert_rows(execute(cql, "", "SELECT * FROM " + targetKs + "." + targetTb), row(0, 1, 2, 3, ["1", "2", "3", "4"]))
+
+    # add static column
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int, b int, c text, PRIMARY KEY (a, b))")
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " ADD d int static")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
