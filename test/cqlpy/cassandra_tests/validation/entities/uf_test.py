@@ -630,6 +630,102 @@ def testFunctionExecutionExceptionNet(cql, test_keyspace):
         with pytest.raises(FunctionFailure):
             execute(cql, table, "SELECT " + fName + "(dval) FROM %s WHERE key = 1")
 
+# Reproduces SCYLLADB-5141 (snake_case names of native functions) and
+# SCYLLADB-5183 (an empty int value passed to a function causes a server error)
+@pytest.mark.xfail(reason="SCYLLADB-5141, SCYLLADB-5183")
+def testEmptyString(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, sval text, aval ascii, bval blob, empty_int int)") as table:
+        execute(cql, table, "INSERT INTO %s (key, sval, aval, bval, empty_int) VALUES (?, ?, ?, ?, blob_as_int(0x))", 1, "", "", b"")
+
+        fNameSRC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val text) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameSCC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val text) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, 'return "";', 'return ""'))
+
+        fNameSRN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val text) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameSCN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val text) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS text " +
+                                  java_or_lua(cql, 'return "";', 'return ""'))
+
+        fNameBRC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val blob) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS blob " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameBCC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val blob) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS blob " +
+                                  java_or_lua(cql, "return ByteBuffer.allocate(0);", 'return ""'))
+
+        fNameBRN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val blob) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS blob " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameBCN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val blob) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS blob " +
+                                  java_or_lua(cql, "return ByteBuffer.allocate(0);", 'return ""'))
+
+        fNameIRC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS int " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameICC = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                  "CALLED ON NULL INPUT " +
+                                  "RETURNS int " +
+                                  java_or_lua(cql, "return 0;", "return 0"))
+
+        fNameIRN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS int " +
+                                  java_or_lua(cql, "return val;", "return val"))
+
+        fNameICN = createFunction(cql, KEYSPACE_PER_TEST,
+                                  "CREATE OR REPLACE FUNCTION %s(val int) " +
+                                  "RETURNS NULL ON NULL INPUT " +
+                                  "RETURNS int " +
+                                  java_or_lua(cql, "return 0;", "return 0"))
+
+        assert_rows(execute(cql, table, "SELECT " + fNameSRC + "(sval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSRN + "(sval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSCC + "(sval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSCN + "(sval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSRC + "(aval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSRN + "(aval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSCC + "(aval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameSCN + "(aval) FROM %s"), row(""))
+        assert_rows(execute(cql, table, "SELECT " + fNameBRC + "(bval) FROM %s"), row(b""))
+        assert_rows(execute(cql, table, "SELECT " + fNameBRN + "(bval) FROM %s"), row(b""))
+        assert_rows(execute(cql, table, "SELECT " + fNameBCC + "(bval) FROM %s"), row(b""))
+        assert_rows(execute(cql, table, "SELECT " + fNameBCN + "(bval) FROM %s"), row(b""))
+        assert_rows(execute(cql, table, "SELECT " + fNameIRC + "(empty_int) FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT " + fNameIRN + "(empty_int) FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT " + fNameICC + "(empty_int) FROM %s"), row(0))
+        assert_rows(execute(cql, table, "SELECT " + fNameICN + "(empty_int) FROM %s"), row(None))
+
 # Reproduces SCYLLADB-5165 (function names with '/', '[' or ']' should be
 # rejected)
 @pytest.mark.xfail(reason="SCYLLADB-5165")
