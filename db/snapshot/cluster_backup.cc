@@ -32,6 +32,7 @@
 #include "utils/upload_progress.hh"
 #include "utils/memory_data_sink.hh"
 #include "idl/snapshot_backup.dist.hh"
+#include "cql3/query_processor.hh"
 
 extern logging::logger snap_log;
 
@@ -75,6 +76,77 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         }
     }
 
+    if (snap_ctl.db().local().features().backup_as_topology_operation) {
+        // No real point in holding any snap gate here. We only send the
+        // op to topology coordinator. If it is us, topo gate(s) will
+        // handle shutdown attempt, otherwise things will either die
+        // or run, regardless. We do no state changes in this code here.
+        auto ctl = co_await snap_ctl.sp().local().start_backup_snapshot(
+            dc_locations, ks_tables, snapshot_name, remove_on_uploaded
+        );
+
+        gate g;
+        // TODO: progress and abort
+        auto sub = as.subscribe([&]() noexcept {
+            // would be great to wait here
+            snap_log.info("Aborting snapshot {}", snapshot_name);
+            auto h = g.hold();
+            std::ignore = ctl.abort().handle_exception([](auto ep) {
+                snap_log.error("Abort failed with exception: {}", ep);
+            }).finally([h = std::move(h)]{});
+        });
+
+        if (as.abort_requested()) {
+            sub = {};
+            co_await g.close();
+            co_await ctl.abort();
+            co_return;
+        }
+
+        total_progress.total = 100;
+
+        co_await ctl.wait([&total_progress](uint32_t v) {
+            total_progress.completed = v;
+        }).finally([&] {
+            sub = {};
+            return g.close();
+        });
+        co_return;
+    }
+
+    class my_progress_sink : public tasks::progress_sink {
+        tasks::task_manager::task::progress& _progress;
+    public:
+        my_progress_sink(tasks::task_manager::task::progress& tp)
+            : _progress(tp)
+        {}
+        void set_total(double v) {
+            _progress.total = v;
+        }
+        void add_progress(double v) {
+            _progress.completed += v;
+        }
+    };
+
+    my_progress_sink mps(total_progress);
+
+    co_await run_global_backup(snap_ctl.qp().local(), snapshot_name, ks_tables, dc_locations, remove_on_uploaded
+        , [&](locator::host_id host, table_id tid, sstring tag, sstring endpoint, sstring bucket, sstring prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) -> future<> {
+            co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), host, tid, tag, endpoint, bucket, prefix, first_token, last_token, std::move(sstable_ids), use_move, service::null_topology_guard);
+        }
+        , mps
+    );
+}
+
+future<> 
+db::snapshot::run_global_backup(cql3::query_processor& qp, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::unordered_map<sstring, db::snapshot_dc_location> dc_locations, bool move_files, send_backup_rpc_func send_rpc, tasks::progress_sink& progress) {
+    db::snapshot_table_helper sth(qp);
+
+    auto snapshot = co_await sth.get_snapshot(snapshot_name);
+    if (!snapshot) {
+        throw std::invalid_argument("No such snapshot: " + snapshot_name);
+    }
+
     auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
     std::unordered_map<std::string, db::snapshot_state> state_filter;
 
@@ -103,6 +175,11 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         state_filter[loc.datacenter] = filter;
     }
 
+    if (dc_locations.empty()) {
+        snap_log.info("All locations for snapshot {} are already backed up.", snapshot_name);
+        co_return;
+    }
+
     auto new_locations = dc_locations | std::views::transform([&](auto& p) {
         return db::snapshot_remote_location_entry {
             .snapshot_name = snapshot_name,
@@ -114,17 +191,13 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         };
     }) | std::ranges::to<std::vector<db::snapshot_remote_location_entry>>();
 
-    // We are already on shard 0. Can use all objects fine. Just need to acquire snap locks.
-    // Mainly for semantic consistency. Maybe all this should be a raft op.
-    co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
-        co_await sth.insert_snapshot_remote_locations(new_locations); // update status
-    });
+    co_await sth.insert_snapshot_remote_locations(new_locations); // update status
 
     auto nodes = co_await sth.get_snapshot_nodes(snapshot_name);
     auto nodes_for_location = nodes | std::views::filter([&](auto& n) { return dc_locations.count(n.datacenter); });
-    auto& db = snap_ctl.db().local();
+    auto& db = qp.db().real_database();
 
-    total_progress.total = (std::distance(nodes_for_location.begin(), nodes_for_location.end()) + dc_locations.size() /* manifests */) * ks_tables.size();
+    progress.set_total((std::distance(nodes_for_location.begin(), nodes_for_location.end()) + dc_locations.size() /* manifests */) * ks_tables.size());
 
     co_await coroutine::parallel_for_each(ks_tables, [&](const std::pair<sstring, sstring>& pair) -> future<>{
         auto [keyspace, table] = pair;
@@ -149,10 +222,6 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         std::unordered_map<locator::host_id, std::pair<size_t, size_t>> node_sstables;
 
         for (const db::snapshot_node_entry& node : nodes_for_location) {
-            if (auto e = as.abort_requested_exception_ptr(); e) {
-                snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
-                std::rethrow_exception(e);
-            }
             snap_log.info("Calculating sstable set for {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
             assert(state_filter.count(node.datacenter));
@@ -176,7 +245,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 if (ti == te) {
                     throw std::runtime_error("Could not find tablet range");
                 }
-                if (e.repaired_at < ti->repaired_at) {
+                if (e.repaired_at < ti->repaired_at || e.repaired_at == 0) {
                     return true; // must include
                 }
                 auto i = repair_master.find(ti->first_token);
@@ -195,12 +264,6 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         }
 
         co_await coroutine::parallel_for_each(nodes_for_location, [&](const db::snapshot_node_entry& node) -> future<>{
-            if (auto e = as.abort_requested_exception_ptr(); e) {
-                // note the point at which we aborted
-                snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
-                std::rethrow_exception(e);
-            }
-
             snap_log.info("Processing {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
             assert(state_filter.count(node.datacenter));
@@ -218,7 +281,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             if (sstables.empty()) {
                 snap_log.info("All sstables for {} node {}, {}:{} already backed up", snapshot_name, node.node, keyspace, table);
-                total_progress.completed += 1;
+                progress.add_progress(1);
                 co_return;
             }
             if (filter > db::snapshot_state::remote_and_local) {
@@ -242,9 +305,16 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
+                // Pre-rpc call break point. 
+                co_await utils::get_local_injector().inject("cluster_backup_pre_node_rpc", utils::wait_for_message(std::chrono::minutes(2)));
+
                 auto prefix = db::snapshot::sstables_location(dst.prefix, t, snapshot_name);
-                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
-                total_progress.completed += 1;
+                co_await send_rpc(node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), move_files);
+
+                progress.add_progress(1);
+
+                // Post-rpc call break point. 
+                co_await utils::get_local_injector().inject("cluster_backup_post_node_rpc", utils::wait_for_message(std::chrono::minutes(2)));
             } catch (...) {
                 snap_log.error("Exception requesting backup of {}:{} from {}", snapshot_name, sstable_ids, node.node);
                 throw; // fail the whole process already
@@ -300,22 +370,20 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             auto client = manager.get_endpoint_client(dst.endpoint);
             auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, snapshot_name);
-            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &as));
+            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}));
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
-            total_progress.completed += 1;
-        });
 
+            progress.add_progress(info.datacenters.size());
+        });
     });
 
     for (auto& loc : new_locations) {
-        loc.state = remove_on_uploaded ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
+        loc.state = move_files ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
     }
 
     // See above.
-    co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
-        co_await sth.insert_snapshot_remote_locations(new_locations); // update status
-    });
+    co_await sth.insert_snapshot_remote_locations(new_locations); // update status
 }
 
 future<tasks::task_id> 
@@ -346,18 +414,19 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
 }
 
 future<>
-db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
+db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move, seastar::abort_source* as) {
     snap_log.info("Got backup request for snapshot {}, table {}, sstables {} ({}:{}) -> {}:{}:{}", tag, table_id, sstable_ids, first_token, last_token, endpoint, bucket, prefix);
 
-    auto& db = snap.db().local();
+    auto& db = qp.db().real_database();
+    auto& sp = qp.proxy();
     // This is not super efficient. We need to match files on disk, but we do want to use 
     // "proper" ids like sstable_id for designating tables to backup. We could open files
     // on scan to match ID:s, but it might be easier/faster to just re-use the meta table
     auto& cf = db.find_column_family(table_id);
-    auto local = snap.sp().local().shared_token_metadata().get()->get_topology().get_location();
+    auto local = sp.shared_token_metadata().get()->get_topology().get_location();
     auto ksname = cf.schema()->ks_name();
     auto cfname = cf.schema()->cf_name();
-    db::snapshot_table_helper sth(snap.qp().local());
+    db::snapshot_table_helper sth(qp);
     auto sstables = co_await sth.get_snapshot_sstables(tag, ksname, cfname 
         , local.dc
         , local.rack
@@ -384,7 +453,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
 
     snap_log.debug("Found {} sstables not yet backed up", sstables.size());
 
-    auto global_table = co_await get_table_on_all_shards(snap.db(), ksname, cfname);
+    auto global_table = co_await get_table_on_all_shards(db.container(), ksname, cfname);
     auto& storage_options = global_table->get_storage_options();
     if (!storage_options.is_local_type()) {
         throw std::invalid_argument("not able to backup a non-local table");
@@ -434,102 +503,155 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
     snap_log.debug("backup_sstables: found {} SSTables consisting of {} component files", base_names.size(), num_components);
 
     auto chunks = base_names 
-            | std::views::chunk(size_t(std::ceil(double(base_names.size())/this_smp_shard_count())))
+            | std::views::chunk(std::max(size_t(1), size_t(std::ceil(double(base_names.size())/this_smp_shard_count()))))
             | std::ranges::to<std::vector>()
             ;
-    co_await snap.db().invoke_on_all([&](auto& db) -> future<> {
-        if (this_shard_id() >= chunks.size()) {
-            co_return;
+
+    struct shard_ctxt {
+        seastar::gate gate;
+        seastar::abort_source as;
+    };
+
+    seastar::sharded<shard_ctxt> per_shard;
+    seastar::gate as_gate;
+    std::exception_ptr ex;
+
+    co_await per_shard.start();
+
+    seastar::optimized_optional<seastar::abort_source::subscription> abort_sub;
+
+    if (as) {
+        // If we abort, we need to signal all shards.
+        // Note that abort callback is non-waiting, so
+        // we cannot wait for our abort dispatch.
+        // The per-context gate ensures we finish any aborts before
+        // destroying any coroutine frame vars.
+        abort_sub = as->subscribe([&] () noexcept {
+            auto h = as_gate.hold();
+            std::ignore = per_shard.invoke_on_all([] (auto& ps) {
+                ps.as.request_abort();
+            }).finally([h = std::move(h)] {});
+            utils::get_local_injector().inject("backup_task_abort_dispatch", []{});
+        });
+    }
+
+    try {
+        if (as) {
+            as->check();
         }
-        std::exception_ptr p;
-
-        auto chunk = chunks[this_shard_id()];
-        auto client = snap.sstm().container().local().get_endpoint_client(endpoint);
-        auto& t = db.find_column_family(table_id);
-        auto& manager = db.get_sstables_manager(*t.schema());
-
-        co_await coroutine::parallel_for_each(chunk | std::views::values, [&](const gen_info& info) -> future<>{
-            auto& id = info.sstable.sstable_id;
-            auto table_prefix = fmt::format("{}/{}", prefix, id);
-
-            auto gen_info = sstables::parse_path(std::filesystem::path(info.sstable.toc_name), ksname, cfname);
-            if (!gen_info) {
-                throw std::runtime_error(fmt::format("Could not parse sstable generation for {}", id));
+        co_await per_shard.invoke_on_all([&](auto& ps) -> future<> {
+            if (this_shard_id() >= chunks.size()) {
+                co_return;
             }
 
-            auto gen = (*gen_info).generation;
-            auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
-            co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
+            std::exception_ptr p;
 
-            bool any_failed = false;
-            co_await coroutine::parallel_for_each(info.filenames, [&](std::string_view name) -> future<> {
-                auto units = co_await manager.dir_semaphore().get_units(1);
+            auto h = ps.gate.hold();
+            auto& as = ps.as;
+            auto& ldb = db.container().local();
+            auto chunk = chunks[this_shard_id()];
+            auto& t = ldb.find_column_family(table_id);
+            auto& manager = ldb.get_sstables_manager(*t.schema());
+            auto client = manager.get_endpoint_client(endpoint);
 
-                // Pre-upload break point. For testing abort in actual s3 client usage.
-                co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
+            co_await coroutine::parallel_for_each(chunk | std::views::values, [&](const gen_info& info) -> future<> {
+                auto& id = info.sstable.sstable_id;
+                auto table_prefix = fmt::format("{}/{}", prefix, id);
 
-                auto component_name = dir / name;
-                auto destination = sstables::object_name(bucket, table_prefix, name);
+                auto gen_info = sstables::parse_path(std::filesystem::path(info.sstable.toc_name), ksname, cfname);
+                if (!gen_info) {
+                    throw std::runtime_error(fmt::format("Could not parse sstable generation for {}", id));
+                }
 
-                snap_log.trace("Upload {} to {}", component_name.native(), destination);
+                auto gen = (*gen_info).generation;
+                auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
+                co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}, &as); // any exception here can just propagate
 
-                bool error = false;
+                bool any_failed = false;
+                co_await coroutine::parallel_for_each(info.filenames, [&](std::string_view name) -> future<> {
+                    // Pre-upload break point. For testing abort in actual s3 client usage.
+                    co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
+
+                    auto component_name = dir / name;
+                    auto destination = sstables::object_name(bucket, table_prefix, name);
+
+                    snap_log.trace("Upload {} to {}", component_name.native(), destination);
+
+                    bool error = false;
+
+                    try {
+                        auto units = co_await manager.dir_semaphore().get_units(1, as);
+                        auto exists = co_await client->object_exists(destination, &as);
+
+                        if (exists) {
+                            snap_log.trace("Object {} already exists. Skipping...", destination);
+                        } else {
+                            utils::upload_progress dummy;
+                            as.check();
+                            co_await client->upload_file(component_name, std::move(destination), dummy, &as);
+                        }
+                    } catch (...) {
+                        error = true; // we might have written parts
+                        snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
+                        if (!p) {
+                            p = std::current_exception();
+                        }
+                    }
+                    if (error) {
+                        any_failed = true;
+                        co_return;
+                    }
+                    if (use_move) {
+                        try {
+                            co_await remove_file(component_name.native());
+                        } catch (...) {
+                            snap_log.warn("Failed to remove {}: {}", component_name, std::current_exception());
+                        }
+                    }
+                    co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
+                });
+
+                if (any_failed) {
+                    try {
+                        co_await client->delete_object(ref_name);
+                    } catch (...) {
+                        // nothing to do here...
+                    }
+                    co_return; // don't update status.
+                }
 
                 try {
-                    auto exists = co_await client->object_exists(destination);
-
-                    if (exists) {
-                        snap_log.trace("Object {} already exists. Skipping...", destination);
-                    } else {
-                        utils::upload_progress dummy;
-                        co_await client->upload_file(component_name, std::move(destination), dummy);
-                    }
+                    snap_log.info("Marking {} as uploaded", id);
+                    as.check();
+                    db::snapshot_table_helper sth(qp.container().local());
+                    info.sstable.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
+                    // Spell out the single-element array instead of passing a
+                    // braced list, which would be ambiguous between the two
+                    // insert_snapshot_sstables() overloads.
+                    std::array sstables{info.sstable};
+                    co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables);
                 } catch (...) {
-                    error = true; // we might have written parts
-                    snap_log.error("Error uploading {}: {:t}", component_name.native(), std::current_exception());
-                    if (!p) {
-                        p = std::current_exception();
-                    }
+                    snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
                 }
-                if (error) {
-                    any_failed = true;
-                    co_return;
-                }
-                if (use_move) {
-                    try {
-                        co_await remove_file(component_name.native());
-                    } catch (...) {
-                        snap_log.warn("Failed to remove {}: {:t}", component_name, std::current_exception());
-                    }
-                }
-                co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
             });
 
-            if (any_failed) {
-                try {
-                    co_await client->delete_object(ref_name);
-                } catch (...) {
-                    // nothing to do here...
-                }
-                co_return; // don't update status.
-            }
-
-            try {
-                snap_log.info("Marking {} as uploaded", id);
-                db::snapshot_table_helper sth(snap.qp().local());
-                info.sstable.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
-                // Spell out the single-element array instead of passing a
-                // braced list, which would be ambiguous between the two
-                // insert_snapshot_sstables() overloads.
-                std::array sstables{info.sstable};
-                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables);
-            } catch (...) {
-                snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
+            if (p) {
+                co_await coroutine::return_exception_ptr(std::move(p));
             }
         });
+    } catch (...) {
+        ex = std::current_exception();
+    }
 
-        if (p) {
-            co_await coroutine::return_exception_ptr(std::move(p));
-        }
+    abort_sub = {};
+    co_await as_gate.close();
+    co_await per_shard.invoke_on_all([&](auto& ps) {
+        return ps.gate.close();
     });
+
+    co_await per_shard.stop();
+
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
