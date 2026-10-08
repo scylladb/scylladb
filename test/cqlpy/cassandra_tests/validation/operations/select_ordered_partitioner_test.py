@@ -248,3 +248,15 @@ def testRangeKey(cql, test_keyspace):
                    row(-1))
 
         assert_invalid(cql, table, "SELECT * FROM %s WHERE k >= -1 AND k < 1")
+
+def testTokenFunctionWithInvalidColumnNames(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY ((a, b), c))") as table:
+        # Cassandra's error message is "Undefined column name e", Scylla's is
+        # "Unrecognized name e", so we only check the common part "name e".
+        assert_invalid_message(cql, table, "name e", "SELECT * FROM %s WHERE token(a, e) = token(0, 0)")
+        assert_invalid_message(cql, table, "name e", "SELECT * FROM %s WHERE token(a, e) > token(0, 1)")
+        # Here, Cassandra says "Undefined column name e" but Scylla gives
+        # a clearer error message about the real cause: "Aliases aren't
+        # allowed in the WHERE clause (name: 'e')".
+        assert_invalid(cql, table, "SELECT b AS e FROM %s WHERE token(a, e) = token(0, 0)")
+        assert_invalid(cql, table, "SELECT b AS e FROM %s WHERE token(a, e) > token(0, 1)")
