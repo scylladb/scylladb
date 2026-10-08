@@ -73,3 +73,22 @@ def testdropSyntaxTest(cql):
     assertValidSyntax(cql, "DROP USER $$ u1 ' x $ x ' $$")
     # user names may not be quoted names
     assertInvalidSyntax(cql, "DROP USER \"u1\"")
+
+# Reproduces SCYLLADB-5144 (ALTER ROLE/USER IF EXISTS).
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testalterSyntaxTest(cql):
+    assertValidSyntax(cql, "ALTER ROLE r1 WITH PASSWORD = 'password'")
+    assertValidSyntax(cql, "ALTER ROLE 'r1' WITH PASSWORD = 'password'")
+    assertValidSyntax(cql, "ALTER ROLE \"r1\" WITH PASSWORD = 'password'")
+    assertValidSyntax(cql, "ALTER ROLE $$r1$$ WITH PASSWORD = 'password'")
+    assertValidSyntax(cql, "ALTER ROLE $$ r1 ' x $ x ' $$ WITH PASSWORD = 'password'")
+    # ALTER has slightly different form for USER (no =)
+    assertValidSyntax(cql, "ALTER USER u1 WITH PASSWORD 'password'")
+    assertValidSyntax(cql, "ALTER USER 'u1' WITH PASSWORD 'password'")
+    assertValidSyntax(cql, "ALTER USER $$u1$$ WITH PASSWORD 'password'")
+    assertValidSyntax(cql, "ALTER USER $$ u1 ' x $ x ' $$ WITH PASSWORD 'password'")
+    # ALTER with IF EXISTS syntax
+    assertValidSyntax(cql, "ALTER ROLE IF EXISTS r1 WITH PASSWORD = 'password'")
+    assertValidSyntax(cql, "ALTER USER IF EXISTS u1 WITH PASSWORD 'password'")
+    # user names may not be quoted names
+    assertInvalidSyntax(cql, "ALTER USER \"u1\" WITH PASSWORD 'password'")
