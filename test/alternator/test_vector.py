@@ -1801,6 +1801,18 @@ def test_searchvectors_topk_at_max(table_vs, needs_vector_store):
         TopK=max_topk(table_vs),
     )
 
+# The SearchVectors documentation says its TableName is "The name or Amazon
+# Resource Name (ARN) of the table containing the vector index.", so check
+# that an ARN works too.
+# Reproduces SCYLLADB-4683.
+def test_searchvectors_table_name_arn(table_vs, needs_vector_store):
+    client = table_vs.meta.client
+    arn = client.describe_table(TableName=table_vs.name)['Table']['TableArn']
+    # We don't check the results, just that the search doesn't fail - as it
+    # would if the ARN wasn't recognized as naming the table.
+    client.search_vectors(TableName=arn, IndexName='vind',
+        SearchVector=[1, 2, 3], TopK=1)
+
 # SearchVectors is *not* the same as Query, and does not support the same
 # parameters. In particular, it does not support "Limit", "ConsistentRead",
 # "ExclusiveStartKey", "ScanIndexForward" or "AttributesToGet" (Query's
