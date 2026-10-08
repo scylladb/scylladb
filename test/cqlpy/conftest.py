@@ -22,7 +22,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -179,6 +179,14 @@ def cassandra_bug(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
+
+# "new_to_cassandra_6" can be used by tests of features which Cassandra added
+# only in Cassandra 6. A test using this fixture is skipped when running on
+# an older version of Cassandra, but runs on Scylla and on Cassandra 6 or newer.
+@pytest.fixture(scope=dynamic_scope())
+def new_to_cassandra_6(cql):
+    if is_cassandra_older_than(cql, (6, 0)):
+        skip_env('Test needs Cassandra 6 or newer')
 
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was
