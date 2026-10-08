@@ -100,6 +100,36 @@ def testEmptyTextJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TEXT)") as table:
         verifyJsonInsert(cql, table, "text", "")
 
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyTimestamp(cql, test_keyspace):
+    assumeEmptyValueMeaningless("timestamp")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
+        verifyPlainInsert(cql, table, "timestamp", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyTimestampJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("timestamp")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
+        verifyJsonInsert(cql, table, "timestamp", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyLong(cql, test_keyspace):
+    assumeEmptyValueMeaningless("bigint")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
+        verifyPlainInsert(cql, table, "bigint", "")
+
+# Reproduces #7944 (Scylla rejects the empty string in INSERT JSON for this
+# type, but with a server error) and SCYLLADB-5185 (SELECT JSON of an empty
+# value fails)
+@pytest.mark.xfail(reason="#7944, SCYLLADB-5185")
+def testEmptyLongJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("bigint")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
+        verifyJsonInsert(cql, table, "bigint", "")
+
 def testEmptyBytes(cql, test_keyspace):
     assumeEmptyValueMeaningless("blob")
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BLOB)") as table:
@@ -119,6 +149,48 @@ def testEmptyDateJson(cql, test_keyspace):
     assumeEmptyValueMeaningless("date")
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DATE)") as table:
         verifyJsonInsert(cql, table, "date", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyDecimal(cql, test_keyspace):
+    assumeEmptyValueMeaningless("decimal")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
+        verifyPlainInsert(cql, table, "decimal", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyDecimalJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("decimal")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
+        verifyJsonInsert(cql, table, "decimal", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyDouble(cql, test_keyspace):
+    assumeEmptyValueMeaningless("double")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
+        verifyPlainInsert(cql, table, "double", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyDoubleJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("double")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
+        verifyJsonInsert(cql, table, "double", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyFloat(cql, test_keyspace):
+    assumeEmptyValueMeaningless("float")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
+        verifyPlainInsert(cql, table, "float", "")
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
+@pytest.mark.xfail(reason="SCYLLADB-5185")
+def testEmptyFloatJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("float")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
+        verifyJsonInsert(cql, table, "float", "")
 
 def testEmptySmallInt(cql, test_keyspace):
     assumeEmptyValueMeaningless("smallint")
