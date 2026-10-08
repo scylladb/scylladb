@@ -61,3 +61,32 @@ def testTTLDefaultLimit(cql, test_keyspace):
 # change Cassandra's expiration date overflow policy through an internal
 # Java API. (They are also only enabled in Cassandra once the current time
 # plus the maximum TTL exceeds the maximum supported expiration date).
+
+# The original Java test is skipped when Cassandra's storage compatibility
+# mode is CASSANDRA_4 (the default in Cassandra 5.0), in which expiration
+# times beyond the year 2038 are not supported, so we skip it too.
+def testImprovedMaxTTL(cql, test_keyspace):
+    if not is_scylla(cql):
+        # When storage_compatibility_mode isn't set in the configuration file,
+        # system_views.settings shows it as "None", and the actual default is
+        # CASSANDRA_4 in Cassandra 5.0 (and NONE in Cassandra 6).
+        mode = cql.execute("SELECT value FROM system_views.settings WHERE name = 'storage_compatibility_mode'").one()
+        mode = mode.value if mode else None
+        if mode in (None, "None"):
+            mode = "CASSANDRA_4" if is_cassandra_older_than(cql, (6, 0)) else "NONE"
+        if mode == "CASSANDRA_4":
+            skip_env("Cassandra's storage_compatibility_mode is CASSANDRA_4")
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i int)") as table:
+        t0 = time.time()
+        execute(cql, table, "INSERT INTO %s (k, i) VALUES (1, 1) USING TTL " + str(MAX_TTL))
+        ttlMemtable = execute(cql, table, "SELECT TTL(i) FROM %s WHERE k = 1").one()[0]
+        flush(cql, table)
+        ttlSSTable = execute(cql, table, "SELECT TTL(i) FROM %s WHERE k = 1").one()[0]
+        t1 = time.time()
+        delta = max(1, int(t1 - t0))
+        assert abs(ttlMemtable - MAX_TTL) <= delta
+        assert abs(ttlSSTable - MAX_TTL) <= delta
+
+# The test testRecoverOverflowedExpirationWithScrub was not translated,
+# because it copies prepared sstable files into the table's directory, and
+# runs Cassandra's scrub operation and sstablescrub tool on them.
