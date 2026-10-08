@@ -114,3 +114,72 @@ def testTokenFunctionWithCompoundPartitionAndClusteringCols(cql, test_keyspace):
         execute(cql, table, "SELECT * FROM %s WHERE c > 10 AND token(a, b) > token(0, 0) ALLOW FILTERING;")
         execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(0, 0) AND (c, d) > (0, 0) ALLOW FILTERING;")
         execute(cql, table, "SELECT * FROM %s WHERE (c, d) > (0, 0) AND token(a, b) > token(0, 0) ALLOW FILTERING;")
+
+# Test undefined columns
+# migrated from cql_tests.py:TestCQL.undefined_column_handling_test()
+def testUndefinedColumns(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v1 int, v2 int,)") as table:
+        execute(cql, table, "INSERT INTO %s (k, v1, v2) VALUES (0, 0, 0)")
+        execute(cql, table, "INSERT INTO %s (k, v1) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (k, v1, v2) VALUES (2, 2, 2)")
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT v2 FROM %s"), row(0), row(null), row(2))
+
+        rows = getRows(execute(cql, table, "SELECT v2 FROM %s WHERE k = 1"))
+        assert 1 == len(rows)
+        assert rows[0][0] is None
+
+# Check table with only a PK (#4361),
+# migrated from cql_tests.py:TestCQL.only_pk_test()
+def testPrimaryKeyOnly(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, PRIMARY KEY (k, c))") as table:
+        for k in range(2):
+            for c in range(2):
+                execute(cql, table, "INSERT INTO %s (k, c) VALUES (?, ?)", k, c)
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, 0),
+                   row(0, 1),
+                   row(1, 0),
+                   row(1, 1))
+
+# Migrated from cql_tests.py:TestCQL.composite_index_with_pk_test()
+def testCompositeIndexWithPK(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(blog_id int, time1 int, time2 int, author text, content text, PRIMARY KEY (blog_id, time1, time2))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(author)")
+
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, ?)", 1, 0, 0, "foo", "bar1")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, ?)", 1, 0, 1, "foo", "bar2")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, ?)", 2, 1, 0, "foo", "baz")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, ?)", 3, 0, 1, "gux", "qux")
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT blog_id, content FROM %s WHERE author='foo'"),
+                   row(1, "bar1"),
+                   row(1, "bar2"),
+                   row(2, "baz"))
+
+        assert_rows(execute(cql, table, "SELECT blog_id, content FROM %s WHERE time1 > 0 AND author='foo' ALLOW FILTERING"),
+                   row(2, "baz"))
+
+        assert_rows(execute(cql, table, "SELECT blog_id, content FROM %s WHERE time1 = 1 AND author='foo' ALLOW FILTERING"),
+                   row(2, "baz"))
+
+        assert_rows(execute(cql, table, "SELECT blog_id, content FROM %s WHERE time1 = 1 AND time2 = 0 AND author='foo' ALLOW FILTERING"),
+                   row(2, "baz"))
+
+        assert_empty(execute(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 = 1 AND author='foo' ALLOW FILTERING"))
+
+        assert_empty(execute(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 > 0 AND author='foo' ALLOW FILTERING"))
+
+        assert_invalid(cql, table, "SELECT content FROM %s WHERE time2 >= 0 AND author='foo'")
+
+        assert_invalid(cql, table, "SELECT blog_id, content FROM %s WHERE time1 > 0 AND author='foo'")
+        assert_invalid(cql, table, "SELECT blog_id, content FROM %s WHERE time1 = 1 AND author='foo'")
+        assert_invalid(cql, table, "SELECT blog_id, content FROM %s WHERE time1 = 1 AND time2 = 0 AND author='foo'")
+        assert_invalid(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 = 1 AND author='foo'")
+        assert_invalid(cql, table, "SELECT content FROM %s WHERE time1 = 1 AND time2 > 0 AND author='foo'")
+
+# The test testLimitBug (testing LIMIT bugs from 4579, migrated from
+# cql_tests.py:TestCQL.limit_bugs_test()) was not translated, because which
+# rows a LIMIT returns from a multi-partition scan depends on the order of
+# tokens of a ByteOrderedPartitioner.
