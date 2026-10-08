@@ -192,6 +192,8 @@ def _get_supported(host: str) -> dict[str, list[str]]:
 async def test_failure_reason_map(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     ip0, ip1 = str(servers[0].ip_addr), str(servers[1].ip_addr)
+    # The error message lists the failed replicas by host ID, whether the extension is enabled or not.
+    failed_in_message = f"Failed replicas: {await manager.get_host_id(servers[1].server_id)} (UNKNOWN)."
     cql = manager.get_cql()
 
     supported = await asyncio.to_thread(_get_supported, ip0)
@@ -212,6 +214,7 @@ async def test_failure_reason_map(manager: ScyllaClusterManager):
         # The write fails on servers[1], which is a remote replica of the coordinator servers[0].
         error = await _failing_query(ip0, insert, with_extension=True)
         assert error["code"] == WRITE_FAILURE
+        assert failed_in_message in error["message"]
         assert error["blockfor"] == 2
         assert error["reason_map"] == {ip1: REASON_UNKNOWN}
         assert error["write_type"] == "SIMPLE"
@@ -219,12 +222,14 @@ async def test_failure_reason_map(manager: ScyllaClusterManager):
         # Without the extension the error carries <numfailures>.
         error = await _failing_query(ip0, insert, with_extension=False)
         assert error["code"] == WRITE_FAILURE
+        assert failed_in_message in error["message"]
         assert error["numfailures"] == 1
         assert error["write_type"] == "SIMPLE"
 
         # The write fails on the coordinator servers[1] itself.
         error = await _failing_query(ip1, insert, with_extension=True)
         assert error["code"] == WRITE_FAILURE
+        assert failed_in_message in error["message"]
         assert error["reason_map"] == {ip1: REASON_UNKNOWN}
 
         # A driver which does not enable the extension still decodes the error.
@@ -240,11 +245,13 @@ async def test_failure_reason_map(manager: ScyllaClusterManager):
         # The read fails on servers[1], which is a remote replica of the coordinator servers[0].
         error = await _failing_query(ip0, select, with_extension=True)
         assert error["code"] == READ_FAILURE
+        assert failed_in_message in error["message"]
         assert error["blockfor"] == 2
         assert error["reason_map"] == {ip1: REASON_UNKNOWN}
 
         error = await _failing_query(ip0, select, with_extension=False)
         assert error["code"] == READ_FAILURE
+        assert failed_in_message in error["message"]
         assert error["numfailures"] == 1
 
         await manager.api.disable_injection(ip1, "storage_proxy::handle_read")

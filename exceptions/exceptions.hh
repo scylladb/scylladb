@@ -235,6 +235,10 @@ public:
     const replica_failure* end() const noexcept { return _data ? _data->entries.end() : nullptr; }
 };
 
+// Returns the message followed by the replicas of the map and their failure reasons.
+// Returns the message unchanged if the map is empty or the result cannot be allocated.
+sstring with_failed_replicas(sstring msg, const replica_failure_map& failed_replicas) noexcept;
+
 class request_failure_exception : public cassandra_exception {
 public:
     db::consistency_level consistency;
@@ -249,7 +253,7 @@ protected:
 
     request_failure_exception(exception_code code, sstring msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_,
             replica_failure_map failed_replicas_ = {}) noexcept
-        : cassandra_exception{code, std::move(msg)}
+        : cassandra_exception{code, with_failed_replicas(std::move(msg), failed_replicas_)}
         , consistency{consistency_}
         , received{received_}
         , failures{failures_}
@@ -424,3 +428,8 @@ public:
 };
 
 } // namespace exceptions
+
+template <>
+struct fmt::formatter<exceptions::request_failure_reason> : fmt::formatter<string_view> {
+    auto format(exceptions::request_failure_reason reason, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
