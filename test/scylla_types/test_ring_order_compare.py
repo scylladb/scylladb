@@ -57,3 +57,15 @@ def test_ring_order_compare_requires_full_compound(scylla_types_fails_with, comp
 def test_ring_order_compare_schema_file(scylla_types, schema_file):
     res = scylla_types("ring-order-compare", "--schema-file", schema_file, "--partition-key", KEY1, KEY2)
     assert res.stdout == f"{RING1} > {RING2}\n"
+
+
+@pytest.mark.parametrize("compound_option", ["--full-compound", "--legacy-composite"])
+def test_ring_order_compare_text(scylla_types, compound_option):
+    res = scylla_types("ring-order-compare", compound_option, "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--",
+                       "1", "abc", "2", "abc")
+    assert res.stdout == f"{RING1} > {RING2}\n"
+
+
+def test_ring_order_compare_text_odd_number_of_values(scylla_types_fails_with):
+    scylla_types_fails_with("ring-order-compare", "--full-compound", "-t", "Int32Type", "-f", "text", "--", "1", "2", "3",
+                            error="error: expected the number of unserialized values (3) to be divisible by 2")

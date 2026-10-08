@@ -18,7 +18,8 @@ The command syntax is as follows:
    scylla types <operation> [options] <hex_value1> [hex_value2]
 
 
-* Provide the values in the hex form without a leading 0x prefix. The exception is the ``serialize`` operation, which expects values in human-readable form.
+* By default, provide the values in the hex form without a leading 0x prefix. The exception is the ``serialize`` operation, which expects values
+  in human-readable form. Some operations accept values in other formats too, see :ref:`Input Formats <scylla-types-input-formats>`.
 * You must specify the type of the provided values. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * The number of provided values depends on the operation. See :ref:`Supported Operations <scylla-types-operations>` for details.
 * The ``scylla types`` operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
@@ -87,22 +88,42 @@ For example:
 
    scylla types deserialize --schema-file schema.cql --partition-key 0004000000010003616263
 
+.. _scylla-types-input-formats:
+
+Input Formats
+-------------
+
+The format of the provided values can be selected with the ``-f`` (or ``--input-format``) option. The supported input formats are:
+
+* ``hex`` - The values are serialized, hex encoded, without a leading 0x prefix. This is the default for all operations, except ``serialize``.
+* ``text`` - The values are unserialized, in their human-readable string representation. This is the default for the ``serialize`` operation.
+  This saves the need to serialize the values with the ``serialize`` operation first, before passing them to another operation.
+
+Not all operations support all input formats, see :ref:`Supported Operations <scylla-types-operations>`. For operations which operate on
+more than one value, unserialized values are interpreted as follows:
+
+* ``compare`` and ``ring-order-compare`` - The first half of the values make up the first compared value, the second half the second one.
+  This allows comparing compounds, which are made up of multiple values.
+* ``tokenof`` and ``shardof`` - All values make up a single partition key.
+
+Note that boost program options, used to parse the command line, doesn't support ``-f=<format>``, use ``-f <format>`` or ``--input-format=<format>``.
+
 .. _scylla-types-operations:
 
 Supported Operations
 --------------------
-* ``serialize`` - Serializes the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form, or in the case of
+* ``serialize`` - Serializes the value and prints it in a hex encoded form. Input formats: ``text``. Required arguments: 1 value in human-readable form, or in the case of
   compounds, 1 value for each component (``--full-compound``), or for some of the components (``--prefix-compound``). To avoid problems around
   special symbols, separate values with ``--`` from the rest of the arguments. Serializing values of collection and vector types (including
   tuples and UDTs, which have fields of such types) is not supported, such values are rejected with an error.
-* ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
-* ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
+* ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Input formats: ``hex``. Required arguments: 1 or more serialized values.
+* ``compare`` - Compares two values and prints the result. Input formats: ``hex`` (default), ``text``. Required arguments: 2 values.
 * ``ring-order-compare`` - Compares two partition keys in ring order, the order ScyllaDB orders partitions in, and prints the result, along with the
-  tokens of the keys: partition keys are ordered by their token first and only by the keys themselves on token collision. Required arguments: 2 serialized values. Only accepts partition keys
+  tokens of the keys: partition keys are ordered by their token first and only by the keys themselves on token collision. Input formats: ``hex`` (default), ``text``. Required arguments: 2 values. Only accepts partition keys
   (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
-* ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
-* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
-* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Required arguments: 1 or more serialized values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
+* ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Input formats: ``hex``. Required arguments: 1 or more serialized values.
+* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Input formats: ``hex`` (default), ``text``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
+* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Input formats: ``hex`` (default), ``text``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
 
 
 You can learn more about each operation by invoking its help:
@@ -128,6 +149,7 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``--full-compound`` (or ``--partition-key``) - Indicates that the value is a full compound (e.g., partition key) composed of multiple values of possibly different types.
 * ``--legacy-composite`` (or ``--legacy-partition-key``) - Indicates that the value is a full compound (e.g., partition key), serialized in the legacy composite format,
   used in SStables, instead of ScyllaDB's in-memory format.
+* ``-f`` (or ``--input-format``) - The format the values are provided in: ``hex`` or ``text``. See :ref:`Input Formats <scylla-types-input-formats>`.
 * ``--shards`` - The number of shards (only relevant for the ``shardof`` operation).
 * ``--ignore-msb-bits`` - The number of the most significant bits of the token to ignore, when calculating the shard. Defaults to 12, the default
   value of the ``murmur3_partitioner_ignore_msb_bits`` configuration option (only relevant for the ``shardof`` operation).
@@ -284,6 +306,19 @@ Examples
     .. code-block:: console
 
         scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
+
+* Calculating the token of a partition key, provided in human-readable form (``-f text``):
+
+    .. code-block:: console
+
+        scylla types tokenof --partition-key -t text -t date -t uuid -f text -- file_instance 2021-03-27 c61a3321-0459-41c3-8e56-75255feb0196
 
     Output:
 

@@ -48,3 +48,10 @@ def test_shardof_legacy_composite(scylla_types):
 def test_shardof_schema_file(scylla_types, schema_file):
     res = scylla_types("shardof", "--schema-file", schema_file, "--partition-key", "--shards=8", "0004000000010003616263")
     assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"
+
+
+@pytest.mark.parametrize("compound_option", ["--full-compound", "--legacy-composite"])
+def test_shardof_text(scylla_types, compound_option):
+    """With -f text, all values make up a single partition key."""
+    res = scylla_types("shardof", compound_option, "-t", "Int32Type", "-t", "UTF8Type", "--shards=8", "-f", "text", "--", "1", "abc")
+    assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"
