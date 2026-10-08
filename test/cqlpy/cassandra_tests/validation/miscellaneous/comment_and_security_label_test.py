@@ -306,3 +306,30 @@ def testErrorCases(cql, new_to_cassandra_6):
         # Test non-existent field
         commentOnNonExistentField = f"COMMENT ON FIELD {ks}.test_type.nonexistent IS 'comment'"
         assert_invalid_message(cql, ks, "doesn't exist", commentOnNonExistentField)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testMultipleOperations(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        cql.execute(f"CREATE TYPE {ks}.contact_info (phone text, address text)")
+
+        # Set comments and labels on multiple objects
+        tableRef = f"{ks}.{TABLE_NAME}"
+        columnRef = f"{ks}.{TABLE_NAME}.name"
+        typeRef = f"{ks}.contact_info"
+
+        setComment(cql, "TABLE", tableRef, "User table")
+        setSecurityLabel(cql, "TABLE", tableRef, "USER_DATA")
+        setComment(cql, "COLUMN", columnRef, "User name")
+        setSecurityLabel(cql, "COLUMN", columnRef, "PUBLIC")
+        setComment(cql, "TYPE", typeRef, "Contact information")
+        setSecurityLabel(cql, "TYPE", typeRef, "PERSONAL")
+
+        # Verify all are set correctly
+        assertComment(cql, "TABLE", ks, tableRef, "User table")
+        assertSecurityLabel(cql, "TABLE", ks, tableRef, "USER_DATA")
+        assertComment(cql, "COLUMN", ks, columnRef, "User name")
+        assertSecurityLabel(cql, "COLUMN", ks, columnRef, "PUBLIC")
+        assertComment(cql, "TYPE", ks, typeRef, "Contact information")
+        assertSecurityLabel(cql, "TYPE", ks, typeRef, "PERSONAL")
