@@ -391,3 +391,37 @@ def testAggregateWithFunctions(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1.4, 1.2)")
             assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, " + copySign + "(b, c), " + copySign + "(c, b) as first FROM %s WHERE a = 1"),
                        row(3, 1.4, null, null))
+
+def testAggregateWithWriteTimeOrTTL(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int primary key, b int, c int)") as table:
+        # Test with empty table
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, "SELECT count(writetime(b)), min(ttl(b)) as min, writetime(b), ttl(c) as first FROM %s"),
+                          "system.count(writetime(b))", "min", "writetime(b)", "first")
+        assert_rows(execute(cql, table, "SELECT count(writetime(b)), min(ttl(b)) as min, writetime(b), ttl(c) as first FROM %s"),
+                           row(0, null, null, null))
+
+        today = int(time.time() * 1000) * 1000
+        yesterday = today - (24 * 60 * 60 * 1000 * 1000)
+
+        secondsPerMinute = 60
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 2, null) USING TTL " + str(20 * secondsPerMinute))
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (2, 4, 6) USING TTL " + str(10 * secondsPerMinute))
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (4, 8, 12) USING TIMESTAMP " + str(yesterday))
+
+        assert_rows(execute(cql, table, "SELECT count(writetime(b)), count(ttl(b)) FROM %s"),
+                   row(3, 2))
+
+        with original_column_names(cql):
+            resultSet = list(execute(cql, table, "SELECT min(ttl(b)), ttl(b) FROM %s"))
+            assert 1 == len(resultSet)
+            r = resultSet[0]
+            assert r["ttl(b)"] > (10 * secondsPerMinute)
+            assert r["system.min(ttl(b))"] <= (10 * secondsPerMinute)
+
+            resultSet = list(execute(cql, table, "SELECT min(writetime(b)), writetime(b) FROM %s"))
+            assert 1 == len(resultSet)
+            r = resultSet[0]
+
+            assert r["writetime(b)"] >= today
+            assert r["system.min(writetime(b))"] == yesterday
