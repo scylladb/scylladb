@@ -61,7 +61,8 @@ Supported Operations
 --------------------
 * ``serialize`` - Serializes the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form, or in the case of
   compounds, 1 value for each component (``--full-compound``), or for some of the components (``--prefix-compound``). To avoid problems around
-  special symbols, separate values with ``--`` from the rest of the arguments. Serializing values of collection and vector types is not supported.
+  special symbols, separate values with ``--`` from the rest of the arguments. Serializing values of collection and vector types (including
+  tuples and UDTs, which have fields of such types) is not supported, such values are rejected with an error.
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
