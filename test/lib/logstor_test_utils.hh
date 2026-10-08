@@ -68,6 +68,8 @@ struct logstor_params {
     size_t disk_size = 4 * 32 * 128 * 1024;
     bool format_on_startup = true;
     bool sparse_files = true;
+    // The interval is short, so that a test of a failed format does not wait long for the retry.
+    std::chrono::milliseconds format_retry_interval = std::chrono::milliseconds(100);
     bool compaction_enabled = true;
     // The default threshold. A minimum at the threshold keeps the threshold constant above the
     // anchor, so that a small test disk does not reach the minimum threshold one segment above the
@@ -84,6 +86,7 @@ inline replica::logstor::logstor_config make_test_logstor_config(const std::file
             .disk_size = params.disk_size,
             .format_on_startup = params.format_on_startup,
             .sparse_files = params.sparse_files,
+            .format_retry_interval = params.format_retry_interval,
             .compaction_enabled = params.compaction_enabled,
             .compaction_min_utilization_threshold = utils::updateable_value<double>(params.compaction_min_utilization_threshold),
             .compaction_sg = seastar::current_scheduling_group(),
