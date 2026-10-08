@@ -10,10 +10,11 @@
 
 
 from ...porting import *
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from cassandra.protocol import FunctionFailure
 import datetime
 import math
+import sys
 
 # Scylla's error messages for dropping a non-existent aggregate are
 # different from Cassandra's: "No function named ks.f found" when no
@@ -1639,6 +1640,33 @@ def testAggregateOverflow(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3), avg(v4), avg(v5) from %s where bucket in (1, 2, 3);"),
                    row(BYTE_MIN, SHORT_MIN, INT_MIN, LONG_MIN, LONG_MIN * 2))
+
+FLOAT_MAX = to_float(3.4028234663852886e38)
+DOUBLE_MAX = sys.float_info.max
+
+# Reproduces SCYLLADB-5163 (avg() of float and double values overflows and
+# loses precision)
+@pytest.mark.xfail(reason="SCYLLADB-5163")
+def testDoubleAggregatesPrecision(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double, v3 decimal)") as table:
+        # BigDecimal.valueOf(Double.MAX_VALUE).add(BigDecimal.valueOf(2))
+        # needs more precision than Python's default for decimals.
+        with localcontext() as ctx:
+            ctx.prec = 400
+            bigDecimal = Decimal(repr(DOUBLE_MAX)) + 2
+        for i in range(1, 4):
+            execute(cql, table, "insert into %s (bucket, v1, v2, v3) values (?, ?, ?, ?)", i,
+                    FLOAT_MAX, DOUBLE_MAX, bigDecimal)
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3) from %s where bucket in (1, 2, 3);"),
+                   row(FLOAT_MAX, DOUBLE_MAX, bigDecimal))
+
+        execute(cql, table, "insert into %s (bucket, v1, v2, v3) values (?, ?, ?, ?)", 4, to_float(100.10), 100.10, Decimal("100.1"))
+        execute(cql, table, "insert into %s (bucket, v1, v2, v3) values (?, ?, ?, ?)", 5, to_float(110.11), 110.11, Decimal("110.11"))
+        execute(cql, table, "insert into %s (bucket, v1, v2, v3) values (?, ?, ?, ?)", 6, to_float(120.12), 120.12, Decimal("120.12"))
+
+        assert_rows(execute(cql, table, "select avg(v1), avg(v2), avg(v3) from %s where bucket in (4, 5, 6);"),
+                   row(to_float(110.11), 110.11, Decimal("110.11")))
 
 def testNan(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double)") as table:
