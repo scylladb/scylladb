@@ -297,3 +297,164 @@ def testCopyAfterAlterTable(cql, new_to_cassandra_6, keyspaces, cassandra_bug):
                row(1, "1", duration1, uuid1))
     assert_rows(execute(cql, "", "SELECT * FROM " + targetKs + "." + targetTb),
                row(2, "2", duration2, uuid2))
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE), #8948 (compression options
+# "class" and "enabled"), SCYLLADB-5142 (LCS's fanout_size option), #24029
+# (UnifiedCompactionStrategy) and #9859 (Cassandra's table options cdc = true,
+# additional_write_policy, read_repair, memtable, incremental_backups and
+# speculative_retry = '95p').
+@pytest.mark.xfail(reason="SCYLLADB-5147, #8948, SCYLLADB-5142, #24029, #9859")
+def testTableOptionsCopy(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    # compression
+    tbCompressionDefault1 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))")
+    tbCompressionDefault2 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                         " WITH compression = { 'enabled' : 'false'};")
+    tbCompressionSnappy1 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 32 };")
+    tbCompressionSnappy2 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 32, 'enabled' : true };")
+    tbCompressionSnappy3 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 2 };")
+    tbCompressionSnappy4 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 1 };")
+    tbCompressionSnappy5 = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 0 };")
+
+    # memtable
+    # The "skiplist" and "trie" memtable configurations exist in Cassandra's
+    # unit-test configuration (test/conf/cassandra.yaml), but not in the
+    # default configuration we run Cassandra with, so these two tables are
+    # commented out.
+    #tableMemtableSkipList = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+    #                                                     " WITH memtable = 'skiplist';")
+    #tableMemtableTrie = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+    #                                                 " WITH memtable = 'trie';")
+    tableMemtableDefault = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))" +
+                                                        " WITH memtable = 'default';")
+
+    # compaction
+    tableCompactionStcs = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH compaction = {'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 2, 'enabled' : false};")
+    tableCompactionLcs = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH compaction = {'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 1, 'fanout_size' : 5};")
+    tableCompactionTwcs = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH compaction = {'class' : 'TimeWindowCompactionStrategy', 'min_threshold' : 2};")
+    tableCompactionUcs = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH compaction = {'class' : 'UnifiedCompactionStrategy'};")
+
+    # other options are all different from default
+    tableOtherOptions = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH" +
+                                                     " additional_write_policy = '95p' " +
+                                                     " AND bloom_filter_fp_chance = 0.1 " +
+                                                     " AND caching = {'keys' : 'ALL', 'rows_per_partition' : '100'}" +
+                                                     " AND cdc = true " +
+                                                     " AND comment = 'test for create like'" +
+                                                     " AND crc_check_chance = 0.1" +
+                                                     " AND default_time_to_live = 10" +
+                                                     " AND compaction = {'class' : 'UnifiedCompactionStrategy'} " +
+                                                     " AND compression = {'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 32 }" +
+                                                     " AND gc_grace_seconds = 100" +
+                                                     " AND incremental_backups = false" +
+                                                     " AND max_index_interval = 1024" +
+                                                     " AND min_index_interval = 64" +
+                                                     " AND speculative_retry = '95p'" +
+                                                     " AND read_repair = 'NONE'" +
+                                                     " AND memtable_flush_period_in_ms = 360000" +
+                                                     " AND memtable = 'default';")
+
+    tbLikeCompressionDefault1 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionDefault1, sourceKs, targetKs)
+    tbLikeCompressionDefault2 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionDefault2, sourceKs, targetKs)
+    tbLikeCompressionSp1 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionSnappy1, sourceKs, targetKs)
+    tbLikeCompressionSp2 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionSnappy2, sourceKs, targetKs)
+    tbLikeCompressionSp3 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionSnappy3, sourceKs, targetKs)
+    tbLikeCompressionSp4 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionSnappy4, sourceKs, targetKs)
+    tbLikeCompressionSp5 = createTableLike(cql, "CREATE TABLE %s LIKE %s", tbCompressionSnappy5, sourceKs, targetKs)
+    #tbLikeMemtableSkipList = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableMemtableSkipList, sourceKs, targetKs)
+    #tbLikeMemtableTrie = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableMemtableTrie, sourceKs, targetKs)
+    tbLikeMemtableDefault = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableMemtableDefault, sourceKs, targetKs)
+    tbLikeCompactionStcs = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableCompactionStcs, sourceKs, targetKs)
+    tbLikeCompactionLcs = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableCompactionLcs, sourceKs, targetKs)
+    tbLikeCompactionTwcs = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableCompactionTwcs, sourceKs, targetKs)
+    tbLikeCompactionUcs = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableCompactionUcs, sourceKs, targetKs)
+    tbLikeCompactionOthers = createTableLike(cql, "CREATE TABLE %s LIKE %s", tableOtherOptions, sourceKs, targetKs)
+
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionDefault1, tbLikeCompressionDefault1)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionDefault2, tbLikeCompressionDefault2)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionSnappy1, tbLikeCompressionSp1)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionSnappy2, tbLikeCompressionSp2)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionSnappy3, tbLikeCompressionSp3)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionSnappy4, tbLikeCompressionSp4)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionSnappy5, tbLikeCompressionSp5)
+    #assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableMemtableSkipList, tbLikeMemtableSkipList)
+    #assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableMemtableTrie, tbLikeMemtableTrie)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableMemtableDefault, tbLikeMemtableDefault)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableCompactionStcs, tbLikeCompactionStcs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableCompactionLcs, tbLikeCompactionLcs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableCompactionTwcs, tbLikeCompactionTwcs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableCompactionUcs, tbLikeCompactionUcs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableOtherOptions, tbLikeCompactionOthers)
+
+    # a copy of the table with the table parameters set
+    tableCopyAndSetCompression = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH compression = {'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 64 };",
+                                                        tbCompressionSnappy1, sourceKs, targetKs)
+    tableCopyAndSetLCSCompaction = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH compaction = {'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 10, 'fanout_size' : 16};",
+                                                          tableCompactionLcs, sourceKs, targetKs)
+    tableCopyAndSetAllParams = createTableLike(cql, "CREATE TABLE %s (a text, b int, c int, primary key (a, b)) WITH" +
+                                                      " bloom_filter_fp_chance = 0.75 " +
+                                                      " AND caching = {'keys' : 'NONE', 'rows_per_partition' : '10'}" +
+                                                      " AND cdc = true " +
+                                                      " AND comment = 'test for create like and set params'" +
+                                                      " AND crc_check_chance = 0.8" +
+                                                      " AND default_time_to_live = 100" +
+                                                      " AND compaction = {'class' : 'SizeTieredCompactionStrategy'} " +
+                                                      " AND compression = {'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 64}" +
+                                                      " AND gc_grace_seconds = 1000" +
+                                                      " AND incremental_backups = true" +
+                                                      " AND max_index_interval = 128" +
+                                                      " AND min_index_interval = 16" +
+                                                      " AND speculative_retry = '96p'" +
+                                                      " AND read_repair = 'NONE'" +
+                                                      " AND memtable_flush_period_in_ms = 3600;",
+                                                      tableOtherOptions, sourceKs, targetKs)
+
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tbCompressionDefault1, tableCopyAndSetCompression, False, False, False)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableCompactionLcs, tableCopyAndSetLCSCompaction, False, False, False)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, tableOtherOptions, tableCopyAndSetAllParams, False, False, False)
+    paramsSetCompression = getTableMetadata(cql, targetKs, tableCopyAndSetCompression)["params"]
+    paramsSetLCSCompaction = getTableMetadata(cql, targetKs, tableCopyAndSetLCSCompaction)["params"]
+    paramsSetAllParams = getTableMetadata(cql, targetKs, tableCopyAndSetAllParams)["params"]
+
+    # The original Java test compares these parameters to TableParams objects
+    # built with the default parameters except the explicitly listed ones.
+    # Here we take the default parameters from a table created without any
+    # options, and override the same explicitly listed parameters, in the
+    # form in which they appear in system_schema.tables.
+    defaultParams = getTableMetadata(cql, sourceKs, tbCompressionDefault1)["params"]
+    assert paramsSetCompression == defaultParams | {
+        "compression": {"class": "org.apache.cassandra.io.compress.SnappyCompressor", "chunk_length_in_kb": "64"}}
+    # (When bloom_filter_fp_chance isn't set explicitly, its default depends
+    # on the compaction strategy - it is 0.1 for LeveledCompactionStrategy.)
+    assert paramsSetLCSCompaction == defaultParams | {
+        "bloom_filter_fp_chance": 0.1,
+        "compaction": {"class": "org.apache.cassandra.db.compaction.LeveledCompactionStrategy",
+                       "sstable_size_in_mb": "10", "fanout_size": "16", "max_threshold": "32", "min_threshold": "4"}}
+    assert paramsSetAllParams == defaultParams | {
+        "bloom_filter_fp_chance": 0.75,
+        "caching": {"keys": "NONE", "rows_per_partition": "10"},
+        "comment": "test for create like and set params",
+        "crc_check_chance": 0.8,
+        "default_time_to_live": 100,
+        "compaction": {"class": "org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy", "max_threshold": "32", "min_threshold": "4"},
+        "compression": {"class": "org.apache.cassandra.io.compress.SnappyCompressor", "chunk_length_in_kb": "64"},
+        "gc_grace_seconds": 1000,
+        # incremental_backups = true is the default, which Cassandra doesn't
+        # write to system_schema.tables.
+        "max_index_interval": 128,
+        "min_index_interval": 16,
+        "speculative_retry": "96p",
+        "read_repair": "NONE",
+        "memtable_flush_period_in_ms": 3600}
+    assert getCdc(cql, targetKs, tableCopyAndSetAllParams)
+
+    # table id
+    id = uuid4()
+    tbNormal = createTable(cql, sourceKs, "CREATE TABLE %s (a text, b int, c int, primary key (a, b))")
+    assert_invalid_throw_message(cql, "", "Cannot alter table id.", ConfigurationException,
+                              "CREATE TABLE " + targetKs + ".targetnormal LIKE " + sourceKs + "." + tbNormal + " WITH ID = " + str(id))
