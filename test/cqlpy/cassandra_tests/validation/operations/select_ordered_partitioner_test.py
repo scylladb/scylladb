@@ -81,3 +81,36 @@ def testTokenFunctionWithPartitionKeyAndClusteringKeyArguments(cql, test_keyspac
     with create_table(cql, test_keyspace, "(a int, b text, PRIMARY KEY (a, b))") as table:
         assert_invalid_message_re(cql, table, ONLY_PARTITION_KEY_MESSAGE,
                              "SELECT * FROM %s WHERE token(a, b) > token(0, 'c')")
+
+def testMultiColumnPartitionKeyWithIndexAndTokenNonTokenRestrictionsMix(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key((a, b)))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(b)")
+        execute(cql, table, "CREATE INDEX ON %s(c)")
+
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 0, 0);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 1, 1);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 2, 2);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 0, 3);")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1, 4);")
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE b = ?;", 1),
+                   row(0, 1, 1),
+                   row(1, 1, 4))
+
+        # The following three checks depend on the order of tokens:
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?) AND b = ?;", 0, 0, 1),
+        #           row(0, 1, 1),
+        #           row(1, 1, 4))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b = ? AND token(a, b) > token(?, ?);", 1, 0, 0),
+        #           row(0, 1, 1),
+        #           row(1, 1, 4))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b = ? AND token(a, b) > token(?, ?) and c = ? ALLOW FILTERING;", 1, 0, 0, 4),
+        #           row(1, 1, 4))
+
+def testTokenFunctionWithCompoundPartitionAndClusteringCols(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY ((a, b), c, d))") as table:
+        # just test that the queries don't error
+        execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(0, 0) AND c > 10 ALLOW FILTERING;")
+        execute(cql, table, "SELECT * FROM %s WHERE c > 10 AND token(a, b) > token(0, 0) ALLOW FILTERING;")
+        execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(0, 0) AND (c, d) > (0, 0) ALLOW FILTERING;")
+        execute(cql, table, "SELECT * FROM %s WHERE (c, d) > (0, 0) AND token(a, b) > token(0, 0) ALLOW FILTERING;")
