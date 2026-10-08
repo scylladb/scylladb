@@ -38,3 +38,12 @@ def teststandardOptionsSyntaxTest(cql):
     assertValidSyntax(cql, "ALTER ROLE r WITH SUPERUSER = true AND PASSWORD = 'foo' AND LOGIN = false")
     assertValidSyntax(cql, "ALTER ROLE r WITH LOGIN = true AND PASSWORD = 'foo' AND SUPERUSER = false")
     assertValidSyntax(cql, "ALTER ROLE r WITH SUPERUSER = true AND PASSWORD = 'foo' AND LOGIN = false")
+
+def testcustomOptionsSyntaxTest(cql):
+    assertValidSyntax(cql, "CREATE ROLE r WITH OPTIONS = {'a':'b', 'b':1}")
+    assertInvalidSyntax(cql, "CREATE ROLE r WITH OPTIONS = 'term'")
+    assertInvalidSyntax(cql, "CREATE ROLE r WITH OPTIONS = 99")
+
+    assertValidSyntax(cql, "ALTER ROLE r WITH OPTIONS = {'a':'b', 'b':1}")
+    assertInvalidSyntax(cql, "ALTER ROLE r WITH OPTIONS = 'term'")
+    assertInvalidSyntax(cql, "ALTER ROLE r WITH OPTIONS = 99")
