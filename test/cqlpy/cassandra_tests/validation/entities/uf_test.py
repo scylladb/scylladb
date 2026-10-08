@@ -201,3 +201,51 @@ def testFunctionOverloading(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT v FROM %s WHERE k = " + fOverload + "((int)?)", 3), row(1))
         # overloaded has just one overload now - so the following DROP FUNCTION is not ambigious (CASSANDRA-7812)
         execute(cql, table, "DROP FUNCTION " + fOverload)
+
+def testFunctionInTargetKeyspace(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
+        execute(cql, table, "CREATE TABLE " + KEYSPACE_PER_TEST + ".second_tab (key int primary key, val double)")
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE OR REPLACE FUNCTION %s(val double) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql, "return Double.valueOf(val);", "return val") + ";")
+
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3.0)
+        assert_invalid_message(cql, table, "Unknown function",
+                               "SELECT key, val, " + shortFunctionName(fName) + "(val) FROM %s")
+
+        execute(cql, table, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 3, 3.0)
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM " + KEYSPACE_PER_TEST + ".second_tab"),
+                    row(1, 1.0, 1.0),
+                    row(2, 2.0, 2.0),
+                    row(3, 3.0, 3.0))
+
+def testFunctionWithReservedName(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        execute(cql, KEYSPACE_PER_TEST, "CREATE TABLE " + KEYSPACE_PER_TEST + ".second_tab (key int primary key, val double)")
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE OR REPLACE FUNCTION %s() " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS timestamp " +
+                               java_or_lua(cql, "return null;", "return nil") + ";")
+
+        execute(cql, KEYSPACE_PER_TEST, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, KEYSPACE_PER_TEST, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, KEYSPACE_PER_TEST, "INSERT INTO " + KEYSPACE_PER_TEST + ".second_tab (key, val) VALUES (?, ?)", 3, 3.0)
+
+        # ensure that system now() is executed
+        rows = list(execute(cql, KEYSPACE_PER_TEST, "SELECT key, val, now() FROM " + KEYSPACE_PER_TEST + ".second_tab"))
+        assert len(rows) == 3
+        assert rows[0][2] is not None
+
+        # ensure that KEYSPACE_PER_TEST's now() is executed
+        rows = list(execute(cql, KEYSPACE_PER_TEST, "SELECT key, val, " + fName + "() FROM " + KEYSPACE_PER_TEST + ".second_tab"))
+        assert len(rows) == 3
+        assert rows[0][2] is None
