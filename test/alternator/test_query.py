@@ -318,6 +318,21 @@ def test_query_limit(test_table_sn):
     with pytest.raises(ClientError, match='ValidationException.*[lL]imit'):
         test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=0)
 
+# A huge Limit, like 2**32+1 or 2**64, is accepted and treated as unlimited -
+# so with two items in the partition, both should be returned. (boto3
+# enforces a minimum of 1 on Limit, but no maximum, so such a huge Limit
+# reaches the server unmodified).
+@pytest.mark.parametrize('limit', [2**32+1, 2**64])
+def test_query_huge_limit(test_table_sn, limit):
+    p = random_string()
+    with test_table_sn.batch_writer() as batch:
+        for c in [1, 2]:
+            batch.put_item({'p': p, 'c': c})
+    got_items = test_table_sn.query(ConsistentRead=True,
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        Limit=limit)['Items']
+    assert [x['c'] for x in got_items] == [1, 2]
+
 # In test_query_limit we tested just that Limit allows to stop the result
 # after right right number of items. Here we test that such a stopped result
 # can be resumed, via the LastEvaluatedKey/ExclusiveStartKey paging mechanism.

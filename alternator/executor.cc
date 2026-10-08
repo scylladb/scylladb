@@ -1198,6 +1198,9 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
+            if (!it->IsString()) {
+                throw api_error::validation("TagKeys entries must be strings");
+            }
             auto tag_key = rjson::to_string_view(*it);
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
@@ -1576,16 +1579,15 @@ static std::optional<int> get_vector_index_dimensions_on_attribute(const schema&
 // object or throws api_error::validation if invalid. The "index_name"
 // parameter is used in error messages.
 static int get_dimensions(const rjson::value& json, std::string_view index_name) {
-    const rjson::value* dimensions_v = rjson::find(json, "Dimensions");
     // Interestingly, although Dimensions is expected to be an integer,
     // DynamoDB's implementation allows floating point numbers and truncates
-    // them to an integer (e.g., 6.7 is accepted as 6). So we'll do the same
-    // by using IsNumber() and GetDouble() instead of IsInt() and GetInt().
-    double dims_d = dimensions_v && dimensions_v->IsNumber() ? std::trunc(dimensions_v->GetDouble()) : 0;
-    if (dims_d < 1 || dims_d > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
+    // them to an integer (e.g., 6.7 is accepted as 6). get_lenient_int_attribute()
+    // does the same.
+    int dims = get_lenient_int_attribute(json, "Dimensions").value_or(0);
+    if (dims < 1 || dims > int(cql3::cql3_type::MAX_VECTOR_DIMENSION)) {
         throw api_error::validation(fmt::format("Vector index '{}': Dimensions must be an integer between 1 and {}.", index_name, cql3::cql3_type::MAX_VECTOR_DIMENSION));
     }
-    return static_cast<int>(dims_d);
+    return dims;
 }
 
 // As noted in issue #5052, in Alternator the CreateTable and UpdateTable are
@@ -2627,7 +2629,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     co_return api_error::validation("You cannot create or delete index while changing stream status");
                 }
             }
-            if (stream_specification && stream_specification->IsObject()) {
+            if (stream_specification) {
+                if (!stream_specification->IsObject()) {
+                    co_return api_error::validation("StreamSpecification must be an object");
+                }
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
@@ -3182,7 +3187,11 @@ void validate_value(const rjson::value& v, const char* caller) {
                     caller, element.GetDouble()));
             }
         }
-    } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
+    } else if (type == "BOOL") {
+        if (!it->value.IsBool()) {
+            throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
+        }
+    } else if (type != "L" && type != "M" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
     }
@@ -4691,6 +4700,9 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
         }
         for (auto it = std::as_const(*_attribute_updates).MemberBegin(); it != std::as_const(*_attribute_updates).MemberEnd(); ++it) {
             validate_attr_name_length("AttributeUpdates", it->name.GetStringLength(), false);
+            if (!it->value.IsObject()) {
+                throw api_error::validation("AttributeUpdates entries must be objects");
+            }
         }
     }
 
@@ -4743,7 +4755,7 @@ static bool check_needs_read_before_write_attribute_updates(rjson::value *attrib
     // that _attribute_updates, when it exists, is a map
     for (auto it = attribute_updates->MemberBegin(); it != attribute_updates->MemberEnd(); ++it) {
         rjson::value* action = rjson::find(it->value, "Action");
-        if (action) {
+        if (action && action->IsString()) {
             std::string_view action_s = rjson::to_string_view(*action);
             if (action_s == "ADD") {
                 return true;
@@ -5054,7 +5066,12 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
-        std::string action = rjson::to_string((it->value)["Action"]);
+        // A missing Action defaults to PUT.
+        const rjson::value* action_json = rjson::find(it->value, "Action");
+        if (action_json && !action_json->IsString()) {
+            throw api_error::validation("AttributeUpdates Action must be a string");
+        }
+        std::string action = action_json ? rjson::to_string(*action_json) : "PUT";
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
             // "Value" option, it is used to delete an attribute. With a
@@ -5328,9 +5345,8 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     co_await utils::get_local_injector().inject("alternator_list_tables", utils::wait_for_message(5min));
 
     rjson::value* exclusive_start_json = rjson::find(request, "ExclusiveStartTableName");
-    rjson::value* limit_json = rjson::find(request, "Limit");
     std::string exclusive_start = exclusive_start_json ? rjson::to_string(*exclusive_start_json) : "";
-    int limit = limit_json ? limit_json->GetInt() : 100;
+    int limit = get_int_attribute(request, "Limit").value_or(100);
     if (limit < 1 || limit > 100) {
         co_return api_error::validation("Limit must be greater than 0 and no greater than 100");
     }
