@@ -4773,10 +4773,29 @@ class scylla_cache(gdb.Command):
             gdb.write("\n")
 
 
+def sstables_in_set(sstable_set, table_name):
+    """Yields pointers to the sstables of a sstables::sstable_set value."""
+    impl = downcast_vptr(std_unique_ptr(sstable_set['_impl']).get()).dereference()
+    impl_type = str(impl.type.strip_typedefs())
+    if impl_type == 'sstables::compound_sstable_set':
+        for s in std_vector(impl['_sets']):
+            yield from sstables_in_set(seastar_lw_shared_ptr(s).get().dereference(), table_name)
+    elif impl_type == 'sstables::time_series_sstable_set':
+        for _, sst in std_map(seastar_lw_shared_ptr(impl['_sstables']).get().dereference()):
+            yield seastar_lw_shared_ptr(sst).get()
+    elif impl_type == 'replica::tablet_sstable_set':
+        for _, tablet_set in absl_container(impl['_sstable_sets']):
+            yield from sstables_in_set(seastar_lw_shared_ptr(tablet_set).get().dereference(), table_name)
+    elif impl_type == 'sstables::partitioned_sstable_set':
+        for sst in std_unordered_set(seastar_lw_shared_ptr(impl['_all']).get().dereference()):
+            yield seastar_lw_shared_ptr(sst).get()
+    else:
+        gdb.write('warning: unsupported sstable_set implementation %s, skipping table %s\n' % (impl_type, table_name))
+
+
 def find_sstables_attached_to_tables():
     for table in for_each_table():
-        for sst_ptr in std_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
-            yield seastar_lw_shared_ptr(sst_ptr).get()
+        yield from sstables_in_set(seastar_lw_shared_ptr(table['_sstables']).get().dereference(), schema_ptr(table['_schema']).table_name())
 
 
 def find_sstables():
