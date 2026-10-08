@@ -206,3 +206,42 @@ def testTableWithLargePartition(cql, test_keyspace):
         expectedReverse = [row("key", 15, t2) for t2 in range(9, -1, -1)]
 
         assert_rows(execute(cql, table, "SELECT k, t1, t2 FROM %s WHERE k=? AND t1=? ORDER BY t1 DESC, t2 DESC", "key", 15), *expectedReverse)
+
+def testRowDeletion(cql, test_keyspace):
+    N = 4
+
+    with create_table(cql, test_keyspace, "(k text, t int, v1 text, v2 int, PRIMARY KEY (k, t))") as table:
+        for t in range(N):
+            execute(cql, table, "INSERT INTO %s (k, t, v1, v2) values (?, ?, ?, ?)", "key", t, "v" + str(t), t + 10)
+
+        flush(cql, table)
+
+        for i in range(N // 2):
+            execute(cql, table, "DELETE FROM %s WHERE k=? AND t=?", "key", i * 2)
+
+        expected = []
+        for i in range(N // 2):
+            t = i * 2 + 1
+            expected.append(row("key", t, "v" + str(t), t + 10))
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"), *expected)
+
+def testRangeTombstones(cql, test_keyspace):
+    N = 100
+
+    with create_table(cql, test_keyspace, "(k text, t1 int, t2 int, v text, PRIMARY KEY (k, t1, t2))") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (k, t1, t2, v) values (?, ?, ?, ?)")
+        for t1 in range(3):
+            for t2 in range(N):
+                cql.execute(stmt, ["key", t1, t2, "someSemiLargeTextForValue_" + str(t1) + "_" + str(t2)])
+
+        flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE k=? AND t1=?", "key", 1)
+
+        flush(cql, table)
+
+        expected = ([row("key", 0, t2, "someSemiLargeTextForValue_0_" + str(t2)) for t2 in range(N)] +
+                    [row("key", 2, t2, "someSemiLargeTextForValue_2_" + str(t2)) for t2 in range(N)])
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"), *expected)
