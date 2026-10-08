@@ -134,7 +134,7 @@ def test_input_format_text(scylla_types):
 
 def test_invalid_input_format(scylla_types_fails_with):
     scylla_types_fails_with("compare", "-t", "Int32Type", "-f", "foo", "00000001", "00000002",
-                            error="error: invalid input format 'foo', expected one of: hex, text")
+                            error="error: invalid input format 'foo', expected one of: hex, text, json")
 
 
 def test_input_format_short_option_with_equal_sign(scylla_types_fails_with):
@@ -144,8 +144,9 @@ def test_input_format_short_option_with_equal_sign(scylla_types_fails_with):
 
 
 @pytest.mark.parametrize("action,input_format,supported_formats", [
-    ("serialize", "hex", "text"),
+    ("serialize", "hex", "text, json"),
     ("deserialize", "text", "hex"),
+    ("deserialize", "json", "hex"),
     ("validate", "text", "hex"),
 ])
 def test_unsupported_input_format(scylla_types_fails_with, action, input_format, supported_formats):

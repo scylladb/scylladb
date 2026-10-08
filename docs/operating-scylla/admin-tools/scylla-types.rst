@@ -98,6 +98,8 @@ The format of the provided values can be selected with the ``-f`` (or ``--input-
 * ``hex`` - The values are serialized, hex encoded, without a leading 0x prefix. This is the default for all operations, except ``serialize``.
 * ``text`` - The values are unserialized, in their human-readable string representation. This is the default for the ``serialize`` operation.
   This saves the need to serialize the values with the ``serialize`` operation first, before passing them to another operation.
+* ``json`` - The values are unserialized, in their JSON representation, the same format accepted by ``INSERT JSON``. Values of collection
+  and vector types have no string representation, they can only be provided in this format.
 
 Not all operations support all input formats, see :ref:`Supported Operations <scylla-types-operations>`. For operations which operate on
 more than one value, unserialized values are interpreted as follows:
@@ -112,18 +114,18 @@ Note that boost program options, used to parse the command line, doesn't support
 
 Supported Operations
 --------------------
-* ``serialize`` - Serializes the value and prints it in a hex encoded form. Input formats: ``text``. Required arguments: 1 value in human-readable form, or in the case of
+* ``serialize`` - Serializes the value and prints it in a hex encoded form. Input formats: ``text`` (default), ``json``. Required arguments: 1 value in human-readable form, or in the case of
   compounds, 1 value for each component (``--full-compound``), or for some of the components (``--prefix-compound``). To avoid problems around
-  special symbols, separate values with ``--`` from the rest of the arguments. Serializing values of collection and vector types (including
-  tuples and UDTs, which have fields of such types) is not supported, such values are rejected with an error.
+  special symbols, separate values with ``--`` from the rest of the arguments. Values of collection and vector types (including tuples and UDTs,
+  which have fields of such types) have no string representation, they can only be serialized from their JSON representation (``-f json``).
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Input formats: ``hex``. Required arguments: 1 or more serialized values.
-* ``compare`` - Compares two values and prints the result. Input formats: ``hex`` (default), ``text``. Required arguments: 2 values.
+* ``compare`` - Compares two values and prints the result. Input formats: ``hex`` (default), ``text``, ``json``. Required arguments: 2 values.
 * ``ring-order-compare`` - Compares two partition keys in ring order, the order ScyllaDB orders partitions in, and prints the result, along with the
-  tokens of the keys: partition keys are ordered by their token first and only by the keys themselves on token collision. Input formats: ``hex`` (default), ``text``. Required arguments: 2 values. Only accepts partition keys
+  tokens of the keys: partition keys are ordered by their token first and only by the keys themselves on token collision. Input formats: ``hex`` (default), ``text``, ``json``. Required arguments: 2 values. Only accepts partition keys
   (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Input formats: ``hex``. Required arguments: 1 or more serialized values.
-* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Input formats: ``hex`` (default), ``text``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
-* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Input formats: ``hex`` (default), ``text``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
+* ``tokenof`` - Calculates the token of the partition key (i.e. decorates it). Input formats: ``hex`` (default), ``text``, ``json``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
+* ``shardof`` - Calculates the token of the partition key and the shard it belongs to, given the provided shard configuration (``--shards`` and ``--ignore-msb-bits``). In most cases, only ``--shards`` has to be provided unless you have a non-standard configuration. Input formats: ``hex`` (default), ``text``, ``json``. Required arguments: 1 or more values. Only accepts partition keys (``--full-compound``/``--partition-key`` or ``--legacy-composite``/``--legacy-partition-key``).
 
 
 You can learn more about each operation by invoking its help:
@@ -149,7 +151,7 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``--full-compound`` (or ``--partition-key``) - Indicates that the value is a full compound (e.g., partition key) composed of multiple values of possibly different types.
 * ``--legacy-composite`` (or ``--legacy-partition-key``) - Indicates that the value is a full compound (e.g., partition key), serialized in the legacy composite format,
   used in SStables, instead of ScyllaDB's in-memory format.
-* ``-f`` (or ``--input-format``) - The format the values are provided in: ``hex`` or ``text``. See :ref:`Input Formats <scylla-types-input-formats>`.
+* ``-f`` (or ``--input-format``) - The format the values are provided in: ``hex``, ``text`` or ``json``. See :ref:`Input Formats <scylla-types-input-formats>`.
 * ``--shards`` - The number of shards (only relevant for the ``shardof`` operation).
 * ``--ignore-msb-bits`` - The number of the most significant bits of the token to ignore, when calculating the shard. Defaults to 12, the default
   value of the ``murmur3_partitioner_ignore_msb_bits`` configuration option (only relevant for the ``shardof`` operation).
@@ -221,6 +223,19 @@ Examples
        :class: hide-copy-button
 
         00040000000100000361626300
+
+* Serializing a value of a collection type, from its JSON representation (``-f json``):
+
+    .. code-block:: console
+
+        scylla types serialize -f json -t 'map<int, text>' -- '{"1": "a"}'
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0000000100000004000000010000000161
 
 * Deserializing and printing a value of type Int32Type:
 

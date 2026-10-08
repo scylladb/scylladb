@@ -183,3 +183,35 @@ def test_serialize_schema_file_clustering_key(scylla_types, schema_file, compoun
 def test_serialize_schema_file_partition_key(scylla_types, schema_file, compound_option, serialized):
     res = scylla_types("serialize", "--schema-file", schema_file, compound_option, "--", "1", "abc")
     assert res.stdout == f"{serialized}\n"
+
+
+@pytest.mark.parametrize("type_name,value,serialized", [
+    ("int", "1", "00000001"),
+    ("text", '"abc"', "616263"),
+    ("blob", '"0x0102"', "0102"),
+    ("boolean", "true", "01"),
+    ("list<int>", "[1, 2]", "00000002000000040000000100000004 00000002".replace(" ", "")),
+    ("frozen<list<int>>", "[1]", "000000010000000400000001"),
+    ("set<text>", '["a"]', "000000010000000161"),
+    ("map<int, text>", '{"1": "a"}', "0000000100000004000000010000000161"),
+    ("tuple<int, text>", '[1, "a"]', "00000004000000010000000161"),
+    ("tuple<int, frozen<set<int>>>", "[1, [2]]", "00000004000000010000000c000000010000000400000002"),
+    ("vector<float, 3>", "[1.0, 2.0, 3.0]", "3f8000004000000040400000"),
+])
+def test_serialize_json(scylla_types, type_name, value, serialized):
+    """With -f json, values are parsed from JSON, which allows serializing collections and vectors too."""
+    res = scylla_types("serialize", "-f", "json", "-t", type_name, "--", value)
+    assert res.stdout == f"{serialized}\n"
+
+
+def test_serialize_json_compound(scylla_types):
+    res = scylla_types("serialize", "--prefix-compound", "-f", "json", "-t", "int", "-t", "frozen<list<int>>", "--", "1", "[1]")
+    assert res.stdout == "000400000001000c000000010000000400000001\n"
+
+
+def test_serialize_json_invalid_json(scylla_types_fails_with):
+    scylla_types_fails_with("serialize", "-f", "json", "-t", "list<int>", "--", "[1", error="Parsing JSON failed")
+
+
+def test_serialize_json_type_mismatch(scylla_types_fails_with):
+    scylla_types_fails_with("serialize", "-f", "json", "-t", "list<int>", "--", '{"a": 1}', error="list_type must be represented as JSON Array")

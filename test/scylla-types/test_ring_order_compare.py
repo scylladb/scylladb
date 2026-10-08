@@ -69,3 +69,10 @@ def test_ring_order_compare_text(scylla_types, compound_option):
 def test_ring_order_compare_text_odd_number_of_values(scylla_types_fails_with):
     scylla_types_fails_with("ring-order-compare", "--full-compound", "-t", "Int32Type", "-f", "text", "--", "1", "2", "3",
                             error="error: expected the number of unserialized values (3) to be divisible by 2")
+
+
+def test_ring_order_compare_json(scylla_types):
+    res = scylla_types("ring-order-compare", "--partition-key", "-t", "int", "-t", "frozen<list<int>>", "-f", "json", "--", "1", "[1]", "2", "[1]")
+    expected = scylla_types("ring-order-compare", "--partition-key", "-t", "int", "-t", "frozen<list<int>>",
+                            "000400000001000c000000010000000400000001", "000400000002000c000000010000000400000001").stdout
+    assert res.stdout == expected

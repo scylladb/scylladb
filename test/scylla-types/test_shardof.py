@@ -55,3 +55,10 @@ def test_shardof_text(scylla_types, compound_option):
     """With -f text, all values make up a single partition key."""
     res = scylla_types("shardof", compound_option, "-t", "Int32Type", "-t", "UTF8Type", "--shards=8", "-f", "text", "--", "1", "abc")
     assert res.stdout == "(1, abc): token: 8771735466527499816, shard: 5\n"
+
+
+def test_shardof_json(scylla_types):
+    expected = scylla_types("shardof", "--partition-key", "-t", "int", "-t", "frozen<list<int>>", "--shards=8",
+                            "000400000001000c000000010000000400000001").stdout
+    res = scylla_types("shardof", "--partition-key", "-t", "int", "-t", "frozen<list<int>>", "--shards=8", "-f", "json", "--", "1", "[1]")
+    assert res.stdout == expected

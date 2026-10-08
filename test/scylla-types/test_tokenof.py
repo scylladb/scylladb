@@ -67,3 +67,11 @@ def test_tokenof_text_schema_file(scylla_types, schema_file):
 def test_tokenof_text_wrong_number_of_values(scylla_types_fails_with):
     scylla_types_fails_with("tokenof", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1",
                             error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")
+
+
+def test_tokenof_json(scylla_types):
+    """Partition keys with collection components can be provided in JSON format."""
+    expected = scylla_types("tokenof", "--partition-key", "-t", "int", "-t", "frozen<list<int>>",
+                            "000400000001000c000000010000000400000001").stdout
+    res = scylla_types("tokenof", "--partition-key", "-t", "int", "-t", "frozen<list<int>>", "-f", "json", "--", "1", "[1]")
+    assert res.stdout == expected
