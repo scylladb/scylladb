@@ -15,6 +15,7 @@
 #include <fmt/ranges.h>
 #include "keys/compound.hh"
 #include "types/tuple.hh"
+#include "types/json_utils.hh"
 #include "cql3/cql3_type.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
@@ -116,9 +117,19 @@ bool can_parse_from_string(const abstract_type& type) {
 managed_bytes from_string(const data_type& type, const sstring& value) {
     if (!can_parse_from_string(*type)) {
         throw std::invalid_argument(fmt::format("error: serializing values of type {} is not supported: collections and vectors (including those nested"
-                " in tuples and UDTs) cannot be parsed from their string representation", type->cql3_type_name()));
+                " in tuples and UDTs) cannot be parsed from their string representation, use --input-format=json", type->cql3_type_name()));
     }
     return type->from_string(value);
+}
+
+// Parses the value from its JSON representation (the one used by INSERT JSON,
+// see types/json_utils.hh) if json is true, from its string representation
+// otherwise.
+managed_bytes parse_value(const data_type& type, const sstring& value, bool json) {
+    if (json) {
+        return managed_bytes(from_json_object(*type, rjson::parse(value)));
+    }
+    return from_string(type, value);
 }
 
 // Converts a type name in CQL syntax (e.g. map<int, text>) to the equivalent
@@ -236,12 +247,13 @@ public:
 
 struct serializing_visitor {
     const std::vector<sstring>& values;
+    bool json; // values are in JSON format
 
     managed_bytes operator()(const data_type& type) {
         if (values.size() != 1) {
             throw std::runtime_error(fmt::format("serialize_handler(): expected 1 value for non-compound type, got {}", values.size()));
         }
-        return from_string(type, values.front());
+        return parse_value(type, values.front(), json);
     }
     template <allow_prefixes AllowPrefixes>
     managed_bytes operator()(const compound_type<AllowPrefixes>& type) {
@@ -257,7 +269,7 @@ struct serializing_visitor {
         std::vector<bytes> serialized_values;
         serialized_values.reserve(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
-            serialized_values.push_back(to_bytes(from_string(type.types().at(i), values.at(i))));
+            serialized_values.push_back(to_bytes(parse_value(type.types().at(i), values.at(i), json)));
         }
         return type.serialize_value(serialized_values);
     }
@@ -275,11 +287,13 @@ struct serializing_visitor {
 enum class input_format {
     hex, // serialized, hex encoded
     text, // unserialized, the string representation of the values
+    json, // unserialized, the JSON representation of the values
 };
 
 const std::map<input_format, std::string_view> input_format_names{
     {input_format::hex, "hex"},
     {input_format::text, "text"},
+    {input_format::json, "json"},
 };
 
 // Returns the format the values are provided in: the one selected with
@@ -305,18 +319,18 @@ input_format get_input_format(const bpo::variables_map& vm, std::string_view act
 }
 
 void serialize_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
-    get_input_format(vm, "serialize", input_format::text, {input_format::text});
-    fmt::print("{}\n", managed_bytes_view(serializing_visitor{values}(type)));
+    const auto format = get_input_format(vm, "serialize", input_format::text, {input_format::text, input_format::json});
+    fmt::print("{}\n", managed_bytes_view(serializing_visitor{values, format == input_format::json}(type)));
 }
 
 // Returns the serialized values to operate on.
-// The values are either serialized (hex encoded), or unserialized (text),
-// which are serialized here. Unserialized values are split into
+// The values are either serialized (hex encoded), or unserialized (text or
+// json), which are serialized here. Unserialized values are split into
 // unserialized_count groups of equal size, each group making up one value
 // (compound values are made up of multiple components).
 std::vector<bytes> get_serialized_values(const type_variant& type, const std::vector<sstring>& values, const bpo::variables_map& vm,
         std::string_view action, size_t unserialized_count) {
-    const auto format = get_input_format(vm, action, input_format::hex, {input_format::hex, input_format::text});
+    const auto format = get_input_format(vm, action, input_format::hex, {input_format::hex, input_format::text, input_format::json});
     if (format == input_format::hex) {
         return values | std::views::transform([] (const sstring& hex_str) { return from_hex(hex_str); }) | std::ranges::to<std::vector>();
     }
@@ -327,7 +341,7 @@ std::vector<bytes> get_serialized_values(const type_variant& type, const std::ve
     std::vector<bytes> serialized_values;
     for (auto&& group : values | std::views::chunk(values.size() / unserialized_count)) {
         const auto group_values = group | std::ranges::to<std::vector<sstring>>();
-        serialized_values.push_back(to_bytes(serializing_visitor{group_values}(type)));
+        serialized_values.push_back(to_bytes(serializing_visitor{group_values, format == input_format::json}(type)));
     }
     return serialized_values;
 }
@@ -556,7 +570,9 @@ const std::vector<operation_option> global_options{
     typed_option<>("partition-key", "alias for --full-compound"),
     typed_option<>("legacy-partition-key", "alias for --legacy-composite"),
     typed_option<sstring>("input-format,f", "the format the values are provided in: hex - serialized, hex encoded (the default, except for the serialize action),"
-            " text - unserialized, the human-readable string representation of the values (the default for the serialize action);"
+            " text - unserialized, the human-readable string representation of the values (the default for the serialize action),"
+            " json - unserialized, the JSON representation of the values, the same as accepted by INSERT JSON, allows serializing"
+            " collections and vectors, which have no string representation;"
             " the supported input formats depend on the action, see the help of the action; for compare and ring-order-compare,"
             " the first half of the unserialized values make up the first compared value, the second half the second one;"
             " for tokenof and shardof, all unserialized values make up a single partition key"),
@@ -584,10 +600,10 @@ characters like '-' as options, separate values from the rest of the arguments
 with '--'.
 
 Values of collection and vector types (including tuples and UDTs, which have
-fields of such types) cannot be serialized, such values are rejected with an
-error.
+fields of such types) have no string representation, they can only be
+serialized from their JSON representation, see --input-format=json.
 
-Input formats: text (default).
+Input formats: text (default), json.
 
 Examples:
 
@@ -599,6 +615,9 @@ $ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081
 
 $ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
 0010d00819896f6b11ea00000000001c571b
+
+$ scylla types serialize -f json -t 'map<int, text>' -- '{"1": "a"}'
+0000000100000004000000010000000161
 )"}, serialize_handler},
     {{"deserialize", "deserialize the value(s) and print them in a human readable form",
 R"(
@@ -620,10 +639,10 @@ $ scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d0
 R"(
 Compare two values and print the result.
 
-Arguments: 2 values. With --input-format=text, the first half of the values
-make up the first compared value, the second half the second one.
+Arguments: 2 values. With unserialized input (text or json), the first half of
+the values make up the first compared value, the second half the second one.
 
-Input formats: hex (default), text.
+Input formats: hex (default), text, json.
 
 Examples:
 
@@ -639,10 +658,10 @@ byte-wise, in their legacy (sstable) format.
 Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 
-Arguments: 2 values. With --input-format=text, the first half of the values
-make up the first compared value, the second half the second one.
+Arguments: 2 values. With unserialized input (text or json), the first half of
+the values make up the first compared value, the second half the second one.
 
-Input formats: hex (default), text.
+Input formats: hex (default), text, json.
 
 Examples:
 
@@ -669,10 +688,10 @@ Decorate the key, that is calculate its token.
 Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 
-Arguments: 1 or more values. With --input-format=text, all values make up a
-single partition key.
+Arguments: 1 or more values. With unserialized input (text or json), all values
+make up a single partition key.
 
-Input formats: hex (default), text.
+Input formats: hex (default), text, json.
 
 Examples:
 
@@ -689,10 +708,10 @@ Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 Use --shards and --ignore-msb-bits to specify sharding parameters.
 
-Arguments: 1 or more values. With --input-format=text, all values make up a
-single partition key.
+Arguments: 1 or more values. With unserialized input (text or json), all values
+make up a single partition key.
 
-Input formats: hex (default), text.
+Input formats: hex (default), text, json.
 
 Examples:
 
