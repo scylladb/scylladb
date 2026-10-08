@@ -18,7 +18,7 @@ The command syntax is as follows:
    scylla types <operation> [options] <hex_value1> [hex_value2]
 
 
-* Provide the values in the hex form without a leading 0x prefix.
+* Provide the values in the hex form without a leading 0x prefix. The exception is the ``serialize`` operation, which expects values in human-readable form.
 * You must specify the type of the provided values. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * The number of provided values depends on the operation. See :ref:`Supported Operations <scylla-types-operations>` for details.
 * The ``scylla types`` operations come with additional options. See :ref:`Additional Options <scylla-types-options>` for the list of options.
@@ -59,7 +59,9 @@ of the types on the command line must be the same as the order in the compound).
 
 Supported Operations
 --------------------
-* ``serialize`` - Serialize the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form. To avoid problems around special symbols, separate values with ``--`` from the rest of the arguments.
+* ``serialize`` - Serializes the value and prints it in a hex encoded form. Required arguments: 1 value in human-readable form, or in the case of
+  compounds, 1 value for each component (``--full-compound``), or for some of the components (``--prefix-compound``). To avoid problems around
+  special symbols, separate values with ``--`` from the rest of the arguments. Serializing values of collection and vector types is not supported.
 * ``deserialize`` - Deserializes and prints the provided value in a human-readable form. Required arguments: 1 or more serialized values.
 * ``compare`` - Compares two values and prints the result. Required arguments: 2 serialized values.
 * ``validate`` - Verifies if the value is valid for the type, according to the requirements of the type. Required arguments: 1 or more serialized values.
@@ -86,6 +88,9 @@ You can run ``scylla types [operation] --help`` for additional information on a 
 * ``-t`` ( or ``--type``) - Specifies the type of the provided value. See :ref:`Specifying the Value Type <scylla-types-type>`.
 * ``--prefix-compound`` - Indicates that the value is a prefixable compound (e.g., clustering key) composed of multiple values of possibly different types.
 * ``--full-compound`` - Indicates that the value is a full compound (e.g., partition key) composed of multiple values of possibly different types.
+* ``--shards`` - The number of shards (only relevant for the ``shardof`` operation).
+* ``--ignore-msb-bits`` - The number of the most significant bits of the token to ignore, when calculating the shard. Defaults to 12, the default
+  value of the ``murmur3_partitioner_ignore_msb_bits`` configuration option (only relevant for the ``shardof`` operation).
 * ``--value arg`` - Specifies the value to process (if not provided as a positional argument).
 
 Examples
@@ -116,7 +121,7 @@ Examples
 
         0010d00819896f6b11ea00000000001c571b000400000010
 
-* Serializing a partition-key (``--full-compound``):
+* Serializing a clustering-key prefix (``--prefix-compound``), with only some of the components present:
 
     .. code-block:: console
 
@@ -128,6 +133,19 @@ Examples
        :class: hide-copy-button
 
         0010d00819896f6b11ea00000000001c571b
+
+* Serializing a partition-key (``--full-compound``):
+
+    .. code-block:: console
+
+        scylla types serialize --full-compound -t Int32Type -t UTF8Type -- 1 abc
+
+    Output:
+
+    .. code-block:: console
+       :class: hide-copy-button
+
+        0004000000010003616263
 
 * Deserializing and printing a value of type Int32Type:
 
