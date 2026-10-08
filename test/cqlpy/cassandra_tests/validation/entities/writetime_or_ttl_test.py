@@ -841,6 +841,263 @@ def testFrozenUDT(cql, test_keyspace):
             assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=3")
             assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=3"), row(3, TIMESTAMP_1, TIMESTAMP_1))
 
+# Reproduces #10953 (MAXWRITETIME), SCYLLADB-5166 (WRITETIME and TTL of a whole
+# non-frozen collection or UDT) and SCYLLADB-5167 (WRITETIME and TTL of an
+# element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, SCYLLADB-5166, SCYLLADB-5167")
+def testNestedUDTs(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(f1 int, f2 int)") as nestedType:
+        with create_type(cql, test_keyspace, f"(f1 frozen<{nestedType}>, f2 frozen<{nestedType}>)") as type:
+            with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t " + type + ")") as table:
+                # Both fields are empty
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (1, {f1:null, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+
+                # Only the first field is set, no nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (2, {f1:{f1:null,f2:null}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, NO_TIMESTAMP], [TTL_1, NO_TTL], "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+
+                # Only the first field is set, only the first nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (3, {f1:{f1:1,f2:null}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, NO_TIMESTAMP], [TTL_1, NO_TTL], "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+
+                # Only the first field is set, only the second nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (4, {f1:{f1:null,f2:2}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, NO_TIMESTAMP], [TTL_1, NO_TTL], "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=4")
+
+                # Only the first field is set, both nested field are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (5, {f1:{f1:1,f2:2}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, NO_TIMESTAMP], [TTL_1, NO_TTL], "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=5")
+
+                # Only the second field is set, no nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (6, {f1:null, f2:{f1:null,f2:null}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [NO_TIMESTAMP, TIMESTAMP_1], [NO_TTL, TTL_1], "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=6")
+
+                # Only the second field is set, only the first nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (7, {f1:null, f2:{f1:1,f2:null}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [NO_TIMESTAMP, TIMESTAMP_1], [NO_TTL, TTL_1], "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=7")
+
+                # Only the second field is set, only the second nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (8, {f1:null, f2:{f1:null,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [NO_TIMESTAMP, TIMESTAMP_1], [NO_TTL, TTL_1], "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=8")
+
+                # Only the second field is set, both nested field are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (9, {f1:null, f2:{f1:1,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", [NO_TIMESTAMP, TIMESTAMP_1], [NO_TTL, TTL_1], "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=9")
+
+                # Both fields are set, alternate fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (10, {f1:{f1:1}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                execute(cql, table, "UPDATE %s USING TIMESTAMP ? AND TTL ? SET t.f2={f2:2} WHERE k=10", TIMESTAMP_2, TTL_2)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2], "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_2, TTL_2, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_2, TTL_2, "k=10")
+
+                # Both fields are set, alternate fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (11, {f1:{f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                execute(cql, table, "UPDATE %s USING TIMESTAMP ? AND TTL ? SET t.f2={f1:2} WHERE k=11", TIMESTAMP_2, TTL_2)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2], "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_2, TTL_2, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_2, TTL_2, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=11")
+
+                # Both fields are set, all fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (12, {f1:{f1:1,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                execute(cql, table, "UPDATE %s USING TIMESTAMP ? AND TTL ? SET t.f2={f1:1,f2:2} WHERE k=12", TIMESTAMP_2, TTL_2)
+                assertWritetimeAndTTL(cql, table, "t", [TIMESTAMP_1, TIMESTAMP_2], [TTL_1, TTL_2], "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_2, TTL_2, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_2, TTL_2, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_2, TTL_2, "k=12")
+
+# Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5167 (WRITETIME and TTL of an
+# element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, SCYLLADB-5167")
+def testFrozenNestedUDTs(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(f1 int, f2 int)") as nestedType:
+        with create_type(cql, test_keyspace, f"(f1 frozen<{nestedType}>, f2 frozen<{nestedType}>)") as type:
+            with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t frozen<" + type + ">)") as table:
+                # Both fields are empty
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (1, {f1:null, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=1")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+
+                # Only the first field is set, no nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (2, {f1:{f1:null,f2:null}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=2")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=2")
+
+                # Only the first field is set, only the first nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (3, {f1:{f1:1,f2:null}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=3")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=3")
+
+                # Only the first field is set, only the second nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (4, {f1:{f1:null,f2:2}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=4")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=4")
+
+                # Only the first field is set, both nested field are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (5, {f1:{f1:1,f2:2}, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=5")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=5")
+
+                # Only the second field is set, no nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (6, {f1:null, f2:{f1:null,f2:null}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=6")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=6")
+
+                # Only the second field is set, only the first nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (7, {f1:null, f2:{f1:1,f2:null}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=7")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=7")
+
+                # Only the second field is set, only the second nested field is set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (8, {f1:null, f2:{f1:null,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=8")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=8")
+
+                # Only the second field is set, both nested field are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (9, {f1:null, f2:{f1:1,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=9")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=9")
+
+                # Both fields are set, alternate fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (10, {f1:{f1:1}, f2:{f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", NO_TIMESTAMP, NO_TTL, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", NO_TIMESTAMP, NO_TTL, "k=10")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=10")
+                # Both fields are set, alternate fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (11, {f1:{f2:2}, f2:{f1:1}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", NO_TIMESTAMP, NO_TTL, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=11")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", NO_TIMESTAMP, NO_TTL, "k=11")
+
+                # Both fields are set, all fields are set
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (12, {f1:{f1:1,f2:2},f2:{f1:1,f2:2}}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+                assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1.f1", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f1.f2", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2.f1", TIMESTAMP_1, TTL_1, "k=12")
+                assertWritetimeAndTTL(cql, table, "t.f2.f2", TIMESTAMP_1, TTL_1, "k=12")
+
 # Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5166 (WRITETIME and TTL of a
 # whole non-frozen collection or UDT)
 @pytest.mark.xfail(reason="#10953, SCYLLADB-5166")
