@@ -374,6 +374,51 @@ def testFunctionOverloading(cql, test_keyspace):
         # overloaded has just one overload now - so the following DROP FUNCTION is not ambigious (CASSANDRA-7812)
         execute(cql, table, "DROP FUNCTION " + fOverload)
 
+# The Java function in this test has Java comments in its body. The Lua
+# function has the equivalent Lua comments.
+def testCreateOrReplaceJavaFunction(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3.0)
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE FUNCTION %s( input double ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql,
+                                           "\n" +
+                                           "  // parameter val is of type java.lang.Double\n" +
+                                           "  /* return type is of type java.lang.Double */\n" +
+                                           "  if (input == null) {\n" +
+                                           "    return null;\n" +
+                                           "  }\n" +
+                                           "  return input * 2;\n",
+                                           "\n" +
+                                           "  -- parameter val is a Lua number\n" +
+                                           "  --[[ return type is a Lua number ]]\n" +
+                                           "  if input == nil then\n" +
+                                           "    return nil\n" +
+                                           "  end\n" +
+                                           "  return input * 2\n") + ";")
+
+        # just check created function
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 1.0, sin(1.0)),
+                    row(2, 2.0, sin(2.0)),
+                    row(3, 3.0, sin(3.0)))
+
+        execute(cql, table, "CREATE OR REPLACE FUNCTION " + fName + "( input double ) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS double " +
+                java_or_lua(cql, "\n  return input;\n", "\n  return input\n") + ";")
+
+        # check if replaced function returns correct result
+        assert_rows(execute(cql, table, "SELECT key, val, " + fName + "(val) FROM %s"),
+                    row(1, 1.0, 1.0),
+                    row(2, 2.0, 2.0),
+                    row(3, 3.0, 3.0))
+
 def testFunctionInTargetKeyspace(cql, test_keyspace):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
         execute(cql, table, "CREATE TABLE " + KEYSPACE_PER_TEST + ".second_tab (key int primary key, val double)")
