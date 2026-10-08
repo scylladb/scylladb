@@ -460,3 +460,46 @@ def testUDT(cql, test_keyspace):
             assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=2")
             assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=2"), row(2, TIMESTAMP_2, TIMESTAMP_1))
             assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f2), WRITETIME(t.f1) FROM %s WHERE k=2"), row(2, TIMESTAMP_1, TIMESTAMP_2))
+
+# Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5166 (WRITETIME and TTL of a
+# whole non-frozen collection or UDT)
+@pytest.mark.xfail(reason="#10953, SCYLLADB-5166")
+def testFunctions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int, s set<int>, fs frozen<set<int>>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, v, s, fs) VALUES (0, 0, {1, 2, 3}, {1, 2, 3}) USING TIMESTAMP 1 AND TTL 1000")
+        execute(cql, table, "INSERT INTO %s (k, v, s, fs) VALUES (1, 1, {10, 20, 30}, {10, 20, 30}) USING TIMESTAMP 10 AND TTL 1000")
+        execute(cql, table, "UPDATE %s USING TIMESTAMP 2 AND TTL 2000 SET s = s + {2, 3} WHERE k = 0")
+        execute(cql, table, "UPDATE %s USING TIMESTAMP 20 AND TTL 2000 SET s = s + {20, 30} WHERE k = 1")
+
+        # Regular column
+        assert_rows(execute(cql, table, "SELECT min(v) FROM %s"), row(0))
+        assert_rows(execute(cql, table, "SELECT max(v) FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT writetime(v) FROM %s"),
+                    row(10),
+                    row(1))
+        assert_rows(execute(cql, table, "SELECT min(writetime(v)) FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT max(writetime(v)) FROM %s"), row(10))
+        assert_rows(execute(cql, table, "SELECT min(maxwritetime(v)) FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT max(maxwritetime(v)) FROM %s"), row(10))
+
+        # Frozen collection
+        assert_rows(execute(cql, table, "SELECT min(fs) FROM %s"), row({1, 2, 3}))
+        assert_rows(execute(cql, table, "SELECT max(fs) FROM %s"), row({10, 20, 30}))
+        assert_rows(execute(cql, table, "SELECT writetime(fs) FROM %s"),
+                    row(10),
+                    row(1))
+        assert_rows(execute(cql, table, "SELECT min(writetime(fs)) FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT max(writetime(fs)) FROM %s"), row(10))
+        assert_rows(execute(cql, table, "SELECT min(maxwritetime(fs)) FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT max(maxwritetime(fs)) FROM %s"), row(10))
+
+        # Multi-cell collection
+        assert_rows(execute(cql, table, "SELECT min(s) FROM %s"), row({1, 2, 3}))
+        assert_rows(execute(cql, table, "SELECT max(s) FROM %s"), row({10, 20, 30}))
+        assert_rows(execute(cql, table, "SELECT writetime(s) FROM %s"),
+                    row([10, 20, 20]),
+                    row([1, 2, 2]))
+        assert_rows(execute(cql, table, "SELECT min(writetime(s)) FROM %s"), row([1, 2, 2]))
+        assert_rows(execute(cql, table, "SELECT max(writetime(s)) FROM %s"), row([10, 20, 20]))
+        assert_rows(execute(cql, table, "SELECT min(maxwritetime(s)) FROM %s"), row(2))
+        assert_rows(execute(cql, table, "SELECT max(maxwritetime(s)) FROM %s"), row(20))
