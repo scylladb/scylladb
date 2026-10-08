@@ -286,3 +286,18 @@ def testFunctionInSystemKS(cql, test_keyspace):
             assertSystemKeyspaceNotModifiable(session, "DROP FUNCTION now")
     finally:
         execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS " + KEYSPACE + ".to_timestamp")
+
+def testWrongKeyspace(cql, test_keyspace):
+    KEYSPACE = test_keyspace
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_type(cql, KEYSPACE, "(txt text, i int)") as type:
+        assert_invalid_message(cql, KEYSPACE, f"Statement on keyspace {KEYSPACE_PER_TEST} cannot refer to a user type in keyspace {KEYSPACE}; user types can only be used in the keyspace they are defined in",
+                               "CREATE FUNCTION " + KEYSPACE_PER_TEST + ".test_wrong_ks( val int ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS " + type + " " +
+                               java_or_lua(cql, "return val;", "return val") + ";")
+
+        assert_invalid_message(cql, KEYSPACE, f"Statement on keyspace {KEYSPACE_PER_TEST} cannot refer to a user type in keyspace {KEYSPACE}; user types can only be used in the keyspace they are defined in",
+                               "CREATE FUNCTION " + KEYSPACE_PER_TEST + ".test_wrong_ks( val " + type + " ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS int " +
+                               java_or_lua(cql, "return val;", "return val") + ";")
