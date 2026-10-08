@@ -199,3 +199,57 @@ def testMinAggregationAscending(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT count(b), min(b) as min FROM %s"),
                    row(6, 0))
+
+def testAggregateWithColumns(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key (a, b))") as table:
+        # Test with empty table
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, "SELECT count(b), max(b) as max, b, c as first FROM %s"),
+                          "system.count(b)", "max", "b", "first")
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, b, c as first FROM %s"),
+                           row(0, null, null, null))
+
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 2, null)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (2, 4, 6)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (4, 8, 12)")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, b, c as first FROM %s"),
+                   row(3, 8, 2, null))
+
+def testAggregateOnCounters(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b counter, primary key (a))") as table:
+        # Test with empty table
+        with original_column_names(cql):
+            assert_column_names(execute(cql, table, "SELECT count(b), max(b) as max, b FROM %s"),
+                          "system.count(b)", "max", "b")
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, b FROM %s"),
+                   row(0, null, null))
+
+        execute(cql, table, "UPDATE %s SET b = b + 1 WHERE a = 1")
+        execute(cql, table, "UPDATE %s SET b = b + 1 WHERE a = 1")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(1, 2, 2, 2, 2))
+        flush(cql, table)
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(1, 2, 2, 2, 2))
+
+        execute(cql, table, "UPDATE %s SET b = b + 2 WHERE a = 1")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(1, 4, 4, 4, 4))
+
+        execute(cql, table, "UPDATE %s SET b = b - 2 WHERE a = 1")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(1, 2, 2, 2, 2))
+        flush(cql, table)
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(1, 2, 2, 2, 2))
+
+        execute(cql, table, "UPDATE %s SET b = b + 1 WHERE a = 2")
+        execute(cql, table, "UPDATE %s SET b = b + 1 WHERE a = 2")
+        execute(cql, table, "UPDATE %s SET b = b + 2 WHERE a = 2")
+
+        assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, min(b) as min, avg(b) as avg, sum(b) as sum FROM %s"),
+                   row(2, 4, 2, 3, 6))
