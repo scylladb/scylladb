@@ -466,3 +466,31 @@ def testCommentAndSecurityLabelNotAllowedInAlterKeyspace(cql, new_to_cassandra_6
         # Test that security_label property is rejected in ALTER KEYSPACE WITH clause
         alterKsWithLabel = f"ALTER KEYSPACE {ks} WITH security_label = 'TEST_LABEL'"
         assert_invalid_throw_message(cql, ks, "Unknown property 'security_label'", SyntaxException, alterKsWithLabel)
+
+# Reproduces SCYLLADB-5146 (the system_views.schema_comments table).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelNotAllowedInCreateTable(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        # Test that security_label property is rejected in CREATE TABLE WITH clause
+        createTableWithLabel = f"CREATE TABLE {ks}.t1 (id int PRIMARY KEY, name text) WITH security_label = 'TEST_LABEL'"
+        assert_invalid_throw_message(cql, ks, "Unknown property 'security_label'", SyntaxException, createTableWithLabel)
+
+        # Verify that comment IS allowed in CREATE TABLE for backward compatibility
+        createTableWithComment = f"CREATE TABLE {ks}.t2 (id int PRIMARY KEY, name text) WITH comment = 'test comment'"
+        cql.execute(createTableWithComment)
+        assertComment(cql, "TABLE", ks, f"{ks}.t2", "test comment")
+
+# Reproduces SCYLLADB-5146 (the system_views.schema_comments table).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelNotAllowedInAlterTable(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, "t1")
+
+        # Test that security_label property is rejected in ALTER TABLE WITH clause
+        alterTableWithLabel = f"ALTER TABLE {ks}.t1 WITH security_label = 'TEST_LABEL'"
+        assert_invalid_throw_message(cql, ks, "Unknown property 'security_label'", SyntaxException, alterTableWithLabel)
+
+        # Verify that comment IS allowed in ALTER TABLE for backward compatibility
+        alterTableWithComment = f"ALTER TABLE {ks}.t1 WITH comment = 'test comment'"
+        cql.execute(alterTableWithComment)
+        assertComment(cql, "TABLE", ks, f"{ks}.t1", "test comment")
