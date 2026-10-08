@@ -8,10 +8,15 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <algorithm>
 #include <cctype>
+#include <compare>
+#include <numeric>
+#include <optional>
 #include <ranges>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
@@ -152,7 +157,88 @@ static const s3::group_connections default_group_connections = {
     {std::string(s3::general_pool_name), 16},
 };
 
-static s3::group_connections make_group_connections(const std::unordered_map<sstring, unsigned>& overrides) {
+// The option's value is a budget for the whole shard, not a per-pool cap, so it is
+// spread over the table above in that table's own proportions. A value equal to the
+// default still counts, which is why this asks whether the option was set at all.
+static std::optional<unsigned> deprecated_per_shard_budget(const db::config& cfg) {
+    if (!cfg.object_storage_connections_per_shard.is_set()) {
+        return std::nullopt;
+    }
+    return cfg.object_storage_connections_per_shard();
+}
+
+// The option is a ceiling for the whole shard, so the built-in table is squeezed or
+// expanded to land on it exactly: every pool keeps one connection and the remainder
+// is handed out in the table's own proportions, largest share first. Ties break on
+// the name, so the result does not depend on the map's iteration order. A pool capped
+// at zero would wait forever for a connection nothing creates (http::client only
+// broadcasts when one is returned), so a budget below one per pool is raised to that.
+static s3::group_connections scale_to_budget(const s3::group_connections& built_in, unsigned budget) {
+    const auto total = std::accumulate(built_in.begin(), built_in.end(), uint64_t(0),
+            [] (uint64_t sum, const auto& e) { return sum + e.second; });
+    const auto pools = built_in.size();
+
+    s3::group_connections scaled;
+    if (budget < pools) {
+        for (const auto& group : built_in | std::views::keys) {
+            scaled[group] = 1;
+        }
+        return scaled;
+    }
+
+    // What each pool lost to flooring its share, and which pool lost it.
+    struct leftover {
+        uint64_t remainder;
+        std::string pool;
+
+        bool operator==(const leftover&) const = default;
+        // Largest remainder first: a pool that fell further short of a whole connection
+        // has the better claim on a leftover one. Equal remainders go by pool name, so
+        // the split depends only on the table and not on the order the map yields it in.
+        std::strong_ordering operator<=>(const leftover& o) const {
+            if (auto cmp = o.remainder <=> remainder; cmp != 0) {
+                return cmp;
+            }
+            return pool <=> o.pool;
+        }
+    };
+    std::vector<leftover> leftovers;
+    leftovers.reserve(pools);
+
+    const uint64_t shared = budget - pools;
+    uint64_t assigned = 0;
+    for (const auto& [group, limit] : built_in) {
+        const uint64_t share = limit * shared;
+        scaled[group] = 1 + share / total;
+        assigned += share / total;
+        leftovers.emplace_back(share % total, group);
+    }
+    std::ranges::sort(leftovers);
+    for (uint64_t i = 0; i < shared - assigned; i++) {
+        scaled[leftovers[i].pool]++;
+    }
+    return scaled;
+}
+
+// Both options are live-updatable, so the table is rebuilt from whatever they hold now.
+// named_value commits the new value before it notifies observers but assigns _source
+// after, so is_set() still reports the old state inside a callback. The per-shard
+// observer therefore hands the budget in: that the callback ran is itself the proof
+// the option was set.
+static s3::group_connections make_group_connections(const db::config& cfg, std::optional<unsigned> budget_override = std::nullopt) {
+    const auto& overrides = cfg.object_storage_connections();
+    auto per_shard_budget = budget_override ? budget_override : deprecated_per_shard_budget(cfg);
+    if (overrides.empty() && per_shard_budget) {
+        auto connections = scale_to_budget(default_group_connections, per_shard_budget.value());
+        auto scaled = std::accumulate(connections.begin(), connections.end(), 0u,
+                [] (unsigned sum, const auto& e) { return sum + e.second; });
+        smlogger.warn("object_storage_connections_per_shard is deprecated; its value {} is spread over the {} built-in "
+                "pools in their own proportions, giving {} connections per shard in total{}. Set "
+                "object_storage_connections to cap the pools directly.",
+                per_shard_budget.value(), connections.size(), scaled,
+                scaled > per_shard_budget.value() ? " - the budget is too small to honor, every pool needs one connection" : "");
+        return connections;
+    }
     auto connections = default_group_connections;
     for (const auto& [group, limit] : overrides) {
         // A pool capped at zero can never connect, so it would hang rather than fail.
@@ -174,7 +260,7 @@ static s3::group_connections make_group_connections(const std::unordered_map<sst
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
-    , _group_connections(make_group_connections(cfg.object_storage_connections()))
+    , _group_connections(make_group_connections(cfg))
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
     , _connections_updater(std::make_unique<connections_updater_sync>(cfg, *this))
 {
@@ -261,22 +347,31 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
     }))
 {}
 
+// Either option can change the caps, so both rebuild the whole table. The observer
+// runs after the new value is committed, so the config is read rather than passed in.
+void storage_manager::reload_group_connections(const db::config& cfg, std::optional<unsigned> budget_override) {
+    s3::group_connections connections;
+    try {
+        connections = make_group_connections(cfg, budget_override);
+    } catch (...) {
+        smlogger.error("connections_updater: ignoring connection limit update: {}", std::current_exception());
+        return;
+    }
+    smlogger.info("connections_updater: updating connection limits to {}", connections);
+    _group_connections = std::move(connections);
+    for (auto& [endpoint, ep] : _object_storage_endpoints) {
+        if (ep.client) {
+            ep.client->update_group_connections(_group_connections);
+        }
+    }
+}
+
 storage_manager::connections_updater_sync::connections_updater_sync(const db::config& cfg, storage_manager& sstm)
-    : observer(cfg.object_storage_connections.observe([&sstm] (const std::unordered_map<sstring, unsigned>& new_value) {
-        s3::group_connections connections;
-        try {
-            connections = make_group_connections(new_value);
-        } catch (...) {
-            smlogger.error("connections_updater: ignoring object_storage_connections update: {}", std::current_exception());
-            return;
-        }
-        smlogger.info("connections_updater: updating object_storage_connections to {}", connections);
-        sstm._group_connections = std::move(connections);
-        for (auto& [endpoint, ep] : sstm._object_storage_endpoints) {
-            if (ep.client) {
-                ep.client->update_group_connections(sstm._group_connections);
-            }
-        }
+    : connections_observer(cfg.object_storage_connections.observe([&sstm, &cfg] (const std::unordered_map<sstring, unsigned>&) {
+        sstm.reload_group_connections(cfg);
+    }))
+    , per_shard_observer(cfg.object_storage_connections_per_shard.observe([&sstm, &cfg] (const unsigned& new_budget) {
+        sstm.reload_group_connections(cfg, new_budget);
     }))
 {}
 
