@@ -22,6 +22,7 @@ from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
 
 from .. import nodetool
+from ..test_materialized_view import wait_for_view_built
 
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -82,6 +83,23 @@ def create_materialized_view(cql, keyspace, arg):
         yield mv_name
     finally:
         cql.execute("DROP MATERIALIZED VIEW " + mv_name)
+
+# Translation of CQLTester.createView(): The query has two "%s" which are
+# replaced by the new view's name and the given table's name, respectively.
+# Like createView(), we wait for the view to be built - its backfill from the
+# base table's existing data is asynchronous. Updates to the view are not:
+# on a single node, both Scylla and Cassandra apply them as part of the base
+# table write, so the Java tests' updateView() can be a simple execute().
+@contextmanager
+def create_view(cql, table, query):
+    keyspace = table.split('.')[0]
+    view = keyspace + "." + unique_name()
+    cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
+    try:
+        wait_for_view_built(cql, view)
+        yield view
+    finally:
+        cql.execute("DROP MATERIALIZED VIEW IF EXISTS " + view)
 
 @contextmanager
 def create_keyspace(cql, arg):
