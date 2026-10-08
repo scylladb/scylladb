@@ -1377,6 +1377,53 @@ def testFunctionWithFrozenMapType(cql):
         assert_invalid_message(cql, table, "Argument 'frozen<map<int, int>>' cannot be frozen; remove frozen<> modifier from 'frozen<map<int, int>>'",
                              "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<map<int, int>>);")
 
+# Reproduces SCYLLADB-5164 (a Lua function can't return a tuple with null
+# components)
+@pytest.mark.xfail(reason="SCYLLADB-5164")
+def testFunctionWithFrozenTupleType(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<tuple<int, int>>)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (b)")
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 0, ())
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 1, (1, 2))
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 2, (4, 5))
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 3, (7, 8))
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s (state tuple<int, int>, values tuple<int, int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS tuple<int, int> " +
+                                java_or_lua(cql, "return values;", "return values"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(state tuple<int, int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS tuple<int, int> " +
+                                java_or_lua(cql, "return state;", "return state"))
+
+        # Tuples are always frozen. Both 'tuple' and 'frozen tuple' have the same effect.
+        # So allows to create aggregate with explicit frozen tuples as argument and state types.
+        toDrop = createAggregate(cql, ks,
+                                 "CREATE AGGREGATE %s(frozen<tuple<int, int>>) " +
+                                 "SFUNC " + shortFunctionName(fState) + ' ' +
+                                 "STYPE frozen<tuple<int, int>> " +
+                                 "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                 "INITCOND null")
+        # Same as above, dropping a function with explicity frozen tuple should be allowed.
+        execute(cql, table, "DROP AGGREGATE " + toDrop + "(frozen<tuple<int, int>>);")
+
+        aggregation = createAggregate(cql, ks,
+                                      "CREATE AGGREGATE %s(tuple<int, int>) " +
+                                      "SFUNC " + shortFunctionName(fState) + ' ' +
+                                      "STYPE tuple<int, int> " +
+                                      "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                      "INITCOND null")
+
+        assert_rows(execute(cql, table, "SELECT " + aggregation + "(b) FROM %s"),
+                   row((7, 8)))
+
+        execute(cql, table, "DROP AGGREGATE " + aggregation + "(frozen<tuple<int, int>>);")
+
 FROZEN_UDT_MESSAGE = "cannot be frozen|should not be frozen"
 
 def testFunctionWithFrozenUDFType(cql):
