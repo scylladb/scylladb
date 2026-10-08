@@ -4794,10 +4794,8 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
 
         // workaround: make row cells to be compacted during next read
         auto set_cells_timestamp_to_min = [&](deletable_row& row) {
-            row.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-                const column_definition& def = s.schema()->column_at(column_kind::clustering_key, id);
-
-                auto cell_view = cell.as_mutable_atomic_cell(def);
+            row.cells().for_each_cell_in_place([&] (column_id id, managed_bytes_mutable_view cell) {
+                auto cell_view = atomic_cell_mutable_view::from_bytes(cell);
                 cell_view.set_timestamp(api::min_timestamp);
             });
         };

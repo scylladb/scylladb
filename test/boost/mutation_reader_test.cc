@@ -4489,9 +4489,12 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
         std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(this_smp_shard_count(), utils::chunked_vector<frozen_mutation>{});
         std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(this_smp_shard_count(), nullptr);
 
+        // Partition keys are random, so the size of partition starts varies.
+        std::vector<size_t> partition_start_sizes;
         unsigned i = 0;
         for (const auto& [token, dk] : pkeys_by_tokens) {
             mutation mut(schema, dk);
+            partition_start_sizes.push_back(mutation_fragment_v2(*schema, semaphore.make_permit(), partition_start(dk, tombstone())).memory_usage());
 
             for (uint32_t ck = 0; ck < num_rows; ++ck) {
                 ss.add_row(mut, ss.make_ckey(ck), value);
@@ -4500,26 +4503,24 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
             frozen_muts[i++ % this_smp_shard_count()].emplace_back(mut);
         }
 
-        size_t partition_size{0};
-        size_t partition_start_size{0};
         size_t row_size{0};
         size_t partition_end_size{0};
         size_t range_tombstone_size{0};
         {
             auto reader = make_mutation_reader_from_mutations(schema, semaphore.make_permit(), frozen_muts.front().front().unfreeze(schema), schema->full_slice());
             auto close_reader = deferred_close(reader);
-            reader.set_max_buffer_size(1024*1024);
+            // Read the whole partition in one buffer.
+            reader.set_max_buffer_size(std::numeric_limits<size_t>::max());
             reader.fill_buffer().get();
-            partition_size = reader.buffer_size();
 
             const auto buf = reader.detach_buffer();
             BOOST_REQUIRE_GT(buf.size(), 2);
             BOOST_REQUIRE(buf[0].is_partition_start());
+            BOOST_REQUIRE_EQUAL(buf[0].memory_usage(), partition_start_sizes.front());
             BOOST_REQUIRE(buf[1].is_clustering_row());
             BOOST_REQUIRE(buf.back().is_end_of_partition());
             BOOST_REQUIRE(reader.is_end_of_stream());
 
-            partition_start_size = buf[0].memory_usage();
             row_size = buf[1].memory_usage();
             partition_end_size = buf.back().memory_usage();
 
@@ -4527,28 +4528,21 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
             range_tombstone_size = rtc.memory_usage();
         }
 
-        std::vector<std::vector<size_t>> data_per_shard(this_smp_shard_count(), std::vector<size_t>{});
-        size_t total_data{0};
-        for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
-            for (const auto& _ : frozen_muts.at(shard_id)) {
-                data_per_shard.at(shard_id).push_back(partition_size);
-                total_data += partition_size;
-            }
-        }
-
         auto sharder = std::make_unique<dummy_sharder>(schema->get_sharder(), std::move(pkeys_by_tokens));
 
         const auto reader_factory = [frozen_muts] (
                 schema_ptr schema,
                 reader_permit permit,
-                const dht::partition_range&,
+                const dht::partition_range& pr,
                 const query::partition_slice& ps,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding) {
             auto muts = frozen_muts.at(this_shard_id())
                     | std::views::transform([schema] (const frozen_mutation& fm) { return fm.unfreeze(schema); })
                     | std::ranges::to<utils::chunked_vector<mutation>>();
-            return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(muts), ps);
+            // Honor the range: the evictable reader recreates the reader with a range
+            // starting at the partition it stopped at.
+            return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(muts), pr, ps);
         };
 
         auto run_test = [&] (size_t buffer_size, multishard_reader_buffer_hint buffer_hint,
@@ -4571,73 +4565,214 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
 
             reader.fill_buffer().get();
 
-            // simulate the expected read algorithm to calculate the amount each shard should have read
-            std::vector<size_t> buffer_fill_calls_per_shard(this_smp_shard_count(), 0);
-            size_t shards_visited{0};
+            // Simulate the read algorithm, to calculate how many times each shard
+            // reader should have been filled. Every fill admits the shard's reader
+            // and is followed by its eviction (by evicting_semaphore_factory).
+            enum class fragment_kind { partition_start, row, partition_end, range_tombstone_change };
+            struct fragment {
+                fragment_kind kind;
+                size_t size;
+                // For partition_start: the partition's index in token order.
+                unsigned partition = 0;
+            };
+            struct partition_state {
+                unsigned index; // in token order
+                size_t rows_left;
+                bool started = false;
+            };
+            struct shard_state {
+                std::deque<partition_state> partitions;
+                // The shard reader's buffer.
+                std::deque<fragment> buffer;
+                bool reader_created = false;
+                // The evictable reader stopped after a clustering row.
+                bool stopped_mid_partition = false;
+                // The from-mutations reader reports end-of-stream only on the fill after
+                // the one which emitted its last partition.
+                bool inner_exhausted = false;
+                bool end_of_stream = false;
+                size_t fills = 0;
+            };
+            const auto nr_shards = this_smp_shard_count();
+            // Both the shard readers' and the underlying readers' buffers have the default size.
+            const auto shard_max_buffer_size = mutation_reader::default_max_buffer_size_in_bytes();
+            std::vector<shard_state> shards(nr_shards);
+            // Partitions are distributed to shards round-robin, in token order.
+            for (unsigned p = 0; p != 2 * nr_shards; ++p) {
+                shards[p % nr_shards].partitions.push_back(partition_state{p, num_rows});
+            }
+
+            // One fill_buffer() of the from-mutations reader. Returns the fragments
+            // emitted, including the partition start re-emitted by a reader recreated
+            // in the middle of a partition, which the evictable reader drops (dropped
+            // fragments have a size but are not delivered).
+            struct underlying_fill_result {
+                std::vector<fragment> fragments;
+                std::vector<bool> dropped;
+                bool end_of_stream = false;
+            };
+            auto underlying_reader_fill = [&] (shard_state& shard, bool reemit_partition_start) {
+                underlying_fill_result res;
+                if (shard.inner_exhausted) {
+                    res.end_of_stream = true;
+                    return res;
+                }
+                size_t buffer_size = 0;
+                auto emit = [&] (fragment f, bool dropped = false) {
+                    buffer_size += f.size;
+                    res.fragments.push_back(f);
+                    res.dropped.push_back(dropped);
+                };
+                if (reemit_partition_start) {
+                    const auto index = shard.partitions.front().index;
+                    emit({fragment_kind::partition_start, partition_start_sizes[index], index}, true);
+                }
+                // The from-mutations reader checks for a full buffer after each row and
+                // before each partition end.
+                while (!shard.partitions.empty()) {
+                    auto& p = shard.partitions.front();
+                    bool full = false;
+                    while (p.rows_left) {
+                        if (!p.started) {
+                            emit({fragment_kind::partition_start, partition_start_sizes[p.index], p.index});
+                            p.started = true;
+                        }
+                        emit({fragment_kind::row, row_size});
+                        --p.rows_left;
+                        if (buffer_size >= shard_max_buffer_size) {
+                            full = true;
+                            break;
+                        }
+                    }
+                    if (full || buffer_size >= shard_max_buffer_size) {
+                        break;
+                    }
+                    emit({fragment_kind::partition_end, partition_end_size});
+                    shard.partitions.pop_front();
+                }
+                shard.inner_exhausted = shard.partitions.empty();
+                return res;
+            };
+
+            // evictable_reader::fill_buffer()
+            auto evictable_reader_fill = [&] (shard_state& shard, bool recreated) {
+                std::vector<fragment> out;
+                auto deliver = [&] (const underlying_fill_result& res) {
+                    for (size_t i = 0; i != res.fragments.size(); ++i) {
+                        if (!res.dropped[i]) {
+                            out.push_back(res.fragments[i]);
+                        }
+                    }
+                    if (res.end_of_stream) {
+                        shard.end_of_stream = true;
+                    }
+                };
+                if (!recreated) {
+                    deliver(underlying_reader_fill(shard, false));
+                } else {
+                    if (shard.stopped_mid_partition) {
+                        // Resets the tombstone state of the recreated reader.
+                        out.push_back({fragment_kind::range_tombstone_change, range_tombstone_size});
+                    }
+                    // The evictable reader examines the first three fragments of the
+                    // recreated reader, pulling them one by one, which fills the
+                    // underlying reader's buffer again each time it runs empty.
+                    bool reemit_partition_start = shard.stopped_mid_partition;
+                    size_t pulled = 0;
+                    while (pulled < 3 && !shard.end_of_stream) {
+                        auto res = underlying_reader_fill(shard, std::exchange(reemit_partition_start, false));
+                        pulled += res.fragments.size();
+                        deliver(res);
+                    }
+                }
+                if (!out.empty()) {
+                    shard.stopped_mid_partition = out.back().kind == fragment_kind::row;
+                }
+                return out;
+            };
+
+            struct buffer_fill_hint {
+                size_t size;
+                unsigned stop_partition;
+            };
+            // shard_reader::fill_buffer()
+            auto shard_reader_fill = [&] (shard_state& shard, std::optional<buffer_fill_hint> hint) {
+                ++shard.fills;
+                const bool recreated = shard.reader_created;
+                shard.reader_created = true;
+                auto fragments = evictable_reader_fill(shard, recreated);
+                if (!hint) {
+                    std::ranges::copy(fragments, std::back_inserter(shard.buffer));
+                    return;
+                }
+                // The reader is not paused while filling with a hint, so it is not
+                // recreated between the fills.
+                size_t size = 0;
+                bool reached_stop_partition = false;
+                while (true) {
+                    for (const auto& f : fragments) {
+                        reached_stop_partition |= f.kind == fragment_kind::partition_start && f.partition >= hint->stop_partition;
+                        size += f.size;
+                        shard.buffer.push_back(f);
+                    }
+                    if (shard.end_of_stream || ((reached_stop_partition || size >= hint->size) && size >= shard_max_buffer_size)) {
+                        break;
+                    }
+                    fragments = evictable_reader_fill(shard, false);
+                }
+            };
+
+            // multishard_combining_reader::fill_buffer()
             {
-                size_t to_read = buffer_size;
-                size_t data_left = total_data;
-                auto shard_data_left = data_per_shard;
-                const auto shard_reader_buffer_size = buffer_hint ? buffer_size : mutation_reader::default_max_buffer_size_in_bytes();
-                while (to_read > 0 && data_left > 0) {
-                    for (unsigned shard_id = 0; shard_id != this_smp_shard_count() && to_read > 0 && data_left > 0; ++shard_id) {
-                        auto& shard_data = shard_data_left[shard_id];
-                        BOOST_REQUIRE(!shard_data.empty());
-
-                        size_t current_buffer_size{0};
-                        auto* current_partition = &shard_data.back();
-                        bool stop_on_full_buffer = false;
-                        while (to_read > 0 && data_left > 0) {
-                            const auto fragment_size = *current_partition == partition_size
-                                    ? partition_start_size
-                                    : (*current_partition == partition_end_size ? partition_end_size : row_size);
-
-                            current_buffer_size += fragment_size;
-                            testlog.trace("fill buffer loop for shard#{}: to_read={}, current_partition={}, fragment_size={}, current_buffer_size={}", shard_id, to_read, *current_partition, fragment_size, current_buffer_size);
-                            if (current_buffer_size >= shard_reader_buffer_size) {
-                                ++buffer_fill_calls_per_shard.at(shard_id);
-                                testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
-                                // After each eviction, the evictable reader will
-                                // emit a range tombstone change resetting the
-                                // current tombstone.
-                                current_buffer_size = range_tombstone_size;
-                                if (stop_on_full_buffer) {
-                                    break;
-                                }
+                // The next partition of each shard other than the current one, ordered
+                // by token, i.e. by partition index.
+                std::map<unsigned, unsigned> next_partition_to_shard;
+                for (unsigned shard_id = 1; shard_id != nr_shards; ++shard_id) {
+                    next_partition_to_shard.emplace(shard_id, shard_id);
+                }
+                unsigned current_shard = 0;
+                size_t multishard_buffer_size = 0;
+                bool end_of_stream = false;
+                while (multishard_buffer_size < buffer_size && !end_of_stream) {
+                    auto& shard = shards[current_shard];
+                    if (shard.buffer.empty()) {
+                        if (shard.end_of_stream) {
+                            if (next_partition_to_shard.empty()) {
+                                end_of_stream = true;
+                            } else {
+                                current_shard = next_partition_to_shard.begin()->second;
+                                next_partition_to_shard.erase(next_partition_to_shard.begin());
                             }
-                            *current_partition -= fragment_size;
-                            to_read -= std::min(to_read, fragment_size);
-                            data_left -= fragment_size;
-
-                            if (!*current_partition) {
-                                if (buffer_hint) {
-                                    break;
-                                } else {
-                                    shard_data.pop_back();
-                                    current_partition = &shard_data.back();
-                                    stop_on_full_buffer = true;
-                                }
+                        } else {
+                            std::optional<buffer_fill_hint> hint;
+                            if (buffer_hint) {
+                                hint.emplace(buffer_size - multishard_buffer_size,
+                                        next_partition_to_shard.empty() ? std::numeric_limits<unsigned>::max() : next_partition_to_shard.begin()->first);
                             }
+                            shard_reader_fill(shard, hint);
                         }
-                        if (current_buffer_size > range_tombstone_size) {
-                            ++buffer_fill_calls_per_shard.at(shard_id);
-                            testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
+                        continue;
+                    }
+                    while (!shard.buffer.empty() && multishard_buffer_size < buffer_size) {
+                        const auto& f = shard.buffer.front();
+                        if (f.kind == fragment_kind::partition_start && !next_partition_to_shard.empty()
+                                && f.partition >= next_partition_to_shard.begin()->first) {
+                            next_partition_to_shard.emplace(f.partition, current_shard);
+                            current_shard = next_partition_to_shard.begin()->second;
+                            next_partition_to_shard.erase(next_partition_to_shard.begin());
+                            break;
                         }
-
-                        if (!shard_data.back()) {
-                            shard_data.pop_back();
-                        }
-                        ++shards_visited;
+                        multishard_buffer_size += f.size;
+                        shard.buffer.pop_front();
                     }
                 }
             }
 
-            for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
-                testlog.trace("shard#{}", shard_id);
+            for (unsigned shard_id = 0; shard_id != nr_shards; ++shard_id) {
+                const auto reads_from_shard = shards[shard_id].fills;
+                testlog.trace("shard#{}: expected reads: {}", shard_id, reads_from_shard);
 
-                if (shards_visited > shard_id) {
-                    const auto reads_from_shard = buffer_fill_calls_per_shard.at(shard_id);
-
+                if (reads_from_shard) {
                     auto& shard_semaphore = semaphore_registry.at(shard_id);
                     BOOST_REQUIRE(bool(shard_semaphore));
                     BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().reads_admitted, reads_from_shard);

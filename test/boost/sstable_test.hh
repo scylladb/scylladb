@@ -297,7 +297,7 @@ inline void match_dead_cell(const row& row, const schema& s, bytes col) {
 
 inline void match_absent(const row& row, const schema& s, bytes col) {
     auto cdef = s.get_column_definition(col);
-    BOOST_REQUIRE(row.find_cell(cdef->id) == nullptr);
+    BOOST_REQUIRE(!row.find_cell(cdef->id).has_value());
 }
 
 inline std::vector<std::pair<bytes, atomic_cell>>

@@ -66,7 +66,9 @@ void open_row(const schema& s, statement_type type, bool has_column_operations,
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             throwing_assert(!has_column_operations);
-            constants::setter(*s.regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
+            mutation_cell_collector cells(m, prefix);
+            constants::setter(*s.regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(cells, prefix, params);
+            cells.finish();
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (!has_column_operations) {
@@ -86,12 +88,14 @@ void open_row(const schema& s, statement_type type, bool has_column_operations,
 
 void apply_column_operations(const std::vector<std::unique_ptr<operation>>& ops,
         mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+    mutation_cell_collector cells(m, prefix);
     for (auto&& update : ops) {
         if (update->should_skip_operation(params._options)) {
             continue;
         }
-        update->execute(m, prefix, params);
+        update->execute(cells, prefix, params);
     }
+    cells.finish();
 }
 
 void update_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {

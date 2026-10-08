@@ -779,10 +779,10 @@ auto fmt::formatter<mutation_partition_v2::printer>::format(const mutation_parti
     if (!mp.static_row().empty()) {
         out = fmt::format_to(out, "{:2}static_row: {{\n", indent);
         const auto& srow = mp.static_row().get();
-        srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        srow.for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
             out = fmt::format_to(out, "{:4}'{}': {},\n",
-                       indent, column_def.name_as_text(), atomic_cell_or_collection::printer(column_def, cell));
+                       indent, column_def.name_as_text(), atomic_cell_or_collection_view::printer(column_def, cell));
         });
         out = fmt::format_to(out, "{:2}}},\n", indent);
     }
@@ -827,11 +827,11 @@ auto fmt::formatter<mutation_partition_v2::printer>::format(const mutation_parti
             out = fmt::format_to(out, "{:6}}},\n", indent);
         }
 
-        row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+        row.cells().for_each_cell([&] (column_id& c_id, atomic_cell_or_collection_view cell) {
             auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
             out = fmt::format_to(out, "{:6}'{}': {},\n",
                        indent, column_def.name_as_text(),
-                       atomic_cell_or_collection::printer(column_def, cell));
+                       atomic_cell_or_collection_view::printer(column_def, cell));
         });
 
         out = fmt::format_to(out, "{:4}}},\n", indent);
@@ -904,7 +904,7 @@ mutation_partition_v2::row_count() const {
 void mutation_partition_v2::accept(const schema& s, mutation_partition_visitor& v) const {
     check_schema(s);
     v.accept_partition_tombstone(_tombstone);
-    _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+    _static_row.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
         const column_definition& def = s.static_column_at(id);
         if (def.is_atomic()) {
             v.accept_static_cell(id, cell.as_atomic_cell(def));
@@ -928,7 +928,7 @@ void mutation_partition_v2::accept(const schema& s, mutation_partition_visitor& 
             }
         }
         v.accept_row(e.position(), dr.deleted_at(), dr.marker(), e.dummy(), e.continuous());
-        dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        dr.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
             const column_definition& def = s.regular_column_at(id);
             if (def.is_atomic()) {
                 v.accept_row_cell(id, cell.as_atomic_cell(def));
@@ -955,6 +955,7 @@ mutation_partition mutation_partition_v2::as_mutation_partition(const schema& s)
     tmp.set_static_row_continuous(_static_row_continuous);
     partition_builder v(s, tmp);
     accept(s, v);
+    v.finish();
     return tmp;
 }
 

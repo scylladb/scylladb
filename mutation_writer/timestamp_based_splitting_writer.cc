@@ -126,12 +126,12 @@ private:
 private:
     future<> write_to_bucket(bucket_id bucket, mutation_fragment_v2&& mf);
 
-    std::optional<bucket_id> examine_column(const atomic_cell_or_collection& c, const column_definition& cdef);
+    std::optional<bucket_id> examine_column(atomic_cell_or_collection_view c, const column_definition& cdef);
     std::optional<bucket_id> examine_row(const row& r, column_kind kind);
     std::optional<bucket_id> examine_static_row(const static_row& sr);
     std::optional<bucket_id> examine_clustering_row(const clustering_row& cr);
     small_flat_map<bucket_id, row_tombstone, 2> split_row_tombstone(const row_tombstone& tomb);
-    small_flat_map<bucket_id, atomic_cell_or_collection, 4> split_collection(atomic_cell_or_collection&& collection, const column_definition& cdef);
+    small_flat_map<bucket_id, atomic_cell_or_collection, 4> split_collection(atomic_cell_or_collection_view collection, const column_definition& cdef);
     small_flat_map<bucket_id, row, 4> split_row(column_kind kind, row&& r);
     small_flat_map<bucket_id, static_row, 4> split_static_row(static_row&& sr);
     small_flat_map<bucket_id, clustering_row, 4> split_clustering_row(clustering_row&& cr);
@@ -194,7 +194,7 @@ future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bu
 }
 
 std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_based_splitting_mutation_writer::examine_column(
-        const atomic_cell_or_collection& cell, const column_definition& cdef) {
+        atomic_cell_or_collection_view cell, const column_definition& cdef) {
     if (cdef.is_atomic()) {
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
@@ -219,7 +219,7 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
 std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_based_splitting_mutation_writer::examine_row(const row& r,
         column_kind kind) {
     std::optional<bucket_id> bucket;
-    r.for_each_cell_until([this, &bucket, kind] (column_id id, const atomic_cell_or_collection& cell) {
+    r.for_each_cell_until([this, &bucket, kind] (column_id id, atomic_cell_or_collection_view cell) {
         const auto this_bucket = examine_column(cell, _schema->column_at(kind, id));
         if (!this_bucket || (bucket && *bucket != *this_bucket)) {
             bucket.reset();
@@ -294,7 +294,7 @@ timestamp_based_splitting_mutation_writer::split_row_tombstone(const row_tombsto
 }
 
 small_flat_map<timestamp_based_splitting_mutation_writer::bucket_id, atomic_cell_or_collection, 4>
-timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_collection&& collection, const column_definition& cdef) {
+timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_collection_view collection, const column_definition& cdef) {
     small_flat_map<bucket_id, atomic_cell_or_collection, 4> pieces_by_bucket;
 
     const auto cmv = collection.as_collection_mutation();
@@ -326,20 +326,47 @@ timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_colle
 
 small_flat_map<timestamp_based_splitting_mutation_writer::bucket_id, row, 4>
 timestamp_based_splitting_mutation_writer::split_row(column_kind kind, row&& r) {
-    small_flat_map<bucket_id, row, 4> rows_by_bucket;
-
-    r.for_each_cell([&, this, kind] (column_id id, atomic_cell_or_collection& cell) {
+    // Classify the cells first, then build each bucket's row a block at a time.
+    // Atomic cells are copied from r; collections are split into new cells.
+    struct classified_cell {
+        bucket_id bucket;
+        column_id id;
+        atomic_cell_or_collection_view cell;
+        std::optional<atomic_cell_or_collection> collection_piece;
+    };
+    utils::small_vector<classified_cell, 8> cells;
+    r.for_each_cell([&, this, kind] (column_id id, atomic_cell_or_collection_view cell) {
         const auto& cdef = _schema->column_at(kind, id);
         if (cdef.type->is_atomic()) {
-            rows_by_bucket[_classifier(cell.as_atomic_cell(cdef).timestamp())].append_cell(id, std::move(cell));
+            cells.push_back({_classifier(cell.as_atomic_cell(cdef).timestamp()), id, cell, std::nullopt});
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-            for (auto&& [bucket, cell_piece] : split_collection(std::move(cell), cdef)) {
-                rows_by_bucket[bucket].append_cell(id, std::move(cell_piece));
+            for (auto&& [bucket, cell_piece] : split_collection(cell, cdef)) {
+                cells.push_back({bucket, id, {}, std::move(cell_piece)});
             }
         } else {
             throw std::runtime_error(fmt::format("Cannot classify cell {} of unknown type {}", cdef.name_as_text(), cdef.type->name()));
         }
     });
+
+    small_flat_map<bucket_id, row, 4> rows_by_bucket;
+    // Create all the rows before building any, as adding rows may move them.
+    for (const auto& c : cells) {
+        rows_by_bucket[c.bucket];
+    }
+    for (auto& [bucket, bucket_row] : rows_by_bucket) {
+        row::cell_appender appender(bucket_row);
+        for (auto& c : cells) {
+            if (c.bucket != bucket) {
+                continue;
+            }
+            if (c.collection_piece) {
+                appender.append(c.id, std::move(*c.collection_piece));
+            } else {
+                appender.append(c.id, c.cell);
+            }
+        }
+        appender.finish();
+    }
 
     return rows_by_bucket;
 }

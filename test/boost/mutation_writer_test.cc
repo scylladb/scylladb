@@ -254,7 +254,7 @@ private:
         check_bucket_id(std::get<classify_by_token_group>(_classify)(t));
     }
 
-    void verify_column_bucket_id(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+    void verify_column_bucket_id(atomic_cell_or_collection_view cell, const column_definition& cdef) {
         if (cdef.is_atomic()) {
             check_timestamp(cell.as_atomic_cell(cdef).timestamp());
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
@@ -266,7 +266,7 @@ private:
         }
     }
     void verify_row_bucket_id(const row& r, column_kind kind) {
-        r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+        r.for_each_cell([this, kind] (column_id id, atomic_cell_or_collection_view cell) {
             verify_column_bucket_id(cell, _schema->column_at(kind, id));
         });
     }

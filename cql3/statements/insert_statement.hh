@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/statements/update_statement.hh"
+#include "cql3/mutation_cell_collector.hh"
 
 namespace cql3 {
 
@@ -89,7 +90,7 @@ private:
 
     json_cache_opt maybe_prepare_json_cache(const query_options& options) const override;
 
-    void execute_set_value(mutation& m, const clustering_key_prefix& prefix, const update_parameters&
+    void execute_set_value(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters&
         params, const column_definition& column, const bytes_opt& value) const;
 };
 

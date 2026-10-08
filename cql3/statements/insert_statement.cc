@@ -223,7 +223,7 @@ modification_statement::json_cache_opt insert_prepared_json_statement::maybe_pre
 }
 
 void
-insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_key_prefix& prefix,
+insert_prepared_json_statement::execute_set_value(mutation_cell_collector& m, const clustering_key_prefix& prefix,
     const update_parameters& params, const column_definition& column, const bytes_opt& value) const {
 
     if (!value) {
@@ -308,6 +308,7 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
 }
 
 void insert_prepared_json_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
+    mutation_cell_collector cells(m, prefix);
     for (const auto& def : s->regular_columns()) {
         if (def.type->is_counter()) {
             throw exceptions::invalid_request_exception(format("Cannot set the value of counter column {} in JSON", def.name_as_text()));
@@ -315,11 +316,12 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
 
         auto it = json_cache->find(def.name_as_text());
         if (it != json_cache->end()) {
-            execute_set_value(m, prefix, params, def, it->second);
+            execute_set_value(cells, prefix, params, def, it->second);
         } else if (!_default_unset) {
-            execute_set_value(m, prefix, params, def, bytes_opt{});
+            execute_set_value(cells, prefix, params, def, bytes_opt{});
         }
     }
+    cells.finish();
 }
 
 namespace raw {

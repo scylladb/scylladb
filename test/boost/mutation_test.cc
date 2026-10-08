@@ -2622,6 +2622,27 @@ SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_data_size) {
+    simple_schema s;
+    auto m = mutation(s.schema(), s.make_pkey(0));
+    auto ck = s.make_ckey(1);
+    const sstring value(100, 'v');
+    s.add_row(m, ck, value);
+    auto& row = m.partition().clustered_row(*s.schema(), ck);
+    const auto& v_def = *s.schema()->get_column_definition("v");
+    const auto cell_size = atomic_cell_type::live_serialized_size(v_def.type->decompose(value).size());
+    // add_row() doesn't add a row marker
+    BOOST_REQUIRE(row.marker().is_missing());
+    BOOST_REQUIRE_EQUAL(m.partition().data_size(*s.schema()), ck.representation().size() + cell_size);
+
+    row.apply(row_marker(1));
+    BOOST_REQUIRE_EQUAL(m.partition().data_size(*s.schema()), ck.representation().size() + cell_size + sizeof(api::timestamp_type));
+
+    // Independent of the in-memory representation: a copy has the same size.
+    auto m2 = mutation(m.schema(), m.decorated_key(), mutation_partition(*s.schema(), m.partition()));
+    BOOST_REQUIRE_EQUAL(m2.partition().data_size(*s.schema()), m.partition().data_size(*s.schema()));
+}
+
 class measuring_allocator final : public allocation_strategy {
     size_t _allocated_bytes = 0;
 public:
@@ -2643,6 +2664,94 @@ public:
     }
     size_t allocated_bytes() const { return _allocated_bytes; }
 };
+
+// row::cell_appender must produce the same row as append_cell(), whatever
+// the order of appends, and merge with cells already in the row.
+SEASTAR_THREAD_TEST_CASE(test_row_cell_appender) {
+    constexpr unsigned nr_columns = 3 * atomic_cell_or_collection_block_nr_cells + 1;
+    auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key);
+    for (unsigned i = 0; i < nr_columns; ++i) {
+        builder.with_column(to_bytes(fmt::format("c{:02}", i)), bytes_type);
+    }
+    auto s = builder.build();
+
+    auto make_cell = [&] (column_id id) {
+        // Mix small cells with cells that don't fit a block's inline area.
+        auto size = id % 5 == 0 ? atomic_cell_or_collection_block_builder::inline_budget : id + 1;
+        return atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, id, bytes(size, int8_t(id))));
+    };
+    auto expected_row = [&] (const std::vector<column_id>& ids) {
+        row r;
+        for (auto id : ids) {
+            r.append_cell(id, make_cell(id));
+        }
+        return r;
+    };
+
+    std::vector<column_id> all_ids;
+    for (column_id id = 0; id < nr_columns; ++id) {
+        all_ids.push_back(id);
+    }
+    auto shuffled = all_ids;
+    std::shuffle(shuffled.begin(), shuffled.end(), std::mt19937(nr_columns));
+    auto reversed = all_ids;
+    std::ranges::reverse(reversed);
+
+    for (const auto& order : {all_ids, shuffled, reversed}) {
+        row r;
+        row::cell_appender appender(r);
+        for (auto id : order) {
+            appender.append(id, make_cell(id));
+        }
+        appender.finish();
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected_row(all_ids), *s));
+        BOOST_REQUIRE_EQUAL(r.size(), nr_columns);
+        BOOST_REQUIRE_EQUAL(r.external_memory_usage(*s, column_kind::regular_column),
+                expected_row(all_ids).external_memory_usage(*s, column_kind::regular_column));
+    }
+
+    // Append to a row which already has cells, some in the same blocks.
+    {
+        std::vector<column_id> existing_ids;
+        std::vector<column_id> appended_ids;
+        for (auto id : all_ids) {
+            (id % 3 ? appended_ids : existing_ids).push_back(id);
+        }
+        auto r = expected_row(existing_ids);
+        row::cell_appender appender(r);
+        for (auto id : appended_ids) {
+            // Exercise both the owning and the copying overloads.
+            if (id % 2) {
+                appender.append(id, make_cell(id));
+            } else {
+                auto cell = make_cell(id);
+                appender.append(id, atomic_cell_or_collection_view(cell));
+            }
+        }
+        appender.finish();
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected_row(all_ids), *s));
+        BOOST_REQUIRE_EQUAL(r.size(), nr_columns);
+    }
+
+    // Writing the serialized form directly.
+    {
+        row r;
+        row::cell_appender appender(r);
+        for (auto id : all_ids) {
+            auto value = bytes(id + 1, int8_t(id));
+            appender.append_serialized(id, atomic_cell_type::live_serialized_size(value.size()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, id, single_fragment_range(bytes_view(value)));
+            });
+        }
+        appender.finish();
+        row expected;
+        for (auto id : all_ids) {
+            expected.append_cell(id, atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, id, bytes(id + 1, int8_t(id)))));
+        }
+        BOOST_REQUIRE(r.equal(column_kind::regular_column, *s, expected, *s));
+    }
+}
 
 SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     measuring_allocator alloc;
@@ -2952,7 +3061,7 @@ private:
                 cell.deletion_time() < _gc_before &&
                 can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
     }
-    void examine_cell(const column_definition& cdef, const atomic_cell_or_collection& cell_or_collection, const row_tombstone& tomb) {
+    void examine_cell(const column_definition& cdef, atomic_cell_or_collection_view cell_or_collection, const row_tombstone& tomb) {
         if (cdef.type->is_atomic()) {
             auto cell = cell_or_collection.as_atomic_cell(cdef);
             if constexpr (OnlyPurged) {
@@ -2975,7 +3084,7 @@ private:
         }
     }
     void examine_row(column_kind kind, const row& r, const row_tombstone& tomb) {
-        r.for_each_cell([&, this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+        r.for_each_cell([&, this, kind] (column_id id, atomic_cell_or_collection_view cell) {
             examine_cell(_schema.column_at(kind, id), cell, tomb);
         });
     }

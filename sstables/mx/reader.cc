@@ -69,12 +69,17 @@ public:
     static_row _in_progress_static_row;
     bool _inside_static_row = false;
 
-    struct cell {
-        column_id id;
-        atomic_cell_or_collection val;
-    };
-    std::vector<cell> _cells;
+    // Builds the cells of the row in progress (static or clustering), a block at a time.
+    // Created on the row's first cell.
+    std::optional<row::cell_appender> _cells;
     std::optional<collection_mutation_writer> _cm;
+
+    row::cell_appender& cells() {
+        if (!_cells) {
+            _cells.emplace(_inside_static_row ? _in_progress_static_row.cells() : _in_progress_row->cells());
+        }
+        return *_cells;
+    }
 
     data_consumer::proceed consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
         sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
@@ -159,6 +164,7 @@ public:
 
     inline void reset_for_new_partition() {
         _is_mutation_end = true;
+        _cells.reset();
         _in_progress_row.reset();
         _stored_tombstone.reset();
         _mf_filter.reset();
@@ -203,7 +209,6 @@ public:
         , _treat_static_row_as_regular(_schema->is_static_compact_table()
             && (!sst->has_scylla_component() || sst->features().is_enabled(sstable_feature::CorrectStaticCompact))) // See #4139
     {
-        _cells.reserve(std::max(_schema->static_columns_count(), _schema->regular_columns_count()));
     }
 
     mp_row_consumer_m(mp_row_consumer_reader_mx* reader,
@@ -423,11 +428,19 @@ public:
                                                     local_deletion_time,
                                                     atomic_cell::collection_member::yes);
             _cm->push_back(cell_path, std::move(ac));
+        } else if (is_deleted) {
+            // Serialize the cell directly into the row.
+            cells().append_serialized(*column_id, atomic_cell_type::dead_serialized_size(), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_dead(out, timestamp, local_deletion_time);
+            });
+        } else if (ttl != gc_clock::duration::zero()) {
+            cells().append_serialized(*column_id, atomic_cell_type::live_expiring_serialized_size(value.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, timestamp, value, local_deletion_time, ttl);
+            });
         } else {
-            auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
-                                 : make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
-                                       atomic_cell::collection_member::no);
-            _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+            cells().append_serialized(*column_id, atomic_cell_type::live_serialized_size(value.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, timestamp, value);
+            });
         }
         return data_consumer::proceed::yes;
     }
@@ -449,7 +462,7 @@ public:
             const column_definition& column_def = get_column_definition(column_id);
             if (!_cm->empty() || (_cm->tombstone() && _cm->tombstone().timestamp > column_def.dropped_at())) {
                 check_schema_mismatch(column_info, column_def);
-                _cells.push_back({column_def.id, std::move(*_cm).finish()});
+                cells().append(column_def.id, std::move(*_cm).finish());
             }
         }
         _cm.reset();
@@ -470,8 +483,7 @@ public:
             return data_consumer::proceed::yes;
         }
         check_schema_mismatch(column_info, column_def);
-        auto ac = make_counter_cell(timestamp, value);
-        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        cells().append(*column_id, make_counter_cell(timestamp, value));
         return data_consumer::proceed::yes;
     }
 
@@ -508,15 +520,12 @@ public:
     }
 
     data_consumer::proceed consume_row_end() {
-        auto fill_cells = [this] (column_kind kind, row& cells) {
-            for (auto &&c : _cells) {
-                cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
-            }
-            _cells.clear();
-        };
+        if (_cells) {
+            _cells->finish();
+            _cells.reset();
+        }
 
         if (_inside_static_row) {
-            fill_cells(column_kind::static_column, _in_progress_static_row.cells());
             sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", fmt::ptr(this), static_row::printer(*_schema, _in_progress_static_row));
             _inside_static_row = false;
             if (!_in_progress_static_row.empty()) {
@@ -533,9 +542,6 @@ public:
                 }
             }
         } else {
-            if (!_cells.empty()) {
-                fill_cells(column_kind::regular_column, _in_progress_row->cells());
-            }
             if (_slice.is_reversed() &&
                     // we always consume whole rows (i.e. `consume_row_end` is always called) when reading in reverse,
                     // even when `consume_row_start` requested to ignore the row. This happens because for reversed reads

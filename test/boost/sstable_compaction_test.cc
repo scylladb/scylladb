@@ -335,7 +335,7 @@ void compact(test_env& env) {
         auto& cdef1 = *s->get_column_definition("age");
         auto& cdef2 = *s->get_column_definition("height");
         BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
-        BOOST_REQUIRE(cells.find_cell(cdef2.id) == nullptr);
+        BOOST_REQUIRE(!cells.find_cell(cdef2.id).has_value());
     });
     verify_mutation([&] (mutation_opt m) {
         BOOST_REQUIRE(m);
