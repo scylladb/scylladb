@@ -752,3 +752,85 @@ def testIndexesNameForCopiedTable(cql, keyspaces):
 
 # The test testTableCopyWithCustomIndexes was not translated, because it
 # uses a custom index implemented by a Java class (StubIndex).
+
+# Read a table's or column's comment or security label from the virtual
+# tables system_views.schema_comments and system_views.schema_security_labels
+# which Cassandra 6 added (the original Java test reads them from Cassandra's
+# internal schema objects).
+def getSchemaMetadata(cql, isComment, keyspace, table, column=None):
+    if isComment:
+        vtable, vcolumn = "system_views.schema_comments", "comment"
+    else:
+        vtable, vcolumn = "system_views.schema_security_labels", "security_label"
+    rows = list(cql.execute(f"SELECT {vcolumn} FROM {vtable} WHERE object_type = %s AND keyspace_name = %s AND table_name = %s AND column_name = %s AND udt_name = '' AND field_name = ''",
+                            ["COLUMN" if column else "TABLE", keyspace, table, column or ""]))
+    return rows[0][0] if rows else ""
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and SCYLLADB-5146 (COMMENT ON).
+@pytest.mark.xfail(reason="SCYLLADB-5147, SCYLLADB-5146")
+def testCreateTableLikeWithComments(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text)", "source_tb_comments")
+    cql.execute("COMMENT ON TABLE " + sourceKs + "." + sourceTb + " IS 'Test table comment'")
+    cql.execute("COMMENT ON COLUMN " + sourceKs + "." + sourceTb + ".b IS 'Test column comment'")
+
+    # Test CREATE TABLE copy LIKE source WITH COMMENTS
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH COMMENTS", sourceTb, sourceKs, targetKs)
+
+    # Verify that the table structure is copied
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, False, False)
+
+    # Verify that comments are copied
+    # Table comment should be copied
+    assert getSchemaMetadata(cql, True, sourceKs, sourceTb) == getSchemaMetadata(cql, True, targetKs, targetTb)
+    # Column comment should be copied
+    assert getSchemaMetadata(cql, True, sourceKs, sourceTb, "b") == getSchemaMetadata(cql, True, targetKs, targetTb, "b")
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and SCYLLADB-5146 (SECURITY
+# LABEL ON).
+@pytest.mark.xfail(reason="SCYLLADB-5147, SCYLLADB-5146")
+def testCreateTableLikeWithSecurityLabels(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text)", "source_tb_labels")
+    cql.execute("SECURITY LABEL ON TABLE " + sourceKs + "." + sourceTb + " IS 'confidential'")
+    cql.execute("SECURITY LABEL ON COLUMN " + sourceKs + "." + sourceTb + ".b IS 'restricted'")
+
+    # Test CREATE TABLE copy LIKE source WITH SECURITY LABELS
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH SECURITY LABELS", sourceTb, sourceKs, targetKs)
+
+    # Verify that the table structure is copied
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, False, False)
+
+    # Verify that security labels are copied
+    # Table security label should be copied
+    assert getSchemaMetadata(cql, False, sourceKs, sourceTb) == getSchemaMetadata(cql, False, targetKs, targetTb)
+    # Column security label should be copied
+    assert getSchemaMetadata(cql, False, sourceKs, sourceTb, "b") == getSchemaMetadata(cql, False, targetKs, targetTb, "b")
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and SCYLLADB-5146 (COMMENT ON
+# and SECURITY LABEL ON).
+@pytest.mark.xfail(reason="SCYLLADB-5147, SCYLLADB-5146")
+def testCreateTableLikeWithAllOptions(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text)", "source_tb_all")
+    cql.execute("COMMENT ON TABLE " + sourceKs + "." + sourceTb + " IS 'Test table comment'")
+    cql.execute("COMMENT ON COLUMN " + sourceKs + "." + sourceTb + ".b IS 'Test column comment'")
+    cql.execute("SECURITY LABEL ON TABLE " + sourceKs + "." + sourceTb + " IS 'confidential'")
+    cql.execute("SECURITY LABEL ON COLUMN " + sourceKs + "." + sourceTb + ".b IS 'restricted'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (b)")
+
+    # Test CREATE TABLE copy LIKE source WITH INDEXES AND COMMENTS AND SECURITY LABELS
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH INDEXES AND COMMENTS AND SECURITY LABELS", sourceTb, sourceKs, targetKs)
+
+    # Verify that the table structure and indexes are copied
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, True, True)
+
+    # Verify that comments and security labels are copied
+    # Table comment should be copied
+    assert getSchemaMetadata(cql, True, sourceKs, sourceTb) == getSchemaMetadata(cql, True, targetKs, targetTb)
+    # Table security label should be copied
+    assert getSchemaMetadata(cql, False, sourceKs, sourceTb) == getSchemaMetadata(cql, False, targetKs, targetTb)
+    # Column comment should be copied
+    assert getSchemaMetadata(cql, True, sourceKs, sourceTb, "b") == getSchemaMetadata(cql, True, targetKs, targetTb, "b")
+    # Column security label should be copied
+    assert getSchemaMetadata(cql, False, sourceKs, sourceTb, "b") == getSchemaMetadata(cql, False, targetKs, targetTb, "b")
