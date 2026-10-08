@@ -271,8 +271,65 @@ struct serializing_visitor {
     }
 };
 
+// The format the values are provided in, on the command line.
+enum class input_format {
+    hex, // serialized, hex encoded
+    text, // unserialized, the string representation of the values
+};
+
+const std::map<input_format, std::string_view> input_format_names{
+    {input_format::hex, "hex"},
+    {input_format::text, "text"},
+};
+
+// Returns the format the values are provided in: the one selected with
+// --input-format, or default_format if none was selected.
+input_format get_input_format(const bpo::variables_map& vm, std::string_view action, input_format default_format,
+        std::initializer_list<input_format> supported_formats) {
+    if (!vm.contains("input-format")) {
+        return default_format;
+    }
+    const std::string_view name = vm["input-format"].as<sstring>();
+    const auto it = std::ranges::find(input_format_names, name, [] (const auto& format_and_name) { return format_and_name.second; });
+    if (it == input_format_names.end()) {
+        // Boost program options doesn't support '=' after short options, -f=text is parsed as "=text".
+        const auto hint = name.starts_with("=") ? ", note that -f=<format> is not supported, use -f <format> or --input-format=<format>" : "";
+        throw std::invalid_argument(fmt::format("error: invalid input format '{}', expected one of: {}{}", name,
+                fmt::join(input_format_names | std::views::values, ", "), hint));
+    }
+    if (!std::ranges::contains(supported_formats, it->first)) {
+        throw std::invalid_argument(fmt::format("error: the {} action doesn't support the {} input format, supported input formats: {}", action, name,
+                fmt::join(supported_formats | std::views::transform([] (input_format format) { return input_format_names.at(format); }), ", ")));
+    }
+    return it->first;
+}
+
 void serialize_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
+    get_input_format(vm, "serialize", input_format::text, {input_format::text});
     fmt::print("{}\n", managed_bytes_view(serializing_visitor{values}(type)));
+}
+
+// Returns the serialized values to operate on.
+// The values are either serialized (hex encoded), or unserialized (text),
+// which are serialized here. Unserialized values are split into
+// unserialized_count groups of equal size, each group making up one value
+// (compound values are made up of multiple components).
+std::vector<bytes> get_serialized_values(const type_variant& type, const std::vector<sstring>& values, const bpo::variables_map& vm,
+        std::string_view action, size_t unserialized_count) {
+    const auto format = get_input_format(vm, action, input_format::hex, {input_format::hex, input_format::text});
+    if (format == input_format::hex) {
+        return values | std::views::transform([] (const sstring& hex_str) { return from_hex(hex_str); }) | std::ranges::to<std::vector>();
+    }
+    if (values.size() % unserialized_count) {
+        throw std::invalid_argument(fmt::format("error: expected the number of unserialized values ({}) to be divisible by {}, the number of values to operate on",
+                values.size(), unserialized_count));
+    }
+    std::vector<bytes> serialized_values;
+    for (auto&& group : values | std::views::chunk(values.size() / unserialized_count)) {
+        const auto group_values = group | std::ranges::to<std::vector<sstring>>();
+        serialized_values.push_back(to_bytes(serializing_visitor{group_values}(type)));
+    }
+    return serialized_values;
 }
 
 sstring to_printable_string(const data_type& type, bytes_view value) {
@@ -336,7 +393,8 @@ void print_compare_result(std::string_view lhs, std::string_view rhs, std::stron
     fmt::print("{} {} {}\n", lhs, res_str, rhs);
 }
 
-void compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void compare_handler(type_variant type, std::vector<sstring> unparsed_values, const bpo::variables_map& vm) {
+    const auto values = get_serialized_values(type, unparsed_values, vm, "compare", 2);
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("compare_handler(): expected 2 values, got {}", values.size()));
     }
@@ -407,12 +465,13 @@ const partition_key_type& get_partition_key_type(const type_variant& type, std::
     throw std::invalid_argument(fmt::format("{} action requires --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key) input", action));
 }
 
-void ring_order_compare_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void ring_order_compare_handler(type_variant type, std::vector<sstring> unparsed_values, const bpo::variables_map& vm) {
+    const auto& pk_type = get_partition_key_type(type, "ring-order-compare");
+    const auto values = get_serialized_values(type, unparsed_values, vm, "ring-order-compare", 2);
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("ring_order_compare_handler(): expected 2 values, got {}", values.size()));
     }
 
-    const auto& pk_type = get_partition_key_type(type, "ring-order-compare");
     const auto& s = *pk_type.schema;
     const auto lhs_dk = dht::decorate_key(s, pk_type.to_partition_key(values[0]));
     const auto rhs_dk = dht::decorate_key(s, pk_type.to_partition_key(values[1]));
@@ -424,26 +483,26 @@ void ring_order_compare_handler(type_variant type, std::vector<bytes> values, co
     print_compare_result(to_printable_ring_position(lhs_dk, values[0]), to_printable_ring_position(rhs_dk, values[1]), lhs_dk.tri_compare(s, rhs_dk));
 }
 
-void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void tokenof_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
     const auto& pk_type = get_partition_key_type(type, "tokenof");
 
-    for (const auto& value : values) {
+    for (const auto& value : get_serialized_values(type, values, vm, "tokenof", 1)) {
         const auto dk = dht::decorate_key(*pk_type.schema, pk_type.to_partition_key(value));
-        fmt::print("{}: {}\n", to_printable_string(type, value), dk.token());
+        fmt::print("{}: {}\n", to_printable_string(pk_type, value), dk.token());
     }
 }
 
-void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
+void shardof_handler(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) {
     const auto& pk_type = get_partition_key_type(type, "shardof");
 
     if (!vm.count("shards")) {
         throw std::invalid_argument("error: missing mandatory argument --shards");
     }
 
-    for (const auto& value : values) {
+    for (const auto& value : get_serialized_values(type, values, vm, "shardof", 1)) {
         const auto dk = dht::decorate_key(*pk_type.schema, pk_type.to_partition_key(value));
         const auto shard = dht::shard_of(vm["shards"].as<unsigned>(), vm["ignore-msb-bits"].as<unsigned>(), dk.token());
-        fmt::print("{}: token: {}, shard: {}\n", to_printable_string(type, value), dk.token(), shard);
+        fmt::print("{}: token: {}, shard: {}\n", to_printable_string(pk_type, value), dk.token(), shard);
     }
 }
 
@@ -496,6 +555,11 @@ const std::vector<operation_option> global_options{
     typed_option<>("clustering-key", "alias for --prefix-compound"),
     typed_option<>("partition-key", "alias for --full-compound"),
     typed_option<>("legacy-partition-key", "alias for --legacy-composite"),
+    typed_option<sstring>("input-format,f", "the format the values are provided in: hex - serialized, hex encoded (the default, except for the serialize action),"
+            " text - unserialized, the human-readable string representation of the values (the default for the serialize action);"
+            " the supported input formats depend on the action, see the help of the action; for compare and ring-order-compare,"
+            " the first half of the unserialized values make up the first compared value, the second half the second one;"
+            " for tokenof and shardof, all unserialized values make up a single partition key"),
     typed_option<unsigned>("shards", "number of shards (only relevant for shardof action)"),
     typed_option<unsigned>("ignore-msb-bits", 12u, "number of the most significant bits of the token to ignore when calculating the shard"
             " (only relevant for shardof action)"),
@@ -523,6 +587,8 @@ Values of collection and vector types (including tuples and UDTs, which have
 fields of such types) cannot be serialized, such values are rejected with an
 error.
 
+Input formats: text (default).
+
 Examples:
 
 $ scylla types serialize -t Int32Type -- -1286905132
@@ -540,6 +606,8 @@ Deserialize the value(s) and print them in a human-readable form.
 
 Arguments: 1 or more serialized values.
 
+Input formats: hex (default).
+
 Examples:
 
 $ scylla types deserialize -t Int32Type b34b62d4
@@ -552,7 +620,10 @@ $ scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d0
 R"(
 Compare two values and print the result.
 
-Arguments: 2 serialized values.
+Arguments: 2 values. With --input-format=text, the first half of the values
+make up the first compared value, the second half the second one.
+
+Input formats: hex (default), text.
 
 Examples:
 
@@ -568,7 +639,10 @@ byte-wise, in their legacy (sstable) format.
 Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 
-Arguments: 2 serialized values.
+Arguments: 2 values. With --input-format=text, the first half of the values
+make up the first compared value, the second half the second one.
+
+Input formats: hex (default), text.
 
 Examples:
 
@@ -582,6 +656,8 @@ the type.
 
 Arguments: 1 or more serialized values.
 
+Input formats: hex (default).
+
 Examples:
 
 $  scylla types validate -t Int32Type b34b62d4
@@ -593,11 +669,17 @@ Decorate the key, that is calculate its token.
 Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 
-Arguments: 1 or more serialized values.
+Arguments: 1 or more values. With --input-format=text, all values make up a
+single partition key.
+
+Input formats: hex (default), text.
 
 Examples:
 
 $ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
+(file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
+
+$ scylla types tokenof --partition-key -t text -t date -t uuid -f text -- file_instance 2021-03-27 c61a3321-0459-41c3-8e56-75255feb0196
 (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
 )"}, tokenof_handler},
     {{"shardof", "calculate which shard the partition-key belongs to",
@@ -607,7 +689,10 @@ Only supports --full-compound (or its alias --partition-key) and
 --legacy-composite (or its alias --legacy-partition-key).
 Use --shards and --ignore-msb-bits to specify sharding parameters.
 
-Arguments: 1 or more serialized values.
+Arguments: 1 or more values. With --input-format=text, all values make up a
+single partition key.
+
+Input formats: hex (default), text.
 
 Examples:
 
@@ -698,6 +783,7 @@ $ scylla types {{action}} --help
         switch (handler.index()) {
             case 0:
                 {
+                    get_input_format(app_config, op.name(), input_format::hex, {input_format::hex});
                     auto from_hex_func = [] (const std::string& hex_str) { return from_hex(hex_str); };
                     auto values = app_config["value"].as<std::vector<std::string>>() | std::views::transform(from_hex_func) | std::ranges::to<std::vector>();
                     std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);

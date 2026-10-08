@@ -119,3 +119,46 @@ def test_schema_file_not_found(scylla_types_fails_with, tmp_path):
     res = scylla_types_fails_with("serialize", "--schema-file", path, "--column", "pk1", "--", "1",
                                   error="No such file or directory")
     assert path in res.stderr
+
+
+@pytest.mark.parametrize("input_format_args", [["-f", "hex"], ["-fhex"], ["--input-format", "hex"], ["--input-format=hex"]])
+def test_input_format_option_spelling(scylla_types, input_format_args):
+    res = scylla_types("compare", "-t", "Int32Type", *input_format_args, "00000001", "00000002")
+    assert res.stdout == "1 < 2\n"
+
+
+def test_input_format_text(scylla_types):
+    res = scylla_types("compare", "-t", "Int32Type", "-f", "text", "--", "1", "2")
+    assert res.stdout == "1 < 2\n"
+
+
+def test_invalid_input_format(scylla_types_fails_with):
+    scylla_types_fails_with("compare", "-t", "Int32Type", "-f", "foo", "00000001", "00000002",
+                            error="error: invalid input format 'foo', expected one of: hex, text")
+
+
+def test_input_format_short_option_with_equal_sign(scylla_types_fails_with):
+    """Boost program options doesn't support -f=<format>, the error message should point this out."""
+    scylla_types_fails_with("compare", "-t", "Int32Type", "-f=text", "--", "1", "2",
+                            error="note that -f=<format> is not supported, use -f <format> or --input-format=<format>")
+
+
+@pytest.mark.parametrize("action,input_format,supported_formats", [
+    ("serialize", "hex", "text"),
+    ("deserialize", "text", "hex"),
+    ("validate", "text", "hex"),
+])
+def test_unsupported_input_format(scylla_types_fails_with, action, input_format, supported_formats):
+    scylla_types_fails_with(action, "-t", "Int32Type", "-f", input_format, "--", "1",
+                            error=f"error: the {action} action doesn't support the {input_format} input format, supported input formats: {supported_formats}")
+
+
+@pytest.mark.parametrize("action,input_format,value,expected", [
+    ("serialize", "text", "1", "00000001"),
+    ("deserialize", "hex", "00000001", "1"),
+    ("validate", "hex", "00000001", "00000001: VALID - 1"),
+])
+def test_default_input_format_explicitly(scylla_types, action, input_format, value, expected):
+    """The default input format of the action can be selected explicitly too."""
+    res = scylla_types(action, "-t", "Int32Type", "-f", input_format, "--", value)
+    assert res.stdout == f"{expected}\n"

@@ -50,3 +50,20 @@ def test_tokenof_legacy_composite_single_component(scylla_types):
 def test_tokenof_schema_file(scylla_types, schema_file, compound_option, key):
     res = scylla_types("tokenof", "--schema-file", schema_file, compound_option, key)
     assert res.stdout == "(1, abc): 8771735466527499816\n"
+
+
+@pytest.mark.parametrize("compound_option", ["--full-compound", "--legacy-composite"])
+def test_tokenof_text(scylla_types, compound_option):
+    """With -f text, all values make up a single partition key."""
+    res = scylla_types("tokenof", compound_option, "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1", "abc")
+    assert res.stdout == "(1, abc): 8771735466527499816\n"
+
+
+def test_tokenof_text_schema_file(scylla_types, schema_file):
+    res = scylla_types("tokenof", "--schema-file", schema_file, "--partition-key", "-f", "text", "--", "1", "abc")
+    assert res.stdout == "(1, abc): 8771735466527499816\n"
+
+
+def test_tokenof_text_wrong_number_of_values(scylla_types_fails_with):
+    scylla_types_fails_with("tokenof", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1",
+                            error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")

@@ -68,3 +68,35 @@ def test_compare_schema_file_column(scylla_types, schema_file):
     assert res.stdout == "b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b\n"
     res = scylla_types("compare", "--schema-file", schema_file, "--column", "ck2", "00000001", "00000002")
     assert res.stdout == "1 < 2\n"
+
+
+def test_compare_text(scylla_types):
+    res = scylla_types("compare", "-t", "Int32Type", "-f", "text", "--", "2", "-1")
+    assert res.stdout == "2 > -1\n"
+
+
+def test_compare_text_prefix_compound(scylla_types):
+    """The first half of the values make up the first compared value, the second half the second one."""
+    res = scylla_types("compare", "--prefix-compound", "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1", "b", "1", "a")
+    assert res.stdout == "(1, b) > (1, a)\n"
+
+
+@pytest.mark.parametrize("compound_option", ["--full-compound", "--legacy-composite"])
+def test_compare_text_full_compound(scylla_types, compound_option):
+    res = scylla_types("compare", compound_option, "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1", "abc", "2", "abc")
+    assert res.stdout == "(1, abc) < (2, abc)\n"
+
+
+def test_compare_text_odd_number_of_values(scylla_types_fails_with):
+    scylla_types_fails_with("compare", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1", "abc", "2",
+                            error="error: expected the number of unserialized values (3) to be divisible by 2")
+
+
+def test_compare_text_wrong_number_of_components(scylla_types_fails_with):
+    scylla_types_fails_with("compare", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "-f", "text", "--", "1", "2",
+                            error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")
+
+
+def test_compare_text_unsupported_type(scylla_types_fails_with):
+    scylla_types_fails_with("compare", "-t", "list<int>", "-f", "text", "--", "1", "2",
+                            error="error: serializing values of type list<int> is not supported")
