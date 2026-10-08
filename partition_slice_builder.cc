@@ -15,6 +15,9 @@ partition_slice_builder::partition_slice_builder(const schema& schema, query::pa
     , _specific_ranges(std::move(slice._specific_ranges))
     , _schema(schema)
     , _options(std::move(slice.options))
+    // The limit is part of the slice, so a builder which starts from a slice
+    // has to carry it. Dropping it turns PER PARTITION LIMIT into no limit.
+    , _partition_row_limit(slice.partition_row_limit())
 {
 }
 

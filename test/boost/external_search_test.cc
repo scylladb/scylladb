@@ -197,7 +197,7 @@ query::result read_rows(schema_ptr s, reader_permit permit, utils::chunked_vecto
             query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, query::max_tombstones);
     auto querier = replica::querier(source, s, std::move(permit), query::full_partition_range, slice, {}, tombstone_gc_state::no_gc());
     auto close_querier = deferred_close(querier);
-    querier.consume_page(query_result_builder(*s, builder), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint32_t>::max(),
+    querier.consume_page(query_result_builder(*s, builder), slice, std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint32_t>::max(),
                    gc_clock::now())
             .get();
     return builder.build();

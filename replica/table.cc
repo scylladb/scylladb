@@ -26,7 +26,7 @@
 #include "replica/compaction_group.hh"
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/types.hh"
-#include "replica/query_state.hh"
+#include "replica/read_page.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
@@ -5174,6 +5174,63 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
     }
 }
 
+// A page of this table, see replica/read_page.hh.
+struct table::page_context {
+    table& t;
+
+    gate::holder start_page() {
+        return t._async_gate.hold();
+    }
+    future<> before_new_querier(const dht::partition_range& range) {
+        return t.wait_for_tablet_truncate(range);
+    }
+};
+
+// A data page of this table, see replica/read_page.hh. Unlike a mutation
+// page, it also measures the read latency.
+struct table::data_page_context {
+    struct page_guard {
+        table& t;
+        gate::holder async_gate_holder;
+        utils::latency_counter lc;
+
+        explicit page_guard(table& t) : t(t), async_gate_holder(t._async_gate.hold()) {
+            t._stats.reads.set_latency(lc);
+        }
+        page_guard(const page_guard&) = delete;
+        ~page_guard() {
+            t._stats.reads.mark(lc);
+        }
+    };
+
+    table& t;
+    query::result_memory_limiter& memory_limiter;
+    query::max_result_size max_size;
+    query::short_read short_read_allowed;
+    bool only_digest;
+
+    page_guard start_page() {
+        return page_guard(t);
+    }
+    future<> before_new_querier(const dht::partition_range& range) {
+        return t.wait_for_tablet_truncate(range);
+    }
+    future<query::result_memory_accounter> make_accounter() {
+        return only_digest
+                ? memory_limiter.new_digest_read(max_size, short_read_allowed)
+                : memory_limiter.new_data_read(max_size, short_read_allowed);
+    }
+    future<> before_read() {
+        return utils::get_local_injector().inject("replica_query_wait", [&t = t] (auto& handler) -> future<> {
+            auto table_name = handler.template get<std::string_view>("table");
+            if (table_name && *table_name == t._schema->cf_name()) {
+                tlogger.info("replica_query_wait: waiting");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+            }
+        });
+    }
+};
+
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr query_schema,
         reader_permit permit,
@@ -5185,73 +5242,13 @@ table::query(schema_ptr query_schema,
         db::timeout_clock::time_point timeout,
         std::optional<querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
-        co_return make_lw_shared<query::result>();
+        return make_ready_future<lw_shared_ptr<query::result>>(make_lw_shared<query::result>());
     }
-
-    const auto table_async_gate_holder = _async_gate.hold();
-    utils::latency_counter lc;
-    _stats.reads.set_latency(lc);
-
-    auto finally = defer([&] () noexcept {
-        _stats.reads.mark(lc);
-    });
 
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
-    auto accounter = co_await (opts.request == query::result_request::only_digest
-             ? memory_limiter.new_digest_read(permit.max_result_size(), short_read_allowed)
-             : memory_limiter.new_data_read(permit.max_result_size(), short_read_allowed));
-
-    query_state qs(query_schema, cmd, opts, partition_ranges, std::move(accounter));
-
-    std::optional<querier> querier_opt;
-    if (saved_querier) {
-        querier_opt = std::move(*saved_querier);
-    }
-
-    co_await utils::get_local_injector().inject("replica_query_wait", [&] (auto& handler) -> future<> {
-        auto table_name = handler.template get<std::string_view>("table");
-        if (table_name && *table_name == _schema->cf_name()) {
-            tlogger.info("replica_query_wait: waiting");
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
-        }
-    });
-
-    while (!qs.done()) {
-        auto&& range = *qs.current_partition_range++;
-
-        if (!querier_opt) {
-            co_await wait_for_tablet_truncate(range);
-            querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);
-        }
-        auto& q = *querier_opt;
-
-        future<> fut = co_await coroutine::as_future(q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state));
-
-        if (fut.failed() || !qs.done()) {
-            co_await q.close();
-            querier_opt = {};
-        }
-        if (fut.failed()) {
-            co_return coroutine::exception(fut.get_exception());
-        }
-    }
-
-    std::optional<full_position> last_pos;
-    if (querier_opt) {
-        if (querier_opt->current_position()) {
-            last_pos.emplace(*querier_opt->current_position());
-        }
-        if (!saved_querier || (!querier_opt->are_limits_reached() && !qs.builder.is_short_read())) {
-            co_await querier_opt->close();
-            querier_opt = {};
-        }
-    }
-    if (saved_querier) {
-        *saved_querier = std::move(querier_opt);
-    }
-
-    co_return make_lw_shared<query::result>(qs.builder.build(std::move(last_pos)));
+    auto ctx = data_page_context{*this, memory_limiter, permit.max_result_size(), short_read_allowed, opts.request == query::result_request::only_digest};
+    return read_data_page(std::move(ctx), as_mutation_source(), std::move(query_schema), std::move(permit), cmd, opts, partition_ranges, std::move(trace_state),
+            get_tombstone_gc_state(), querier_base::querier_config(_config.tombstone_warn_threshold), saved_querier);
 }
 
 future<reconcilable_result>
@@ -5265,42 +5262,13 @@ table::mutation_query(schema_ptr query_schema,
         bool tombstone_gc_enabled,
         std::optional<querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
-        co_return reconcilable_result();
+        return make_ready_future<reconcilable_result>();
     }
 
-    const auto table_async_gate_holder = _async_gate.hold();
-
-    std::optional<querier> querier_opt;
-    if (saved_querier) {
-        querier_opt = std::move(*saved_querier);
-    }
-    if (!querier_opt) {
-        co_await wait_for_tablet_truncate(range);
-        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
-        querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, tombstone_gc_state, conf);
-    }
-    auto& q = *querier_opt;
-
-    std::exception_ptr ex;
-  try {
-    auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
-
-    if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
-        co_await q.close();
-        querier_opt = {};
-    }
-    if (saved_querier) {
-        *saved_querier = std::move(querier_opt);
-    }
-
-    co_return r;
-  } catch (...) {
-    ex = std::current_exception();
-  }
-    co_await q.close();
-    co_return coroutine::exception(std::move(ex));
+    auto gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+    return read_mutation_page(page_context{*this}, as_mutation_source(), std::move(query_schema), std::move(permit), cmd, range,
+            std::move(trace_state), std::move(accounter), std::move(gc_state), querier_base::querier_config(_config.tombstone_warn_threshold),
+            saved_querier);
 }
 
 mutation_source
