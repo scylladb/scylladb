@@ -16,7 +16,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
-from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
+from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, new_test_table, reconnect_driver, \
     get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config
 from contextlib import nullcontext as does_not_raise
 import time
@@ -1338,6 +1338,37 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ScyllaClusterM
     assert len(tablet_replicas) == 4
     for r in tablet_replicas:
         assert len(r.replicas) == 2
+
+# ALTER waits for an idle topology, which endless rebuild retries rarely leave.
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-4325",
+                       reason="ALTER KEYSPACE on a non-coordinator is starved by endless failed-rebuild retries")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alter_keyspace_not_starved_by_rebuild_retries(manager: ScyllaClusterManager, scale_timeout) -> None:
+    injection = "rebuild_repair_stage_fail"
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+    cmdline = ['--smp=2']
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': f'rack1{r}'}) for r in 'abc']
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} and tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "pk int primary key"):
+            coord = await get_topology_coordinator(manager)
+            coord_serv = await manager.find_server_by_host_id(servers, coord)
+            follower = next(s for s in servers if s.server_id != coord_serv.server_id)
+            host = (await wait_for_cql_and_get_hosts(cql, [follower], time.time() + 60))[0]
+
+            start = time.monotonic()
+            alter = cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']}}", host=host)
+            try:
+                await asyncio.wait_for(asyncio.shield(alter), timeout=scale_timeout(5))
+            except asyncio.TimeoutError:
+                pytest.fail(f"ALTER KEYSPACE took over {scale_timeout(5)}s, starved by failed-rebuild retries")
+            else:
+                logger.info(f"ALTER KEYSPACE on a non-coordinator took {time.monotonic() - start:.1f}s")
+            finally:
+                # Let the rebuild and any abandoned ALTER finish so teardown doesn't stall.
+                await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
+                await asyncio.gather(alter, return_exceptions=True)
 
 # Regression test: when the target rack in a rack_list colocation has no
 # available nodes (all excluded), the ALTER KEYSPACE must fail promptly
