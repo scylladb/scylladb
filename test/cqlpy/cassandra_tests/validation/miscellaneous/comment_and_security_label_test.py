@@ -494,3 +494,19 @@ def testSecurityLabelNotAllowedInAlterTable(cql, new_to_cassandra_6):
         alterTableWithComment = f"ALTER TABLE {ks}.t1 WITH comment = 'test comment'"
         cql.execute(alterTableWithComment)
         assertComment(cql, "TABLE", ks, f"{ks}.t1", "test comment")
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and SCYLLADB-5146 (the
+# system_views.schema_comments table).
+@pytest.mark.xfail(reason="SCYLLADB-5147, SCYLLADB-5146")
+def testSecurityLabelNotAllowedInCreateTableLike(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, "source_table")
+
+        # Test that security_label property is rejected in CREATE TABLE ... LIKE ... WITH clause
+        createTableLikeWithLabel = f"CREATE TABLE {ks}.target_table LIKE {ks}.source_table WITH security_label = 'TEST_LABEL'"
+        assert_invalid_throw_message(cql, ks, "Unknown property 'security_label'", SyntaxException, createTableLikeWithLabel)
+
+        # Verify that comment IS allowed in CREATE TABLE ... LIKE for backward compatibility
+        createTableLikeWithComment = f"CREATE TABLE {ks}.target_table2 LIKE {ks}.source_table WITH comment = 'test comment'"
+        cql.execute(createTableLikeWithComment)
+        assertComment(cql, "TABLE", ks, f"{ks}.target_table2", "test comment")
