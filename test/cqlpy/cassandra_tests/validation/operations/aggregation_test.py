@@ -1756,3 +1756,19 @@ def testSumPrecision(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "select sum(v1), sum(v2), sum(v3) from %s;"),
                    row(to_float(15.3), 15.3, Decimal("15.3")))
+
+# This test fails on Cassandra because of a Cassandra bug: when an authorizer
+# is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
+# SFUNC or FINALFUNC fails with a NoSuchElementException server error,
+# instead of an InvalidRequest. This is CASSANDRA-21734.
+# Reproduces SCYLLADB-5165 (function names with '/', '[' or ']' should be
+# rejected)
+@pytest.mark.xfail(reason="SCYLLADB-5165")
+def testRejectInvalidAggregateNamesOnCreation(cql, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        for funcName in ["my/fancy/aggregate", "my_other[fancy]aggregate"]:
+            assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Aggregate name '{funcName}' is invalid",
+                                   " CREATE AGGREGATE IF NOT EXISTS " + f'{KEYSPACE_PER_TEST}."{funcName}"' + "(text, text)\n" +
+                                   " SFUNC func\n" +
+                                   " STYPE map<text,bigint>\n" +
+                                   " INITCOND { };")
