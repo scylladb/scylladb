@@ -13,6 +13,7 @@ import random
 import uuid
 
 from cassandra.cluster import ConsistencyLevel
+from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.pylib.internal_types import ServerInfo
@@ -20,7 +21,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig
+from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig, set_cluster_config
 
 
 logger = logging.getLogger(__name__)
@@ -231,8 +232,8 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
 
     Leaves a batch in the batchlog, pauses the write handlers so replaying it
     cannot complete, and repairs. The repair coordinator carries on after a
-    failed flush, so the repair has to finish shortly after the batchlog
-    timeout, which an injection shortens to 2s.
+    failed flush, so the repair has to finish shortly after the flush
+    timeout, which the cluster config option shortens to 2s.
 
     Regression test for SCYLLADB-3928.
     """
@@ -240,11 +241,16 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
     # Disable the batchlog flush cache: otherwise the periodic replay loop's
     # own near-boot run can satisfy the default 60s cache window, so issue_flush
     # ends up false and the replay is never reached.
-    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0", "--logger-log-level", "cluster_config_manager=debug"]
     node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
     host1 = next(h for h in hosts if h.address == str(node1.rpc_address))
+
+    # A timeout that cannot bound a wait is rejected at the statement.
+    with pytest.raises(InvalidRequest, match="expected an integer between 1 and"):
+        await cql.run_async("ALTER CLUSTER WITH repair_hints_batchlog_flush_timeout_in_seconds = 0")
+    await set_cluster_config(manager, cql, [node1, node2], hosts, "repair_hints_batchlog_flush_timeout_in_seconds", "2")
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair'}}")
@@ -274,8 +280,6 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
         # write_request_timeout_in_ms, 4s with the default of 2s.
         await asyncio.sleep(5)
 
-        await manager.api.enable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout", one_shot=False,
-                                           parameters={"batchlog_timeout_in_s": "2"})
         # Pause the write handlers, so whichever node holds the batch cannot
         # finish replaying it: the replay writes to both replicas.
         for node in (node1, node2):
@@ -303,7 +307,6 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
             # replay can finish before the servers are torn down.
             for node in (node1, node2):
                 await manager.api.disable_injection(node.ip_addr, "storage_proxy_write_response_pause")
-            await manager.api.disable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):

@@ -81,6 +81,15 @@ constexpr std::array registry_options = {
         .scopes = scope_set::of<scope::cluster>(),
         .default_value = true,
     },
+    option{
+        .name = option_name::repair_hints_batchlog_flush_timeout_in_seconds,
+        .description = "How long the hints and batchlog flush that precedes a repair of a table whose tombstone_gc is set to repair mode waits for each node to flush its hints and replay its batchlog before giving up. Raise it when nodes accumulate hints faster than they can replay them within the default, for example after a node stayed down for a long time",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(300),
+        // The replica adds it to a clock. Ten years is as good as never and far from the
+        // overflow.
+        .range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
