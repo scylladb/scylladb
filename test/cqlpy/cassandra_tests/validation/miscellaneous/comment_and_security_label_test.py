@@ -190,3 +190,24 @@ def testSecurityLabelOnTable(cql, new_to_cassandra_6):
         result = cql.execute(f"SECURITY LABEL FOR my_provider ON TABLE {tableRef} IS 'CONFIDENTIAL'")
         assertWarningsContain(result, "Provider functionality not implemented.")
         assertSecurityLabel(cql, "TABLE", ks, tableRef, "CONFIDENTIAL")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentOnColumn(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        columnRef = f"{ks}.{TABLE_NAME}.name"
+        commentLifecycle(cql, "COLUMN", ks, columnRef)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelOnColumn(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        cql.execute(f"CREATE TABLE {ks}.{SECURITY_TABLE_NAME} (id int PRIMARY KEY, ssn text, name text)")
+        columnRef = f"{ks}.{SECURITY_TABLE_NAME}.ssn"
+        securityLabelLifecycle(cql, "COLUMN", ks, columnRef)
+
+        # Test provider warning
+        result = cql.execute(f"SECURITY LABEL FOR data_classifier ON COLUMN {columnRef} IS 'PII'")
+        assertWarningsContain(result, "Provider functionality not implemented.")
+        assertSecurityLabel(cql, "COLUMN", ks, columnRef, "PII")
