@@ -74,3 +74,10 @@ def testBoolean(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, b) VALUES (true, false)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k = true"),
                    row(true, false))
+
+# Migrated from cql_tests.py:TestCQL.float_with_exponent_test()
+def testFloatWithExponent(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, d double, f float)") as table:
+        execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (0, 3E+10, 3.4E3)")
+        execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (1, 3.E10, -23.44E-3)")
+        execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (2, 3, -2)")
