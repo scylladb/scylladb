@@ -89,9 +89,12 @@ public:
     static const sstring CHUNK_LENGTH_KB;
     static const sstring CHUNK_LENGTH_KB_ERR;
     static const sstring CRC_CHECK_CHANCE;
+    static const sstring MIN_COMPRESSION_SAVING_PERCENT;
 private:
     algorithm _algorithm;
     std::optional<int> _chunk_length;
+    // Fills the hole before _crc_check_chance; range-checked on parse.
+    std::optional<uint8_t> _min_compression_saving_percent;
     std::optional<double> _crc_check_chance;
     std::optional<int> _zstd_compression_level;
 public:
@@ -104,9 +107,12 @@ public:
     double crc_check_chance() const { return _crc_check_chance.value_or(double(DEFAULT_CRC_CHECK_CHANCE)); }
     algorithm get_algorithm() const { return _algorithm; }
     std::optional<int> zstd_compression_level() const { return _zstd_compression_level; }
+    // A chunk is stored raw unless compression saves at least this percent of it; 0 = never.
+    int min_compression_saving_percent() const { return _min_compression_saving_percent.value_or(0); }
 
     using dicts_feature_enabled = bool_class<struct dicts_feature_enabled_tag>;
-    void validate(dicts_feature_enabled) const;
+    using raw_chunks_feature_enabled = bool_class<struct raw_chunks_feature_enabled_tag>;
+    void validate(dicts_feature_enabled, raw_chunks_feature_enabled) const;
 
     std::map<sstring, sstring> get_options() const;
 

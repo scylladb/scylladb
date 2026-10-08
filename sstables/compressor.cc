@@ -415,6 +415,7 @@ const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
 const sstring compression_parameters::CHUNK_LENGTH_KB_ERR = "chunk_length_kb";
 const sstring compression_parameters::CRC_CHECK_CHANCE = "crc_check_chance";
+const sstring compression_parameters::MIN_COMPRESSION_SAVING_PERCENT = "min_compression_saving_percent";
 
 compression_parameters::compression_parameters()
     : compression_parameters(algorithm::lz4)
@@ -518,6 +519,19 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
         }
     }
 
+    if (auto v = get_option(MIN_COMPRESSION_SAVING_PERCENT)) {
+        int percent;
+        try {
+            percent = std::stoi(*v);
+        } catch (const std::exception&) {
+            throw exceptions::syntax_exception(sstring("Invalid integer value ") + *v + " for " + MIN_COMPRESSION_SAVING_PERCENT);
+        }
+        if (percent < 0 || percent > 99) {
+            throw exceptions::configuration_exception(fmt::format("{} must be between 0 and 99, got {}", MIN_COMPRESSION_SAVING_PERCENT, percent));
+        }
+        _min_compression_saving_percent = percent;
+    }
+
     switch (_algorithm) {
     case algorithm::zstd_with_dicts:
     case algorithm::zstd:
@@ -539,7 +553,10 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
     }
 }
 
-void compression_parameters::validate(dicts_feature_enabled dicts_enabled) const {
+void compression_parameters::validate(dicts_feature_enabled dicts_enabled, raw_chunks_feature_enabled raw_chunks_enabled) const {
+    if (min_compression_saving_percent() && !raw_chunks_enabled) {
+        throw exceptions::configuration_exception(fmt::format("{} can't be used before all nodes support the SSTABLE_RAW_CHUNKS cluster feature", MIN_COMPRESSION_SAVING_PERCENT));
+    }
     if (_algorithm == algorithm::zstd_with_dicts || _algorithm == algorithm::lz4_with_dicts) {
         if (!dicts_enabled) {
             throw std::runtime_error(std::format("sstable_compression {} can't be used before "
@@ -588,6 +605,9 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
     }
     if (_crc_check_chance) {
         opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
+    }
+    if (_min_compression_saving_percent) {
+        opts.emplace(sstring(MIN_COMPRESSION_SAVING_PERCENT), std::to_string(_min_compression_saving_percent.value()));
     }
     return opts;
 }
