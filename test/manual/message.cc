@@ -42,6 +42,7 @@ private:
     gms::inet_address _server;
     uint32_t _cpuid;
     locator::host_id _server_id = locator::host_id{utils::UUID("00000000-0000-1000-0000-000000000001")};
+    abort_source _as;
 public:
     tester(netw::messaging_service& ms_) : ms(ms_) {}
     using msg_addr = netw::messaging_service::msg_addr;
@@ -81,7 +82,7 @@ public:
             };
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
             // FIXME: discarded future.
-            (void)ser::gossip_rpc_verbs::send_gossip_digest_ack(&ms, from, std::move(ack)).handle_exception([] (auto ep) {
+            (void)ser::gossip_rpc_verbs::send_gossip_digest_ack(&ms, from, _as, std::move(ack)).handle_exception([] (auto ep) {
                 test_logger.error("Fail to send ack : {}", ep);
             });
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
@@ -97,7 +98,7 @@ public:
             };
             gms::gossip_digest_ack2 ack2(std::move(eps));
             // FIXME: discarded future.
-            (void)ser::gossip_rpc_verbs::send_gossip_digest_ack2(&ms, from, std::move(ack2)).handle_exception([] (auto ep) {
+            (void)ser::gossip_rpc_verbs::send_gossip_digest_ack2(&ms, from, _as, std::move(ack2)).handle_exception([] (auto ep) {
                 test_logger.error("Fail to send ack2 : {}", ep);
             });
             digest_test_done.set_value();
@@ -139,7 +140,7 @@ public:
         digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
         digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
         gms::gossip_digest_syn syn("my_cluster", "my_partition", digests, utils::null_uuid(), utils::null_uuid());
-        return ser::gossip_rpc_verbs::send_gossip_digest_syn(&ms, id, std::move(syn)).then([this] {
+        return ser::gossip_rpc_verbs::send_gossip_digest_syn(&ms, id, _as, std::move(syn)).then([this] {
             test_logger.info("Sent gossip sigest syn. Waiting for digest_test_done...");
             return digest_test_done.get_future();
         });
