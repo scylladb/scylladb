@@ -133,3 +133,46 @@ def testSimple(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT pk, WRITETIME(v) FROM %s"), row(1, TIMESTAMP_2))
         assert_rows(execute(cql, table, "SELECT WRITETIME(v), pk FROM %s"), row(TIMESTAMP_2, 1))
         assert_rows(execute(cql, table, "SELECT pk, WRITETIME(v), v, ck FROM %s"), row(1, TIMESTAMP_2, 8, 2))
+
+# Reproduces #10953 (MAXWRITETIME) and #22075 (slice selection)
+@pytest.mark.xfail(reason="#10953, #22075")
+def testFrozenList(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v frozen<list<int>>)") as table:
+        # Null column
+        execute(cql, table, "INSERT INTO %s (k) VALUES (1) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v", NO_TIMESTAMP, NO_TTL)
+
+        # Create empty
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, []) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+        assertWritetimeAndTTL(cql, table, "v", TIMESTAMP_1, TTL_1)
+
+        # truncate, since previous columns would win on reconcilliation because of their TTL (CASSANDRA-14592)
+        execute(cql, table, "TRUNCATE TABLE %s")
+
+        # Update with a single element without TTL
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, [1]) USING TIMESTAMP ?", TIMESTAMP_1)
+        assertWritetimeAndTTL(cql, table, "v", TIMESTAMP_1, NO_TTL)
+
+        # Add a new element to the list with a new timestamp and a TTL
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, [1, 2, 3]) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_2, TTL_2)
+        assertWritetimeAndTTL(cql, table, "v", TIMESTAMP_2, TTL_2)
+
+        assertInvalidListElementSelection(cql, table, "v[1]", "v")
+        assertInvalidListSliceSelection(cql, table, "v[..0]", "v")
+        assertInvalidListSliceSelection(cql, table, "v[0..]", "v")
+        assertInvalidListSliceSelection(cql, table, "v[1..1]", "v")
+        assertInvalidListSliceSelection(cql, table, "v[1..2]", "v")
+
+        # Read multiple rows to verify selector reset
+        execute(cql, table, "TRUNCATE TABLE %s")
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (1, [1, 2, 3]) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (2, [1, 2]) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (3, [1]) USING TIMESTAMP ?", TIMESTAMP_1)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (4, []) USING TIMESTAMP ?", TIMESTAMP_2)
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (5, null) USING TIMESTAMP ?", TIMESTAMP_2)
+        assert_rows(execute(cql, table, "SELECT k, WRITETIME(v) FROM %s"),
+                    row(5, NO_TIMESTAMP),
+                    row(1, TIMESTAMP_1),
+                    row(2, TIMESTAMP_2),
+                    row(4, TIMESTAMP_2),
+                    row(3, TIMESTAMP_1))
