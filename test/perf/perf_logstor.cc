@@ -140,6 +140,10 @@
 //                    decoding the mutation. Includes the lookup of the location, since a read
 //                    starts from a key
 //   write            a whole write, up to and including the flush of the buffer its record went into
+//   write-frozen     a whole write of a frozen mutation, which is how a write reaches a replica. Its
+//                    partition is copied into the record value, and no mutation is built. Draws from
+//                    a pool of frozen mutations of up to 1024 keys, which is frozen before the test
+//                    starts, so the freeze, which the coordinator pays, is not in the number
 //
 // Everything above `raw-read` touches no disk - the two cache tests touch the cache, the rest touch
 // neither it nor the disk. They run `cpu_test_batch` operations per invocation of the measurement
@@ -284,6 +288,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
+#include "mutation/frozen_mutation.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "partition_slice_builder.hh"
@@ -332,6 +337,7 @@ enum class test_kind {
     read_disk,
     segment_read,
     write,
+    write_frozen,
 };
 
 const std::vector<std::pair<std::string_view, test_kind>> test_kinds = {
@@ -352,6 +358,7 @@ const std::vector<std::pair<std::string_view, test_kind>> test_kinds = {
     {"read-disk", test_kind::read_disk},
     {"segment-read", test_kind::segment_read},
     {"write", test_kind::write},
+    {"write-frozen", test_kind::write_frozen},
 };
 
 std::string_view name_of(test_kind kind) {
@@ -558,6 +565,8 @@ class logstor_bench {
     // A writer of that record, whose value is already encoded, for the append test, which is about
     // what the copy into the buffer costs and not about what encoding the value costs.
     std::optional<log_record_writer> _record_writer;
+    // The frozen mutations the write-frozen test draws from, see freeze_write_pool().
+    std::vector<frozen_mutation> _frozen_pool;
     // Takes the result of a step whose result is otherwise unused, so that the step is not optimized
     // away and cannot be hoisted out of the loop of the test that repeats it. Volatile because that
     // is what makes the store to it something the compiler has to keep; it costs the same load and
@@ -631,6 +640,25 @@ public:
     future<> do_write() {
         auto m = make_mutation(random_key());
         co_await _logstor->write(m, write_target{.cg = _group.get()}, db::no_timeout);
+    }
+
+    future<> do_write_frozen() {
+        const auto& fm = _frozen_pool[tests::random::get_int<size_t>(_frozen_pool.size() - 1)];
+        return _logstor->write(fm, *_schema, write_target{.cg = _group.get()}, db::no_timeout);
+    }
+
+    // Freezes the mutations of up to 1024 keys, spread over the dataset, for the write-frozen test.
+    // A frozen mutation keeps its timestamp, and the index does not replace an entry with an older
+    // one. The pool is frozen just before the test, so it is newer than what the tests before it
+    // wrote, and each write of it replaces the entry of its key as the write test does.
+    void freeze_write_pool() {
+        constexpr size_t max_pool_size = 1024;
+        const auto pool_size = std::min(max_pool_size, _keys.size());
+        _frozen_pool.clear();
+        _frozen_pool.reserve(pool_size);
+        for (size_t i = 0; i < pool_size; ++i) {
+            _frozen_pool.push_back(freeze(make_mutation(_keys[i * _keys.size() / pool_size])));
+        }
     }
 
     future<> do_read(const dht::decorated_key& key, const query::partition_slice& slice) {
@@ -1023,6 +1051,9 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return io_test(&logstor_bench::do_segment_read);
     case test_kind::write:
         return io_test(&logstor_bench::do_write);
+    case test_kind::write_frozen:
+        bench.invoke_on_all(&logstor_bench::freeze_write_pool).get();
+        return io_test(&logstor_bench::do_write_frozen);
     }
     on_internal_error(logstor_logger, "unknown test kind");
 }
