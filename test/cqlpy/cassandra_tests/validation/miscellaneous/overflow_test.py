@@ -61,6 +61,27 @@ def testIdentifiers(cql, test_keyspace):
         table_name = unique_name()
         assert_invalid_throw(cql, table, SyntaxException, f"CREATE TABLE {test_keyspace}.{table_name} (select int PRIMARY KEY, column int)")
 
+# Test table options
+# migrated from cql_tests.py:TestCQL.table_options_test()
+# Reproduces SCYLLADB-5142 (LCS's "fanout_size" option) and #8948
+# (compression options "class" and "enabled").
+@pytest.mark.xfail(reason="SCYLLADB-5142, #8948")
+def testTableOptions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "( k int PRIMARY KEY, c int ) WITH "
+                    + "comment = 'My comment' "
+                    + "AND gc_grace_seconds = 4 "
+                    + "AND bloom_filter_fp_chance = 0.01 "
+                    + "AND compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 10, 'fanout_size' : 5 } "
+                    + "AND compression = { 'enabled': false } "
+                    + "AND caching = { 'keys': 'ALL', 'rows_per_partition': 'ALL' }") as table:
+        execute(cql, table, "ALTER TABLE %s WITH "
+                + "comment = 'other comment' "
+                + "AND gc_grace_seconds = 100 "
+                + "AND bloom_filter_fp_chance = 0.1 "
+                + "AND compaction = { 'class': 'SizeTieredCompactionStrategy', 'min_sstable_size' : 42 } "
+                + "AND compression = { 'class' : 'SnappyCompressor' } "
+                + "AND caching = { 'rows_per_partition': 'ALL' }")
+
 # Migrated from cql_tests.py:TestCQL.unescaped_string_test()
 def testUnescapedString(cql, test_keyspace):
     with create_table(cql, test_keyspace, "( k text PRIMARY KEY, c text, )") as table:
