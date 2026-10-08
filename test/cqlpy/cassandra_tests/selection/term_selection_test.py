@@ -12,6 +12,7 @@ from ..porting import *
 from cassandra.util import Duration
 from decimal import Decimal
 import time
+import uuid
 
 # Notes on the translation of expected results with nested collections:
 # The driver returns set and map columns as special types, which assert_rows
@@ -543,3 +544,103 @@ def testSelectPrepared(cql, test_keyspace):
                         1, 2, "two"),
                     row(88, Decimal(10), "foo bar baz", (42, "ursus"),
                         1, 3, "three"))
+
+# Functions are created in a new keyspace (instead of the Java test's
+# KEYSPACE), which is dropped at the end of the test.
+REPLICATION = "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+
+def createFunction(cql, keyspace, query):
+    name = keyspace + "." + unique_name()
+    cql.execute(query.replace("%s", name, 1))
+    return name
+
+def createFunctionOverload(cql, name, query):
+    cql.execute(query.replace("%s", name, 1))
+
+MAX_JAVA = "return Math.max(val1, val2);"
+MAX_LUA = "if val1 > val2 then return val1 else return val2 end"
+
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause)
+@pytest.mark.xfail(reason="#5411")
+def testConstantFunctionArgs(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        fInt = createFunction(cql, KEYSPACE,
+                              "CREATE FUNCTION %s (val1 int, val2 int) " +
+                              "CALLED ON NULL INPUT " +
+                              "RETURNS int " +
+                              java_or_lua(cql, MAX_JAVA, MAX_LUA) + ";")
+        fFloat = createFunction(cql, KEYSPACE,
+                                "CREATE FUNCTION %s (val1 float, val2 float) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS float " +
+                                java_or_lua(cql, MAX_JAVA, MAX_LUA) + ";")
+        fText = createFunction(cql, KEYSPACE,
+                               "CREATE FUNCTION %s (val1 text, val2 text) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, "return val2;", "return val2") + ";")
+        fAscii = createFunction(cql, KEYSPACE,
+                                "CREATE FUNCTION %s (val1 ascii, val2 ascii) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS ascii " +
+                                java_or_lua(cql, "return val2;", "return val2") + ";")
+
+        with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, valInt int, valFloat float, valText text, valAscii ascii, valTimeuuid timeuuid)") as table:
+            execute(cql, table, "INSERT INTO %s (pk, valInt, valFloat, valText, valAscii, valTimeuuid) " +
+                    "VALUES (1, 10, 10.0, '100', '100', 2deb23e0-96b5-11e5-b26d-a939dd1405a3)")
+
+            assert_rows(execute(cql, table, "SELECT pk, " + fInt + "(valInt, 100) FROM %s"),
+                        row(1, 100))
+            assert_rows(execute(cql, table, "SELECT pk, " + fInt + "(valInt, (int)100) FROM %s"),
+                        row(1, 100))
+            assert_invalid_message(cql, table, "Type error: (bigint)100 cannot be passed as argument 1 of function",
+                                   "SELECT pk, " + fInt + "(valInt, (bigint)100) FROM %s")
+            assert_rows(execute(cql, table, "SELECT pk, " + fFloat + "(valFloat, (float)100.00) FROM %s"),
+                        row(1, 100.0))
+            assert_rows(execute(cql, table, "SELECT pk, " + fText + "(valText, 'foo') FROM %s"),
+                        row(1, "foo"))
+            assert_rows(execute(cql, table, "SELECT pk, " + fAscii + "(valAscii, (ascii)'foo') FROM %s"),
+                        row(1, "foo"))
+            # The check of fTimeuuid was moved to testConstantFunctionArgsTimeuuid
+            # below, because it fails on Cassandra.
+
+            # ambiguous
+
+            fAmbiguousFunc1 = createFunction(cql, KEYSPACE,
+                                             "CREATE FUNCTION %s (val1 int, val2 bigint) " +
+                                             "CALLED ON NULL INPUT " +
+                                             "RETURNS bigint " +
+                                             java_or_lua(cql, "return Math.max((long)val1, val2);", MAX_LUA) + ";")
+            assert_rows(execute(cql, table, "SELECT pk, " + fAmbiguousFunc1 + "(valInt, 100) FROM %s"),
+                        row(1, 100))
+            createFunctionOverload(cql, fAmbiguousFunc1,
+                                   "CREATE FUNCTION %s (val1 int, val2 int) " +
+                                   "CALLED ON NULL INPUT " +
+                                   "RETURNS int " +
+                                   java_or_lua(cql, MAX_JAVA, MAX_LUA) + ";")
+            assert_rows(execute(cql, table, "SELECT pk, " + fAmbiguousFunc1 + "(valInt, 100) FROM %s"),
+                        row(1, 100))
+
+# This is the part of the Java test testConstantFunctionArgs which checks a
+# function returning a timeuuid. It fails on Cassandra because of a Cassandra
+# bug: the result metadata describes the function's result type as the
+# custom type org.apache.cassandra.db.marshal.LegacyTimeUUIDType instead of
+# timeuuid, so the driver can't decode it and returns the raw bytes. The Java
+# test reads the result inside Cassandra, without this metadata, so it doesn't
+# notice. This is CASSANDRA-21735.
+# Reproduces #5411 (terms, such as type hints and collection literals, in the
+# selection clause)
+@pytest.mark.xfail(reason="#5411")
+def testConstantFunctionArgsTimeuuid(cql, test_keyspace, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        fTimeuuid = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s (val1 timeuuid, val2 timeuuid) " +
+                                   "CALLED ON NULL INPUT " +
+                                   "RETURNS timeuuid " +
+                                   java_or_lua(cql, "return val2;", "return val2") + ";")
+
+        with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, valTimeuuid timeuuid)") as table:
+            execute(cql, table, "INSERT INTO %s (pk, valTimeuuid) VALUES (1, 2deb23e0-96b5-11e5-b26d-a939dd1405a3)")
+            assert_rows(execute(cql, table, "SELECT pk, " + fTimeuuid + "(valTimeuuid, (timeuuid)34617f80-96b5-11e5-b26d-a939dd1405a3) FROM %s"),
+                        row(1, uuid.UUID("34617f80-96b5-11e5-b26d-a939dd1405a3")))
