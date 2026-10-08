@@ -342,3 +342,15 @@ def testFunctionExecutionExceptionNet(cql, test_keyspace):
 
         with pytest.raises(FunctionFailure):
             execute(cql, table, "SELECT " + fName + "(dval) FROM %s WHERE key = 1")
+
+# Reproduces SCYLLADB-5165 (function names with '/', '[' or ']' should be
+# rejected)
+@pytest.mark.xfail(reason="SCYLLADB-5165")
+def testRejectInvalidFunctionNamesOnCreation(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        for funcName in ["my/fancy/func", "my_other[fancy]func"]:
+            assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Function name '{funcName}' is invalid",
+                                   f'CREATE OR REPLACE FUNCTION {KEYSPACE_PER_TEST}."{funcName}"(val int) ' +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS int " +
+                                   java_or_lua(cql, "return val;", "return val"))
