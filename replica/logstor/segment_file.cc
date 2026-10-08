@@ -313,10 +313,10 @@ future<> file_manager::allocate_file(file_id_t file_id) {
     }
     // If the format of the file failed, it starts again here, when the retry interval has passed
     // since the failure. Before that, the allocation fails at once with the error of the failed
-    // format. A format failure is assumed to be temporary, and a failure that lasts is not handled.
-    // The format starts again only when a segment needs the file, so no timer runs it. A retry is
-    // safe, because format_file() does not change a file that it published, and it truncates the
-    // temporary file.
+    // format, and the caller uses a free segment instead. A format failure is assumed to be
+    // temporary, and a failure that lasts is not handled. The format starts again only when a
+    // segment needs the file, so no timer runs it. A retry is safe, because format_file() does not
+    // change a file that it published, and it truncates the temporary file.
     if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _cfg.format_retry_interval) {
         logstor_logger.debug("Trying again to format logstor file {}", file_path(file_id).string());
         start_next_file_format();
