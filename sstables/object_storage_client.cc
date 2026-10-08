@@ -145,7 +145,7 @@ public:
 
 static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, std::function<shared_ptr<s3::client>(std::string)> factory, s3::group_connections connections) {
     auto& epc = ep.get_s3_storage();
-    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, std::move(factory), connections);
+    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, std::move(factory), std::move(connections));
 }
 
 class s3_client_wrapper : public sstables::object_storage_client {
@@ -154,7 +154,7 @@ class s3_client_wrapper : public sstables::object_storage_client {
     object_storage_byte_metrics _byte_metrics;
 public:
     s3_client_wrapper(const db::object_storage_endpoint_param& ep, shard_client_factory cf, s3::group_connections connections)
-        : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), connections))
+        : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), std::move(connections)))
         , _cf(std::move(cf))
         , _byte_metrics(ep, [this] { return _client->bytes(); })
     {
@@ -203,7 +203,7 @@ public:
         auto& epc = ep.get_s3_storage();
         _client->update_config_sync(epc.region, epc.iam_role_arn);
     }
-    void update_group_connections(s3::group_connections connections) override {
+    void update_group_connections(const s3::group_connections& connections) override {
         _client->update_group_connections(connections);
     }
     future<> close() override {
@@ -468,7 +468,7 @@ public:
                     osclog.info("Old GCS client cleanup done, use_count={}", old_client.use_count());
                 });
     }
-    void update_group_connections(s3::group_connections) override {
+    void update_group_connections(const s3::group_connections&) override {
         // GCS client does not support per-scheduling-group connection budgeting
     }
     future<> close() override {
@@ -481,7 +481,7 @@ public:
 
 shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf, s3::group_connections connections) {
     if (ep.is_s3_storage()) {
-        return seastar::make_shared<s3_client_wrapper>(ep, std::move(cf), connections);
+        return seastar::make_shared<s3_client_wrapper>(ep, std::move(cf), std::move(connections));
     }
     if (ep.is_gs_storage()) {
         return seastar::make_shared<gs_client_wrapper>(ep, memory, std::move(cf));

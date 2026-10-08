@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 
@@ -26,18 +28,20 @@ struct aws_credentials {
     std::strong_ordering operator<=>(const aws_credentials& o) const = default;
 };
 
-using group_connections = unsigned;
+// Connection cap per scheduling group, keyed by group name. All service-level
+// groups share one pool under the "service_levels" key.
+using group_connections = std::unordered_map<std::string, unsigned>;
 
 struct endpoint_config {
-    static constexpr unsigned default_connections_per_shard = 128;
+    static constexpr unsigned default_max_connections = 128;
 
     unsigned port;
     bool use_https;
     std::string region;
     // Amazon Resource Names (ARNs) to access AWS resources
     std::string role_arn;
+    // Gives every scheduling group this cap, overriding the client's group_connections.
     std::optional<unsigned> max_connections;
-    unsigned connections_per_shard = default_connections_per_shard;
 
     std::strong_ordering operator<=>(const endpoint_config& o) const = default;
 };

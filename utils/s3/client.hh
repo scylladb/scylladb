@@ -138,6 +138,9 @@ class client : public enable_shared_from_this<client> {
 
     struct group_client {
         seastar::http::client http;
+        // http::client does not report the cap it was given, and the warning below
+        // names it when a pool outlives its configuration entry.
+        unsigned max_connections;
         uint64_t read_bytes = 0;
         uint64_t write_bytes = 0;
         uint64_t prefetch_bytes = 0;
@@ -147,7 +150,10 @@ class client : public enable_shared_from_this<client> {
         group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
-    std::unordered_map<seastar::scheduling_group, group_client> _https;
+    // Several scheduling groups can share one pool (see pool_name()), so _https maps each group to its pool.
+    std::unordered_map<sstring, group_client> _pools;
+    std::unordered_map<seastar::scheduling_group, group_client*> _https;
+    group_connections _group_connections;
     // Set by the owner that knows this client is the only one for its endpoint
     // on this shard. Unset means no object_storage metrics are reported.
     std::optional<utils::object_storage_metrics_labels> _object_storage_metrics_labels;
@@ -156,7 +162,6 @@ class client : public enable_shared_from_this<client> {
     std::unique_ptr<throttling_controller> _request_limiter;
     seastar::metrics::metric_groups _client_metrics;
     void register_client_metrics();
-    semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     std::unique_ptr<seastar::http::retry_strategy> _retry_strategy;
@@ -167,7 +172,7 @@ class client : public enable_shared_from_this<client> {
     future<> authorize(http::request&);
     future<group_client&> find_or_create_client();
     future<group_client&> find_or_create_client_slow();
-    future<> rebalance_connections();
+    std::optional<unsigned> max_connections(std::string_view pool_name) const;
 
     using error_handler = std::function<void(std::exception_ptr)>;
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
@@ -208,7 +213,7 @@ public:
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs,
                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
-    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, group_connections connections = endpoint_config::default_connections_per_shard);
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf, group_connections connections);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
