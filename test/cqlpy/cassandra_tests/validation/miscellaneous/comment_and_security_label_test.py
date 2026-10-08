@@ -211,3 +211,25 @@ def testSecurityLabelOnColumn(cql, new_to_cassandra_6):
         result = cql.execute(f"SECURITY LABEL FOR data_classifier ON COLUMN {columnRef} IS 'PII'")
         assertWarningsContain(result, "Provider functionality not implemented.")
         assertSecurityLabel(cql, "COLUMN", ks, columnRef, "PII")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentOnType(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        cql.execute(f"CREATE TYPE {ks}.{TYPE_NAME} (street text, city text, zip int)")
+        typeRef = f"{ks}.{TYPE_NAME}"
+        commentLifecycle(cql, "TYPE", ks, typeRef)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelOnType(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        typeName = "personal_info"
+        cql.execute(f"CREATE TYPE {ks}.{typeName} (ssn text, dob date)")
+        typeRef = f"{ks}.{typeName}"
+        securityLabelLifecycle(cql, "TYPE", ks, typeRef)
+
+        # Test provider warning
+        result = cql.execute(f"SECURITY LABEL FOR security_provider ON TYPE {typeRef} IS 'RESTRICTED'")
+        assertWarningsContain(result, "Provider functionality not implemented.")
+        assertSecurityLabel(cql, "TYPE", ks, typeRef, "RESTRICTED")
