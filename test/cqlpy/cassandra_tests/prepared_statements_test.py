@@ -140,3 +140,107 @@ def testInvalidatePreparedStatementsOnDrop(cql, version):
             session.execute(preparedBatch.bind((2, 2, "value2")))
         finally:
             session.execute(dropKsStatement)
+
+# The Java tests (in Cassandra 6) also check a prepared Accord transaction,
+# which we don't.
+def invalidatePreparedStatementOnAlter(cql, version, supportsMetadataChange):
+    KEYSPACE = unique_name()
+    createKsStatement = "CREATE KEYSPACE " + KEYSPACE + " WITH " + REPLICATION
+    dropKsStatement = "DROP KEYSPACE IF EXISTS " + KEYSPACE
+    with sessionNet(cql, version) as session:
+        createTableStatement = "CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".qp_cleanup (a int PRIMARY KEY, b int, c int);"
+        alterTableStatement = "ALTER TABLE " + KEYSPACE + ".qp_cleanup ADD d int;"
+
+        session.execute(dropKsStatement)
+        session.execute(createKsStatement)
+        try:
+            session.execute(createTableStatement)
+
+            select = "SELECT * FROM " + KEYSPACE + ".qp_cleanup"
+            preparedSelect = session.prepare(select)
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (%s, %s, %s);", (1, 2, 3))
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (%s, %s, %s);", (2, 3, 4))
+
+            assert_rows_ignoring_order(session.execute(preparedSelect.bind(())),
+                                       row(1, 2, 3),
+                                       row(2, 3, 4))
+
+            session.execute(alterTableStatement)
+
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c, d) VALUES (%s, %s, %s, %s);", (3, 4, 5, 6))
+
+            if supportsMetadataChange:
+                rs = session.execute(preparedSelect.bind(()))
+                assert len(rs.column_names) == 4
+                assert_rows_ignoring_order(rs,
+                                           row(1, 2, 3, None),
+                                           row(2, 3, 4, None),
+                                           row(3, 4, 5, 6))
+            else:
+                rs = session.execute(preparedSelect.bind(()))
+                assert len(rs.column_names) == 3
+                assert_rows_ignoring_order(rs,
+                                           row(1, 2, 3),
+                                           row(2, 3, 4),
+                                           row(3, 4, 5))
+        finally:
+            session.execute(dropKsStatement)
+
+@pytest.mark.parametrize("version", [V5])
+def testInvalidatePreparedStatementOnAlterV5(cql, version):
+    invalidatePreparedStatementOnAlter(cql, version, True)
+
+# With protocol version 4, the Java driver keeps using the result metadata it
+# got when it first prepared the statement, so the Java test expects to see
+# the table's old 3 columns after the ALTER TABLE. But the Python driver
+# updates the result metadata when it re-prepares the statement (which the
+# server invalidated on ALTER TABLE), so with protocol version 4 it sees the
+# new 4 columns - like with protocol version 5.
+def testInvalidatePreparedStatementOnAlterV4(cql):
+    invalidatePreparedStatementOnAlter(cql, V4, True)
+
+# The Java tests (in Cassandra 6) also check a prepared Accord transaction,
+# which we don't.
+def invalidatePreparedStatementOnAlterUnchangedMetadata(cql, version):
+    KEYSPACE = unique_name()
+    createKsStatement = "CREATE KEYSPACE " + KEYSPACE + " WITH " + REPLICATION
+    dropKsStatement = "DROP KEYSPACE IF EXISTS " + KEYSPACE
+    with sessionNet(cql, version) as session:
+        createTableStatement = "CREATE TABLE IF NOT EXISTS " + KEYSPACE + ".qp_cleanup (a int PRIMARY KEY, b int, c int);"
+        alterTableStatement = "ALTER TABLE " + KEYSPACE + ".qp_cleanup ADD d int;"
+
+        session.execute(dropKsStatement)
+        session.execute(createKsStatement)
+        try:
+            session.execute(createTableStatement)
+
+            select = "SELECT a, b, c FROM " + KEYSPACE + ".qp_cleanup"
+            preparedSelect = session.prepare(select)
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (%s, %s, %s);", (1, 2, 3))
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c) VALUES (%s, %s, %s);", (2, 3, 4))
+
+            rs = session.execute(preparedSelect.bind(()))
+            assert len(rs.column_names) == 3
+            assert_rows_ignoring_order(rs,
+                                       row(1, 2, 3),
+                                       row(2, 3, 4))
+
+            session.execute(alterTableStatement)
+
+            session.execute("INSERT INTO " + KEYSPACE + ".qp_cleanup (a, b, c, d) VALUES (%s, %s, %s, %s);", (3, 4, 5, 6))
+
+            rs = session.execute(preparedSelect.bind(()))
+            assert len(rs.column_names) == 3
+            assert_rows_ignoring_order(rs,
+                                       row(1, 2, 3),
+                                       row(2, 3, 4),
+                                       row(3, 4, 5))
+        finally:
+            session.execute(dropKsStatement)
+
+def testInvalidatePreparedStatementOnAlterUnchangedMetadataV4(cql):
+    invalidatePreparedStatementOnAlterUnchangedMetadata(cql, V4)
+
+@pytest.mark.parametrize("version", [V5])
+def testInvalidatePreparedStatementOnAlterUnchangedMetadataV5(cql, version):
+    invalidatePreparedStatementOnAlterUnchangedMetadata(cql, version)
