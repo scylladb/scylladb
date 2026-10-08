@@ -10,7 +10,7 @@
 
 from ...porting import *
 from ....util import new_cql
-from cassandra.protocol import FunctionFailure, Unauthorized
+from cassandra.protocol import FunctionFailure, ResultMessage, Unauthorized
 
 # Functions are created in a new keyspace (KEYSPACE_PER_TEST in the original
 # Java test), which is dropped at the end of the test.
@@ -69,6 +69,86 @@ def testNonExistingOnes(cql, test_keyspace):
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS " + KEYSPACE + ".func_does_not_exist(int,text)")
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS keyspace_does_not_exist.func_does_not_exist")
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS keyspace_does_not_exist.func_does_not_exist(int,text)")
+
+# The Java test's assertSchemaChange() checks the SCHEMA_CHANGE result of a
+# schema-changing statement. The Python driver doesn't expose this result,
+# so we use a new session whose protocol handler records it.
+def assertSchemaChange(cql, query, change, target, keyspace, name, *argTypes):
+    with new_cql(cql) as session:
+        events = []
+        class recording_handler(session.client_protocol_handler):
+            @classmethod
+            def decode_message(cls, *args, **kwargs):
+                msg = super().decode_message(*args, **kwargs)
+                if isinstance(msg, ResultMessage) and msg.schema_change_event:
+                    events.append(msg.schema_change_event)
+                return msg
+        session.client_protocol_handler = recording_handler
+        session.execute(query)
+    assert len(events) == 1
+    event = events[0]
+    assert event['change_type'] == change
+    assert event['target_type'] == target
+    assert event['keyspace'] == keyspace
+    assert event['function'].name == name
+    # Scylla reports a tuple nested in a collection as frozen<tuple<...>>,
+    # while Cassandra omits the (implied) frozen<>.
+    assert [t.replace("frozen<tuple<int, int>>", "tuple<int, int>") for t in event['function'].argument_types] == list(argTypes)
+
+# Reproduces SCYLLADB-5168 (CREATE OR REPLACE FUNCTION of an existing function
+# reports CREATED instead of UPDATED)
+@pytest.mark.xfail(reason="SCYLLADB-5168")
+def testSchemaChange(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        functionName = unique_name()
+        f = KEYSPACE + "." + functionName
+
+        assertSchemaChange(cql, "CREATE OR REPLACE FUNCTION " + f + "(state double, val double)" +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return Double.valueOf(Math.max(state, val));",
+                                       "if state > val then return state end return val"),
+                           "CREATED",
+                           "FUNCTION",
+                           KEYSPACE, functionName,
+                           "double", "double")
+
+        assertSchemaChange(cql, "CREATE OR REPLACE FUNCTION " + f + "(state int, val int) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS int " +
+                           java_or_lua(cql, "return Integer.valueOf(Math.max(state, val));",
+                                       "if state > val then return state end return val"),
+                           "CREATED",
+                           "FUNCTION",
+                           KEYSPACE, functionName,
+                           "int", "int")
+
+        assertSchemaChange(cql, "CREATE OR REPLACE FUNCTION " + f + "(state int, val int) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS int " +
+                           java_or_lua(cql, "return Integer.valueOf(Math.min(state, val));",
+                                       "if state < val then return state end return val"),
+                           "UPDATED",
+                           "FUNCTION",
+                           KEYSPACE, functionName,
+                           "int", "int")
+
+        assertSchemaChange(cql, "DROP FUNCTION " + f + "(double, double)",
+                           "DROPPED", "FUNCTION",
+                           KEYSPACE, functionName,
+                           "double", "double")
+
+        # The function with nested tuple should be created without throwing InvalidRequestException. See CASSANDRA-15857
+        flName = unique_name()
+        fl = KEYSPACE + "." + flName
+
+        assertSchemaChange(cql, "CREATE OR REPLACE FUNCTION " + fl + "(state list<tuple<int, int>>, val double) " +
+                           "RETURNS NULL ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return val;", "return val"),
+                           "CREATED", "FUNCTION",
+                           KEYSPACE, flName,
+                           "list<tuple<int, int>>", "double")
 
 def testFunctionDropOnKeyspaceDrop(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
