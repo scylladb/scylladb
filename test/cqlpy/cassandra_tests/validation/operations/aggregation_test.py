@@ -1008,6 +1008,34 @@ def testJavaAggregateComplex(cql):
 # The test testFunctionDropPreparedStatement was not translated, because it
 # checks Cassandra's internal cache of prepared statements.
 
+# This test fails on Cassandra because of a Cassandra bug: when an authorizer
+# is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
+# SFUNC or FINALFUNC fails with a NoSuchElementException server error,
+# instead of an InvalidRequest. This is CASSANDRA-21734.
+def testAggregatesReferencedInAggregates(cql, cassandra_bug):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, " return a + b;", "return a + b"))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int ")
+
+        assert_invalid_message_re(cql, ks, FUNCTION_DOESNT_EXIST_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggInv(int) " +
+                             "SFUNC " + shortFunctionName(a) + " " +
+                             "STYPE int ")
+
+        assert_invalid_message_re(cql, ks, NOT_A_SCALAR_FUNCTION_MESSAGE,
+                             "CREATE AGGREGATE " + ks + ".aggInv(int) " +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(a))
+
 # Reproduces SCYLLADB-5158 (CREATE AGGREGATE should reject a RETURNS NULL ON
 # NULL INPUT state function without INITCOND) and #24344 (such a state
 # function called with null should leave the state unchanged).
