@@ -26,6 +26,8 @@ struct aws_credentials {
     std::strong_ordering operator<=>(const aws_credentials& o) const = default;
 };
 
+using group_connections = unsigned;
+
 struct endpoint_config {
     static constexpr unsigned default_connections_per_shard = 128;
 
