@@ -220,12 +220,19 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
 }
 
 void compression::set_compressor(compressor_ptr c) {
-    options.elements.clear();
-    if (c) {
+    if (!c) {
+        options.elements.clear();
+    } else {
         unqualified_name uqn(compression_parameters::name_prefix, c->name());
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
-        for (auto& [k, v] : c->options()) {
+        auto c_options = c->options();
+        // Replace only what the compressor owns; other on-disk options such as crc_check_chance must survive a load.
+        auto [first, last] = std::ranges::remove_if(options.elements, [&] (const option& o) {
+            return c_options.contains(sstring(o.key.value.begin(), o.key.value.end()));
+        });
+        options.elements.erase(first, last);
+        for (auto& [k, v] : c_options) {
             if (k != compression_parameters::SSTABLE_COMPRESSION) {
                 options.elements.push_back({
                     {bytes(k.begin(), k.end())},

@@ -491,6 +491,23 @@ static void do_test_link_with_rewritten_component_size(test_env& env) {
     BOOST_REQUIRE_EQUAL(after_size, new_sst->bytes_on_disk());
 }
 
+// The options in CompressionInfo.db outlive both the write and a reload.
+SEASTAR_TEST_CASE(test_compression_options_survive_reload) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type)
+                .set_compressor_params(compression_parameters({{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}}))
+                .build();
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(1)));
+        m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(1), 1);
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(m)}).get();
+        for (const auto& x : {sst, env.reusable_sst(sst).get()}) {
+            BOOST_REQUIRE_EQUAL(options_from_compression(x->get_compression()).at("crc_check_chance"), "1.0");
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_link_with_rewritten_component_bytes_on_disk) {
     return test_env::do_with_async(do_test_link_with_rewritten_component_size);
 }
