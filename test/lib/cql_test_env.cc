@@ -628,6 +628,8 @@ private:
             auto schema_initializer_checkpoint = schema_builder::capture_schema_initializers_checkpoint();
             register_compression_initializer(*cfg, [this] {
                 return bool(_feature_service.local().sstable_compression_dicts);
+            }, [this] {
+                return bool(_feature_service.local().sstable_raw_chunks);
             });
             register_speculative_retry_initializer(*cfg);
 

@@ -927,6 +927,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //   because this particular initializer depends on `db::extensions::is_extension_internal_keyspace()`.
             register_compression_initializer(*cfg, [&feature_service] {
                 return bool(feature_service.local().sstable_compression_dicts);
+            }, [&feature_service] {
+                return bool(feature_service.local().sstable_raw_chunks);
             });
 
             // Register the default speculative_retry value for user tables.
@@ -2590,10 +2592,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Adding here (i.e., after `join_cluster`) to ensure that the
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
             const auto dicts_feature_enabled = bool(feature_service.local().sstable_compression_dicts);
+            const auto raw_chunks_feature_enabled = bool(feature_service.local().sstable_raw_chunks);
 
             try {
-                cfg->get_sstable_compression_user_table_options(dicts_feature_enabled).validate(
-                        compression_parameters::dicts_feature_enabled(dicts_feature_enabled));
+                cfg->get_sstable_compression_user_table_options(dicts_feature_enabled, raw_chunks_feature_enabled).validate(
+                        compression_parameters::dicts_feature_enabled(dicts_feature_enabled),
+                        compression_parameters::raw_chunks_feature_enabled(raw_chunks_feature_enabled));
             } catch (const std::exception& e) {
                 startlog.error("Invalid sstable_compression_user_table_options: {}", e.what());
                 throw bad_configuration_error();
