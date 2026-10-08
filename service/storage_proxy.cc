@@ -6995,8 +6995,12 @@ static read_timeout_exception write_timeout_to_read(mutation_write_timeout_excep
     return read_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, false);
 }
 
+// The message of the converted exception already lists the failed replicas.
+// The map is assigned after construction, so the replicas are listed once.
 static read_failure_exception write_failure_to_read(mutation_write_failure_exception& ex) {
-    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false, std::move(ex.failed_replicas));
+    auto e = read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+    e.failed_replicas = std::move(ex.failed_replicas);
+    return e;
 }
 
 static mutation_write_timeout_exception read_timeout_to_write(read_timeout_exception& ex) {
@@ -7004,7 +7008,9 @@ static mutation_write_timeout_exception read_timeout_to_write(read_timeout_excep
 }
 
 static mutation_write_failure_exception read_failure_to_write(read_failure_exception& ex) {
-    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS, std::move(ex.failed_replicas));
+    auto e = mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
+    e.failed_replicas = std::move(ex.failed_replicas);
+    return e;
 }
 
 /**
