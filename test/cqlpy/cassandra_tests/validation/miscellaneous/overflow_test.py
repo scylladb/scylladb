@@ -166,3 +166,14 @@ def testNanInfinityValues(cql, test_keyspace):
 
         assert math.isinf(selected[2][0]) #-inf
         assert selected[2][0] < 0
+
+# Migrated from cql_tests.py:TestCQL.blobAs_functions_test()
+# Reproduces SCYLLADB-5141 (snake_case names of native functions).
+@pytest.mark.xfail(reason="SCYLLADB-5141")
+def testBlobAsFunction(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
+        #  A blob that is not 4 bytes should be rejected
+        assert_invalid(cql, table, "INSERT INTO %s (k, v) VALUES (0, blob_as_int(0x01))")
+
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (0, blob_as_int(0x00000001))")
+        assert_rows(execute(cql, table, "select v from %s where k=0"), row(1))
