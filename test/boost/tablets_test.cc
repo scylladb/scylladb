@@ -8990,6 +8990,63 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_erm_replication_factor) {
         BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 1u); // unknown alone, below the configured 2
     }
 
+    // A keyspace which does not replicate to the local datacenter has no cache slot for
+    // it, so every query takes the counting path. Repeated to cover both the first query
+    // and a repeat.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h5, h6})});
+        auto erm = make_erm(std::move(tmap), {{"dc2", sstring("2")}});
+        for (int round = 0; round < 2; ++round) {
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 0u);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+        }
+    }
+
+    // A tablet which lags behind a replication factor drop to 0 still reports the dc1
+    // replicas it kept, although dc1 has no cache slot.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h2, h5, h6})});
+        auto erm = make_erm(std::move(tmap), {{"dc2", sstring("2")}});
+        for (int round = 0; round < 2; ++round) {
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 1u);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+        }
+    }
+
+    // Tablets with different replica counts, queried repeatedly and interleaved across
+    // datacenters, so that every tablet and datacenter pair is both filled and read back.
+    {
+        std::vector<std::vector<host_id>> tablet_replicas = {
+            {h1, h2, h5},     // dc1: 2, dc2: 1
+            {h2, h3, h4, h5}, // dc1: 3, dc2: 1
+            {h5, h6},         // dc1: 0, dc2: 2
+            {h1, h5, h6},     // dc1: 1, dc2: 2
+        };
+        tablet_map tmap(tablet_replicas.size());
+        auto tid = tmap.first_tablet();
+        std::vector<dht::token> tokens;
+        for (const auto& hosts : tablet_replicas) {
+            tmap.set_tablet(tid, tablet_info{replicas(hosts)});
+            tokens.push_back(tmap.get_last_token(tid));
+            if (auto next = tmap.next_tablet(tid)) {
+                tid = *next;
+            }
+        }
+        auto erm = make_erm(std::move(tmap));
+
+        auto expected_dc1 = std::vector<size_t>{2, 3, 0, 1};
+        auto expected_dc2 = std::vector<size_t>{1, 1, 2, 2};
+        for (int round = 0; round < 2; ++round) {
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i], "dc1"), expected_dc1[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i], "dc2"), expected_dc2[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i]), tablet_replicas[i].size());
+            }
+        }
+    }
+
     // EACH_QUORUM: a tablet lagging behind dc1's drop to RF 0 still holds a dc1 replica,
     // which gets no quota, so the per-datacenter quotas add up to block_for.
     {

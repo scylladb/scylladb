@@ -26,6 +26,8 @@
 #include <flat_set>
 #include <iterator>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 
 #include <fmt/ranges.h>
 
@@ -1541,9 +1543,27 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
 }
 
 class tablet_effective_replication_map : public effective_replication_map {
+    // Cache entry for a tablet and datacenter pair whose replica count was not computed yet.
+    static constexpr uint8_t rf_not_cached = 0;
+    // Replica counts are cached as rf + 1, which leaves the largest one uncacheable.
+    static constexpr size_t max_cached_rf = std::numeric_limits<uint8_t>::max() - 1;
+
     table_id _table;
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
+    // Set once _cached_dcs and _dc_rf are both in place, so that a build which fails
+    // half way is retried instead of leaving the two out of step.
+    mutable bool _dc_cache_built = false;
+    // Datacenters a replica count can be cached for, the local one first so that the
+    // consistency levels which ask for it match on the first comparison. Empty when the
+    // keyspace replicates to no datacenter the topology knows.
+    mutable utils::small_vector<sstring, 4> _cached_dcs;
+    // Read replica count per tablet, one array per entry of _cached_dcs, each allocated
+    // when that datacenter is first asked about. A workload which only ever asks for the
+    // local datacenter pays for one array.
+    // The erm is an immutable snapshot of topology and tablet metadata, and must only be
+    // used on the shard which built it, so a cached count can neither go stale nor race.
+    mutable utils::small_vector<utils::chunked_vector<uint8_t>, 4> _dc_rf;
 private:
     host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
         host_id_vector_replica_set result;
@@ -1616,6 +1636,65 @@ private:
                               _table, tablet, unplaceable, datacenter, placed, configured, result.count);
         }
         return result;
+    }
+
+    // Builds the datacenter list. Called on first use, so that an erm nothing asks for a
+    // per-datacenter replication factor costs nothing.
+    void build_dc_cache() const {
+        const auto& topo = get_topology();
+        const auto& rs = get_tablet_aware_strategy();
+        const sstring& local_dc = topo.get_datacenter();
+        // Built into a local and committed at the end, so that a failed allocation leaves
+        // the erm on the counting path instead of leaving _cached_dcs longer than _dc_rf.
+        utils::small_vector<sstring, 4> dcs;
+        // The local datacenter goes first, so that LOCAL_ONE, LOCAL_QUORUM and
+        // LOCAL_SERIAL match on the first comparison. A datacenter the keyspace does not
+        // replicate to gets no slot: it holds replicas only while a tablet lags behind a
+        // replication factor change, so an array for it would be spent on zeros.
+        if (rs.get_replication_factor_data(local_dc)) {
+            dcs.push_back(local_dc);
+        }
+        for (const auto& dc : topo.get_datacenters()) {
+            if (dc != local_dc && rs.get_replication_factor_data(dc)) {
+                dcs.push_back(dc);
+            }
+        }
+        _dc_rf.resize(dcs.size());
+        _cached_dcs = std::move(dcs);
+        _dc_cache_built = true;
+    }
+
+    // Replica count per tablet and datacenter, memoized. LOCAL_ONE, LOCAL_QUORUM and
+    // LOCAL_SERIAL ask for the local datacenter on every request, and EACH_QUORUM asks
+    // for each one; the remaining consistency levels use the total replica count, which
+    // needs no cache. A count which is not exact is not cached, so it keeps being
+    // recomputed and keeps reporting the replica which cannot be placed.
+    size_t get_cached_replication_factor(tablet_id tablet, const sstring& datacenter) const {
+        if (!_dc_cache_built) [[unlikely]] {
+            build_dc_cache();
+        }
+        auto dc = std::ranges::find(_cached_dcs, datacenter);
+        if (dc == _cached_dcs.end()) [[unlikely]] {
+            // A datacenter with no slot still holds replicas while a tablet lags behind a
+            // replication factor change, and still takes unplaceable ones, so it is counted.
+            return count_replicas_in_dc(tablet, get_tablet_map().get_replicas_for_reading(tablet), datacenter).count;
+        }
+        auto& counts = _dc_rf[dc - _cached_dcs.begin()];
+        if (counts.empty()) [[unlikely]] {
+            counts.resize(get_tablet_map().tablet_count());
+        }
+        if (tablet.value() >= counts.size()) [[unlikely]] {
+            return count_replicas_in_dc(tablet, get_tablet_map().get_replicas_for_reading(tablet), datacenter).count;
+        }
+        auto& entry = counts[tablet.value()];
+        if (entry != rf_not_cached) {
+            return entry - 1;
+        }
+        auto rf = count_replicas_in_dc(tablet, get_tablet_map().get_replicas_for_reading(tablet), datacenter);
+        if (rf.exact && rf.count <= max_cached_rf) {
+            entry = rf.count + 1;
+        }
+        return rf.count;
     }
 
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
@@ -1705,7 +1784,7 @@ public:
 
     virtual size_t get_replication_factor_for_reading(token search_token, const sstring& datacenter) const override {
         auto tablet = get_tablet_map().get_tablet_id(search_token);
-        auto rf = count_replicas_in_dc(tablet, get_tablet_map().get_replicas_for_reading(tablet), datacenter).count;
+        auto rf = get_cached_replication_factor(tablet, datacenter);
         tablet_logger.trace("get_replication_factor_for_reading({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
         return rf;
     }
@@ -1721,7 +1800,12 @@ public:
     virtual size_t get_replication_factor_for_writing(token search_token, const sstring& datacenter) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto rf = count_replicas_in_dc(tablet, tablets.get_replicas_for_writing(tablet), datacenter).count;
+        const auto& replicas = tablets.get_replicas_for_writing(tablet);
+        // The cache holds read set counts. The write set is another object only in
+        // write_both_read_new, which is counted on every call.
+        auto rf = &replicas == &tablets.get_replicas_for_reading(tablet)
+                ? get_cached_replication_factor(tablet, datacenter)
+                : count_replicas_in_dc(tablet, replicas, datacenter).count;
         tablet_logger.trace("get_replication_factor_for_writing({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
         return rf;
     }
