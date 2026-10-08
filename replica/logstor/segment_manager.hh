@@ -79,35 +79,6 @@ struct segment_manager_usage {
     size_t memory_usage{0};
 };
 
-struct table_segment_histogram_bucket {
-    size_t count;
-    size_t max_data_size;
-
-    table_segment_histogram_bucket& operator+=(table_segment_histogram_bucket& other) {
-        count += other.count;
-        max_data_size = std::max(max_data_size, other.max_data_size);
-        return *this;
-    }
-};
-
-struct table_segment_stats {
-    size_t compaction_group_count{0};
-    size_t segment_count{0};
-    uint64_t live_record_bytes{0};
-    std::vector<table_segment_histogram_bucket> histogram;
-
-    table_segment_stats& operator+=(table_segment_stats& other) {
-        compaction_group_count += other.compaction_group_count;
-        segment_count += other.segment_count;
-        live_record_bytes += other.live_record_bytes;
-        histogram.resize(std::max(histogram.size(), other.histogram.size()));
-        for (size_t i = 0; i < other.histogram.size(); i++) {
-            histogram[i] += other.histogram[i];
-        }
-        return *this;
-    }
-};
-
 struct segment_snapshot {
     log_segment_id segment_id;
     segment_ref seg_ref;
