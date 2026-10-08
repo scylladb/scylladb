@@ -673,3 +673,147 @@ def testJavaAggregateInvalidInitcond(cql):
                              "STYPE int " +
                              "FINALFUNC " + shortFunctionName(fFinal) + " " +
                              "INITCOND 'foobar'")
+
+def testJavaAggregate(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int " +
+                            "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                            "INITCOND 42")
+
+        assert_rows(execute(cql, table, "SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(a)),
+                   row("42"))
+
+        # 42 + 1 + 2 + 3 = 48
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row("48"))
+
+        execute(cql, table, "DROP AGGREGATE " + a + "(int)")
+
+        execute(cql, table, "DROP FUNCTION " + fFinal + "(int)")
+        execute(cql, table, "DROP FUNCTION " + fState + "(int, int)")
+
+        assert_invalid_message(cql, table, "Unknown function", "SELECT " + a + "(b) FROM %s")
+
+def testJavaAggregateSimple(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int")
+
+        # 1 + 2 + 3 = 6
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row(6))
+
+        execute(cql, table, "DROP AGGREGATE " + a + "(int)")
+
+        execute(cql, table, "DROP FUNCTION " + fState + "(int, int)")
+
+        assert_invalid_message(cql, table, "Unknown function", "SELECT " + a + "(b) FROM %s")
+
+def testJavaAggregateEmpty(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int")
+
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row(None))
+
+# Reproduces #14404 (an aggregate with an empty collection as INITCOND returns
+# null instead of the empty collection).
+@pytest.mark.xfail(reason="#14404")
+def testJavaAggregateStateEmpty(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b uuid)") as table:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(state map<uuid, int>, type uuid) " +
+                                "RETURNS NULL ON NULL INPUT " +
+                                "RETURNS map<uuid, int> " +
+                                java_or_lua(cql, "return state;", "return state"))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(uuid) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE map<uuid, int> " +
+                            "INITCOND {}")
+
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row({}))
+
+def testJavaAggregateComplex(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        # build an average aggregation function using
+        # tuple<bigint,int> as state
+        # double as finaltype
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a tuple<bigint, int>, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS tuple<bigint, int> " +
+                                java_or_lua(cql,
+                                    "a.setLong(0, a.getLong(0) + b.intValue());" +
+                                    "a.setInt(1, a.getInt(1) + 1);" +
+                                    "return a;",
+                                    "a[1] = a[1] + b a[2] = a[2] + 1 return a"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a tuple<bigint, int>) " +
+                                "RETURNS NULL ON NULL INPUT " +
+                                "RETURNS double " +
+                                java_or_lua(cql,
+                                    "double r = a.getLong(0);" +
+                                    "r /= a.getInt(1);" +
+                                    "return Double.valueOf(r);",
+                                    "return a[1] / a[2]"))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE tuple<bigint, int> "+
+                            "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                            "INITCOND (0, 0)")
+
+        assert_rows(execute(cql, table, "SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(a)),
+                   row("(0, 0)"))
+
+        # 1 + 2 + 3 = 6 / 3 = 2
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row(2.0))
+
+# The test testFunctionDropPreparedStatement was not translated, because it
+# checks Cassandra's internal cache of prepared statements.
