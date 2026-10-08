@@ -91,3 +91,45 @@ def testFunctionDropOnKeyspaceDrop(cql):
 # testDropKeyspaceContainingFunctionDropsPreparedStatementsWithDelayedValues
 # were not translated, because they check Cassandra's internal cache of
 # prepared statements.
+
+# Reproduces #13746 (a function in WHERE or in INSERT values)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testFunctionExecution(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(v text PRIMARY KEY)") as table:
+        execute(cql, table, "INSERT INTO %s(v) VALUES (?)", "aaa")
+
+        fRepeat = createFunction(cql, KEYSPACE_PER_TEST,
+                                 "CREATE FUNCTION %s(v text, n int) " +
+                                 "RETURNS NULL ON NULL INPUT " +
+                                 "RETURNS text " +
+                                 java_or_lua(cql,
+                                             "StringBuilder sb = new StringBuilder();\n" +
+                                             "    for (int i = 0; i < n; i++)\n" +
+                                             "        sb.append(v);\n" +
+                                             "    return sb.toString();",
+                                             "local s = \"\"\n" +
+                                             "    for i = 1, n do\n" +
+                                             "        s = s .. v\n" +
+                                             "    end\n" +
+                                             "    return s"))
+
+        assert_rows(execute(cql, table, "SELECT v FROM %s WHERE v=" + fRepeat + "(?, ?)", "a", 3), row("aaa"))
+        assert_empty(execute(cql, table, "SELECT v FROM %s WHERE v=" + fRepeat + "(?, ?)", "a", 2))
+
+# Reproduces #13746 (a function in WHERE or in INSERT values)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testFunctionExecutionWithReversedTypeAsOutput(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(k int, v text, PRIMARY KEY(k, v)) WITH CLUSTERING ORDER BY (v DESC)") as table:
+        fRepeat = createFunction(cql, KEYSPACE_PER_TEST,
+                                 "CREATE FUNCTION %s(v text) " +
+                                 "RETURNS NULL ON NULL INPUT " +
+                                 "RETURNS text " +
+                                 java_or_lua(cql, "return v + v;", "return v .. v"))
+
+        execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, " + fRepeat + "(?))", 1, "a")
