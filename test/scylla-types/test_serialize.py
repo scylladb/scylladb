@@ -64,3 +64,27 @@ def test_serialize_full_compound_single_component(scylla_types):
 def test_serialize_full_compound_too_few_values(scylla_types_fails_with):
     scylla_types_fails_with("serialize", "--full-compound", "-t", "Int32Type", "-t", "UTF8Type", "--", "1",
                             error="expected 2 (number of subtypes) values for non-prefix compound type, got 1")
+
+
+def test_serialize_tuple(scylla_types):
+    res = scylla_types("serialize", "-t", "TupleType(Int32Type,UTF8Type)", "--", "1:a")
+    assert res.stdout == "00000004000000010000000161\n"
+
+
+@pytest.mark.parametrize("type_name", [
+    "ListType(Int32Type)",
+    "SetType(Int32Type)",
+    "MapType(Int32Type,UTF8Type)",
+    "FrozenType(ListType(Int32Type))",
+    "ReversedType(ListType(Int32Type))",
+    "VectorType(FloatType,3)",
+    "TupleType(Int32Type,ListType(Int32Type))",
+])
+def test_serialize_unsupported_type(scylla_types_fails_with, type_name):
+    """Values of collection and vector types cannot be serialized, the tool should reject them cleanly."""
+    scylla_types_fails_with("serialize", "-t", type_name, "--", "1", error="is not supported")
+
+
+def test_serialize_unsupported_type_in_compound(scylla_types_fails_with):
+    scylla_types_fails_with("serialize", "--prefix-compound", "-t", "Int32Type", "-t", "FrozenType(ListType(Int32Type))", "--", "1", "1",
+                            error="error: serializing values of type frozen<list<int>> is not supported")

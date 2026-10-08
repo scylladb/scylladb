@@ -10,6 +10,7 @@
 
 #include <fmt/ranges.h>
 #include "keys/compound.hh"
+#include "types/tuple.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
@@ -43,6 +44,30 @@ using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variable
 using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
 using operation_func_variant = std::variant<bytes_func, string_func>;
 
+// abstract_type::from_string() is not implemented for collections and
+// vectors, it aborts. Tuples (and UDTs) are supported, as long as their
+// fields are.
+bool can_parse_from_string(const abstract_type& type) {
+    const auto& t = type.without_reversed();
+    if (t.is_collection() || t.is_vector()) {
+        return false;
+    }
+    if (t.is_tuple()) {
+        return std::ranges::all_of(static_cast<const tuple_type_impl&>(t).all_types(), [] (const data_type& field_type) {
+            return can_parse_from_string(*field_type);
+        });
+    }
+    return true;
+}
+
+managed_bytes from_string(const data_type& type, const sstring& value) {
+    if (!can_parse_from_string(*type)) {
+        throw std::invalid_argument(fmt::format("error: serializing values of type {} is not supported: collections and vectors (including those nested"
+                " in tuples and UDTs) cannot be parsed from their string representation", type->cql3_type_name()));
+    }
+    return type->from_string(value);
+}
+
 struct serializing_visitor {
     const std::vector<sstring>& values;
 
@@ -50,7 +75,7 @@ struct serializing_visitor {
         if (values.size() != 1) {
             throw std::runtime_error(fmt::format("serialize_handler(): expected 1 value for non-compound type, got {}", values.size()));
         }
-        return managed_bytes(type->from_string(values.front()));
+        return from_string(type, values.front());
     }
     template <allow_prefixes AllowPrefixes>
     managed_bytes operator()(const compound_type<AllowPrefixes>& type) {
@@ -66,7 +91,7 @@ struct serializing_visitor {
         std::vector<bytes> serialized_values;
         serialized_values.reserve(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
-            serialized_values.push_back(to_bytes(type.types().at(i)->from_string(values.at(i))));
+            serialized_values.push_back(to_bytes(from_string(type.types().at(i), values.at(i))));
         }
         return type.serialize_value(serialized_values);
     }
@@ -275,8 +300,9 @@ To avoid boost::program_options trying to interpret values with special
 characters like '-' as options, separate values from the rest of the arguments
 with '--'.
 
-Only atomic, regular types are supported for now, collections, UDT and tuples are
-not supported, not even in frozen form.
+Values of collection and vector types (including tuples and UDTs, which have
+fields of such types) cannot be serialized, such values are rejected with an
+error.
 
 Examples:
 
