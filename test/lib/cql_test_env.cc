@@ -1047,6 +1047,7 @@ private:
                 std::ref(_view_builder), std::ref(_view_building_worker),
                 std::ref(_qp),
                 std::ref(_sl_controller),
+                std::ref(_cluster_config_manager),
                 std::ref(_auth_cache),
                 std::ref(_client_routes),
                 std::ref(_topology_state_machine),

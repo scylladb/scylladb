@@ -14,6 +14,7 @@
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
+#include "service/tablet_operation.hh"
 #include "service/topology_guard.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -36,6 +37,7 @@ class storage_proxy;
 
 namespace db {
 
+class cluster_config_manager;
 class system_keyspace;
 class system_distributed_keyspace;
 class batchlog_manager;
@@ -133,6 +135,7 @@ private:
     sharded<db::view::view_building_worker>& _view_building_worker;
     shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
+    sharded<db::cluster_config_manager>& _cluster_config;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
@@ -173,7 +176,7 @@ private:
     gc_clock::time_point _flush_hints_batchlog_time;
     future<std::tuple<bool, bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<locator::host_id> ignore_nodes);
+            std::unordered_set<locator::host_id> ignore_nodes, abort_source& as);
 
     config _config;
     static config default_config() { return {}; }
@@ -193,6 +196,7 @@ public:
             sharded<db::view::view_building_worker>& vbw,
             tasks::task_manager& tm,
             service::migration_manager& mm,
+            sharded<db::cluster_config_manager>& ccm,
             size_t max_repair_memory,
             repair_service::config cfg = default_config()
             );
@@ -257,14 +261,14 @@ private:
     future<> reset_node_ops_progress(streaming::stream_reason reason);
 
 public:
-    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
+    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage, service::tablet_repair_flush_info flush);
 
 private:
     struct tablet_repair_result {
         gc_clock::time_point flush_time;
         bool should_flush_and_flush_failed;
     };
-    future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
+    future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, service::tablet_repair_flush_info flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, abort_source& as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_data_sync_repair(size_t& cfs_size, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, abort_source& as, service::frozen_topology_guard frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
 

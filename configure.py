@@ -1412,6 +1412,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/topology_state_machine.cc',
                 'service/topology_mutation.cc',
                 'service/topology_coordinator.cc',
+                'service/hints_batchlog_flusher.cc',
                 'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
@@ -1749,6 +1750,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/group0_cmd_merge_test.cc',
     'test/boost/group0_test.cc',
     'test/boost/group0_voter_calculator_test.cc',
+    'test/boost/hints_batchlog_flusher_test.cc',
     'test/boost/index_with_paging_test.cc',
     'test/boost/json_cql_query_test.cc',
     'test/boost/large_data_guardrail_test.cc',
@@ -1841,7 +1843,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
     "test/lib/log.cc",
 ]
 deps['test/boost/expr_test'] = ['test/boost/expr_test.cc', 'test/lib/expr_test_utils.cc'] + scylla_core + alternator
-deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc']
+deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc', 'utils/rate_limiter.cc']
 deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized_test.cc', 'utils/exceptions.cc']
 deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_test.cc', 'utils/exceptions.cc']
 

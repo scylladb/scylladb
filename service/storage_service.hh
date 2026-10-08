@@ -73,6 +73,7 @@ class stream_manager;
 }
 
 namespace db {
+class cluster_config_manager;
 class system_distributed_keyspace;
 class system_keyspace;
 class batchlog_manager;
@@ -212,6 +213,7 @@ private:
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
     sharded<qos::service_level_controller>& _sl_controller;
+    sharded<db::cluster_config_manager>& _cluster_config;
     auth::cache& _auth_cache;
     sharded<client_routes_service>& _client_routes;
 
@@ -233,7 +235,7 @@ private:
     shared_ptr<service::topo::task_manager_module> _global_topology_requests_module;
     shared_ptr<service::vnodes_to_tablets::task_manager_module> _vnodes_to_tablets_migration_module;
     gms::gossip_address_map& _address_map;
-    future<service::tablet_operation_repair_result> repair_tablet(locator::global_tablet_id, service::session_id);
+    future<service::tablet_operation_repair_result> repair_tablet(locator::global_tablet_id, service::session_id, std::optional<tablet_repair_flush_info> flush);
     future<> stream_tablet(locator::global_tablet_id);
     // Clones storage of leaving tablet into pending one. Done in the context of intra-node migration,
     // when both of which sit on the same node. So all the movement is local.
@@ -278,6 +280,7 @@ public:
         sharded<db::view::view_building_worker>& view_building_worker,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
+        sharded<db::cluster_config_manager>& cluster_config,
         auth::cache& auth_cache,
         sharded<client_routes_service>& _client_routes,
         topology_state_machine& topology_state_machine,
