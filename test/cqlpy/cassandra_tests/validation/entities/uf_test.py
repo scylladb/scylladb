@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....util import new_cql
 from cassandra.protocol import Unauthorized
 
 # Functions are created in a new keyspace (KEYSPACE_PER_TEST in the original
@@ -249,3 +250,39 @@ def testFunctionWithReservedName(cql):
         rows = list(execute(cql, KEYSPACE_PER_TEST, "SELECT key, val, " + fName + "() FROM " + KEYSPACE_PER_TEST + ".second_tab"))
         assert len(rows) == 3
         assert rows[0][2] is None
+
+def testFunctionInSystemKS(cql, test_keyspace):
+    KEYSPACE = test_keyspace
+    try:
+        execute(cql, KEYSPACE, "CREATE OR REPLACE FUNCTION " + KEYSPACE + ".to_timestamp(val timeuuid) " +
+                "RETURNS NULL ON NULL INPUT " +
+                "RETURNS timestamp " +
+                java_or_lua(cql, "return null;", "return nil") + ";")
+
+        assertSystemKeyspaceNotModifiable(cql, "CREATE OR REPLACE FUNCTION system.jnft(val double) " +
+                                               "RETURNS NULL ON NULL INPUT " +
+                                               "RETURNS double " +
+                                               java_or_lua(cql, "return null;", "return nil") + ";")
+        assertSystemKeyspaceNotModifiable(cql, "CREATE OR REPLACE FUNCTION system.to_timestamp(val timeuuid) " +
+                                               "RETURNS NULL ON NULL INPUT " +
+                                               "RETURNS timestamp " +
+                                               java_or_lua(cql, "return null;", "return nil") + ";")
+        assertSystemKeyspaceNotModifiable(cql, "DROP FUNCTION system.now")
+
+        # KS for executeLocally() is system
+        # (The Java test runs these statements without a keyspace, using
+        # executeLocally(), whose keyspace is "system". We use a new session
+        # with "USE system" instead.)
+        with new_cql(cql) as session:
+            session.execute("USE system")
+            assertSystemKeyspaceNotModifiable(session, "CREATE OR REPLACE FUNCTION jnft(val double) " +
+                                                       "RETURNS NULL ON NULL INPUT " +
+                                                       "RETURNS double " +
+                                                       java_or_lua(cql, "return null;", "return nil") + ";")
+            assertSystemKeyspaceNotModifiable(session, "CREATE OR REPLACE FUNCTION to_timestamp(val timeuuid) " +
+                                                       "RETURNS NULL ON NULL INPUT " +
+                                                       "RETURNS timestamp " +
+                                                       java_or_lua(cql, "return null;", "return nil") + ";")
+            assertSystemKeyspaceNotModifiable(session, "DROP FUNCTION now")
+    finally:
+        execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS " + KEYSPACE + ".to_timestamp")
