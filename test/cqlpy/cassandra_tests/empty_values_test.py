@@ -89,3 +89,53 @@ def testEmptyIntJson(cql, test_keyspace):
     assumeEmptyValueMeaningless("int")
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INT)") as table:
         verifyJsonInsert(cql, table, "int", "")
+
+def testEmptyText(cql, test_keyspace):
+    assumeEmptyValueMeaningless("text")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TEXT)") as table:
+        verifyPlainInsert(cql, table, "text", "")
+
+def testEmptyTextJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("text")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TEXT)") as table:
+        verifyJsonInsert(cql, table, "text", "")
+
+def testEmptyBytes(cql, test_keyspace):
+    assumeEmptyValueMeaningless("blob")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BLOB)") as table:
+        verifyPlainInsert(cql, table, "blob", "")
+
+def testEmptyBytesJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("blob")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BLOB)") as table:
+        verifyJsonInsert(cql, table, "blob", "0x")
+
+def testEmptyDate(cql, test_keyspace):
+    assumeEmptyValueMeaningless("date")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DATE)") as table:
+        verifyPlainInsert(cql, table, "date", "")
+
+def testEmptyDateJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("date")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DATE)") as table:
+        verifyJsonInsert(cql, table, "date", "")
+
+def testEmptySmallInt(cql, test_keyspace):
+    assumeEmptyValueMeaningless("smallint")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v SMALLINT)") as table:
+        verifyPlainInsert(cql, table, "smallint", "")
+
+def testEmptySmallIntJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("smallint")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v SMALLINT)") as table:
+        verifyJsonInsert(cql, table, "smallint", "")
+
+def testEmptyTime(cql, test_keyspace):
+    assumeEmptyValueMeaningless("time")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIME)") as table:
+        verifyPlainInsert(cql, table, "time", "")
+
+def testEmptyTimeJson(cql, test_keyspace):
+    assumeEmptyValueMeaningless("time")
+    with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIME)") as table:
+        verifyJsonInsert(cql, table, "time", "")
