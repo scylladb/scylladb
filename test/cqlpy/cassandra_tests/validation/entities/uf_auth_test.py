@@ -504,3 +504,14 @@ def testaggregateWrappingFunction(t):
     t.grantExecuteOnFunction(innerFunc, "int")
 
     t.assertAuthorized(cql)
+
+def testgrantAndRevokeSyntaxRequiresExplicitKeyspace(t):
+    with t.setupTable("(k int, s int STATIC, v1 int, v2 int, PRIMARY KEY(k, v1))"):
+        functionName = t.createSimpleFunction().split(".")[1]
+        # The test's session has no current keyspace.
+        # Scylla's error message is different: "<function .f()> doesn't exist."
+        message = "In this context function name must be explictly qualified by a keyspace|<function \\." + functionName + "\\(\\)> doesn't exist"
+        assert_invalid_message_re(t.cql, "", message,
+                                  f"GRANT EXECUTE ON FUNCTION {functionName}() TO {t.role}")
+        assert_invalid_message_re(t.cql, "", message,
+                                  f"REVOKE EXECUTE ON FUNCTION {functionName}() FROM {t.role}")
