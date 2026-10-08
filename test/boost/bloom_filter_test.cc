@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <limits>
+
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/with_timeout.hh>
 
 #include "sstables/sstable_writer.hh"
 #include "test/lib/eventually.hh"
@@ -110,6 +113,24 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
         .available_memory = 500
+    });
+}
+
+// Guards against maybe_reclaim_components() spinning forever when the
+// reclaimable-memory counter is above the threshold but no sstable in
+// _active actually has anything left to reclaim.
+SEASTAR_TEST_CASE(test_maybe_reclaim_components_terminates_without_reclaimable_memory) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto sst = env.make_sstable(ss.schema());
+        auto& sst_mgr = env.manager();
+
+        // sst has no bloom filter built, so it has nothing reclaimable;
+        // force the counter out of sync with reality.
+        sst_mgr.set_total_reclaimable_memory(std::numeric_limits<size_t>::max() / 2);
+
+        with_timeout(std::chrono::steady_clock::now() + std::chrono::seconds(30),
+                sst_mgr.maybe_reclaim_components()).get();
     });
 }
 
