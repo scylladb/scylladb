@@ -152,14 +152,14 @@ void client::update_config_sync(std::string region, std::string ira) {
     });
 }
 
-void client::update_connections_per_shard(unsigned connections_per_shard) {
+void client::update_group_connections(group_connections connections) {
     if (_config_update_gate.is_closed()) {
         s3l.info("config update gate is closed");
         return;
     }
     auto holder = _config_update_gate.hold();
-    (void)with_semaphore(_rebalance_sem, 1, [this, connections_per_shard] {
-        _cfg->connections_per_shard = connections_per_shard;
+    (void)with_semaphore(_rebalance_sem, 1, [this, connections] {
+        _cfg->connections_per_shard = connections;
         return rebalance_connections();
     }).handle_exception([holder = std::move(holder)](auto ex) {
         s3l.warn("Failed to rebalance connections after config update: {}", ex);
@@ -210,14 +210,14 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs), std::move(tc));
 }
 
-shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, group_connections connections) {
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
         .port = url.port,
         .use_https = url.is_https(),
         .region = std::move(region),
         .role_arn = std::move(iam_role_arn),
-        .connections_per_shard = connections_per_shard,
+        .connections_per_shard = connections,
     };
     return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
 }

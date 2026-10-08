@@ -208,7 +208,7 @@ public:
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs,
                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
-    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, group_connections connections = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
@@ -248,7 +248,7 @@ public:
                          seastar::abort_source* = nullptr);
 
     void update_config_sync(std::string reg, std::string ira);
-    void update_connections_per_shard(unsigned connections_per_shard);
+    void update_group_connections(group_connections connections);
     // Bytes moved to and from objects by this client, for its owner to report.
     utils::object_storage_bytes bytes() const;
     // Reports the http client metrics under the labels the caller supplies. The

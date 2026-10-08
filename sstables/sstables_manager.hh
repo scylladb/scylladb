@@ -103,7 +103,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     };
 
     semaphore _object_storage_clients_memory;
-    unsigned _connections_per_shard;
+    s3::group_connections _group_connections;
     std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
     std::unique_ptr<config_updater_sync> _config_updater;
     std::unique_ptr<connections_updater_sync> _connections_updater;
