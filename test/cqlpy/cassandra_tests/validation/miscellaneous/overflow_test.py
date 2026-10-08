@@ -90,3 +90,11 @@ def testConversionFunctions(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, i, b) VALUES (0, blob_as_varint(bigint_as_blob(3)), text_as_blob('foobar'))")
         assert_rows(execute(cql, table, "SELECT i, blob_as_text(b) FROM %s WHERE k = 0"),
                    row(3, "foobar"))
+
+# Migrated from cql_tests.py:TestCQL.empty_blob_test()
+def testEmptyBlob(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, b blob)") as table:
+        execute(cql, table, "INSERT INTO %s (k, b) VALUES (0, 0x)")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, b""))
