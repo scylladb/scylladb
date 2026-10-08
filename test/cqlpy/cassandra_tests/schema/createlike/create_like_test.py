@@ -243,3 +243,57 @@ def testIfNotExists(cql, keyspaces):
     # Cassandra's "Cannot add already existing table ...".
     assert_invalid_throw_message(cql, "", "Table '" + targetKs + "." + targetTb + "' already exists", AlreadyExists,
                               "CREATE TABLE " + targetKs + "." + targetTb + " LIKE " + sourceKs + "." + sourceTb)
+
+# This test fails on Cassandra because of a Cassandra bug: after
+# "ALTER TABLE DROP f USING TIMESTAMP 20000", where column f has data newer
+# than that timestamp, reading the table through the CQL protocol fails with
+# "IllegalStateException: [c, e, f] is not a subset of [c e]" (while
+# serializing the read response). The original Java test reads the table
+# internally, without this serialization, so it doesn't notice. This is
+# CASSANDRA-21733.
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and SCYLLADB-5142 (LCS's
+# fanout_size option).
+@pytest.mark.xfail(reason="SCYLLADB-5147, SCYLLADB-5142")
+def testCopyAfterAlterTable(cql, new_to_cassandra_6, keyspaces, cassandra_bug):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int, b text, c duration, d float, PRIMARY KEY(a, b));")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " DROP d")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " ADD e uuid")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " ADD f float")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    execute(cql, "", "INSERT INTO " + sourceKs + "." + sourceTb + " (a, b, c, e, f) VALUES (?, ?, ?, ?, ?)", 1, "1", duration1, uuid1, f1)
+    execute(cql, "", "INSERT INTO " + targetKs + "." + targetTb + " (a, b, c, e, f) VALUES (?, ?, ?, ?, ?)", 2, "2", duration2, uuid2, f2)
+    assert_rows(execute(cql, "", "SELECT * FROM " + sourceKs + "." + sourceTb),
+               row(1, "1", duration1, uuid1, f1))
+    assert_rows(execute(cql, "", "SELECT * FROM " + targetKs + "." + targetTb),
+               row(2, "2", duration2, uuid2, f2))
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " DROP f USING TIMESTAMP 20000")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " RENAME b TO bb ")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " WITH compaction = {'class':'LeveledCompactionStrategy', 'sstable_size_in_mb' : 10, 'fanout_size' : 16} ")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    execute(cql, "", "INSERT INTO " + sourceKs + "." + sourceTb + " (a, bb, c, e) VALUES (?, ?, ?, ?)", 1, "1", duration1, uuid1)
+    execute(cql, "", "INSERT INTO " + targetKs + "." + targetTb + " (a, bb, c, e) VALUES (?, ?, ?, ?)", 2, "2", duration2, uuid2)
+    assert_rows(execute(cql, "", "SELECT * FROM " + sourceKs + "." + sourceTb),
+               row(1, "1", duration1, uuid1))
+    assert_rows(execute(cql, "", "SELECT * FROM " + targetKs + "." + targetTb),
+               row(2, "2", duration2, uuid2))
