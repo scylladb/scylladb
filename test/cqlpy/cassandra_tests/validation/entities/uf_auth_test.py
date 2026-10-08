@@ -411,3 +411,96 @@ def testsystemFunctionsRequireNoExplicitPrivileges(t):
     t.grantExecuteOnFunction(functionName)
     cql = f"UPDATE {t.table} SET v2 = 0 WHERE k = blob_as_int(int_as_blob({functionCall(functionName)})) and v1 = 0"
     t.assertAuthorized(cql)
+
+def testrequireExecutePermissionOnComponentFunctionsWhenDefiningAggregate(t):
+    sFunc = t.createSimpleStateFunction()
+    fFunc = t.createSimpleFinalFunction()
+    # aside from the component functions, we need CREATE on the keyspace's functions
+    t.cql.execute(f"GRANT CREATE ON ALL FUNCTIONS IN KEYSPACE {t.keyspace} TO {t.role}")
+    aggDef = aggregateCql(sFunc, fFunc).replace("%s", t.keyspace + ".aggregate_for_permissions_test")
+
+    t.assertUnauthorized(aggDef, sFunc, "int, int")
+    t.grantExecuteOnFunction(sFunc, "int, int")
+
+    t.assertUnauthorized(aggDef, fFunc, "int")
+    t.grantExecuteOnFunction(fFunc, "int")
+
+    t.assertAuthorized(aggDef)
+
+def testrevokeExecutePermissionsOnAggregateComponents(t):
+    sFunc = t.createSimpleStateFunction()
+    fFunc = t.createSimpleFinalFunction()
+    aggDef = aggregateCql(sFunc, fFunc)
+    t.grantExecuteOnFunction(sFunc, "int, int")
+    t.grantExecuteOnFunction(fFunc, "int")
+
+    aggregate = t.createAggregate(aggDef)
+    t.grantExecuteOnFunction(aggregate, "int")
+
+    cql = f"SELECT {aggregate}(v1) FROM {t.table}"
+    t.assertAuthorized(cql)
+
+    # check that revoking EXECUTE permission on any one of the
+    # component functions means we lose the ability to execute it
+    t.revokeExecuteOnFunction(aggregate, "int")
+    t.assertUnauthorized(cql, aggregate, "int")
+    t.grantExecuteOnFunction(aggregate, "int")
+    t.assertAuthorized(cql)
+
+    t.revokeExecuteOnFunction(sFunc, "int, int")
+    t.assertUnauthorized(cql, sFunc, "int, int")
+    t.grantExecuteOnFunction(sFunc, "int, int")
+    t.assertAuthorized(cql)
+
+    t.revokeExecuteOnFunction(fFunc, "int")
+    t.assertUnauthorized(cql, fFunc, "int")
+    t.grantExecuteOnFunction(fFunc, "int")
+    t.assertAuthorized(cql)
+
+def testfunctionWrappingAggregate(t):
+    outerFunc = t.createFunction("CREATE FUNCTION %s(input int) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS int " +
+                                 java_or_lua(t.cql, "return input;", "return input"))
+
+    sFunc = t.createSimpleStateFunction()
+    fFunc = t.createSimpleFinalFunction()
+    aggDef = aggregateCql(sFunc, fFunc)
+    t.grantExecuteOnFunction(sFunc, "int, int")
+    t.grantExecuteOnFunction(fFunc, "int")
+
+    aggregate = t.createAggregate(aggDef)
+
+    cql = f"SELECT {outerFunc}({aggregate}(v1)) FROM {t.table}"
+
+    t.assertUnauthorized(cql, outerFunc, "int")
+    t.grantExecuteOnFunction(outerFunc, "int")
+
+    t.assertUnauthorized(cql, aggregate, "int")
+    t.grantExecuteOnFunction(aggregate, "int")
+
+    t.assertAuthorized(cql)
+
+def testaggregateWrappingFunction(t):
+    innerFunc = t.createFunction("CREATE FUNCTION %s(input int) " +
+                                 "CALLED ON NULL INPUT " +
+                                 "RETURNS int " +
+                                 java_or_lua(t.cql, "return input;", "return input"))
+
+    sFunc = t.createSimpleStateFunction()
+    fFunc = t.createSimpleFinalFunction()
+    aggDef = aggregateCql(sFunc, fFunc)
+    t.grantExecuteOnFunction(sFunc, "int, int")
+    t.grantExecuteOnFunction(fFunc, "int")
+
+    aggregate = t.createAggregate(aggDef)
+
+    cql = f"SELECT {aggregate}({innerFunc}(v1)) FROM {t.table}"
+
+    t.assertUnauthorized(cql, aggregate, "int")
+    t.grantExecuteOnFunction(aggregate, "int")
+
+    t.assertUnauthorized(cql, innerFunc, "int")
+    t.grantExecuteOnFunction(innerFunc, "int")
+
+    t.assertAuthorized(cql)
