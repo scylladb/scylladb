@@ -1,0 +1,39 @@
+# This file was translated from the original Java test from the Apache
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
+#
+# The original Apache Cassandra license:
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Modifications: Copyright 2026-present ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+# Any tests that do not fit in any other category,
+# migrated from python dtests, CASSANDRA-9160
+
+from ...porting import *
+
+# Test support for nulls
+# migrated from cql_tests.py:TestCQL.null_support_test()
+def testNullSupport(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v1 int, v2 set<text>, PRIMARY KEY (k, c))") as table:
+        execute(cql, table, "INSERT INTO %s (k, c, v1, v2) VALUES (0, 0, null, {'1', '2'})")
+        execute(cql, table, "INSERT INTO %s (k, c, v1) VALUES (0, 1, 1)")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, 0, null, {"1", "2"}),
+                   row(0, 1, 1, null))
+
+        execute(cql, table, "INSERT INTO %s (k, c, v1) VALUES (0, 1, null)")
+        execute(cql, table, "INSERT INTO %s (k, c, v2) VALUES (0, 0, null)")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, 0, null, null),
+                   row(0, 1, null, null))
+
+        assert_invalid(cql, table, "INSERT INTO %s (k, c, v2) VALUES (0, 2, {1, null})")
+        # Scylla deliberately allows "WHERE k = null", and it just matches
+        # nothing - see test_null.py::test_filtering_eq_null. So this check
+        # is commented out:
+        #assert_invalid(cql, table, "SELECT * FROM %s WHERE k = null")
+        assert_invalid(cql, table, "INSERT INTO %s (k, c, v2) VALUES (0, 0, { 'foo', 'bar', null })")
