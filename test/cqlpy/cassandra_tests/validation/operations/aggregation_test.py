@@ -589,3 +589,87 @@ def testDropReferenced(cql):
         assert_invalid_message_re(cql, ks, STILL_REFERENCED_MESSAGE, "DROP FUNCTION " + f)
 
         execute(cql, ks, "DROP AGGREGATE " + a + "(double)")
+
+def testJavaAggregateNoInit(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int " +
+                            "FINALFUNC " + shortFunctionName(fFinal))
+
+        # 1 + 2 + 3 = 6
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row("6"))
+
+        execute(cql, table, "DROP AGGREGATE " + a + "(int)")
+
+        assert_invalid_message(cql, table, "Unknown function", "SELECT " + a + "(b) FROM %s")
+
+def testJavaAggregateNullInitcond(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, 2)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, 3)")
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        a = createAggregate(cql, ks,
+                            "CREATE AGGREGATE %s(int) " +
+                            "SFUNC " + shortFunctionName(fState) + " " +
+                            "STYPE int " +
+                            "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                            "INITCOND null")
+
+        # 1 + 2 + 3 = 6
+        assert_rows(execute(cql, table, "SELECT " + a + "(b) FROM %s"), row("6"))
+
+        execute(cql, table, "DROP AGGREGATE " + a + "(int)")
+
+        assert_invalid_message(cql, table, "Unknown function", "SELECT " + a + "(b) FROM %s")
+
+def testJavaAggregateInvalidInitcond(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int, b int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS int " +
+                                java_or_lua(cql, SUM_STATE_JAVA, SUM_STATE_LUA))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(a int) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS text " +
+                                java_or_lua(cql, TO_STRING_JAVA, TO_STRING_LUA))
+
+        assert_invalid_message(cql, ks, "Invalid STRING constant (foobar)",
+                             "CREATE AGGREGATE " + ks + ".aggrInvalid(int)" +
+                             "SFUNC " + shortFunctionName(fState) + " " +
+                             "STYPE int " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                             "INITCOND 'foobar'")
