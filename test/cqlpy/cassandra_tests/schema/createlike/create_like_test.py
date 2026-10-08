@@ -475,3 +475,72 @@ def testStaticColumnCopy(cql, keyspaces):
     cql.execute("ALTER TABLE " + sourceKs + "." + sourceTb + " ADD d int static")
     targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
     assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+# The original Java test enables Cassandra's "dynamic data masking" feature
+# before this test, but we can't do this through CQL - it is enabled only by
+# the "dynamic_data_masking_enabled" option in Cassandra's configuration
+# file. So on Cassandra, this test is skipped if this option isn't enabled.
+# Reproduces #24277 (dynamic data masking) and SCYLLADB-5147 (CREATE TABLE
+# LIKE).
+@pytest.mark.xfail(reason="#24277, SCYLLADB-5147")
+def testColumnMaskTableCopy(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    if not is_scylla(cql):
+        setting = cql.execute("SELECT value FROM system_views.settings WHERE name = 'dynamic_data_masking_enabled'").one()
+        if setting is None or setting.value != "true":
+            skip_env("Cassandra's dynamic_data_masking_enabled configuration option is not enabled")
+    # masked partition key
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int MASKED WITH mask_default() PRIMARY KEY, r int)")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked partition key component
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k1 int, k2 text MASKED WITH DEFAULT, r int, PRIMARY KEY(k1, k2))")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked clustering key
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int, c int MASKED WITH mask_default(), r int, PRIMARY KEY (k, c))")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked clustering key with reverse order
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int, c text MASKED WITH mask_default(), r int, PRIMARY KEY (k, c)) " +
+                                     "WITH CLUSTERING ORDER BY (c DESC)")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked clustering key component
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int, c1 int, c2 text MASKED WITH DEFAULT, r int, PRIMARY KEY (k, c1, c2))")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked regular column
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int PRIMARY KEY, r1 text MASKED WITH DEFAULT, r2 int)")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # masked static column
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int, c int, r int, s int STATIC MASKED WITH DEFAULT, PRIMARY KEY (k, c))")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    # multiple masked columns
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (" +
+                                     "k1 int, k2 int MASKED WITH DEFAULT, " +
+                                     "c1 int, c2 text MASKED WITH DEFAULT, " +
+                                     "r1 int, r2 int MASKED WITH DEFAULT, " +
+                                     "s1 int static, s2 int static MASKED WITH DEFAULT, " +
+                                     "PRIMARY KEY((k1, k2), c1, c2))")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (k int PRIMARY KEY, " +
+                                     "s set<int> MASKED WITH DEFAULT, " +
+                                     "l list<int> MASKED WITH DEFAULT, " +
+                                     "m map<int, int> MASKED WITH DEFAULT, " +
+                                     "fs frozen<set<int>> MASKED WITH DEFAULT, " +
+                                     "fl frozen<list<int>> MASKED WITH DEFAULT, " +
+                                     "fm frozen<map<int, int>> MASKED WITH DEFAULT)")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
