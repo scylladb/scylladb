@@ -519,10 +519,10 @@ def test_audit_batch_get_item_respects_table_filter(dynamodb, cql, alternator_au
 
 
 # Test auditing of DDL operations: CreateTable, UpdateTable (with GSI),
-# TagResource, UntagResource, UpdateTimeToLive, DeleteTable.
+# TagResource, UntagResource, UpdateTimeToLive, DeleteTable, ImportTable.
 # DDL and metadata-query operations have no meaningful CL (stored as "").
 # The DescribeTable call (used to fetch the TableArn) also produces a QUERY entry.
-# Produces 7 audit entries.
+# Produces 8 audit entries.
 def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
     client = dynamodb.meta.client
     table_name = unique_table_name()
@@ -580,6 +580,19 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
         # DeleteTable
         client.delete_table(TableName=table_name)
         expected.append(("DDL", "", False, ks_name, table_name, ["DeleteTable", table_name]))
+        # ImportTable. It imports nothing yet, and creates no table; once it
+        # does, the finally block below deletes it.
+        client.import_table(
+            S3BucketSource={"S3Bucket": "my-bucket"},
+            InputFormat="DYNAMODB_JSON",
+            TableCreationParameters={
+                "TableName": table_name,
+                "KeySchema": HASH_ONLY_SCHEMA["KeySchema"],
+                "AttributeDefinitions": HASH_ONLY_SCHEMA["AttributeDefinitions"],
+                "BillingMode": "PAY_PER_REQUEST",
+            },
+        )
+        expected.append(("DDL", "", False, ks_name, table_name, ["ImportTable", table_name, "my-bucket"]))
         # Each individual Alternator call above must be audited.
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
         _assert_audit_entries(new_rows, expected, ks_name, table_name)

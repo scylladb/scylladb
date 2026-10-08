@@ -761,7 +761,7 @@ async def test_index_requires_rf_rack_valid_keyspace(manager: ScyllaClusterManag
     expected_err_create = "GlobalSecondaryIndexes and LocalSecondaryIndexes on a table " \
         "using tablets require the number of racks in the cluster to be either 1 or 3"
     expected_err_update_add_gsi = "GlobalSecondaryIndexes on a table " \
-        "using tablets require the number of racks in the cluster to be either 1 or 3"
+        "using tablets require an RF-rack-valid keyspace"
 
     def create_table_with_index(alternator, table_name, index_type, initial_tablets):
         create_table_args = dict(
@@ -2094,4 +2094,54 @@ async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp
         alternator_bad.meta.client.list_tables()
 
 
-
+# The rule: a GSI is a materialized view, and a keyspace holding views must be
+# RF-rack-valid while it uses tablets - the replication factor of a datacenter
+# has to match its rack count. CreateTable rejects a GSI that would break this.
+#
+# Before SCYLLADB-3976 was fixed, CreateTable checked this rule against the
+# keyspace it would have created itself, not against the pre-created keyspace
+# the table lands in: when the "system:initial_tablets" tag asked for vnodes,
+# the check was skipped, and when it asked for tablets, the check used the RF
+# Alternator picks - 1 on two nodes, which is valid. Either way the GSI got
+# created whatever the racks looked like.
+#
+# What the test pins down: it pre-creates a tablets keyspace whose RF does not
+# match the rack count, and then creates a table with a GSI under either tag.
+# The error naming the keyspace's own RF is the proof that the table went into
+# the pre-created keyspace and was checked against it. Adding the GSI later with
+# UpdateTable has to report the same reason.
+async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ScyllaClusterManager):
+    # Two nodes in one rack, and rf_rack_valid_keyspaces off so that an
+    # RF-rack-invalid keyspace with RF=2 can be created at all.
+    servers = await manager.servers_add(2,
+        config=alternator_config | {'rf_rack_valid_keyspaces': False},
+        property_file={'dc': 'dc1', 'rack': 'rack1'})
+    cql = manager.get_cql()
+    alternator = get_alternator(servers[0].ip_addr)
+    name = unique_table_name()
+    cql.execute(f'CREATE KEYSPACE "alternator_{name}" WITH REPLICATION = '
+        "{'class': 'NetworkTopologyStrategy', 'dc1': 2} AND TABLETS = {'enabled': true}")
+    try:
+        for tag in ['none', '0']:
+            with pytest.raises(ClientError, match='ValidationException.*RF=2 vs. rack count=1'):
+                alternator.create_table(TableName=name,
+                    Tags=[{'Key': 'system:initial_tablets', 'Value': tag}],
+                    BillingMode='PAY_PER_REQUEST',
+                    KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                    AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                          {'AttributeName': 'x', 'AttributeType': 'S'}],
+                    GlobalSecondaryIndexes=[{'IndexName': 'gsi',
+                        'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                        'Projection': {'ProjectionType': 'ALL'}}])
+        alternator.create_table(TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+        with pytest.raises(ClientError, match='ValidationException.*RF=2 vs. rack count=1'):
+            alternator.meta.client.update_table(TableName=name,
+                AttributeDefinitions=[{'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'}}}])
+    finally:
+        cql.execute(f'DROP KEYSPACE IF EXISTS "alternator_{name}"')
