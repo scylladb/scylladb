@@ -47,3 +47,16 @@ def testcustomOptionsSyntaxTest(cql):
     assertValidSyntax(cql, "ALTER ROLE r WITH OPTIONS = {'a':'b', 'b':1}")
     assertInvalidSyntax(cql, "ALTER ROLE r WITH OPTIONS = 'term'")
     assertInvalidSyntax(cql, "ALTER ROLE r WITH OPTIONS = 99")
+
+def testcreateSyntaxTest(cql):
+    assertValidSyntax(cql, "CREATE ROLE r1")
+    assertValidSyntax(cql, "CREATE ROLE 'r1'")
+    assertValidSyntax(cql, "CREATE ROLE \"r1\"")
+    assertValidSyntax(cql, "CREATE ROLE $$r1$$")
+    assertValidSyntax(cql, "CREATE ROLE $$ r1 ' x $ x ' $$")
+    assertValidSyntax(cql, "CREATE USER u1")
+    assertValidSyntax(cql, "CREATE USER 'u1'")
+    assertValidSyntax(cql, "CREATE USER $$u1$$")
+    assertValidSyntax(cql, "CREATE USER $$ u1 ' x $ x ' $$")
+    # user names may not be quoted names
+    assertInvalidSyntax(cql, "CREATE USER \"u1\"")
