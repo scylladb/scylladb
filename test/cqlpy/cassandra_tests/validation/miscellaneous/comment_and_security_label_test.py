@@ -233,3 +233,24 @@ def testSecurityLabelOnType(cql, new_to_cassandra_6):
         result = cql.execute(f"SECURITY LABEL FOR security_provider ON TYPE {typeRef} IS 'RESTRICTED'")
         assertWarningsContain(result, "Provider functionality not implemented.")
         assertSecurityLabel(cql, "TYPE", ks, typeRef, "RESTRICTED")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentOnField(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        cql.execute(f"CREATE TYPE {ks}.geo_position (latitude double, longitude double, altitude double)")
+        fieldRef = f"{ks}.geo_position.latitude"
+        commentLifecycle(cql, "FIELD", ks, fieldRef)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelOnField(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        cql.execute(f"CREATE TYPE {ks}.patient_record (ssn text, diagnosis text, treatment text)")
+        fieldRef = f"{ks}.patient_record.ssn"
+        securityLabelLifecycle(cql, "FIELD", ks, fieldRef)
+
+        # Test provider warning
+        result = cql.execute(f"SECURITY LABEL FOR healthcare_provider ON FIELD {fieldRef} IS 'PHI'")
+        assertWarningsContain(result, "Provider functionality not implemented.")
+        assertSecurityLabel(cql, "FIELD", ks, fieldRef, "PHI")
