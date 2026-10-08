@@ -183,3 +183,68 @@ def testCompositeIndexWithPK(cql, test_keyspace):
 # cql_tests.py:TestCQL.limit_bugs_test()) was not translated, because which
 # rows a LIMIT returns from a multi-partition scan depends on the order of
 # tokens of a ByteOrderedPartitioner.
+
+# Test for #4612 bug and more generally order by when multiple C* rows are queried
+# migrated from cql_tests.py:TestCQL.order_by_multikey_test()
+def testOrderByMultikey(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(my_id varchar, col1 int, col2 int, value varchar, PRIMARY KEY (my_id, col1, col2))") as table:
+        execute(cql, table, "INSERT INTO %s (my_id, col1, col2, value) VALUES ( 'key1', 1, 1, 'a');")
+        execute(cql, table, "INSERT INTO %s (my_id, col1, col2, value) VALUES ( 'key2', 3, 3, 'a');")
+        execute(cql, table, "INSERT INTO %s (my_id, col1, col2, value) VALUES ( 'key3', 2, 2, 'b');")
+        execute(cql, table, "INSERT INTO %s (my_id, col1, col2, value) VALUES ( 'key4', 2, 1, 'b');")
+
+        # Cassandra refuses to page a query with both ORDER BY and IN on the
+        # partition key, so we need to disable paging (the original Java test
+        # doesn't page its queries).
+        assert_rows(execute_without_paging(cql, table, "SELECT col1 FROM %s WHERE my_id in('key1', 'key2', 'key3') ORDER BY col1"),
+                   row(1), row(2), row(3))
+
+        assert_rows(execute_without_paging(cql, table, "SELECT col1, value, my_id, col2 FROM %s WHERE my_id in('key3', 'key4') ORDER BY col1, col2"),
+                   row(2, "b", "key4", 1), row(2, "b", "key3", 2))
+
+        assert_invalid(cql, table, "SELECT col1 FROM %s ORDER BY col1")
+        assert_invalid(cql, table, "SELECT col1 FROM %s WHERE my_id > 'key1' ORDER BY col1")
+
+# Migrated from cql_tests.py:TestCQL.composite_index_collections_test()
+def testIndexOnCompositeWithCollections(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(blog_id int, time1 int, time2 int, author text, content set<text>, PRIMARY KEY (blog_id, time1, time2))") as table:
+        execute(cql, table, "CREATE INDEX ON %s (author)")
+
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, { 'bar1', 'bar2' })", 1, 0, 0, "foo")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, { 'bar2', 'bar3' })", 1, 0, 1, "foo")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, { 'baz' })", 2, 1, 0, "foo")
+        execute(cql, table, "INSERT INTO %s (blog_id, time1, time2, author, content) VALUES (?, ?, ?, ?, { 'qux' })", 3, 0, 1, "gux")
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT blog_id, content FROM %s WHERE author='foo'"),
+                   row(1, {"bar1", "bar2"}),
+                   row(1, {"bar2", "bar3"}),
+                   row(2, {"baz"}))
+
+# Migrated from cql_tests.py:TestCQL.truncate_clean_cache_test()
+def testTruncateWithCaching(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v1 int, v2 int) WITH CACHING = { 'keys': 'ALL', 'rows_per_partition': 'ALL' };") as table:
+        for i in range(3):
+            execute(cql, table, "INSERT INTO %s (k, v1, v2) VALUES (?, ?, ?)", i, i, i * 2)
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT v1, v2 FROM %s WHERE k IN (0, 1, 2)"),
+                   row(0, 0),
+                   row(1, 2),
+                   row(2, 4))
+
+        execute(cql, table, "TRUNCATE %s")
+
+        assert_empty(execute(cql, table, "SELECT v1, v2 FROM %s WHERE k IN (0, 1, 2)"))
+
+# Migrated from cql_tests.py:TestCQL.range_key_ordered_test()
+def testRangeKey(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY)") as table:
+        execute(cql, table, "INSERT INTO %s (k) VALUES (-1)")
+        execute(cql, table, "INSERT INTO %s (k) VALUES ( 0)")
+        execute(cql, table, "INSERT INTO %s (k) VALUES ( 1)")
+
+        assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s"),
+                   row(0),
+                   row(1),
+                   row(-1))
+
+        assert_invalid(cql, table, "SELECT * FROM %s WHERE k >= -1 AND k < 1")
