@@ -9,35 +9,23 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from contextlib import ExitStack, contextmanager
 
 # The original Java test class is parameterized to run each test with each of
 # the CQL protocol versions which Cassandra supports. We use only the Python
 # driver's default protocol version.
 
 # Each test below checks a view filtering on a clustering column of the base
-# table, for five different primary keys of the view (mvPrimaryKeys). The
-# Java test creates a separate base table for each of these view primary
-# keys, one after another, and repeats the same operations on each. Doing this
-# takes a second per test on Scylla, mostly creating tables and views, so
-# instead we create the five views on the same base table, and check all of
-# them after each operation - each view still sees exactly the same sequence
-# of base-table operations as in the Java test.
+# table, for five different primary keys of the view. As explained in
+# porting.py, we create all these views on the same base table.
 mvPrimaryKeys = ["((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"]
 
-@contextmanager
-def create_views(cql, table, where):
-    with ExitStack() as stack:
-        views = [stack.enter_context(create_view(cql, table, "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %s " +
-                                                 where + " PRIMARY KEY " + mvPrimaryKey, wait=False))
-                 for mvPrimaryKey in mvPrimaryKeys]
-        for view in views:
-            wait_for_view_built(cql, view)
-        yield views
+def create_views_where(cql, table, where):
+    return create_views(cql, table, ["CREATE MATERIALIZED VIEW %s AS SELECT * FROM %s " +
+                                     where + " PRIMARY KEY " + mvPrimaryKey
+                                     for mvPrimaryKey in mvPrimaryKeys])
 
 def assertViewsRows(cql, views, *rows):
-    for view in views:
-        assert_rows_ignoring_order(execute(cql, view, "SELECT a, b, c, d FROM %s"), *rows)
+    assert_views_rows_ignoring_order(cql, views, "SELECT a, b, c, d FROM %s", *rows)
 
 def testClusteringKeyEQRestrictions(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b, c))") as table:
@@ -51,7 +39,7 @@ def testClusteringKeyEQRestrictions(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 1, 1, 1, 0)
 
         # only accept rows where b = 1
-        with create_views(cql, table, "WHERE a IS NOT NULL AND b = 1 AND c IS NOT NULL") as views:
+        with create_views_where(cql, table, "WHERE a IS NOT NULL AND b = 1 AND c IS NOT NULL") as views:
 
             assertViewsRows(cql, views,
                             row(0, 1, 0, 0),
@@ -132,7 +120,7 @@ def testClusteringKeySliceRestrictions(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 1, 1, 0, 0)
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 1, 1, 1, 0)
 
-        with create_views(cql, table, "WHERE a IS NOT NULL AND b >= 1 AND c IS NOT NULL") as views:
+        with create_views_where(cql, table, "WHERE a IS NOT NULL AND b >= 1 AND c IS NOT NULL") as views:
 
             assertViewsRows(cql, views,
                             row(0, 1, 0, 0),
@@ -215,7 +203,7 @@ def testClusteringKeyINRestrictions(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 1, 2, 1, 0)
 
         # only accept rows where b = 1
-        with create_views(cql, table, "WHERE a IS NOT NULL AND b IN (1, 2) AND c IS NOT NULL") as views:
+        with create_views_where(cql, table, "WHERE a IS NOT NULL AND b IN (1, 2) AND c IS NOT NULL") as views:
 
             assertViewsRows(cql, views,
                             row(0, 1, 0, 0),
