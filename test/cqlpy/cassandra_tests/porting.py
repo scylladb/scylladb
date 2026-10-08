@@ -90,13 +90,17 @@ def create_materialized_view(cql, keyspace, arg):
 # base table's existing data is asynchronous. Updates to the view are not:
 # on a single node, both Scylla and Cassandra apply them as part of the base
 # table write, so the Java tests' updateView() can be a simple execute().
+# With wait=False, this is the translation of CQLTester.createViewAsync(),
+# and the caller can wait with wait_for_view_built() - e.g., to wait for
+# several views being built in parallel.
 @contextmanager
-def create_view(cql, table, query):
+def create_view(cql, table, query, wait=True):
     keyspace = table.split('.')[0]
     view = keyspace + "." + unique_name()
     cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
     try:
-        wait_for_view_built(cql, view)
+        if wait:
+            wait_for_view_built(cql, view)
         yield view
     finally:
         cql.execute("DROP MATERIALIZED VIEW IF EXISTS " + view)
