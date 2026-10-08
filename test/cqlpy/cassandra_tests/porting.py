@@ -13,7 +13,7 @@ import re
 import collections
 import struct
 import time
-from ..util import unique_name
+from ..util import unique_name, is_scylla
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.util import SortedSet, OrderedMapSerializedKey
@@ -60,6 +60,17 @@ def create_function(cql, keyspace, arg):
         yield function_name
     finally:
         cql.execute("DROP FUNCTION " + function_name)
+
+# Scylla doesn't support Java as a language for user-defined functions, but
+# it does support Lua. Many of Cassandra's tests create a Java UDF not to test
+# Java, but just because they need some function. Such tests can use
+# java_or_lua() to get the "LANGUAGE ... AS ..." part of CREATE FUNCTION:
+# the original Java body when running on Cassandra, and an equivalent Lua
+# body when running on Scylla.
+def java_or_lua(cql, java_body, lua_body):
+    if is_scylla(cql):
+        return "LANGUAGE lua AS '" + lua_body + "'"
+    return "LANGUAGE java AS '" + java_body + "'"
 
 @contextmanager
 def create_materialized_view(cql, keyspace, arg):
