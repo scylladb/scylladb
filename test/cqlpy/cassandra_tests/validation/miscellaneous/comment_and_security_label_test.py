@@ -169,3 +169,24 @@ def testSecurityLabelOnKeyspace(cql, new_to_cassandra_6):
         result = cql.execute(f"SECURITY LABEL FOR test_provider ON KEYSPACE {ks} IS 'SENSITIVE'")
         assertWarningsContain(result, "Provider functionality not implemented.")
         assertSecurityLabel(cql, "KEYSPACE", ks, ks, "SENSITIVE")
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testCommentOnTable(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        tableRef = f"{ks}.{TABLE_NAME}"
+        commentLifecycle(cql, "TABLE", ks, tableRef)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testSecurityLabelOnTable(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, SECURITY_TABLE_NAME)
+        tableRef = f"{ks}.{SECURITY_TABLE_NAME}"
+        securityLabelLifecycle(cql, "TABLE", ks, tableRef)
+
+        # Test provider warning
+        result = cql.execute(f"SECURITY LABEL FOR my_provider ON TABLE {tableRef} IS 'CONFIDENTIAL'")
+        assertWarningsContain(result, "Provider functionality not implemented.")
+        assertSecurityLabel(cql, "TABLE", ks, tableRef, "CONFIDENTIAL")
