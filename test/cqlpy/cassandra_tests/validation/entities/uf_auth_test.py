@@ -164,3 +164,94 @@ def testfunctionInSelection(t):
     functionName = t.createSimpleFunction()
     cql = f"SELECT k, {functionCall(functionName)} FROM {t.table} WHERE k = 1;"
     t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectPKRestriction(t):
+    functionName = t.createSimpleFunction()
+    cql = f"SELECT * FROM {t.table} WHERE k = {functionCall(functionName)}"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectClusteringRestriction(t):
+    functionName = t.createSimpleFunction()
+    cql = f"SELECT * FROM {t.table} WHERE k = 0 AND v1 = {functionCall(functionName)}"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectInRestriction(t):
+    functionName = t.createSimpleFunction()
+    cql = f"SELECT * FROM {t.table} WHERE k IN ({functionCall(functionName)}, {functionCall(functionName)})"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectMultiColumnInRestriction(t):
+    with t.setupTable("(k int, v1 int, v2 int, v3 int, PRIMARY KEY (k, v1, v2))"):
+        functionName = t.createSimpleFunction()
+        cql = f"SELECT * FROM {t.table} WHERE k=0 AND (v1, v2) IN (({functionCall(functionName)}, {functionCall(functionName)}))"
+        t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectMultiColumnEQRestriction(t):
+    with t.setupTable("(k int, v1 int, v2 int, v3 int, PRIMARY KEY (k, v1, v2))"):
+        functionName = t.createSimpleFunction()
+        cql = f"SELECT * FROM {t.table} WHERE k=0 AND (v1, v2) = ({functionCall(functionName)}, {functionCall(functionName)})"
+        t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectMultiColumnSliceRestriction(t):
+    with t.setupTable("(k int, v1 int, v2 int, v3 int, PRIMARY KEY (k, v1, v2))"):
+        functionName = t.createSimpleFunction()
+        cql = f"SELECT * FROM {t.table} WHERE k=0 AND (v1, v2) < ({functionCall(functionName)}, {functionCall(functionName)})"
+        t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectTokenEQRestriction(t):
+    functionName = t.createSimpleFunction()
+    cql = f"SELECT * FROM {t.table} WHERE token(k) = token({functionCall(functionName)})"
+    t.assertPermissionsOnFunction(cql, functionName)
+
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
+def testfunctionInSelectTokenSliceRestriction(t):
+    functionName = t.createSimpleFunction()
+    cql = f"SELECT * FROM {t.table} WHERE token(k) < token({functionCall(functionName)})"
+    t.assertPermissionsOnFunction(cql, functionName)
