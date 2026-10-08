@@ -16,6 +16,7 @@
 # are not translated.
 
 from ...porting import *
+from ....util import new_cql
 from cassandra.protocol import FunctionFailure
 
 # Functions are created in a new keyspace (KEYSPACE_PER_TEST in the original
@@ -363,3 +364,134 @@ def testJavaTupleTypeCollection(cql, test_keyspace):
 
         # The Java test repeats these checks with each protocol version. We
         # only use the driver's protocol version.
+
+def testJavaUserTypeWithUse(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + KEYSPACE + "." + type + " (txt text, i int)")
+        with create_table(cql, KEYSPACE, "(key int primary key, udt frozen<" + KEYSPACE + '.' + type + ">)") as table:
+            execute(cql, table, "INSERT INTO %s (key, udt) VALUES (1, {txt: 'one', i:1})")
+
+            # The Java test repeats this check with each protocol version, in
+            # a new session. We only use the driver's protocol version.
+            with new_cql(cql) as session:
+                session.execute("USE " + KEYSPACE)
+
+                session.execute("CREATE FUNCTION f_use1( udt " + type + " ) " +
+                                "RETURNS NULL ON NULL INPUT " +
+                                "RETURNS " + type + " " +
+                                java_or_lua_dollar(cql, "return " +
+                                                        "     udt;",
+                                                        "return " +
+                                                        "     udt") + ";")
+                try:
+                    rowsNet = list(session.execute("SELECT f_use1(udt) FROM " + table + " WHERE key = 1"))
+                    assert len(rowsNet) == 1
+                    udtVal = rowsNet[0][0]
+                    assert udtVal.txt == "one"
+                    assert udtVal.i == 1
+                finally:
+                    session.execute("DROP FUNCTION f_use1")
+
+def testJavaUserType(cql):
+    # The type, table and functions are created in a new keyspace instead of
+    # KEYSPACE, so that they will all be dropped at the end of the test.
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = KEYSPACE + "." + unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + type + " (txt text, i int)")
+
+        with create_table(cql, KEYSPACE, "(key int primary key, udt frozen<" + type + ">)") as table:
+            fUdt0 = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s( udt " + type + " ) " +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS " + type + " " +
+                                   java_or_lua_dollar(cql, "return " +
+                                                           "     udt;",
+                                                           "return " +
+                                                           "     udt") + ";")
+            fUdt1 = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s( udt " + type + ") " +
+                                   "RETURNS NULL ON NULL INPUT " +
+                                   "RETURNS text " +
+                                   java_or_lua_dollar(cql, "return " +
+                                                           "     udt.getString(\"txt\");",
+                                                           "return " +
+                                                           "     udt.txt") + ";")
+            fUdt2 = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s( udt " + type + ") " +
+                                   "CALLED ON NULL INPUT " +
+                                   "RETURNS int " +
+                                   java_or_lua_dollar(cql, "return " +
+                                                           "     Integer.valueOf(udt.getInt(\"i\"));",
+                                                           "return " +
+                                                           "     udt.i") + ";")
+
+            execute(cql, table, "INSERT INTO %s (key, udt) VALUES (1, {txt: 'one', i:1})")
+
+            rows = list(execute(cql, table, "SELECT " + fUdt0 + "(udt) FROM %s WHERE key = 1"))
+            assert len(rows) == 1
+            udtVal = rows[0][0]
+            assert udtVal.txt == "one"
+            assert udtVal.i == 1
+            assert_rows(execute(cql, table, "SELECT " + fUdt1 + "(udt) FROM %s WHERE key = 1"),
+                        row("one"))
+            assert_rows(execute(cql, table, "SELECT " + fUdt2 + "(udt) FROM %s WHERE key = 1"),
+                        row(1))
+
+            # The Java test repeats these checks with each protocol version. We
+            # only use the driver's protocol version.
+
+# The Java functions in this test intentionally mix the package names of two
+# Java UDTValue classes, which isn't relevant for the Lua functions.
+def testJavaUTCollections(cql):
+    # The type, table and functions are created in a new keyspace instead of
+    # KEYSPACE, so that they will all be dropped at the end of the test.
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = KEYSPACE + "." + unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + type + " (txt text, i int)")
+
+        with create_table(cql, KEYSPACE, f"(key int primary key, lst list<frozen<{type}>>, st set<frozen<{type}>>, mp map<int, frozen<{type}>>)") as table:
+            # The mix of the package names org.apache.cassandra.cql3.functions.types and com.datastax.driver.core is
+            # intentional to test the replacement of com.datastax.driver.core with org.apache.cassandra.cql3.functions.types.
+            fName1 = createFunction(cql, KEYSPACE,
+                                    "CREATE FUNCTION %s( lst list<frozen<" + type + ">> ) " +
+                                    "RETURNS NULL ON NULL INPUT " +
+                                    "RETURNS text " +
+                                    java_or_lua_dollar(cql,
+                                                       "     org.apache.cassandra.cql3.functions.types.UDTValue udtVal = (com.datastax.driver.core.UDTValue)lst.get(1);" +
+                                                       "     return udtVal.getString(\"txt\");",
+                                                       "     local udtVal = lst[2]" +
+                                                       "     return udtVal.txt") + ";")
+            fName2 = createFunction(cql, KEYSPACE,
+                                    "CREATE FUNCTION %s( st set<frozen<" + type + ">> ) " +
+                                    "RETURNS NULL ON NULL INPUT " +
+                                    "RETURNS text " +
+                                    java_or_lua_dollar(cql,
+                                                       "     com.datastax.driver.core.UDTValue udtVal = (org.apache.cassandra.cql3.functions.types.UDTValue)st.iterator().next();" +
+                                                       "     return udtVal.getString(\"txt\");",
+                                                       # A Lua set is a table whose keys are the elements, in no
+                                                       # particular order, so we pick the smallest element (the
+                                                       # first element of the Java set).
+                                                       "     local udtVal = nil" +
+                                                       "     for k, _ in pairs(st) do if udtVal == nil or k.txt < udtVal.txt or (k.txt == udtVal.txt and k.i < udtVal.i) then udtVal = k end end" +
+                                                       "     return udtVal.txt") + ";")
+            fName3 = createFunction(cql, KEYSPACE,
+                                    "CREATE FUNCTION %s( mp map<int, frozen<" + type + ">> ) " +
+                                    "RETURNS NULL ON NULL INPUT " +
+                                    "RETURNS text " +
+                                    java_or_lua_dollar(cql,
+                                                       "     org.apache.cassandra.cql3.functions.types.UDTValue udtVal = (com.datastax.driver.core.UDTValue)mp.get(Integer.valueOf(3));" +
+                                                       "     return udtVal.getString(\"txt\");",
+                                                       "     local udtVal = mp[3]" +
+                                                       "     return udtVal.txt") + ";")
+
+            execute(cql, table, "INSERT INTO %s (key, lst, st, mp) values (1, " +
+                    "[ {txt: 'one', i:1}, {txt: 'three', i:1}, {txt: 'one', i:1} ] , " +
+                    "{ {txt: 'one', i:1}, {txt: 'three', i:3}, {txt: 'two', i:2} }, " +
+                    "{ 1: {txt: 'one', i:1}, 2: {txt: 'one', i:3}, 3: {txt: 'two', i:2} })")
+
+            assert_rows(execute(cql, table, "SELECT " + fName1 + "(lst), " + fName2 + "(st), " + fName3 + "(mp) FROM %s WHERE key = 1"),
+                        row("three", "one", "two"))
+
+            # The Java test repeats this check with each protocol version. We
+            # only use the driver's protocol version.
