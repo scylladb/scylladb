@@ -799,6 +799,48 @@ def testUDT(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=2"), row(2, TIMESTAMP_2, TIMESTAMP_1))
             assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f2), WRITETIME(t.f1) FROM %s WHERE k=2"), row(2, TIMESTAMP_1, TIMESTAMP_2))
 
+# Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5167 (WRITETIME and TTL of an
+# element or field inside a frozen value)
+@pytest.mark.xfail(reason="#10953, SCYLLADB-5167")
+def testFrozenUDT(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(f1 int, f2 int)") as type:
+        with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t frozen<" + type + ">)") as table:
+            # Null column
+            execute(cql, table, "INSERT INTO %s (k) VALUES (0) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+            assertWritetimeAndTTL(cql, table, "t", NO_TIMESTAMP, NO_TTL)
+            assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL)
+            assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL)
+
+            # Both fields are empty
+            execute(cql, table, "INSERT INTO %s (k, t) VALUES (0, {f1:null, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+            assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=0")
+            assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=0")
+            assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=0")
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=0"), row(0, NO_TIMESTAMP, NO_TIMESTAMP))
+
+            # Only the first field is set
+            execute(cql, table, "INSERT INTO %s (k, t) VALUES (1, {f1:1, f2:null}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+            assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=1")
+            assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=1")
+            assertWritetimeAndTTL(cql, table, "t.f2", NO_TIMESTAMP, NO_TTL, "k=1")
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=1"), row(1, TIMESTAMP_1, NO_TIMESTAMP))
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f2), WRITETIME(t.f1) FROM %s WHERE k=1"), row(1, NO_TIMESTAMP, TIMESTAMP_1))
+
+            # Only the second field is set
+            execute(cql, table, "INSERT INTO %s (k, t) VALUES (2, {f1:null, f2:2}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+            assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=2")
+            assertWritetimeAndTTL(cql, table, "t.f1", NO_TIMESTAMP, NO_TTL, "k=2")
+            assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=2")
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=2"), row(2, NO_TIMESTAMP, TIMESTAMP_1))
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f2), WRITETIME(t.f1) FROM %s WHERE k=2"), row(2, TIMESTAMP_1, NO_TIMESTAMP))
+
+            # Both fields are set
+            execute(cql, table, "INSERT INTO %s (k, t) VALUES (3, {f1:1, f2:2}) USING TIMESTAMP ? AND TTL ?", TIMESTAMP_1, TTL_1)
+            assertWritetimeAndTTL(cql, table, "t", TIMESTAMP_1, TTL_1, "k=3")
+            assertWritetimeAndTTL(cql, table, "t.f1", TIMESTAMP_1, TTL_1, "k=3")
+            assertWritetimeAndTTL(cql, table, "t.f2", TIMESTAMP_1, TTL_1, "k=3")
+            assert_rows(execute(cql, table, "SELECT k, WRITETIME(t.f1), WRITETIME(t.f2) FROM %s WHERE k=3"), row(3, TIMESTAMP_1, TIMESTAMP_1))
+
 # Reproduces #10953 (MAXWRITETIME) and SCYLLADB-5166 (WRITETIME and TTL of a
 # whole non-frozen collection or UDT)
 @pytest.mark.xfail(reason="#10953, SCYLLADB-5166")
