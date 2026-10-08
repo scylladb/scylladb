@@ -278,3 +278,118 @@ def testStatementRePreparationOnReconnect(cql, test_keyspace, version):
 # The test testMetadataFlagsWithLWTs was not translated, because it checks
 # the flags in the result metadata of protocol messages, using Cassandra's
 # internal protocol client.
+
+# As explained in kb/lwt-differences.rst, Scylla is different from Cassandra
+# in that it always returns the old values of the columns in the condition
+# (or the whole old row, for IF NOT EXISTS), even if the condition was
+# successful - where Cassandra returns just the success boolean. We decided
+# to keep this difference, so the expected results depend on the server.
+def prepareWithLWT(cql, test_keyspace, version):
+    scylla = is_scylla(cql)
+    with sessionNet(cql, version) as session:
+        session.execute("USE " + test_keyspace)
+        with create_table(cql, test_keyspace, "(pk int, v1 int, v2 int, PRIMARY KEY (pk))") as table:
+            prepared1 = session.prepare(f"UPDATE {table} SET v1 = ?, v2 = ?  WHERE pk = 1 IF v1 = ?")
+            prepared2 = session.prepare(f"INSERT INTO {table} (pk, v1, v2) VALUES (?, 200, 300) IF NOT EXISTS")
+            execute(cql, table, "INSERT INTO %s (pk, v1, v2) VALUES (1,1,1)")
+            execute(cql, table, "INSERT INTO %s (pk, v1, v2) VALUES (2,2,2)")
+
+            rs = session.execute(prepared1.bind((10, 20, 1)))
+            assert_rows(rs, row(True, 1) if scylla else row(True))
+            assert len(rs.column_names) == (2 if scylla else 1)
+
+            rs = session.execute(prepared1.bind((100, 200, 1)))
+            assert_rows(rs, row(False, 10))
+            assert len(rs.column_names) == 2
+
+            rs = session.execute(prepared1.bind((30, 40, 10)))
+            assert_rows(rs, row(True, 10) if scylla else row(True))
+            assert len(rs.column_names) == (2 if scylla else 1)
+
+            # Try executing the same message once again
+            rs = session.execute(prepared1.bind((100, 200, 1)))
+            assert_rows(rs, row(False, 30))
+            assert len(rs.column_names) == 2
+
+            rs = session.execute(prepared2.bind((1,)))
+            assert_rows(rs, row(False, 1, 30, 40))
+            assert len(rs.column_names) == 4
+
+            execute(cql, table, "ALTER TABLE %s ADD v3 int;")
+
+            rs = session.execute(prepared2.bind((1,)))
+            assert_rows(rs, row(False, 1, 30, 40, None))
+            assert len(rs.column_names) == 5
+
+            rs = session.execute(prepared2.bind((20,)))
+            assert_rows(rs, row(True, None, None, None, None) if scylla else row(True))
+            assert len(rs.column_names) == (5 if scylla else 1)
+
+            rs = session.execute(prepared2.bind((20,)))
+            assert_rows(rs, row(False, 20, 200, 300, None))
+            assert len(rs.column_names) == 5
+
+# The Java test runs prepareWithLWT() with protocol versions 4 and 5
+@pytest.mark.parametrize("version", [V4, V5])
+def testPrepareWithLWT(cql, test_keyspace, version):
+    prepareWithLWT(cql, test_keyspace, version)
+
+# As in prepareWithLWT(), Scylla returns the old values of the row even if
+# the conditions were successful. Moreover, for a batch Scylla returns one
+# result row for each conditional statement, while Cassandra returns just one
+# row (this is also explained in kb/lwt-differences.rst).
+def prepareWithBatchLWT(cql, test_keyspace, version):
+    scylla = is_scylla(cql)
+    with sessionNet(cql, version) as session:
+        session.execute("USE " + test_keyspace)
+        with create_table(cql, test_keyspace, "(pk int, v1 int, v2 int, PRIMARY KEY (pk))") as table:
+            prepared1 = session.prepare("BEGIN BATCH " +
+                                        "UPDATE " + table + " SET v1 = ? WHERE pk = 1 IF v1 = ?;" +
+                                        "UPDATE " + table + " SET v2 = ? WHERE pk = 1 IF v2 = ?;" +
+                                        "APPLY BATCH;")
+            prepared2 = session.prepare("BEGIN BATCH " +
+                                        "INSERT INTO " + table + " (pk, v1, v2) VALUES (1, 200, 300) IF NOT EXISTS;" +
+                                        "APPLY BATCH")
+            execute(cql, table, "INSERT INTO %s (pk, v1, v2) VALUES (1,1,1)")
+            execute(cql, table, "INSERT INTO %s (pk, v1, v2) VALUES (2,2,2)")
+
+            rs = session.execute(prepared1.bind((10, 1, 20, 1)))
+            if scylla:
+                assert_rows(rs, row(True, 1, 1, 1), row(True, 1, 1, 1))
+            else:
+                assert_rows(rs, row(True))
+            assert len(rs.column_names) == (4 if scylla else 1)
+
+            rs = session.execute(prepared1.bind((100, 1, 200, 1)))
+            if scylla:
+                assert_rows(rs, row(False, 1, 10, 20), row(False, 1, 10, 20))
+            else:
+                assert_rows(rs, row(False, 1, 10, 20))
+            assert len(rs.column_names) == 4
+
+            # Try executing the same message once again
+            rs = session.execute(prepared1.bind((100, 1, 200, 1)))
+            if scylla:
+                assert_rows(rs, row(False, 1, 10, 20), row(False, 1, 10, 20))
+            else:
+                assert_rows(rs, row(False, 1, 10, 20))
+            assert len(rs.column_names) == 4
+
+            rs = session.execute(prepared2.bind(()))
+            assert_rows(rs, row(False, 1, 10, 20))
+            assert len(rs.column_names) == 4
+
+            execute(cql, table, "ALTER TABLE %s ADD v3 int;")
+
+            rs = session.execute(prepared2.bind(()))
+            assert_rows(rs, row(False, 1, 10, 20, None))
+            assert len(rs.column_names) == 5
+
+# The Java test runs prepareWithBatchLWT() with protocol versions 4 and 5
+@pytest.mark.parametrize("version", [V4, V5])
+def testPrepareWithBatchLWT(cql, test_keyspace, version):
+    prepareWithBatchLWT(cql, test_keyspace, version)
+
+# The tests testPrepareWithAccordV4, testPrepareWithAccordV5 and
+# testPrepareWithAccordCurrent were not translated, because they test Accord
+# transactions, which Scylla doesn't support.
