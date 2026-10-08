@@ -657,3 +657,32 @@ def testUnSupportedSchema(cql, keyspaces):
                               "CREATE TABLE system.local_clone LIKE system.local ;")
     assert_invalid_throw_message(cql, "", "system_views keyspace is not user-modifiable", Unauthorized,
                               "CREATE TABLE system_views.newtb LIKE system_views.snapshots ;")
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and #19999 (SAI indexes on
+# non-vector columns).
+@pytest.mark.xfail(reason="SCYLLADB-5147, #19999")
+def testTableCopyWithIndexes(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text, d int, e text, f int, g text)", "sourcetb")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (d)")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (c)")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX ON %s (b) USING 'sai'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE CUSTOM INDEX ON %s (e) USING 'storageattachedindex'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE CUSTOM INDEX ON %s (f) USING 'org.apache.cassandra.index.sai.StorageAttachedIndex'")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH INDEXES", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, True, True)
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE), #19999 (SAI index on a
+# non-vector column) and #9859 (USING 'legacy_local_table').
+@pytest.mark.xfail(reason="SCYLLADB-5147, #19999, #9859")
+def testTableCopyWithMultiIndexOnSameColumn(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b int, c text, d int, e text, f int, g text)", "sourcetb")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX " + sourceTb + "_b_idx1 ON %s (b) USING 'legacy_local_table'")
+    createIndex(cql, sourceKs, sourceTb, "CREATE INDEX " + sourceTb + "_b_idx2 ON %s (b) USING 'sai'")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s WITH INDEXES", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb, True, True, True)
+
+# The test testTableCopyWithOutIndexes was not translated, because it uses
+# a SASI index, which Scylla does not support, and a custom index
+# implemented by a Java class (StubIndex).
