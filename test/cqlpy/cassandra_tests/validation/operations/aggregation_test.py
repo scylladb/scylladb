@@ -11,6 +11,7 @@
 
 from ...porting import *
 from decimal import Decimal
+import datetime
 
 # Scylla's error messages for dropping a non-existent aggregate are
 # different from Cassandra's: "No function named ks.f found" when no
@@ -449,3 +450,37 @@ def testReversedType(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 4, 7)")
 
         assert_rows(execute(cql, table, "SELECT max(c), min(c), avg(c) FROM %s WHERE a = 1 AND b > 1"), row(9, 7, 8))
+
+# Reproduces SCYLLADB-5141 (snake_case names of native functions).
+@pytest.mark.xfail(reason="SCYLLADB-5141")
+def testNestedFunctions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int primary key, b timeuuid, c double, d double)") as table:
+        with create_function(cql, test_keyspace, "(magnitude double, sign double) " +
+                                     "RETURNS NULL ON NULL INPUT " +
+                                     "RETURNS double " +
+                                     java_or_lua(cql, COPY_SIGN_JAVA, COPY_SIGN_LUA)) as copySign:
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, "SELECT max(a), max(to_unix_timestamp(b)) FROM %s"), "system.max(a)", "system.max(system.to_unix_timestamp(b))")
+            assert_rows(execute(cql, table, "SELECT max(a), max(to_unix_timestamp(b)) FROM %s"), row(null, null))
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, "SELECT max(a), to_unix_timestamp(max(b)) FROM %s"), "system.max(a)", "system.to_unix_timestamp(system.max(b))")
+            assert_rows(execute(cql, table, "SELECT max(a), to_unix_timestamp(max(b)) FROM %s"), row(null, null))
+
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, "SELECT max(" + copySign + "(c, d)) FROM %s"), "system.max(" + copySign + "(c, d))")
+            assert_rows(execute(cql, table, "SELECT max(" + copySign + "(c, d)) FROM %s"), row(null))
+
+            execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, max_timeuuid('2011-02-03 04:05:00+0000'), -1.2, 2.1)")
+            execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (2, max_timeuuid('2011-02-03 04:06:00+0000'), 1.3, -3.4)")
+            execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (3, max_timeuuid('2011-02-03 04:10:00+0000'), 1.4, 1.2)")
+
+            date = int(datetime.datetime(2011, 2, 3, 4, 10, 0, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+            assert_rows(execute(cql, table, "SELECT max(a), max(to_unix_timestamp(b)) FROM %s"), row(3, date))
+            assert_rows(execute(cql, table, "SELECT max(a), to_unix_timestamp(max(b)) FROM %s"), row(3, date))
+
+            assert_rows(execute(cql, table, "SELECT " + copySign + "(max(c), min(c)) FROM %s"), row(-1.4))
+            assert_rows(execute(cql, table, "SELECT " + copySign + "(c, d) FROM %s"), row(1.2), row(-1.3), row(1.4))
+            assert_rows(execute(cql, table, "SELECT max(" + copySign + "(c, d)) FROM %s"), row(1.4))
+            assert_rows(execute(cql, table, "SELECT " + copySign + "(c, max(c)) FROM %s"), row(1.2))
+            assert_rows(execute(cql, table, "SELECT " + copySign + "(max(c), c) FROM %s"), row(-1.4))
