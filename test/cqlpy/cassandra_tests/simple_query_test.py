@@ -410,3 +410,20 @@ def testRowFilteringOnStaticColumn(cql, test_keyspace):
                     row(1, 1), row(2, 2))
         assert_rows(execute(cql, table, "SELECT id, age FROM %s WHERE age > 3 ALLOW FILTERING"),
                     row(4, 4))
+
+def testSStableTimestampOrdering(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k1 int, v1 int, v2 int, PRIMARY KEY (k1))") as table:
+        # disableCompaction();
+
+        # sstable1
+        execute(cql, table, "INSERT INTO %s(k1,v1,v2) VALUES(1,1,1)  USING TIMESTAMP 5")
+        flush(cql, table)
+
+        # sstable2
+        execute(cql, table, "INSERT INTO %s(k1,v1,v2) VALUES(1,1,2)  USING TIMESTAMP 8")
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s(k1) VALUES(1)  USING TIMESTAMP 7")
+        execute(cql, table, "DELETE FROM %s USING TIMESTAMP 6 WHERE k1 = 1")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1=1"), row(1, 1, 2))
