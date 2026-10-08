@@ -81,3 +81,12 @@ def testFloatWithExponent(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (0, 3E+10, 3.4E3)")
         execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (1, 3.E10, -23.44E-3)")
         execute(cql, table, "INSERT INTO %s (k, d, f) VALUES (2, 3, -2)")
+
+# Migrated from cql_tests.py:TestCQL.conversion_functions_test()
+# Reproduces SCYLLADB-5141 (snake_case names of native functions).
+@pytest.mark.xfail(reason="SCYLLADB-5141")
+def testConversionFunctions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i varint, b blob)") as table:
+        execute(cql, table, "INSERT INTO %s (k, i, b) VALUES (0, blob_as_varint(bigint_as_blob(3)), text_as_blob('foobar'))")
+        assert_rows(execute(cql, table, "SELECT i, blob_as_text(b) FROM %s WHERE k = 0"),
+                   row(3, "foobar"))
