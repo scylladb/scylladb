@@ -87,6 +87,10 @@ void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& sta
             stats.resizes_finalized),
         sm::make_counter("auto_repair_needs_repair_nr", sm::description("number of tablets with auto repair enabled that currently needs repair"),
             stats.auto_repair_needs_repair_nr),
+        sm::make_counter("auto_repair_needs_repair_by_time_nr", sm::description("number of tablets selected for auto repair by the time based trigger"),
+            stats.auto_repair_needs_repair_by_time_nr),
+        sm::make_counter("auto_repair_needs_repair_by_size_nr", sm::description("number of tablets selected for auto repair by the size based trigger"),
+            stats.auto_repair_needs_repair_by_size_nr),
         sm::make_counter("auto_repair_enabled_nr", sm::description("number of tablets with auto repair enabled"),
             stats.auto_repair_enabled_nr),
         sm::make_counter("repairs_produced", sm::description("number of repairs produced by the load balancer"),
@@ -1215,6 +1219,12 @@ public:
     struct auto_repair_settings {
         bool enabled;
         std::chrono::seconds threshold;
+        // The size-based trigger: the fraction of a tablet that has to be unrepaired before
+        // it is repaired ahead of its interval, and the floor in bytes below which that
+        // fraction is not consulted at all. A fraction of 0 - the default - leaves the
+        // trigger off, so only the interval applies.
+        double size_fraction = 0;
+        int64_t min_size_in_bytes = 0;
     };
 
     // The effective auto repair settings for a table: the auto_repair_enabled and
@@ -1231,26 +1241,88 @@ public:
             .enabled = enabled,
             .threshold = std::chrono::seconds(threshold),
         };
-        lblogger.debug("Auto repair settings for table {}: enabled={} threshold={}",
-                table, settings.enabled, settings.threshold);
+        // Resolving the size thresholds is only worth it where the trigger could fire.
+        // Without incremental repair, repairing a tablet does not mark its sstables as
+        // repaired, so its unrepaired size would never drop and the trigger would select it
+        // again on every round; leave such a cluster to the time-based trigger. Unlike the
+        // two options above, these have no yaml counterpart, so the registry's own default
+        // is the right answer when no scope stores a value.
+        if (settings.enabled && _db.features().tablet_incremental_repair) {
+            settings.size_fraction = _cluster_config_manager.resolve_floating_point_table_config_or_default(
+                    opt::auto_repair_threshold_size_fraction, table);
+            settings.min_size_in_bytes = _cluster_config_manager.resolve_integer_table_config_or_default(
+                    opt::auto_repair_threshold_min_size_in_bytes, table);
+        }
+        lblogger.debug("Auto repair settings for table {}: enabled={} threshold={} size_fraction={} min_size_in_bytes={}",
+                table, settings.enabled, settings.threshold, settings.size_fraction, settings.min_size_in_bytes);
         return settings;
     }
 
+    // Whether enough time has passed since the tablet's last repair. An interval of 0 turns
+    // this trigger off, leaving the tablet to the other triggers; the time since the last
+    // repair is never negative, so comparing against 0 would instead select the tablet on
+    // every round. Negative values are not rejected by the registry yet and mean the same.
+    bool needs_auto_repair_by_time(const locator::global_tablet_id& gid, std::chrono::seconds threshold,
+            db_clock::duration diff) {
+        if (threshold <= std::chrono::seconds::zero()) {
+            lblogger.debug("Skipped time based auto repair for tablet={}: the repair interval is disabled", gid);
+            return false;
+        }
+        // Compared in whole seconds: converting the threshold to db_clock's resolution
+        // instead could overflow for a very large value.
+        return std::chrono::duration_cast<std::chrono::seconds>(diff) >= threshold;
+    }
+
+    // Whether the tablet holds enough unrepaired data to be repaired. Both conditions must hold: the unrepaired data has to be a large enough
+    // fraction of the tablet, and it has to be worth repairing in absolute terms, so that a
+    // nearly empty tablet is not repaired over and over for a few bytes. A tablet that fails
+    // the floor simply waits for the time-based trigger, or for a manual repair.
+    //
+    // Returns false when the sizes are not known for every replica: a node that predates the
+    // TABLET_UNREPAIRED_LOAD_STATS cluster feature, or whose load stats have not arrived yet,
+    // leaves the tablet to the time-based trigger rather than being repaired on a guess.
+    bool needs_auto_repair_by_size(const locator::global_tablet_id& gid, const locator::tablet_map& tmap,
+            const auto_repair_settings& settings) {
+        if (settings.size_fraction <= 0 || !_table_load_stats) {
+            return false;
+        }
+        // The tablet size gates the rest: it is the long-standing statistic, so it is the one
+        // more likely to be there, and an empty tablet has nothing to repair and nothing to
+        // take a fraction of. Checking it first also keeps the unknown-unrepaired-size case
+        // below meaning what it says - a replica that did not report - rather than also
+        // covering tablets that simply hold no data.
+        auto tablet_size = _table_load_stats->get_avg_tablet_size(tmap, gid);
+        if (!tablet_size) {
+            lblogger.debug("Skipped size based auto repair for tablet={}: tablet size unknown", gid);
+            return false;
+        }
+        if (!*tablet_size) {
+            lblogger.debug("Skipped size based auto repair for tablet={}: tablet is empty", gid);
+            return false;
+        }
+        auto unrepaired_size = _table_load_stats->get_avg_unrepaired_tablet_size(tmap, gid);
+        if (!unrepaired_size) {
+            lblogger.debug("Skipped size based auto repair for tablet={}: unrepaired size unknown", gid);
+            return false;
+        }
+        if (*unrepaired_size < uint64_t(settings.min_size_in_bytes)) {
+            return false;
+        }
+        auto fraction = double(*unrepaired_size) / double(*tablet_size);
+        lblogger.trace("Check gid={} unrepaired_size={} tablet_size={} fraction={} threshold_fraction={} min_size={}",
+                gid, *unrepaired_size, *tablet_size, fraction, settings.size_fraction, settings.min_size_in_bytes);
+        return fraction >= settings.size_fraction;
+    }
+
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const auto_repair_settings& settings, const db_clock::time_point& now,
+            const locator::tablet_map& tmap, const auto_repair_settings& settings,
+            const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
             co_return true;
         }
         if (!settings.enabled) {
-            co_return false;
-        }
-        // A threshold of 0 disables time-based auto repair. The time since the last repair is
-        // never negative, so comparing against 0 would select every tablet on every round.
-        // Negative values are not rejected by the registry yet and are treated as 0.
-        if (settings.threshold <= std::chrono::seconds::zero()) {
-            lblogger.debug("Skipped auto repair for tablet={}: time-based auto repair is disabled", gid);
             co_return false;
         }
         auto size = info.replicas.size();
@@ -1262,13 +1334,23 @@ public:
         diff = now - last_repair_time;
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
                 gid, diff, info.repair_time, settings.threshold);
-        // Compared in whole seconds: converting the threshold to db_clock's milliseconds
-        // instead could overflow for a very large value.
-        if (std::chrono::duration_cast<std::chrono::seconds>(diff) < settings.threshold) {
-            co_return false;
+        // Every trigger is evaluated on its own and counted on its own, and the tablet is
+        // repaired if any of them fires. Evaluating them all, rather than stopping at the
+        // first, is what keeps the per-trigger counters meaningful: each one says how often
+        // that trigger would have selected the tablet, independently of the others. A new
+        // trigger is added by computing it here and joining it to the disjunction below.
+        bool time_trigger = needs_auto_repair_by_time(gid, settings.threshold, diff);
+        if (time_trigger) {
+            stats.needs_repair_by_time_nr++;
         }
-        stats.needs_repair_nr++;
-        co_return true;
+        bool size_trigger = needs_auto_repair_by_size(gid, tmap, settings);
+        if (size_trigger) {
+            stats.needs_repair_by_size_nr++;
+        }
+
+        bool needed = time_trigger || size_trigger;
+        stats.needs_repair_nr += needed;
+        co_return needed;
     }
 
     void ensure_node(node_load_map& nodes, host_id host) {
@@ -1421,7 +1503,8 @@ public:
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, settings, now, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, tmap, settings, now,
+                            diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
@@ -1434,6 +1517,8 @@ public:
         }
 
         _stats.for_cluster().auto_repair_needs_repair_nr = auto_repair_stats.needs_repair_nr;
+        _stats.for_cluster().auto_repair_needs_repair_by_time_nr = auto_repair_stats.needs_repair_by_time_nr;
+        _stats.for_cluster().auto_repair_needs_repair_by_size_nr = auto_repair_stats.needs_repair_by_size_nr;
         _stats.for_cluster().auto_repair_enabled_nr = auto_repair_stats.enabled_nr;
 
         // TODO: we could add other factors in addition to the repair time when
