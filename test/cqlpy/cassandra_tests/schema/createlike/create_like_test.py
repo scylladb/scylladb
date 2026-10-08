@@ -619,3 +619,24 @@ def testUDTTableCopy(cql, keyspaces):
         sourceTbSameUdt = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c " + udtWithSameField + ");")
         targetTbSameUdt = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTbSameUdt, sourceKs, targetKs, "tbsameudt")
         assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTbSameUdt, targetTbSameUdt)
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE) and #19999 (SAI index on a
+# non-vector column).
+@pytest.mark.xfail(reason="SCYLLADB-5147, #19999")
+def testIndexOperationOnCopiedTable(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    # copied table can do index creation
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (id text PRIMARY KEY, val text, num int);")
+    targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
+    saiIndex = createIndex(cql, targetKs, targetTb, "CREATE INDEX ON %s(val) USING 'sai'")
+    cql.execute("INSERT INTO " + targetKs + "." + targetTb + " (id, val, num) VALUES ('1', 'value', 1)")
+    assert 1 == len(list(cql.execute("SELECT id FROM " + targetKs + "." + targetTb + " WHERE val = 'value'")))
+    normalIndex = createIndex(cql, targetKs, targetTb, "CREATE INDEX ON %s(num)")
+    targetIndexes = indexNames(cql, targetKs, targetTb)
+    assert len(targetIndexes) == 2
+    assert saiIndex in targetIndexes
+    assert normalIndex in targetIndexes
+
+# The test testTriggerOperationOnCopiedTable was not translated, because it
+# creates a trigger implemented by a Java class, which Scylla does not
+# support.
