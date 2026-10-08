@@ -228,3 +228,18 @@ def testTableSchemaCopy(cql, keyspaces):
     sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int PRIMARY KEY, b duration, c text);")
     targetTb = createTableLike(cql, "CREATE TABLE %s LIKE %s", sourceTb, sourceKs, targetKs)
     createTableLike(cql, "CREATE TABLE %s LIKE %s", targetTb, targetKs, sourceKs, "newtargettb")
+
+# Reproduces SCYLLADB-5147 (CREATE TABLE LIKE).
+@pytest.mark.xfail(reason="SCYLLADB-5147")
+def testIfNotExists(cql, keyspaces):
+    sourceKs, targetKs, differentKs = keyspaces
+    sourceTb = createTable(cql, sourceKs, "CREATE TABLE %s (a int, b text, c duration, d float, PRIMARY KEY(a, b));")
+    targetTb = createTableLike(cql, "CREATE TABLE IF NOT EXISTS %s LIKE %s", sourceTb, sourceKs, targetKs)
+    assertTableMetaEqualsWithoutKs(cql, sourceKs, targetKs, sourceTb, targetTb)
+
+    createTableLike(cql, "CREATE TABLE IF NOT EXISTS %s LIKE %s", sourceTb, sourceKs, targetKs, targetTb)
+    # The Python driver replaces the server's message for AlreadyExists errors
+    # with its own message, so we check for the driver's message instead of
+    # Cassandra's "Cannot add already existing table ...".
+    assert_invalid_throw_message(cql, "", "Table '" + targetKs + "." + targetTb + "' already exists", AlreadyExists,
+                              "CREATE TABLE " + targetKs + "." + targetTb + " LIKE " + sourceKs + "." + sourceTb)
