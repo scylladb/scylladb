@@ -425,3 +425,27 @@ def testAggregateWithWriteTimeOrTTL(cql, test_keyspace):
 
             assert r["writetime(b)"] >= today
             assert r["system.min(writetime(b))"] == yesterday
+
+def testInvalidCalls(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key (a, b))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1, 10)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 2, 9)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 3, 8)")
+
+        # Cassandra considers this a syntax error, while Scylla gives a clearer
+        # error message: "Aggregation functions are not supported in the WHERE
+        # clause". We accept either.
+        assert_invalid_throw(cql, table, (SyntaxException, InvalidRequest), "SELECT max(b), max(c) FROM %s WHERE max(a) = 1")
+        # Scylla's error message is different from Cassandra's, so we accept
+        # either.
+        assert_invalid_message_re(cql, table, re.escape("aggregate functions cannot be used as arguments of aggregate functions") + "|" +
+                                  re.escape("SELECT clause contains aggeregation of an aggregation"), "SELECT max(sum(c)) FROM %s")
+
+def testReversedType(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key (a, b)) WITH CLUSTERING ORDER BY (b DESC)") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1, 10)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 2, 9)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 3, 8)")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 4, 7)")
+
+        assert_rows(execute(cql, table, "SELECT max(c), min(c), avg(c) FROM %s WHERE a = 1 AND b > 1"), row(9, 7, 8))
