@@ -113,7 +113,7 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
     candidates.reserve(batch_cap);
     prefix_scores.reserve(batch_cap);
 
-    uint64_t accum_net_data_size = 0;
+    uint64_t accum_record_bytes = 0;
     uint64_t accum_record_count = 0;
     for (const auto& desc : segments._segments) {
         if (candidates.size() >= batch_cap) {
@@ -121,13 +121,13 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
         }
         candidates.push_back(&desc);
 
-        accum_net_data_size += desc.net_data_size(segment_size);
+        accum_record_bytes += desc.record_bytes(segment_size);
         accum_record_count += desc.record_count;
 
         const auto score = compaction_candidate_score{
             .n_in = candidates.size(),
-            .n_out = raw_write_buffer::estimate_required_segments(accum_net_data_size, accum_record_count, segment_size, segment_kind::full),
-            .live_bytes = accum_net_data_size,
+            .n_out = raw_write_buffer::estimate_required_segments(accum_record_bytes, accum_record_count, segment_size, segment_kind::full),
+            .live_bytes = accum_record_bytes,
         };
         prefix_scores.push_back(score);
     }

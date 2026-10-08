@@ -22,8 +22,8 @@ using namespace tests::logstor;
 namespace {
 
 struct noop_space_accounting_subscriber final : space_accounting_subscriber {
-    void on_add_record(log_location) noexcept override {}
-    void on_free_record(log_location) noexcept override {}
+    void on_add_record(record_location) noexcept override {}
+    void on_free_record(record_location) noexcept override {}
 };
 
 inline noop_space_accounting_subscriber noop_space_accounting{};
@@ -49,7 +49,7 @@ primary_index_key make_fixed_token_key(const schema& schema, int64_t token, sstr
 
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {
     return index_entry{
-        .location = log_location{
+        .location = record_location{
             .segment = log_segment_id{segment},
             .offset = offset,
             .size = size,

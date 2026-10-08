@@ -48,9 +48,9 @@ class logstor_group;
 struct separator_index_update {
     primary_index* index;
     primary_index_key key;
-    log_location prev_location;
+    record_location prev_location;
 
-    void operator()(log_location new_location, seastar::gate::holder) const;
+    void operator()(record_location new_location, seastar::gate::holder) const;
 };
 
 using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
@@ -210,10 +210,10 @@ float compaction_shares_pressure(uint64_t available_segments, free_segment_water
 inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
-    // free_space = segment_size - net_data_size
+    // free_space = segment_size - record_bytes
     // initially set to segment_size
-    // when writing records, decrease by total net data size
-    // when freeing a record, increase by the record's net data size
+    // when writing records, decrease by the record frame sizes written
+    // when freeing a record, increase by that record's frame size
     size_t free_space{0};
     size_t record_count{0};
     segment_set* owner{nullptr}; // non-owning, set when added to a segment_set
@@ -227,25 +227,26 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
         record_count = 0;
     }
 
-    size_t net_data_size(size_t segment_size) const noexcept {
+    // The frame sizes of the live records of the segment summed, their padding excluded.
+    size_t record_bytes(size_t segment_size) const noexcept {
         return segment_size - free_space;
     }
 
-    void on_write(size_t net_data_size, size_t cnt = 1) noexcept {
-        free_space -= net_data_size;
+    void on_write(size_t record_bytes, size_t cnt = 1) noexcept {
+        free_space -= record_bytes;
         record_count += cnt;
     }
 
-    void on_write(log_location loc) noexcept {
+    void on_write(record_location loc) noexcept {
         on_write(loc.size);
     }
 
-    void on_free(size_t net_data_size, size_t cnt = 1) noexcept {
-        free_space += net_data_size;
+    void on_free(size_t record_bytes, size_t cnt = 1) noexcept {
+        free_space += record_bytes;
         record_count -= cnt;
     }
 
-    void on_free(log_location loc) noexcept {
+    void on_free(record_location loc) noexcept {
         on_free(loc.size);
     }
 };
@@ -375,7 +376,7 @@ private:
         desc.owner = this;
         desc.index_in_set = _segment_list.size() - 1;
         _segments.push(desc);
-        _live_bytes += desc.net_data_size(_segment_size);
+        _live_bytes += desc.record_bytes(_segment_size);
     }
 
     // Validates the invariants of every removal path, and aborts rather than throwing, both
@@ -387,12 +388,12 @@ private:
         if (desc.index_in_set >= _segment_list.size() || _segment_list[desc.index_in_set] != &desc) {
             on_fatal_internal_error(logstor_logger, "segment is not at its recorded position in its set");
         }
-        const size_t net_data_size = desc.net_data_size(_segment_size);
-        if (net_data_size > _live_bytes) {
-            on_fatal_internal_error(logstor_logger, format("unlinking a segment holding {} bytes from a set holding {} live bytes", net_data_size, _live_bytes));
+        const size_t record_bytes = desc.record_bytes(_segment_size);
+        if (record_bytes > _live_bytes) {
+            on_fatal_internal_error(logstor_logger, format("unlinking a segment holding {} bytes from a set holding {} live bytes", record_bytes, _live_bytes));
         }
         _segments.erase(desc);
-        _live_bytes -= net_data_size;
+        _live_bytes -= record_bytes;
         // Keep the list compact by moving the last segment into the freed slot.
         auto* last = _segment_list.back();
         _segment_list[desc.index_in_set] = last;
@@ -488,8 +489,8 @@ struct separator_buffer {
         return !buf || !buf->has_data();
     }
 
-    size_t offset_in_buffer() const noexcept {
-        return buf ? buf->offset_in_buffer() : 0;
+    size_t serialized_size() const noexcept {
+        return buf ? buf->serialized_size() : 0;
     }
 
     future<> close() {
