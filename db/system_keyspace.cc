@@ -3065,6 +3065,29 @@ future<> system_keyspace::save_group0_upgrade_state(sstring value) {
     return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value, false);
 }
 
+static constexpr auto RAFT_REPLAYED_UP_TO_KEY = "raft_replayed_segments_up_to";
+
+future<db::segment_id_type> system_keyspace::get_raft_replayed_up_to() {
+    const auto value = co_await get_scylla_local_param_as<int64_t>(RAFT_REPLAYED_UP_TO_KEY);
+    co_return db::segment_id_type(value.value_or(0));
+}
+
+future<> system_keyspace::set_raft_replayed_up_to(db::segment_id_type base_id) {
+    // Above the stored write's timestamp, so that a backwards clock step cannot let the
+    // older value win over this one.
+    static const auto read_cql = format("SELECT writetime(value) AS ts FROM system.{} WHERE key = ?", SCYLLA_LOCAL);
+    const auto rows = co_await execute_cql(read_cql, sstring(RAFT_REPLAYED_UP_TO_KEY));
+    api::timestamp_type timestamp = api::new_timestamp();
+    if (!rows->empty() && rows->one().has("ts")) {
+        timestamp = std::max(timestamp, rows->one().get_as<int64_t>("ts") + 1);
+    }
+    static const auto write_cql = format("UPDATE system.{} USING TIMESTAMP ? SET value = ? WHERE key = ?", SCYLLA_LOCAL);
+    co_await execute_cql(write_cql, int64_t(timestamp),
+            data_type_for<int64_t>()->to_string_impl(data_value(int64_t(base_id))),
+            sstring(RAFT_REPLAYED_UP_TO_KEY)).discard_result();
+    co_await force_blocking_flush(SCYLLA_LOCAL);
+}
+
 static constexpr auto MUST_SYNCHRONIZE_TOPOLOGY_KEY = "must_synchronize_topology";
 
 future<bool> system_keyspace::get_must_synchronize_topology() {

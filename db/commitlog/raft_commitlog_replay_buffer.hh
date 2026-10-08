@@ -110,6 +110,9 @@ class raft_commitlog_replay_buffer {
     std::unordered_map<raft::group_id, group_state> _groups;
     std::unordered_map<raft::group_id, service::strong_consistency::replayed_data_per_group> _per_group_data;
     uint64_t _total_entries = 0;
+    // Base id of the newest segment an earlier boot's replay consumed; see
+    // set_replayed_up_to().
+    db::segment_id_type _replayed_up_to = 0;
     // One schema store for the whole replay, so each schema version resolves once
     // across all groups. Created on first use.
     std::optional<service::strong_consistency::schema_store> _schemas;
@@ -164,11 +167,27 @@ public:
         return _total_entries;
     }
 
+    // Segments at or below this base id were consumed by an earlier boot's replay and
+    // survived its deletion, through a failed unlink or a crash in the middle of it.
+    // Their raft batches are ignored: what they held is already in sstables, in the
+    // descriptors and in the rewritten tails. Replaying them again can resurrect copies
+    // a truncation superseded, because that replay may not see the superseding segment.
+    void set_replayed_up_to(db::segment_id_type base_id) {
+        _replayed_up_to = base_id;
+    }
+
+    bool consumed_by_earlier_replay(db::segment_id_type segment) const {
+        return db::replay_position(segment).base_id() <= _replayed_up_to;
+    }
+
     // A segment the replay could not read whole: a bad sector, or a header that failed
     // its check and skipped the file. finish_replay() decides from the indexes whether
     // the loss cost a raft group anything; the segments named here only go into the
     // warning. A truncated tail, where writing stopped at the crash, is not recorded.
     void note_unreadable_segment(db::segment_id_type segment) {
+        if (consumed_by_earlier_replay(segment)) {
+            return;
+        }
         _unreadable_segments.push_back(segment);
     }
 

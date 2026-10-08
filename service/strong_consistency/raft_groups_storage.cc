@@ -434,12 +434,11 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
     // Only advance: an earlier run or replay may have persisted a value at or beyond
     // this index. An equal index is a no-op even when replay computed truncation
     // records of its own. Replay derives those records from the segments it reads: a
-    // crash before delete_segments() leaves the same segments to replay again, which
-    // derives the same records. The boot deletes the segments before
-    // groups_manager::start() starts any group. A crash during the deletion, or a
-    // failed unlink, leaves a subset of them, which can derive fewer records
-    // (SCYLLADB-5133). Index 0 is written anyway, so that a bootstrapped group's first
-    // descriptor lands.
+    // crash before the segments are recorded as replayed leaves the same segments to
+    // replay again, which derives the same records. Once recorded (see
+    // system_keyspace::set_raft_replayed_up_to()), a later replay ignores any of them a
+    // crash or a failed unlink leaves behind. Index 0 is written anyway, so that a
+    // bootstrapped group's first descriptor lands.
     const auto persisted = co_await load_descriptor(qp, gid, shard);
     if (persisted.exists
             && (persisted.idx > idx || (persisted.idx == idx && idx != raft::index_t{0}))) {

@@ -231,6 +231,9 @@ future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db
 future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::query_processor& qp,
         db::system_keyspace& sys_ks, raft::group_id group_id, db::segment_id_type segment,
         raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
+    if (consumed_by_earlier_replay(segment)) {
+        co_return;
+    }
     auto& group = _groups[group_id];
     if (!group.resolved) {
         co_await resolve_group(db, qp, group_id, group);

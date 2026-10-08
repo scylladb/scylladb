@@ -678,6 +678,14 @@ public:
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);
 
+    // The highest commitlog segment base id a completed replay consumed. Raft batches in
+    // segments at or below it are already persisted elsewhere, so a later replay skips
+    // them (see raft_commitlog_replay_buffer). 0 when no segment is covered.
+    future<db::segment_id_type> get_raft_replayed_up_to();
+    // Overwrites the value, also with a lower one, and flushes it so that the next boot
+    // reads it before commitlog replay.
+    future<> set_raft_replayed_up_to(db::segment_id_type base_id);
+
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 

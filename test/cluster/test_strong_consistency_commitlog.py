@@ -11,7 +11,9 @@ from test.cluster.util import new_test_keyspace, reconnect_driver
 
 import asyncio
 import logging
+import os
 import pytest
+import shutil
 import time
 import uuid
 
@@ -678,3 +680,68 @@ async def test_crash_after_recycling_a_segment(manager: ScyllaClusterManager):
         for pk in (0, rows // 2, rows - 1):
             got = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {pk}")
             assert len(got) == 1 and got[0].c == pk * 10, f"pk={pk} did not survive the crash"
+
+
+@pytest.mark.asyncio
+async def test_replay_ignores_a_segment_an_earlier_replay_consumed(manager: ScyllaClusterManager):
+    """A crash in the middle of the deletion that follows replay, or an unlink that
+    fails, leaves some of the replayed segments on disk. Replaying such a subset can
+    hand raft copies a truncation superseded, so the boot records the segments as
+    consumed before it deletes them, and the next replay ignores their raft batches.
+    Restore the replayed segments after the boot that deleted them, and check that the
+    next boot recognizes and ignores them."""
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        # Keep the entries in the commitlog rather than letting a flush move them
+        # to sstables before the crash.
+        'commitlog_total_space_in_mb': 10000,
+    }
+    server = await manager.server_add(config=config)
+    cql, _ = await manager.get_ready_cql([server])
+    commitlog_dir = os.path.join(await manager.server_get_workdir(server.server_id), 'commitlog')
+    saved_dir = os.path.join(await manager.server_get_workdir(server.server_id), 'replayed-segments')
+
+    def segment_base_id(name: str) -> int:
+        # CommitLog-<version>-<id>[.<tag>].log; the top bits of the id are the shard.
+        return int(name.split('.')[0].split('-')[2]) & ((1 << 54) - 1)
+
+    async def replayed_up_to() -> int:
+        rows = await cql.run_async(
+            "SELECT value FROM system.scylla_local WHERE key = 'raft_replayed_segments_up_to'")
+        return int(rows[0].value) if rows else 0
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        for pk in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+
+        await manager.server_stop(server.server_id, convict=False)
+        os.makedirs(saved_dir)
+        saved = [name for name in os.listdir(commitlog_dir) if name.startswith('CommitLog-')]
+        assert saved, "expected commitlog segments to replay"
+        for name in saved:
+            shutil.copy2(os.path.join(commitlog_dir, name), saved_dir)
+
+        # This boot replays the segments, records them as consumed and deletes them.
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        assert await replayed_up_to() >= max(segment_base_id(name) for name in saved)
+        assert not set(saved) & set(os.listdir(commitlog_dir)), "replayed segments were not deleted"
+
+        # Put them back, as a crash in the middle of the deletion would have left them.
+        await manager.server_stop(server.server_id, convict=False)
+        for name in saved:
+            shutil.copy2(os.path.join(saved_dir, name), commitlog_dir)
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        await log.wait_for(r"was replayed by an earlier boot that did not delete it; its raft batches are ignored",
+                           from_mark=mark, timeout=60)
+        cql, _ = await manager.get_ready_cql([server])
+
+        for pk in range(5):
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+            assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+            assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
+
+    await manager.server_stop_gracefully(server.server_id)

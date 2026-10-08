@@ -355,6 +355,18 @@ starts the node without them, which is the way out while the commitlog still rep
 intact segment as damaged (SCYLLADB-4853). The node that starts that way runs a log that
 may be short of entries the quorum committed.
 
+After `finish_replay()` the node flushes every memtable, records in `system.scylla_local`
+the highest base id among the replayed segments, flushes that, and only then deletes the
+segments. A crash in the middle of the deletion, or an unlink that fails, leaves a subset
+of them, and replaying a subset can resurrect a copy a truncation superseded: the segment
+that superseded it may be gone, and the record naming the copy is persisted only when the
+floor advanced. So the next replay ignores raft batches, and unreadable-segment reports,
+from segments at or below the recorded base id. A boot that finds no segment clears the
+value: its segment ids start from the machine's uptime (`steady_clock`), so after a
+machine reboot they can fall under the stored value. A boot with strongly consistent
+tables disabled still maintains a stored value, so that a later boot that enables them
+does not ignore its segments.
+
 A group this shard no longer hosts is discarded rather than recovered: its entries
 belong to whoever holds the tablet now. The test is `hosts_raft_group()`, the same one
 that decides whether the running group is torn down, and it is stage-aware - a leaving

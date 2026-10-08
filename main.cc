@@ -2214,8 +2214,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cl != nullptr) {
                 auto paths = cl->get_segments_to_replay().get();
+                // Read also with strongly consistent tables disabled: a stored value must stay
+                // below this boot's segment ids, or a later boot with the feature enabled
+                // ignores those segments.
+                const db::segment_id_type raft_replayed_up_to = sys_ks.local().get_raft_replayed_up_to().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
+                    db::segment_id_type max_replayed_base_id = 0;
+                    for (const auto& path : paths) {
+                        const auto base_id = db::replay_position(
+                                db::commitlog::descriptor(path, db::commitlog::descriptor::FILENAME_PREFIX).id).base_id();
+                        max_replayed_base_id = std::max(max_replayed_base_id, base_id);
+                        if (base_id <= raft_replayed_up_to) {
+                            startlog.warn("commitlog segment {} was replayed by an earlier boot that did not delete it; "
+                                    "its raft batches are ignored", path);
+                        }
+                    }
+                    raft_replay_buffer.invoke_on_all([raft_replayed_up_to] (db::raft_commitlog_replay_buffer& buffer) {
+                        buffer.set_replayed_up_to(raft_replayed_up_to);
+                    }).get();
                     auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer, &qp).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
 
@@ -2232,6 +2249,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
                     startlog.info("replaying commit log - flushing memtables");
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
+
+                    // Everything the replayed segments held is now in sstables, in the
+                    // descriptors and in the rewritten tails. Record that before the
+                    // deletion: a crash in the middle of it, or a failed unlink, leaves a
+                    // subset of the segments, and replaying a subset can resurrect copies
+                    // a truncation superseded. Every segment this run writes, on every
+                    // shard, has a higher base id than the replayed ones.
+                    if (raft_replayed_up_to != 0 || db.local().get_config().check_experimental(
+                            db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+                        sys_ks.local().set_raft_replayed_up_to(max_replayed_base_id).get();
+                    }
                     supervisor::notify("replaying commit log - removing old commitlog segments");
 
                     auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/this_smp_shard_count())));
@@ -2243,6 +2271,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         }
                         return make_ready_future<>();
                     }).get();
+                } else if (raft_replayed_up_to != 0) {
+                    // No segment is left, so this run's base ids start from the machine's
+                    // uptime (steady_clock). After a machine reboot they can fall under the
+                    // stored value.
+                    sys_ks.local().set_raft_replayed_up_to(0).get();
                 }
             }
 

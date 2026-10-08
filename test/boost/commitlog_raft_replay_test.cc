@@ -1940,6 +1940,97 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_damaged_segment) {
     }, sc_replay_config());
 }
 
+// Test: a replay ignores the raft batches of segments an earlier replay consumed. Leader A
+// wrote 10..12 in term 1 to one segment, leader B rewrote 11..12 in term 2 to the next,
+// and no header raised the floor of 9, so the record of the truncation is not persisted.
+// Once the first replay's deletion leaves only A's segment, replaying it next to the
+// rewritten tail would hand raft 11..12 in term 1. Segment ids carry shard bits, so a
+// comparison of whole ids instead of base ids would misjudge them.
+SEASTAR_TEST_CASE(test_replay_ignores_segments_an_earlier_replay_consumed) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto gid = make_group_id();
+        const auto table = table_id(utils::UUID_gen::get_time_UUID());
+        const auto my_id = env.local_db().get_token_metadata().get_my_id();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(9), raft::term_t(1),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, table, gid, locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
+
+        const db::segment_id_type leader_a_segment = db::replay_position(unsigned(1), db::segment_id_type(1)).id;
+        const db::segment_id_type leader_b_segment = db::replay_position(unsigned(1), db::segment_id_type(2)).id;
+        const db::segment_id_type tail_segment = db::replay_position(unsigned(0), db::segment_id_type(3)).id;
+        const std::vector<raft::log_entry_ptr> leader_a_batch{
+            make_dummy_entry(raft::term_t(1), raft::index_t(10)),
+            make_dummy_entry(raft::term_t(1), raft::index_t(11)),
+            make_dummy_entry(raft::term_t(1), raft::index_t(12)),
+        };
+        const std::vector<raft::log_entry_ptr> leader_b_batch{
+            make_dummy_entry(raft::term_t(2), raft::index_t(11)),
+            make_dummy_entry(raft::term_t(2), raft::index_t(12)),
+        };
+
+        db::raft_commitlog_replay_buffer first;
+        first.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, leader_a_segment, raft::index_t(9), leader_a_batch).get();
+        first.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, leader_b_segment, raft::index_t(9), leader_b_batch).get();
+        first.finish_replay(env.local_db(), env.local_qp()).get();
+        auto first_data = first.take_replayed_group_entries(gid);
+        BOOST_REQUIRE_EQUAL(log_shape(first_data.entries), "1:10,2:11,2:12");
+        const std::vector<raft::log_entry_ptr> tail(first_data.entries.begin(), first_data.entries.end());
+
+        // The second replay finds leader A's segment and the rewritten tail.
+        db::raft_commitlog_replay_buffer second;
+        second.set_replayed_up_to(db::replay_position(leader_b_segment).base_id());
+        second.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, leader_a_segment, raft::index_t(9), leader_a_batch).get();
+        second.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, tail_segment, raft::index_t(9), tail).get();
+        second.finish_replay(env.local_db(), env.local_qp()).get();
+        auto second_data = second.take_replayed_group_entries(gid);
+        BOOST_REQUIRE_EQUAL(log_shape(second_data.entries), "1:10,2:11,2:12");
+
+        first_data.records.clear();
+        second_data.records.clear();
+        first.stop().get();
+        second.stop().get();
+    }, sc_replay_config());
+}
+
+// Test: a segment an earlier replay consumed does not refuse the boot when it cannot
+// be read, because its raft batches are ignored anyway.
+SEASTAR_TEST_CASE(test_replay_ignores_an_unreadable_segment_an_earlier_replay_consumed) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto my_id = env.local_db().get_token_metadata().get_my_id();
+        damaged_segment_fixture fixture{env};
+        fixture.seed(locator::tablet_replica_set{{my_id, this_shard_id()}});
+        db::raft_commitlog_replay_buffer buffer;
+        buffer.set_replayed_up_to(1);
+        fixture.read_one_batch(buffer);
+        buffer.note_unreadable_segment(db::replay_position(unsigned(1), db::segment_id_type(1)).id);
+        BOOST_REQUIRE_NO_THROW(buffer.finish_replay(env.local_db(), env.local_qp()).get());
+        auto data = buffer.take_replayed_group_entries(fixture.gid);
+        BOOST_REQUIRE_EQUAL(data.entries.size(), 1u);
+        buffer.stop().get();
+    }, sc_replay_config());
+}
+
+// Test: the replay marker is overwritten, also with a lower value, and 0 clears it. A
+// boot that finds no segment clears it, because its segment ids start from the machine's
+// uptime, and after a machine reboot they can fall under the stored value.
+SEASTAR_TEST_CASE(test_raft_replayed_up_to_overwrites) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& sys_ks = env.get_system_keyspace().local();
+        BOOST_REQUIRE_EQUAL(sys_ks.get_raft_replayed_up_to().get(), 0u);
+        sys_ks.set_raft_replayed_up_to(100).get();
+        BOOST_REQUIRE_EQUAL(sys_ks.get_raft_replayed_up_to().get(), 100u);
+        sys_ks.set_raft_replayed_up_to(50).get();
+        BOOST_REQUIRE_EQUAL(sys_ks.get_raft_replayed_up_to().get(), 50u);
+        sys_ks.set_raft_replayed_up_to(0).get();
+        BOOST_REQUIRE_EQUAL(sys_ks.get_raft_replayed_up_to().get(), 0u);
+    }, sc_replay_config());
+}
+
 // Test: strongly_consistent_tables_start_on_damaged_commitlog starts the node the
 // refusal above stops. The commitlog still reports an intact segment as damaged on some
 // paths (SCYLLADB-4853), so an operator needs a way past the refusal.
