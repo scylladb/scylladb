@@ -564,6 +564,16 @@ def testUserTypeDrop(cql):
         # UT still referenced by UDF
         assert_invalid_message(cql, KEYSPACE, "as it is still used by function", "DROP TYPE " + type)
 
+# Reproduces SCYLLADB-5171 (duplicate argument names in CREATE FUNCTION)
+@pytest.mark.xfail(reason="SCYLLADB-5171")
+def testDuplicateArgNames(cql, test_keyspace):
+    KEYSPACE = test_keyspace
+    assert_invalid_message(cql, KEYSPACE, "Duplicate argument names for given function",
+                           "CREATE OR REPLACE FUNCTION " + KEYSPACE + ".scrinv(input double, input int) " +
+                           "CALLED ON NULL INPUT " +
+                           "RETURNS double " +
+                           java_or_lua(cql, "return Math.max(input, input)", "return input") + ";")
+
 # Reproduces SCYLLADB-5169 (CREATE OR REPLACE FUNCTION should not change the
 # return type or null-input behavior)
 @pytest.mark.xfail(reason="SCYLLADB-5169")
