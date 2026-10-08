@@ -138,7 +138,7 @@ public:
         : compaction::compaction_task_executor(cm, compaction::throw_if_stopping::no, &table_s, compaction::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
-        , _hold(_compaction_state.gate.hold())
+        , _hold(hold_compaction_state_gate())
     { }
 
 protected:
