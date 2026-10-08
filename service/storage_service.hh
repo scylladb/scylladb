@@ -915,6 +915,9 @@ private:
     std::optional<shared_future<>> _decommission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+
+    std::optional<shared_future<>> _decommission_hints_drain;
+
     tablet_op_registry _tablet_ops;
     // This tracks active topology cmd rpc. There can be only one active
     // cmd running and by inspecting this structure it can be checked which
@@ -948,6 +951,7 @@ private:
             reset_streaming_result reset_result = reset_streaming_result::no);
 
     future<> raft_decommission();
+    future<> drain_hints_before_leaving();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
