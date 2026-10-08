@@ -16,7 +16,7 @@ import time
 import random
 import string
 from ..util import unique_name, is_scylla
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
@@ -116,6 +116,28 @@ def create_view(cql, table, query, wait=True):
         yield view
     finally:
         cql.execute("DROP MATERIALIZED VIEW IF EXISTS " + view)
+
+# Several of Cassandra's view tests repeat the same operations for several
+# different primary keys of a view, each time on a new base table. Creating
+# all these tables and views takes about a second per test on Scylla, so the
+# translations instead create all the views on the same base table, and check
+# all of them after each operation - each view still sees exactly the same
+# sequence of base-table operations as in the Java test. create_views()
+# creates the views with the given queries (with %s placeholders, as in
+# create_view()) and waits for all of them to be built, and
+# assert_views_rows_ignoring_order() checks the result of the same SELECT
+# from all of them.
+@contextmanager
+def create_views(cql, table, queries):
+    with ExitStack() as stack:
+        views = [stack.enter_context(create_view(cql, table, query, wait=False)) for query in queries]
+        for view in views:
+            wait_for_view_built(cql, view)
+        yield views
+
+def assert_views_rows_ignoring_order(cql, views, query, *rows):
+    for view in views:
+        assert_rows_ignoring_order(execute(cql, view, query), *rows)
 
 @contextmanager
 def create_keyspace(cql, arg):
