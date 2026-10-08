@@ -365,3 +365,29 @@ def testAggregateWithUdtFields(cql, test_keyspace):
 COPY_SIGN_JAVA = "return Double.valueOf(Math.copySign(magnitude, sign));"
 # (Scylla's Lua environment doesn't include Lua's "math" library)
 COPY_SIGN_LUA = "if magnitude < 0 then magnitude = -magnitude end if sign < 0 then return -magnitude else return magnitude end"
+
+def testAggregateWithFunctions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b double, c double, primary key(a, b))") as table:
+        with create_function(cql, test_keyspace, "(magnitude double, sign double) " +
+                                     "RETURNS NULL ON NULL INPUT " +
+                                     "RETURNS double " +
+                                     java_or_lua(cql, COPY_SIGN_JAVA, COPY_SIGN_LUA)) as copySign:
+            # Test with empty table
+            with original_column_names(cql):
+                assert_column_names(execute(cql, table, "SELECT count(b), max(b) as max, " + copySign + "(b, c), " + copySign + "(c, b) as first FROM %s"),
+                              "system.count(b)", "max", copySign + "(b, c)", "first")
+            assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, " + copySign + "(b, c), " + copySign + "(c, b) as first FROM %s"),
+                               row(0, null, null, null))
+
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, -1.2, 2.1)")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 1.3, -3.4)")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (0, 1.4, 1.2)")
+
+            assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, " + copySign + "(b, c), " + copySign + "(c, b) as first FROM %s"),
+                       row(3, 1.4, 1.2, -2.1))
+
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, -1.2, null)")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1.3, -3.4)")
+            execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (1, 1.4, 1.2)")
+            assert_rows(execute(cql, table, "SELECT count(b), max(b) as max, " + copySign + "(b, c), " + copySign + "(c, b) as first FROM %s WHERE a = 1"),
+                       row(3, 1.4, null, null))
