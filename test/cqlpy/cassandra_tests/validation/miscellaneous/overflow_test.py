@@ -44,3 +44,18 @@ def testReservedKeywords(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key text PRIMARY KEY, count counter)") as table:
         table_name = unique_name()
         assert_invalid_throw(cql, table, SyntaxException, f"CREATE TABLE {test_keyspace}.{table_name} (select text PRIMARY KEY, x int)")
+
+# Test identifiers
+# migrated from cql_tests.py:TestCQL.identifier_test()
+def testIdentifiers(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(key_23 int PRIMARY KEY, CoLuMn int)") as table:
+        execute(cql, table, "INSERT INTO %s (Key_23, Column) VALUES (0, 0)")
+        execute(cql, table, "INSERT INTO %s (KEY_23, COLUMN) VALUES (0, 0)")
+
+        assert_invalid(cql, table, "INSERT INTO %s (key_23, column, column) VALUES (0, 0, 0)")
+        assert_invalid(cql, table, "INSERT INTO %s (key_23, column, COLUMN) VALUES (0, 0, 0)")
+        assert_invalid(cql, table, "INSERT INTO %s (key_23, key_23, column) VALUES (0, 0, 0)")
+        assert_invalid(cql, table, "INSERT INTO %s (key_23, KEY_23, column) VALUES (0, 0, 0)")
+
+        table_name = unique_name()
+        assert_invalid_throw(cql, table, SyntaxException, f"CREATE TABLE {test_keyspace}.{table_name} (select int PRIMARY KEY, column int)")
