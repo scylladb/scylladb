@@ -41,6 +41,18 @@ namespace {
 
 const auto app_name = "types";
 
+// The compound options have more human-friendly aliases, either name is accepted.
+const std::map<std::string, std::string> compound_option_aliases{
+    {"prefix-compound", "clustering-key"},
+    {"full-compound", "partition-key"},
+    {"legacy-composite", "legacy-partition-key"},
+};
+
+// Is the compound option (or its alias) set?
+bool has_compound_option(const bpo::variables_map& vm, const std::string& name) {
+    return vm.contains(name) || vm.contains(compound_option_aliases.at(name));
+}
+
 // A full compound, that is, a partition key.
 // Values are serialized either in scylla's in-memory format (see
 // keys/compound.hh), or in the legacy composite format, used in sstables (see
@@ -387,7 +399,7 @@ const partition_key_type& get_partition_key_type(const type_variant& type, std::
     if (const auto* pk_type = std::get_if<partition_key_type>(&type)) {
         return *pk_type;
     }
-    throw std::invalid_argument(fmt::format("{} action requires full-compound or legacy-composite input", action));
+    throw std::invalid_argument(fmt::format("{} action requires --full-compound (--partition-key) or --legacy-composite (--legacy-partition-key) input", action));
 }
 
 void tokenof_handler(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) {
@@ -418,10 +430,15 @@ const std::vector<operation_option> global_options{
             " types can be specified either with their CQL name (e.g. map<int, text>) or with their cassandra type class name (e.g. MapType(Int32Type, UTF8Type));"
             " when values are compounds, multiple types can be specified, one for each type making up the compound, "
             "note that the order of the types on the command line will be their order in the compound too"),
-    typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
-    typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types"),
+    typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types;"
+            " alias: --clustering-key"),
+    typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types;"
+            " alias: --partition-key"),
     typed_option<>("legacy-composite", "values are full compounds (e.g. partition key), serialized in the legacy composite format, used in sstables,"
-            " instead of scylla's in-memory format"),
+            " instead of scylla's in-memory format; alias: --legacy-partition-key"),
+    typed_option<>("clustering-key", "alias for --prefix-compound"),
+    typed_option<>("partition-key", "alias for --full-compound"),
+    typed_option<>("legacy-partition-key", "alias for --legacy-composite"),
     typed_option<unsigned>("shards", "number of shards (only relevant for shardof action)"),
     typed_option<unsigned>("ignore-msb-bits", 12u, "number of the most significant bits of the token to ignore when calculating the shard"
             " (only relevant for shardof action)"),
@@ -500,7 +517,8 @@ b34b62d4: VALID - -1286905132
     {{"tokenof", "tokenof (calculate the token of) the partition-key",
 R"(
 Decorate the key, that is calculate its token.
-Only supports --full-compound and --legacy-composite.
+Only supports --full-compound (or its alias --partition-key) and
+--legacy-composite (or its alias --legacy-partition-key).
 
 Arguments: 1 or more serialized values.
 
@@ -512,7 +530,8 @@ $ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType
     {{"shardof", "calculate which shard the partition-key belongs to",
 R"(
 Decorate the key and calculate which shard its token belongs to.
-Only supports --full-compound and --legacy-composite.
+Only supports --full-compound (or its alias --partition-key) and
+--legacy-composite (or its alias --legacy-partition-key).
 Use --shards and --ignore-msb-bits to specify sharding parameters.
 
 Arguments: 1 or more serialized values.
@@ -575,11 +594,11 @@ $ scylla types {{action}} --help
                     | std::views::transform([] (const std::string_view type_name) { return cql_type_name_converter(type_name).convert(); })
                     | std::views::transform([] (const sstring& type_name) { return db::marshal::type_parser::parse(type_name); })
                     | std::ranges::to<std::vector<data_type>>();
-            if (app_config.contains("prefix-compound")) {
+            if (has_compound_option(app_config, "prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
-            } else if (app_config.contains("full-compound")) {
+            } else if (has_compound_option(app_config, "full-compound")) {
                 return partition_key_type{build_dummy_partition_key_schema(types), false};
-            } else if (app_config.contains("legacy-composite")) {
+            } else if (has_compound_option(app_config, "legacy-composite")) {
                 return partition_key_type{build_dummy_partition_key_schema(types), true};
             } else { // non-compound type
                 if (types.size() != 1) {

@@ -50,3 +50,36 @@ def test_invalid_cql_type_name(scylla_types_fails_with, type_name, error):
 
 def test_unknown_type_name(scylla_types_fails_with):
     scylla_types_fails_with("deserialize", "-t", "foo", "00000001", error="unknown type: org.apache.cassandra.db.marshal.foo")
+
+
+COMPOUND_OPTION_ALIASES = [
+    ("prefix-compound", "clustering-key"),
+    ("full-compound", "partition-key"),
+    ("legacy-composite", "legacy-partition-key"),
+]
+
+
+def compound_option_args(action, option_name, option):
+    """The arguments for invoking action with the given compound option, on an int (compound) value."""
+    value = "00000001" if option_name == "legacy-composite" else "000400000001"
+    if action == "serialize":
+        return [option, "-t", "Int32Type", "--", "1"]
+    if action == "compare":
+        return [option, "-t", "Int32Type", value, value]
+    if action == "shardof":
+        return [option, "-t", "Int32Type", "--shards=8", value]
+    return [option, "-t", "Int32Type", value]
+
+
+@pytest.mark.parametrize("action,option_name,alias", [
+    (action, option_name, alias)
+    for action in ACTIONS
+    for option_name, alias in COMPOUND_OPTION_ALIASES
+    # These actions only support partition keys.
+    if not (action in ("ring-order-compare", "tokenof", "shardof") and option_name == "prefix-compound")
+])
+def test_compound_option_alias(scylla_types, action, option_name, alias):
+    """The compound options have human-friendly aliases, which are equivalent to the original option."""
+    expected = scylla_types(action, *compound_option_args(action, option_name, f"--{option_name}")).stdout
+    assert expected
+    assert scylla_types(action, *compound_option_args(action, option_name, f"--{alias}")).stdout == expected
