@@ -68,3 +68,26 @@ def testNonExistingOnes(cql, test_keyspace):
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS " + KEYSPACE + ".func_does_not_exist(int,text)")
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS keyspace_does_not_exist.func_does_not_exist")
     execute(cql, KEYSPACE, "DROP FUNCTION IF EXISTS keyspace_does_not_exist.func_does_not_exist(int,text)")
+
+def testFunctionDropOnKeyspaceDrop(cql):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
+        fSin = createFunction(cql, KEYSPACE_PER_TEST,
+                              "CREATE FUNCTION %s ( input double ) " +
+                              "CALLED ON NULL INPUT " +
+                              "RETURNS double " +
+                              java_or_lua(cql, "return Double.valueOf(Math.sin(input.doubleValue()));",
+                                          "return input"))
+
+        # The Java test also checks Cassandra's internal schema object
+        # (Schema.instance.getUserFunctions()), which we can't do. But
+        # system_schema.functions is checked through CQL.
+        assert_rows(execute(cql, KEYSPACE_PER_TEST, "SELECT function_name, language FROM system_schema.functions WHERE keyspace_name=?", KEYSPACE_PER_TEST),
+                    row(shortFunctionName(fSin), "lua" if is_scylla(cql) else "java"))
+
+    assert_empty(execute(cql, KEYSPACE_PER_TEST, "SELECT function_name, language FROM system_schema.functions WHERE keyspace_name=?", KEYSPACE_PER_TEST))
+
+# The tests testFunctionDropPreparedStatement,
+# testDropFunctionDropsPreparedStatementsWithDelayedValues and
+# testDropKeyspaceContainingFunctionDropsPreparedStatementsWithDelayedValues
+# were not translated, because they check Cassandra's internal cache of
+# prepared statements.
