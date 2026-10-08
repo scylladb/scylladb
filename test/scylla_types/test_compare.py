@@ -100,3 +100,8 @@ def test_compare_text_wrong_number_of_components(scylla_types_fails_with):
 def test_compare_text_unsupported_type(scylla_types_fails_with):
     scylla_types_fails_with("compare", "-t", "list<int>", "-f", "text", "--", "1", "2",
                             error="error: serializing values of type list<int> is not supported")
+
+
+def test_compare_json(scylla_types):
+    res = scylla_types("compare", "-t", "frozen<list<int>>", "-f", "json", "--", "[1, 2]", "[1, 3]")
+    assert res.stdout == "1, 2 < 1, 3\n"
