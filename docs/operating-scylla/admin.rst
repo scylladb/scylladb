@@ -250,6 +250,19 @@ Tuning options
        counts it in ``scylla_s3_unclassified_groups``. Live-updateable;
        removing an entry keeps the cap of a pool that already exists. The GCS
        backend ignores this option.
+   * - ``object_storage_connections_per_shard``
+     - 128
+     - Deprecated, superseded by ``object_storage_connections``. This set one
+       budget for the whole shard, which was split across the scheduling groups
+       by their shares. A value other than the default is still honored as a
+       shard budget: it is spread over the built-in per-group values in their
+       own proportions, and no group is lowered below its built-in value. The
+       built-in values total 312, so a node configured with 512 gets
+       ``streaming`` 105 instead of 64 and ``backup`` 53 instead of 32, while a
+       value at or under 312 leaves every group as it is -- the built-in table
+       already asks for more than this option's own default of 128. Setting
+       ``object_storage_connections`` replaces this entirely: the caps come from
+       there and the old budget is not consulted. Read at startup only.
 
 .. _admin-oci-object-storage:
 
