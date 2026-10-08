@@ -466,19 +466,31 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     }
 
     std::optional<locator::tablet_routing_info> tablet_info;
+    std::optional<locator::tablet_routing_info_v2> tablet_info_v2;
 
     auto&& table = s->table();
-    if (_may_use_token_aware_routing && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-        tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
+    if (_may_use_token_aware_routing) {
+        if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+            // Only EXECUTE requests carry a tablet version block.
+            if (options.get_tablet_version_block().has_value()) {
+                tablet_info_v2 = table.tablet_routing_info_v2_for(token, *options.get_tablet_version_block());
+            }
+        } else if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+            tablet_info = table.tablet_routing_info_for(token, qs.get_client_state().get_original_shard());
+        }
     }
 
     return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
-            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
+            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info),
+                    tablet_info_v2 = std::move(tablet_info_v2)] (service::storage_proxy::cas_result cas_result) mutable {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
         if (tablet_info) {
             result->add_tablet_info(std::move(*tablet_info));
+        }
+        if (tablet_info_v2) {
+            result->add_tablet_info_v2(std::move(*tablet_info_v2));
         }
         // Surface any coordinator-side large data guardrail soft limit violations
         // detected during the LWT to the client as a CQL warning.
