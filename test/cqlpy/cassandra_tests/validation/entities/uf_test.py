@@ -173,6 +173,97 @@ def testFunctionDropOnKeyspaceDrop(cql):
 # were not translated, because they check Cassandra's internal cache of
 # prepared statements.
 
+# The original test uses Java's Math.sin() as the function, but Scylla's Lua
+# has no math library. The function's value isn't important for this test,
+# so we use a simpler function in both languages.
+SIN_JAVA = "return input * 2;"
+SIN_LUA = "return input * 2"
+def sin(x):
+    return x * 2
+
+# Reproduces SCYLLADB-5169 (CREATE OR REPLACE FUNCTION should not change the
+# return type or null-input behavior)
+@pytest.mark.xfail(reason="SCYLLADB-5169")
+def testFunctionCreationAndDrop(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int PRIMARY KEY, d double)") as table:
+        execute(cql, table, "INSERT INTO %s(key, d) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s(key, d) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s(key, d) VALUES (?, ?)", 3, 3.0)
+
+        # simple creation
+        fSin = createFunction(cql, KEYSPACE_PER_TEST,
+                              "CREATE FUNCTION %s ( input double ) " +
+                              "CALLED ON NULL INPUT " +
+                              "RETURNS double " +
+                              java_or_lua(cql, SIN_JAVA, SIN_LUA))
+        # check we can't recreate the same function
+        assert_invalid_message(cql, table, "already exists",
+                               "CREATE FUNCTION " + fSin + " ( input double ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql, SIN_JAVA, SIN_LUA))
+
+        # but that it doesn't comply with "IF NOT EXISTS"
+        execute(cql, table, "CREATE FUNCTION IF NOT EXISTS " + fSin + " ( input double ) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS double " +
+                java_or_lua(cql, SIN_JAVA, SIN_LUA))
+
+        # Validate that it works as expected
+        assert_rows(execute(cql, table, "SELECT key, " + fSin + "(d) FROM %s"),
+                    row(1, sin(1.0)),
+                    row(2, sin(2.0)),
+                    row(3, sin(3.0)))
+
+        # Replace the method with incompatible return type
+        assert_invalid_message(cql, table, "the new return type text is not compatible with the return type double of existing function",
+                               "CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) " +
+                               "CALLED ON NULL INPUT " +
+                               "RETURNS text " +
+                               java_or_lua(cql, 'return "42d";', 'return "42d"'))
+
+        # proper replacement
+        execute(cql, table, "CREATE OR REPLACE FUNCTION " + fSin + " ( input double ) " +
+                "CALLED ON NULL INPUT " +
+                "RETURNS double " +
+                java_or_lua(cql, "return Double.valueOf(42d);", "return 42"))
+
+        # Validate the method as been replaced
+        assert_rows(execute(cql, table, "SELECT key, " + fSin + "(d) FROM %s"),
+                    row(1, 42.0),
+                    row(2, 42.0),
+                    row(3, 42.0))
+
+        # same function but other keyspace
+        fSin2 = createFunction(cql, test_keyspace,
+                               "CREATE FUNCTION %s ( input double ) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS double " +
+                               java_or_lua(cql, SIN_JAVA, SIN_LUA))
+        assert_rows(execute(cql, table, "SELECT key, " + fSin2 + "(d) FROM %s"),
+                    row(1, sin(1.0)),
+                    row(2, sin(2.0)),
+                    row(3, sin(3.0)))
+
+        # Drop
+        execute(cql, table, "DROP FUNCTION " + fSin)
+        execute(cql, table, "DROP FUNCTION " + fSin2)
+
+        # Drop unexisting function
+        assert_invalid_message_re(cql, table, doesntExistMessage(fSin), "DROP FUNCTION " + fSin)
+        # but don't complain with "IF EXISTS"
+        execute(cql, table, "DROP FUNCTION IF EXISTS " + fSin)
+
+        # can't drop native functions
+        # Our session has no keyspace, and Scylla doesn't look for native
+        # functions in DROP FUNCTION, so it fails with "No keyspace has been
+        # specified" instead.
+        assert_invalid_message_re(cql, table, "(?i)system keyspace.* is not user-modifiable|No keyspace has been specified", "DROP FUNCTION to_timestamp")
+        assert_invalid_message_re(cql, table, "(?i)system keyspace.* is not user-modifiable|No keyspace has been specified", "DROP FUNCTION uuid")
+
+        # sin() no longer exists
+        assert_invalid_message(cql, table, "Unknown function", "SELECT key, sin(d) FROM %s")
+
 # Reproduces #13746 (a function in WHERE or in INSERT values)
 @pytest.mark.skip_bug(
     link="https://github.com/scylladb/scylladb/issues/13746",
