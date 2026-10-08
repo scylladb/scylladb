@@ -889,7 +889,7 @@ A table supports the following options:
    * - ``memtable_flush_period_in_ms``
      - simple
      - 0
-     - Flush the memtables associated with this table every ``memtable_flush_period_in_ms`` milliseconds. When set to ``0``, periodic flush is disabled. Cannot set to values lower than ``60000`` (1 minute). Default: ``0``.
+     - Flush the memtables associated with this table if they were not flushed for ``memtable_flush_period_in_ms`` milliseconds. When set to ``0``, periodic flush is disabled. Cannot set to values lower than ``60000`` (1 minute). Default: ``0``.
    * - ``min_index_interval``
      - simple
      - 128

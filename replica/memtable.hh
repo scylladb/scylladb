@@ -9,6 +9,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <seastar/core/lowres_clock.hh>
 #include "replica/database_fwd.hh"
 #include "dht/decorated_key.hh"
 #include "dht/ring_position.hh"
@@ -132,6 +133,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     bool _merging_into_cache = false;
+    bool _merged_into_cache = false;
     // Tracks the difference between the amount of memory "spooled" during the flush
     // and the memory freed during the flush.
     //
@@ -150,8 +152,9 @@ private:
     // But we are only interested in the maximal total decrease since the beginning of flush.
     // This tracks the lowest value of _total_memory seen during the flush.
     uint64_t _total_memory_low_watermark_during_flush = 0;
-    bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
+    // Lets the table flush timer skip memtables sealed recently by other triggers.
+    seastar::lowres_clock::time_point _created_at = seastar::lowres_clock::now();
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
@@ -290,6 +293,7 @@ public:
     }
 
     size_t partition_count() const noexcept { return nr_partitions; }
+    seastar::lowres_clock::time_point created_at() const noexcept { return _created_at; }
     logalloc::occupancy_stats occupancy() const noexcept;
 
     // Creates a reader of data in this memtable for given partition range.
