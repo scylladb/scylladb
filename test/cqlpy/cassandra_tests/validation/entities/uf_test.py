@@ -301,3 +301,26 @@ def testWrongKeyspace(cql, test_keyspace):
                                "CALLED ON NULL INPUT " +
                                "RETURNS int " +
                                java_or_lua(cql, "return val;", "return val") + ";")
+
+def testUserTypeDrop(cql):
+    # The type, table and function are created in a new keyspace instead of
+    # KEYSPACE, so that they will all be dropped at the end of the test.
+    with create_keyspace(cql, REPLICATION) as KEYSPACE:
+        type = KEYSPACE + "." + unique_name()
+        execute(cql, KEYSPACE, "CREATE TYPE " + type + " (txt text, i int)")
+
+        with create_table(cql, KEYSPACE, "(key int primary key, udt frozen<" + type + ">)") as table:
+            fName = createFunction(cql, KEYSPACE,
+                                   "CREATE FUNCTION %s( udt " + type + " ) " +
+                                   "CALLED ON NULL INPUT " +
+                                   "RETURNS int " +
+                                   java_or_lua(cql, 'return Integer.valueOf(udt.getInt("i"));', "return udt.i") + ";")
+
+            # The Java test also checks Cassandra's internal schema object
+            # and its cache of prepared statements, which we can't do.
+
+            # UT still referenced by table
+            assert_invalid_message(cql, table, "Cannot drop user type", "DROP TYPE " + type)
+
+        # UT still referenced by UDF
+        assert_invalid_message(cql, KEYSPACE, "as it is still used by function", "DROP TYPE " + type)
