@@ -132,3 +132,14 @@ def testFunctionWithNull(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k) VALUES (0)")
         rows = getRows(execute(cql, table, "SELECT to_timestamp(t) FROM %s WHERE k=0"))
         assert rows[0][0] is None
+
+# Migrated from cql_tests.py:TestCQL.column_name_validation_test()
+def testColumnNameValidation(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k text, c int, v timeuuid, PRIMARY KEY (k, c))") as table:
+        assert_invalid(cql, table, "INSERT INTO %s (k, c) VALUES ('', 0)")
+
+        # Insert a value that don't fit 'int'
+        assert_invalid(cql, table, "INSERT INTO %s (k, c) VALUES (0, 10000000000)")
+
+        # Insert a non-version 1 uuid
+        assert_invalid(cql, table, "INSERT INTO %s (k, c, v) VALUES (0, 0, 550e8400-e29b-41d4-a716-446655440000)")
