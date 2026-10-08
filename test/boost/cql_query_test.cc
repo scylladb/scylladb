@@ -141,6 +141,36 @@ SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_fea
     }, cfg);
 }
 
+static auto cluster_config_option_unsupported(std::string_view option) {
+    return [option] (const exceptions::invalid_request_exception& ex) {
+        return std::string_view(ex.what()).find(
+                seastar::format("Cluster config option '{}' is not yet supported by this cluster", option)) != std::string_view::npos;
+    };
+}
+
+// The registry gates an option's visibility on the epoch it was added in, so that a node does
+// not accept an ALTER for an option its not-yet-upgraded peers would not understand. With only
+// v0 enabled, the options of that epoch are writable while the v1 ones are rejected exactly as
+// if they did not exist.
+SEASTAR_TEST_CASE(test_registry_v1_options_reject_when_only_v0_is_enabled) {
+    cql_test_config cfg;
+    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V1");
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get());
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 3600").get());
+
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = 0.5").get(),
+            exceptions::invalid_request_exception,
+            cluster_config_option_unsupported("auto_repair_threshold_size_fraction"));
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_min_size_in_bytes = 1").get(),
+            exceptions::invalid_request_exception,
+            cluster_config_option_unsupported("auto_repair_threshold_min_size_in_bytes"));
+    }, cfg);
+}
+
 // No shipping option supports the node-oriented scopes yet, so we inject a test-only option
 // to exercise the ALTER DATACENTER/RACK/NODE paths. Verifies that each node-oriented write is
 // schema-backed (bumps the global schema version), persists its value out-of-band in the
