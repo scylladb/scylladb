@@ -354,3 +354,31 @@ def testEmptyAndSpecialCharacters(cql, new_to_cassandra_6):
         unicodeComment = "Unicode comment: 测试 ñoño 🚀"
         setComment(cql, "TABLE", tableRef, unicodeComment)
         assertComment(cql, "TABLE", ks, tableRef, unicodeComment)
+
+# Reproduces SCYLLADB-5146 (COMMENT ON and SECURITY LABEL ON statements).
+@pytest.mark.xfail(reason="SCYLLADB-5146")
+def testUseKeyspaceContext(cql, new_to_cassandra_6):
+    with create_keyspace(cql, REPLICATION) as ks:
+        createTableWithName(cql, ks, TABLE_NAME)
+        cql.execute(f"CREATE TYPE {ks}.test_type (field1 text, field2 int)")
+
+        # Use the keyspace to set current context
+        # ("USE" cannot be undone, so we do it on a separate connection)
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {ks}")
+
+            # Test unqualified names with USE KEYSPACE context
+            setComment(ncql, "TABLE", TABLE_NAME, "Table comment via USE")
+            setSecurityLabel(ncql, "TABLE", TABLE_NAME, "TABLE_LABEL")
+            setComment(ncql, "COLUMN", TABLE_NAME + ".name", "Column comment via USE")
+            setSecurityLabel(ncql, "COLUMN", TABLE_NAME + ".name", "COLUMN_LABEL")
+            setComment(ncql, "TYPE", "test_type", "Type comment via USE")
+            setSecurityLabel(ncql, "TYPE", "test_type", "TYPE_LABEL")
+
+        # Verify all are set correctly using the current keyspace context
+        assertComment(cql, "TABLE", ks, TABLE_NAME, "Table comment via USE")
+        assertSecurityLabel(cql, "TABLE", ks, TABLE_NAME, "TABLE_LABEL")
+        assertComment(cql, "COLUMN", ks, TABLE_NAME + ".name", "Column comment via USE")
+        assertSecurityLabel(cql, "COLUMN", ks, TABLE_NAME + ".name", "COLUMN_LABEL")
+        assertComment(cql, "TYPE", ks, "test_type", "Type comment via USE")
+        assertSecurityLabel(cql, "TYPE", ks, "test_type", "TYPE_LABEL")
