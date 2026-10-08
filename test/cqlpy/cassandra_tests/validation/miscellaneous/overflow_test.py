@@ -37,3 +37,10 @@ def testNullSupport(cql, test_keyspace):
         # is commented out:
         #assert_invalid(cql, table, "SELECT * FROM %s WHERE k = null")
         assert_invalid(cql, table, "INSERT INTO %s (k, c, v2) VALUES (0, 0, { 'foo', 'bar', null })")
+
+# Test reserved keywords
+# migrated from cql_tests.py:TestCQL.reserved_keyword_test()
+def testReservedKeywords(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(key text PRIMARY KEY, count counter)") as table:
+        table_name = unique_name()
+        assert_invalid_throw(cql, table, SyntaxException, f"CREATE TABLE {test_keyspace}.{table_name} (select text PRIMARY KEY, x int)")
