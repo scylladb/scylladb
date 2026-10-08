@@ -123,3 +123,12 @@ def testEmpty(cql, test_keyspace):
         # Test empty IN() in UPDATE
         execute(cql, table, "UPDATE %s SET v = 3 WHERE k1 IN () AND k2 = 2")
         assertArrayEquals(rows, getRows(execute(cql, table, "SELECT * FROM %s")))
+
+# Migrated from cql_tests.py:TestCQL.function_with_null_test()
+# Reproduces SCYLLADB-5141 (snake_case names of native functions).
+@pytest.mark.xfail(reason="SCYLLADB-5141")
+def testFunctionWithNull(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t timeuuid,)") as table:
+        execute(cql, table, "INSERT INTO %s (k) VALUES (0)")
+        rows = getRows(execute(cql, table, "SELECT to_timestamp(t) FROM %s WHERE k=0"))
+        assert rows[0][0] is None
