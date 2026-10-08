@@ -92,3 +92,37 @@ def testalterSyntaxTest(cql):
     assertValidSyntax(cql, "ALTER USER IF EXISTS u1 WITH PASSWORD 'password'")
     # user names may not be quoted names
     assertInvalidSyntax(cql, "ALTER USER \"u1\" WITH PASSWORD 'password'")
+
+# Reproduces SCYLLADB-5145 (multiple permissions in one statement).
+@pytest.mark.xfail(reason="SCYLLADB-5145")
+def testgrantRevokePermissionsSyntaxTest(cql):
+    for r1 in ["r1", "'r1'", "\"r1\"", "$$r1$$"]:
+        for r2 in ["r2", "\"r2\"", "'r2'", "$$ r '2' $$"]:
+            # grant/revoke on RoleResource
+            assertValidSyntax(cql, f"GRANT ALTER ON ROLE {r1} TO {r2}")
+            assertValidSyntax(cql, f"GRANT ALTER PERMISSION ON ROLE {r1} TO {r2}")
+            assertValidSyntax(cql, f"REVOKE ALTER ON ROLE {r1} FROM {r2}")
+            assertValidSyntax(cql, f"REVOKE ALTER PERMISSION ON ROLE {r1} FROM {r2}")
+
+            # grant/revoke multiple permissions in a single statement
+            assertValidSyntax(cql, f"GRANT CREATE, ALTER ON ROLE {r1} TO {r2}")
+            assertValidSyntax(cql, f"GRANT CREATE PERMISSION, ALTER PERMISSION ON ROLE {r1} TO {r2}")
+            assertValidSyntax(cql, f"REVOKE CREATE, ALTER ON ROLE {r1} FROM {r2}")
+            assertValidSyntax(cql, f"REVOKE CREATE PERMISSION, ALTER PERMISSION ON ROLE {r1} FROM {r2}")
+
+    for r1 in ["r1", "'r1'", "\"r1\"", "$$r1$$", "$$ r '1' $$"]:
+        # grant/revoke on DataResource
+        assertValidSyntax(cql, f"GRANT SELECT ON KEYSPACE ks TO {r1}")
+        assertValidSyntax(cql, f"GRANT SELECT PERMISSION ON KEYSPACE ks TO {r1}")
+        assertValidSyntax(cql, f"REVOKE SELECT ON KEYSPACE ks FROM {r1}")
+        assertValidSyntax(cql, f"REVOKE SELECT PERMISSION ON KEYSPACE ks FROM {r1}")
+
+        # grant/revoke multiple permissions in a single statement
+        assertValidSyntax(cql, f"GRANT MODIFY, SELECT ON KEYSPACE ks TO {r1}")
+        assertValidSyntax(cql, f"GRANT MODIFY PERMISSION, SELECT PERMISSION ON KEYSPACE ks TO {r1}")
+        assertValidSyntax(cql, f"GRANT MODIFY, SELECT ON ALL KEYSPACES TO {r1}")
+        assertValidSyntax(cql, f"GRANT MODIFY PERMISSION, SELECT PERMISSION ON ALL KEYSPACES TO {r1}")
+        assertValidSyntax(cql, f"REVOKE MODIFY, SELECT ON KEYSPACE ks FROM {r1}")
+        assertValidSyntax(cql, f"REVOKE MODIFY PERMISSION, SELECT PERMISSION ON KEYSPACE ks FROM {r1}")
+        assertValidSyntax(cql, f"REVOKE MODIFY, SELECT ON ALL KEYSPACES FROM {r1}")
+        assertValidSyntax(cql, f"REVOKE MODIFY PERMISSION, SELECT PERMISSION ON ALL KEYSPACES FROM {r1}")
