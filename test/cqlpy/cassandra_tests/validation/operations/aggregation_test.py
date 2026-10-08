@@ -1233,3 +1233,192 @@ def testWrongKeyspace(cql):
                                  "STYPE " + type + ' ' +
                                  "FINALFUNC system.min " +
                                  "INITCOND 1")
+
+# Reproduces #13855 (a frozen collection can't be passed to a function
+# taking a non-frozen collection) and #13866 (functions should reject
+# frozen argument types)
+@pytest.mark.xfail(reason="#13855, #13866")
+def testFunctionWithFrozenSetType(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<set<int>>)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 0, set())
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 1, {1, 2, 3})
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 2, {4, 5, 6})
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 3, {7, 8, 9})
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s (state set<int>, values set<int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS set<int> " +
+                                java_or_lua(cql, "return values;", "return values"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(state set<int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS set<int> " +
+                                java_or_lua(cql, "return state;", "return state"))
+
+        # The original Java test uses the table's name as the aggregate's name
+        # in the following statements that are expected to fail. We use a
+        # new unique name instead.
+        assert_invalid_message(cql, table, "cannot be frozen",
+                             "CREATE AGGREGATE " + ks + "." + unique_name() + "(set<int>) " +
+                             "SFUNC " + shortFunctionName(fState) + ' ' +
+                             "STYPE frozen<set<int>> " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                             "INITCOND null")
+
+        aggregation = createAggregate(cql, ks,
+                                      "CREATE AGGREGATE %s(set<int>) " +
+                                      "SFUNC " + shortFunctionName(fState) + ' ' +
+                                      "STYPE set<int> " +
+                                      "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                      "INITCOND null")
+
+        assert_rows(execute(cql, table, "SELECT initcond FROM system_schema.aggregates WHERE keyspace_name=? AND aggregate_name=?", ks, shortFunctionName(aggregation)),
+                   row(None))
+
+        assert_rows(execute(cql, table, "SELECT " + aggregation + "(b) FROM %s"),
+                   row({7, 8, 9}))
+
+        assert_invalid_message(cql, table, "Argument 'frozen<set<int>>' cannot be frozen; remove frozen<> modifier from 'frozen<set<int>>'",
+                             "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<set<int>>);")
+
+# Reproduces #13855 (a frozen collection can't be passed to a function
+# taking a non-frozen collection) and #13866 (functions should reject
+# frozen argument types)
+@pytest.mark.xfail(reason="#13855, #13866")
+def testFunctionWithFrozenListType(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<list<int>>)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 0, [])
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 1, [1, 2, 3])
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 2, [4, 5, 6])
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 3, [7, 8, 9])
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s (state list<int>, values list<int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS list<int> " +
+                                java_or_lua(cql, "return values;", "return values"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(state list<int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS list<int> " +
+                                java_or_lua(cql, "return state;", "return state"))
+
+        assert_invalid_message(cql, table, "cannot be frozen",
+                             "CREATE AGGREGATE " + ks + "." + unique_name() + "(list<int>) " +
+                             "SFUNC " + shortFunctionName(fState) + ' ' +
+                             "STYPE frozen<list<int>> " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + " " +
+                             "INITCOND null")
+
+        aggregation = createAggregate(cql, ks,
+                                      "CREATE AGGREGATE %s(list<int>) " +
+                                      "SFUNC " + shortFunctionName(fState) + ' ' +
+                                      "STYPE list<int> " +
+                                      "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                      "INITCOND null")
+
+        assert_rows(execute(cql, table, "SELECT " + aggregation + "(b) FROM %s"),
+                   row([7, 8, 9]))
+
+        assert_invalid_message(cql, table, "Argument 'frozen<list<int>>' cannot be frozen; remove frozen<> modifier from 'frozen<list<int>>'",
+                             "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<list<int>>);")
+
+# Reproduces #13855 (a frozen collection can't be passed to a function
+# taking a non-frozen collection) and #13866 (functions should reject
+# frozen argument types)
+@pytest.mark.xfail(reason="#13855, #13866")
+def testFunctionWithFrozenMapType(cql):
+    with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<map<int, int>>)") as table:
+        execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
+
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 0, {})
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 1, {1: 2, 3: 4})
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 2, {4: 5, 6: 7})
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, ?)", 3, {7: 8, 9: 10})
+
+        fState = createFunction(cql, ks,
+                                "CREATE FUNCTION %s (state map<int, int>, values map<int, int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS map<int, int> " +
+                                java_or_lua(cql, "return values;", "return values"))
+
+        fFinal = createFunction(cql, ks,
+                                "CREATE FUNCTION %s(state map<int, int>) " +
+                                "CALLED ON NULL INPUT " +
+                                "RETURNS map<int, int> " +
+                                java_or_lua(cql, "return state;", "return state"))
+
+        assert_invalid_message(cql, table, "cannot be frozen",
+                             "CREATE AGGREGATE " + ks + "." + unique_name() + "(map<int, int>) " +
+                             "SFUNC " + shortFunctionName(fState) + ' ' +
+                             "STYPE frozen<map<int, int>> " +
+                             "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                             "INITCOND null")
+
+        aggregation = createAggregate(cql, ks,
+                                      "CREATE AGGREGATE %s(map<int, int>) " +
+                                      "SFUNC " + shortFunctionName(fState) + ' ' +
+                                      "STYPE map<int, int> " +
+                                      "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                      "INITCOND null")
+
+        assert_rows(execute(cql, table, "SELECT " + aggregation + "(b) FROM %s"),
+                   row({7: 8, 9: 10}))
+
+        assert_invalid_message(cql, table, "Argument 'frozen<map<int, int>>' cannot be frozen; remove frozen<> modifier from 'frozen<map<int, int>>'",
+                             "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<map<int, int>>);")
+
+FROZEN_UDT_MESSAGE = "cannot be frozen|should not be frozen"
+
+def testFunctionWithFrozenUDFType(cql):
+    with create_keyspace(cql, REPLICATION) as ks:
+        myType = unique_name()
+        execute(cql, ks, "CREATE TYPE " + ks + "." + myType + " (f int)")
+        with create_table(cql, ks, "(a int PRIMARY KEY, b frozen<" + myType + ">)") as table:
+            execute(cql, table, "CREATE INDEX ON %s (b)")
+
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, {f : ?})", 0, 1)
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, {f : ?})", 1, 2)
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, {f : ?})", 2, 4)
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (?, {f : ?})", 3, 7)
+
+            fState = createFunction(cql, ks,
+                                    "CREATE FUNCTION %s (state " + myType + ", values " + myType + ") " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS " + myType + " " +
+                                    java_or_lua(cql, "return values;", "return values"))
+
+            fFinal = createFunction(cql, ks,
+                                    "CREATE FUNCTION %s(state " + myType + ") " +
+                                    "CALLED ON NULL INPUT " +
+                                    "RETURNS " + myType + " " +
+                                    java_or_lua(cql, "return state;", "return state"))
+
+            # Scylla's error message is "User defined argument and return types
+            # should not be frozen".
+            assert_invalid_message_re(cql, table, FROZEN_UDT_MESSAGE,
+                                 "CREATE AGGREGATE " + ks + "." + unique_name() + "(" + myType + ") " +
+                                 "SFUNC " + shortFunctionName(fState) + ' ' +
+                                 "STYPE frozen<" + myType + "> " +
+                                 "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                 "INITCOND null")
+
+            aggregation = createAggregate(cql, ks,
+                                          "CREATE AGGREGATE %s(" + myType + ") " +
+                                          "SFUNC " + shortFunctionName(fState) + ' ' +
+                                          "STYPE " + myType + ' ' +
+                                          "FINALFUNC " + shortFunctionName(fFinal) + ' ' +
+                                          "INITCOND null")
+
+            assert_rows(execute(cql, table, "SELECT " + aggregation + "(b).f FROM %s"),
+                       row(7))
+
+            assert_invalid_message_re(cql, table, re.escape(f"Argument 'frozen<{myType}>' cannot be frozen; remove frozen<> modifier from 'frozen<{myType}>'") + "|" + FROZEN_UDT_MESSAGE,
+                                 "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<" + myType + ">);")
