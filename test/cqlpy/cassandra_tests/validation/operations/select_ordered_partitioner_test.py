@@ -82,6 +82,48 @@ def testTokenFunctionWithPartitionKeyAndClusteringKeyArguments(cql, test_keyspac
         assert_invalid_message_re(cql, table, ONLY_PARTITION_KEY_MESSAGE,
                              "SELECT * FROM %s WHERE token(a, b) > token(0, 'c')")
 
+# Reproduces SCYLLADB-5153 (the BETWEEN operator).
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testTokenFunctionWithMultiColumnPartitionKey(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b text, PRIMARY KEY ((a, b)))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'a')")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'b')")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, 'c')")
+
+        # The following three checks depend on the order of tokens:
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?)", 0, "a"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) > token(?, ?) and token(a, b) < token(?, ?)", 0, "a", 0, "d"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        #assert_rows(execute(cql, table, "SELECT * FROM %s WHERE token(a, b) between token(?, ?) and token(?, ?)", 0, "b", 0, "d"),
+        #           row(0, "b"),
+        #           row(0, "c"))
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?) and token(b) > token(?)", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(a) < token(?, ?) and token(b) > token(?, ?) ",
+                             0, "a", 0, "d", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) BETWEEN token(?, ?) AND token(?, ?) and token(b) > token(?, ?) ",
+                             0, "a", 0, "d", 0, "a")
+        assert_invalid_message_re(cql, table, ARGUMENTS_ORDER_MESSAGE,
+                             "SELECT * FROM %s WHERE token(b, a) > token(0, 'c')")
+        assert_invalid_message_re(cql, table, ARGUMENTS_ORDER_MESSAGE,
+                             "SELECT * FROM %s WHERE token(b, a) BETWEEN token(0, 'c') AND token(0, 'f')")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a, b) > token(?, ?) and token(b) < token(?, ?)", 0, "a", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(b) > token(?, ?)", 0, "a", 0, "a")
+        assert_invalid_message_re(cql, table, ALL_OR_NONE_MESSAGE,
+                             "SELECT * FROM %s WHERE token(a) > token(?, ?) and token(b) > token(?, ?)", 0, "a", 0, "a")
+
+# The tests testSingleColumnPartitionKeyWithTokenNonTokenRestrictionsMix and
+# testMultiColumnPartitionKeyWithTokenNonTokenRestrictionsMix were not
+# translated, because their results depend on the order of tokens of a
+# ByteOrderedPartitioner.
+
 def testMultiColumnPartitionKeyWithIndexAndTokenNonTokenRestrictionsMix(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, primary key((a, b)))") as table:
         execute(cql, table, "CREATE INDEX ON %s(b)")
