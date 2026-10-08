@@ -16,6 +16,7 @@
 # are not translated.
 
 from ...porting import *
+from cassandra.protocol import FunctionFailure
 
 # Functions are created in a new keyspace (KEYSPACE_PER_TEST in the original
 # Java test), which is dropped at the end of the test.
@@ -187,3 +188,33 @@ def testJavaKeyspaceFunction(cql, test_keyspace):
                     row(1, 1.0, sin(1.0)),
                     row(2, 2.0, sin(2.0)),
                     row(3, 3.0, sin(3.0)))
+
+# Reproduces SCYLLADB-5159 (wrong error code for a failing function)
+@pytest.mark.xfail(reason="SCYLLADB-5159")
+def testJavaRuntimeException(cql, test_keyspace):
+    with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, val double)") as table:
+        if is_scylla(cql):
+            functionBody = "\n  error(\"oh no!\")\n"
+        else:
+            functionBody = "\n  throw new RuntimeException(\"oh no!\");\n"
+
+        fName = createFunction(cql, KEYSPACE_PER_TEST,
+                               "CREATE OR REPLACE FUNCTION %s(val double) " +
+                               "RETURNS NULL ON NULL INPUT " +
+                               "RETURNS double " +
+                               "LANGUAGE " + language(cql) + "\n" +
+                               "AS '" + functionBody + "';")
+
+        assert_rows(execute(cql, table, "SELECT language, body FROM system_schema.functions WHERE keyspace_name=? AND function_name=?",
+                            KEYSPACE_PER_TEST, shortFunctionName(fName)),
+                    row(language(cql), functionBody))
+
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 1, 1.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 2, 2.0)
+        execute(cql, table, "INSERT INTO %s (key, val) VALUES (?, ?)", 3, 3.0)
+
+        # function throws a RuntimeException which is wrapped by FunctionExecutionException
+        # (On Scylla, the Lua function raises an error, and the error message
+        # doesn't mention java.lang.RuntimeException.)
+        assert_invalid_throw_message_re(cql, table, "java.lang.RuntimeException: oh no|oh no!", FunctionFailure,
+                                        "SELECT key, val, " + fName + "(val) FROM %s")
