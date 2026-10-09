@@ -970,6 +970,33 @@ def test_index_map_entries(cql, test_keyspace):
         assert [(1,2)] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[3] = 2'))
         assert [] == list(cql.execute(f'SELECT pk,ck FROM {table} WHERE m[4] = 6'))
 
+# The following tests read the index view directly, because index queries
+# hide stale entries. Scylla-only - relies on the index's representation.
+
+# Reproduces SCYLLADB-4070: an element added and removed at the same timestamp.
+@pytest.mark.parametrize("removal", [
+    "UPDATE {table} USING TIMESTAMP 100 SET cs = cs - {{7}} WHERE p = 1 AND c = 1",
+    "DELETE cs FROM {table} USING TIMESTAMP 100 WHERE p = 1 AND c = 1",
+    "DELETE FROM {table} USING TIMESTAMP 100 WHERE p = 1 AND c = 1",
+], ids=["element", "column", "row"])
+def test_collection_index_element_removed_at_same_timestamp(cql, test_keyspace, scylla_only, removal):
+    with new_test_table(cql, test_keyspace, 'p int, c int, cs set<int>, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(cs)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 100 SET cs = cs + {{7}} WHERE p = 1 AND c = 1')
+        cql.execute(removal.format(table=table))
+        assert [] == list(cql.execute(f'SELECT cs FROM {table} WHERE p = 1'))
+        assert [] == list(cql.execute(f'SELECT coll_value FROM {table}_cs_idx_index'))
+
+# Reproduces SCYLLADB-4165: an element removed by an overwrite one timestamp
+# later.
+def test_collection_index_element_removed_by_overwrite(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, cs set<int>') as table:
+        cql.execute(f'CREATE INDEX ON {table}(cs)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 100 SET cs = cs + {{7}} WHERE p = 1')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 101 SET cs = {{8}} WHERE p = 1')
+        assert [({8},)] == list(cql.execute(f'SELECT cs FROM {table} WHERE p = 1'))
+        assert [(8,)] == list(cql.execute(f'SELECT coll_value FROM {table}_cs_idx_index'))
+
 # Check that it is possible to index the same map column in different ways
 # (values, keys and entries) at the same time:
 def test_index_map_multiple(cql, test_keyspace):

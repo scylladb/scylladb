@@ -2449,9 +2449,13 @@ std::vector<db::view::view_key_and_action> collection_column_computation::comput
             if (update->second.is_live()) {
                 row_marker rm = compute_row_marker(update->second);
                 ret.push_back({serialize_cell(*update), {rm}});
+                // Use timestamp reduced by 1 for the tombstone only if we generate a live update
+                // alongside it. Tombstone with the same timestamp would win against the update.
+                // And if the update is dead, use the same timestamp - it should win against
+                // any other updates with the same timestamps.
+                operation_ts -= 1;
             }
         }
-        operation_ts -= 1;
         if (existing && existing->second.is_live()) {
             db::view::view_key_and_action::shadowable_tombstone_tag tag{operation_ts};
             ret.push_back({serialize_cell(*existing), {tag}});
