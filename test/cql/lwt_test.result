@@ -2354,8 +2354,10 @@ Error from server: code=2200 [Invalid query] message="Invalid comparison with nu
 OK
 > -- collections of collections
 > -- non-frozen nested sets are not supported
-> create table lwt (a int, b set<map<int,int>>, c list<set<int>>, primary key (a));
+> create table lwt (a int, b set<map<int,int>>, primary key (a));
 Error from server: code=2200 [Invalid query] message="Non-frozen user types or collections are not allowed inside collections: set<map<int, int>>"
+> create table lwt (a int, c list<set<int>>, primary key (a));
+Error from server: code=2200 [Invalid query] message="Non-frozen user types or collections are not allowed inside collections: list<set<int>>"
 > -- frozen collection elements are however ok
 > create table lwt (a int, b set<frozen<list<int>>>, c list<frozen<set<int>>>, primary key (a));
 OK
