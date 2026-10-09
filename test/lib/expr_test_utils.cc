@@ -599,6 +599,9 @@ public:
         throw std::bad_function_call();
     }
     virtual schema_ptr get_table_schema(data_dictionary::table t) const override { return _table_schema; }
+    virtual std::optional<data_dictionary::keyspace> get_table_keyspace(data_dictionary::table t) const override {
+        return make_keyspace(this, nullptr);
+    }
     virtual db_clock::time_point get_truncation_time(data_dictionary::table t) const override {
         return {};
     }

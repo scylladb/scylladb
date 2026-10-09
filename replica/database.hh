@@ -490,6 +490,9 @@ public:
     };
 private:
     schema_ptr _schema;
+    // Null for standalone tables built by tests, and once the table is removed from the
+    // database: its keyspace may be destroyed while the table drains pending operations.
+    const keyspace* _keyspace;
     config _config;
     locator::effective_replication_map_ptr _erm;
     lw_shared_ptr<const storage_options> _storage_opts;
@@ -1022,7 +1025,9 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm,
+            sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
+            locator::effective_replication_map_ptr erm, const keyspace* ks = nullptr);
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
@@ -1035,9 +1040,15 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
+    const keyspace* get_keyspace() const { return _keyspace; }
+    void detach_from_keyspace() noexcept { _keyspace = nullptr; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
+    // Routing info to attach to the response of a single-partition request for `token`
+    // that landed on `original_shard`. Empty if the client routed correctly, and always
+    // empty while the keyspace's migration to tablets is not finalized.
+    std::optional<locator::tablet_routing_info> tablet_routing_info_for(dht::token token, unsigned original_shard) const;
 private:
     void update_tombstone_gc_rf_one();
 
@@ -1510,7 +1521,8 @@ public:
     explicit keyspace(config cfg, locator::effective_replication_map_factory& erm_factory);
     keyspace(const keyspace&) = delete;
     void operator=(const keyspace&) = delete;
-    keyspace(keyspace&&) = default;
+    // Tables link to their keyspace by address.
+    keyspace(keyspace&&) = delete;
 
     future<> shutdown() noexcept;
 
@@ -1735,7 +1747,8 @@ private:
             db::commitlog_force_sync,
             db::per_partition_rate_limit::info> _apply_stage;
 
-    flat_hash_map<sstring, keyspace> _keyspaces;
+    // By pointer, so that rehashing does not move keyspaces: tables link to theirs by address.
+    flat_hash_map<sstring, std::unique_ptr<keyspace>> _keyspaces;
     tables_metadata _tables_metadata;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
@@ -2035,11 +2048,11 @@ public:
     future<std::optional<std::filesystem::path>> find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
+    const flat_hash_map<sstring, std::unique_ptr<keyspace>>& get_keyspaces() const {
         return _keyspaces;
     }
 
-    flat_hash_map<sstring, keyspace>& get_keyspaces() {
+    flat_hash_map<sstring, std::unique_ptr<keyspace>>& get_keyspaces() {
         return _keyspaces;
     }
 

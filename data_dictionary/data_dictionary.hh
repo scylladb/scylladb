@@ -54,6 +54,7 @@ class impl;
 
 class user_types_metadata;
 class keyspace_metadata;
+class keyspace;
 
 class no_such_keyspace : public std::runtime_error {
 public:
@@ -75,6 +76,10 @@ private:
     table(const impl* ops, const void* table);
 public:
     schema_ptr schema() const;
+    // The keyspace this table belongs to, through a link rather than a lookup by name.
+    // Empty once the table is dropped: it stays reachable through its schema for a while,
+    // its keyspace may not.
+    std::optional<class keyspace> keyspace() const;
     const std::vector<view_ptr>& views() const;
     const secondary_index::secondary_index_manager& get_index_manager() const;
     db_clock::time_point get_truncation_time() const;

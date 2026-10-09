@@ -1416,9 +1416,9 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
         e.db().invoke_on_all([] (replica::database& db) -> future<> {
             auto& cm = db.get_compaction_manager();
             for (auto& [ks_name, ks] : db.get_keyspaces()) {
-                const auto& erm = ks.get_static_effective_replication_map();
+                const auto& erm = ks->get_static_effective_replication_map();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(co_await db.get_keyspace_local_ranges(erm));
-                for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
+                for (auto& [cf_name, schema] : ks->metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
                     co_await t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) {
@@ -2413,6 +2413,50 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             execute_test("queued reads", false);
             execute_test("queued reads", true);
         }
+    }, cfg);
+}
+
+// The link from a table to its keyspace reads the keyspace's current state, not a copy.
+SEASTAR_TEST_CASE(test_table_links_to_its_keyspace) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k int primary key, v int);").get();
+        auto& db = e.local_db();
+        auto& table = db.find_column_family("ks", "cf");
+
+        BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
+        auto ks = table.as_data_dictionary().keyspace();
+        BOOST_REQUIRE(ks);
+        BOOST_REQUIRE_EQUAL(ks->metadata()->name(), "ks");
+        BOOST_REQUIRE(ks->metadata()->durable_writes());
+
+        e.execute_cql("alter keyspace ks with durable_writes = false;").get();
+        BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
+        BOOST_REQUIRE(!table.as_data_dictionary().keyspace()->metadata()->durable_writes());
+    });
+}
+
+// A dropped table lives on until its pending operations drain, while its keyspace may be
+// destroyed as soon as the drop commits: the link must go, and no routing info be published.
+SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
+    cql_test_config cfg;
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.initial_tablets = 2;
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k int primary key, v int);").get();
+        auto table = e.local_db().find_column_family("ks", "cf").shared_from_this();
+        BOOST_REQUIRE(table->uses_tablets());
+        BOOST_REQUIRE(table->as_data_dictionary().keyspace()->uses_tablets());
+
+        // Landed on a shard with no replica, so routing info is due if it may be published at all.
+        const auto token = dht::token::from_int64(0);
+        const auto foreign_shard = smp::count;
+        BOOST_REQUIRE(table->tablet_routing_info_for(token, foreign_shard));
+
+        e.execute_cql("drop table ks.cf;").get();
+
+        BOOST_REQUIRE(!table->get_keyspace());
+        BOOST_REQUIRE(!table->as_data_dictionary().keyspace());
+        BOOST_REQUIRE(!table->tablet_routing_info_for(token, foreign_shard));
     }, cfg);
 }
 
