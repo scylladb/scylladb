@@ -13,6 +13,7 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/topology_guard.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
@@ -208,6 +209,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Handle to the group's server, or nullopt if the group is being deleted
     // or (re)started. Unlike acquire_server(), doesn't wait for a start.
     static std::optional<raft_server> try_acquire_server(raft_group_state& state);
+
+    // The shard hosting the raft group `expected_gid` of `tablet`,
+    // nullopt if this node holds no replica of the tablet or the table is gone.
+    std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
+
+    // Appends a truncate of the group's tablet to the log of the group `gid` if this replica
+    // leads it, and tells whether the entry is committed. Runs on the shard hosting the group.
+    future<bool> truncate_tablet_group(raft::group_id gid, utils::UUID request_id,
+            service::frozen_topology_guard frozen_guard, lowres_clock::time_point timeout);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
