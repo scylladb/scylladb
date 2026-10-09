@@ -76,7 +76,7 @@ const db::cluster_config_registry::option& validate_cluster_option(query_process
     }
     if (value) {
         if (auto error = db::cluster_config_registry::validate_value(*option, *value)) {
-            throw exceptions::invalid_request_exception(format("Invalid value for cluster config '{}': {}", config_name, *error));
+            throw exceptions::invalid_request_exception(fmt::format("Invalid value for cluster config '{}': {}", config_name, *error));
         }
     }
     return *option;

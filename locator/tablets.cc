@@ -630,7 +630,7 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _repair_scheduler_config, _raft_info, _target_pow2_tablet_count);
+                      _raft_info, _target_pow2_tablet_count);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -658,7 +658,7 @@ future<tablet_map> tablet_map::clone_gently() const {
     }
 
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
-                         _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info),
+                         _resize_decision, _resize_task_info, std::move(raft_info),
                          _target_pow2_tablet_count);
 }
 
@@ -824,10 +824,6 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
 
 void tablet_map::set_resize_task_info(tablet_task_info task_info) {
     _resize_task_info = std::move(task_info);
-}
-
-void tablet_map::set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config) {
-    _repair_scheduler_config = std::move(config);
 }
 
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
@@ -1136,10 +1132,6 @@ const locator::resize_decision& tablet_map::resize_decision() const {
 
 const tablet_task_info& tablet_map::resize_task_info() const {
     return _resize_task_info;
-}
-
-const std::optional<locator::repair_scheduler_config> tablet_map::get_repair_scheduler_config() const {
-    return _repair_scheduler_config;
 }
 
 sstring resize_decision::type_name() const {
@@ -2239,15 +2231,6 @@ auto fmt::formatter<locator::tablet_metadata_change_hint>::format(const locator:
     }
     return fmt::format_to(out, "\n}}");
 }
-
-auto fmt::formatter<locator::repair_scheduler_config>::format(const locator::repair_scheduler_config& config, fmt::format_context& ctx) const
-        -> decltype(ctx.out()) {
-    std::map<sstring, sstring> ret{
-        {"auto_repair_enabled", config.auto_repair_enabled ? "true" : "false"},
-        {"auto_repair_threshold", std::to_string(config.auto_repair_threshold.count())},
-    };
-    return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
-};
 
 auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_task_info& info, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {

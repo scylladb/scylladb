@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
-from cassandra.protocol import InvalidRequest, SyntaxException  # type: ignore # pylint: disable=no-name-in-module
+from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException  # type: ignore # pylint: disable=no-name-in-module
 
 from test.cluster.util import reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -114,6 +114,28 @@ async def test_cluster_config_auto_repair_table_scope_persistence(manager: Scyll
 
     await cql.run_async("ALTER CLUSTER WITH auto_repair_enabled = null")
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", None)
+
+    # The integer option follows the same chain and is stored as its canonical text.
+    await cql.run_async("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 3600")
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_threshold_in_seconds", "3600")
+
+    await cql.run_async("ALTER KEYSPACE ks_cfg WITH auto_repair_threshold_in_seconds = 7200")
+    await wait_for_config_map_value_on_hosts(cql, hosts, KEYSPACE_CONFIGS_QUERY, ["ks_cfg"], "auto_repair_threshold_in_seconds", "7200")
+
+    await cql.run_async("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = 60")
+    await wait_for_config_map_value_on_hosts(cql, hosts, TABLE_CONFIGS_QUERY, ["ks_cfg", "tbl"], "auto_repair_threshold_in_seconds", "60")
+
+    with pytest.raises(ConfigurationException, match="expected 64-bit integer"):
+        await cql.run_async("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = 'soon'")
+
+    await cql.run_async("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = null")
+    await wait_for_config_map_value_on_hosts(cql, hosts, TABLE_CONFIGS_QUERY, ["ks_cfg", "tbl"], "auto_repair_threshold_in_seconds", None)
+
+    await cql.run_async("ALTER KEYSPACE ks_cfg WITH auto_repair_threshold_in_seconds = null")
+    await wait_for_config_map_value_on_hosts(cql, hosts, KEYSPACE_CONFIGS_QUERY, ["ks_cfg"], "auto_repair_threshold_in_seconds", None)
+
+    await cql.run_async("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = null")
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_threshold_in_seconds", None)
 
 
 @pytest.mark.asyncio

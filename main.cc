@@ -984,6 +984,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }
 
+            // Still honored as the fallback for the cluster config options until they are removed.
+            auto warn_deprecated_auto_repair_option = [] (const utils::config_file::config_src& opt) {
+                if (opt.source() != utils::config_file::config_source::None) {
+                    startlog.warn("The {} option is deprecated and will be removed in a future version."
+                            " Configure automatic repair with ALTER CLUSTER, ALTER KEYSPACE or ALTER TABLE instead", opt.name());
+                }
+            };
+            warn_deprecated_auto_repair_option(cfg->auto_repair_enabled_default);
+            warn_deprecated_auto_repair_option(cfg->auto_repair_threshold_default_in_seconds);
+
             auto unused_features = cfg->experimental_features() | std::views::filter([] (auto& f) {
                 return f == db::experimental_features_t::feature::UNUSED;
             });
@@ -1888,7 +1898,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 .background_sg = dbcfg.maintenance_scheduling_group,
             };
             sharded<service::tablet_allocator> tablet_allocator;
-            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
+            tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db), std::ref(cluster_config_manager)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });

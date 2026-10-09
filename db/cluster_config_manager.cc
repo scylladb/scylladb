@@ -517,6 +517,56 @@ std::optional<sstring> cluster_config_manager::resolve_config(std::string_view c
     return get_cluster_config(config_name);
 }
 
+std::optional<cluster_config_manager::lookup_context> cluster_config_manager::table_lookup_context(table_id table) const {
+    auto t = _db.get_tables_metadata().get_table_if_exists(table);
+    if (!t) {
+        return std::nullopt;
+    }
+    auto s = t->schema();
+    return lookup_context{
+        .keyspace_name = s->ks_name(),
+        .table_name = s->cf_name(),
+    };
+}
+
+// The option named by a resolve_*_table_config() call. The name comes from the consumer's
+// code (cluster_config_registry::option_name), never from user input, so an unknown name is
+// a programming error. Looked up per call rather than cached by the consumer: tests that
+// inject registry options invalidate pointers handed out earlier.
+static const cluster_config_registry::option& find_registered_option(std::string_view config_name) {
+    const auto* opt = cluster_config_registry::find(config_name);
+    if (!opt) {
+        utils::on_internal_error(format("'{}' is not a registered cluster config option", config_name));
+    }
+    return *opt;
+}
+
+std::optional<bool> cluster_config_manager::resolve_boolean_table_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    auto ctx = table_lookup_context(table);
+    if (!ctx) {
+        return std::nullopt;
+    }
+    auto value = resolve_config(config_name, *ctx);
+    if (!value) {
+        return std::nullopt;
+    }
+    return cluster_config_registry::to_boolean(opt, value);
+}
+
+std::optional<int64_t> cluster_config_manager::resolve_integer_table_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    auto ctx = table_lookup_context(table);
+    if (!ctx) {
+        return std::nullopt;
+    }
+    auto value = resolve_config(config_name, *ctx);
+    if (!value) {
+        return std::nullopt;
+    }
+    return cluster_config_registry::to_integer(opt, value);
+}
+
 // An option's default is compiled in, so these are usable before the cluster enables the
 // registry feature. Until then no scope can store an override for it (the ALTER path
 // rejects the option), so resolution yields absence and these return the default, which is
