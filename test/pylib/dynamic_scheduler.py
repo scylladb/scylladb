@@ -178,18 +178,26 @@ RETIRE_COOLDOWN = 10.0
 # 4.6% for seconds; the run that filled swap and stalled the machine
 # sat at 15-21% for a quarter of an hour.
 MEM_STALL_LIMIT = 10.0
-# The pool starts at one worker per CPU and grows, one worker at a
-# time, while every worker is busy and the machine has CPU and memory
-# to spare.  Starting 64 workers at once had half of them holding a
-# test and their last module's memory for most of the run: the run
-# kept 33-36 tests going on average.  A new worker imports the
-# framework and collects the whole suite, about a core and a quarter
-# of a gigabyte for several seconds, so the next one waits until it
-# has collected, and at least POOL_GROW_SECONDS.  Until then its
-# expected overhead is charged to the forecast, so admission cannot
-# hand that memory to a test.  A worker's overhead is measured, not
-# assumed: what its cgroup holds the moment each test starts.
-POOL_GROW_SECONDS = 10.0
+# The pool starts at one worker per CPU and grows while every worker is
+# busy and the machine has CPU and memory to spare.  Starting 64
+# workers at once had half of them holding a test and their last
+# module's memory for most of the run: the run kept 33-36 tests going
+# on average.  So it grows by what the gap to the CPU target asks for,
+# at the load a busy worker puts on the machine now: one when the
+# workers run long tests and the gap is small; many where they run
+# sub-second tests and each keeps a fraction of a core busy -- at most
+# half as many again as there are, so a burst never doubles the pool on
+# a reading that came out low.  One at a
+# time, ten seconds apart, a release run ended with 10-19 cores busy
+# against a target of 27-30 while the pool grew by one worker every ten
+# seconds.  A new worker imports the framework and collects the whole
+# suite, about a core and a quarter of a gigabyte for some ten seconds,
+# so the next growth waits until those have collected, and at least
+# POOL_GROW_SECONDS.  Until then their expected overhead is charged to
+# the forecast, so admission cannot hand that memory to a test.  A
+# worker's overhead is measured, not assumed: what its cgroup holds the
+# moment each test starts.
+POOL_GROW_SECONDS = 5.0
 POOL_SPAWN_TIMEOUT = 120.0      # a spawned worker that has not collected by then is written off
 POOL_WORKER_PRIOR = 0.25 * 10**9
 # An idle worker holding this much more than its peers is sent home,
@@ -1727,9 +1735,10 @@ class DynamicScheduling:
         return [n for n in self.node2pending if n not in self.shutdown_sent and not n.shutting_down]
 
     def _maybe_grow_pool(self, pressure: bool) -> None:
-        """Add one worker when every worker is busy and the machine
-        has CPU and memory to spare."""
-        if self.max_workers <= 0 or self._spawning or not self.pending_set:
+        """Add workers when every worker is busy and the machine has CPU
+        and memory to spare: as many as the gap to the CPU target asks
+        for, between one and half the workers there are."""
+        if self.max_workers <= 0 or not self.pending_set or self._spawning:
             return
         now = self.now()
         if now - self._last_spawn < POOL_GROW_SECONDS:
@@ -1744,7 +1753,8 @@ class DynamicScheduling:
         refill = len(live) < self._pool_floor
         if not refill and any(not self._committed(n) for n in live):
             return
-        if pressure or self._estimate_now(now) + 1.0 > self.cpu_target:
+        load = self._estimate_now(now)
+        if pressure or load + 1.0 > self.cpu_target:
             return
         # Low CPU load is not idle capacity when the tests are stalled
         # on memory: a test waiting for its pages to come back from
@@ -1756,20 +1766,28 @@ class DynamicScheduling:
         head = next((lst[0] for lst in self.files.values() if lst and not self._waits_for_first_run(lst[0])), None)
         if head is None:
             return
+        # How many: the gap to the target, at the load one busy worker
+        # puts on the machine now.
+        per_worker = max(0.1, load / max(1, len(live)))
+        want = 1 if refill else math.ceil((self.cpu_target - load) / per_worker)
+        want = max(1, min(want, len(live) // 2, self.max_workers - len(live)))
         fc = self._forecast(head, 0.0, self._file_held.get(self._file_of(head), 0.0))
         cost = self.worker_cost()
         headroom = self._mem_headroom()
-        if headroom < cost + fc:
+        started = 0
+        while started < want and headroom - started * cost >= cost + fc:
+            wid = self._spawn_worker()
+            if not wid:
+                break
+            self._spawning_ids.add(wid)
+            self._fc_mean += cost
+            started += 1
+        if not started:
             return
-        wid = self._spawn_worker()
-        if not wid:
-            return
-        self._spawning_ids.add(wid)
         self._last_spawn = now
-        self.stats["pool_grown"] += 1
-        self._fc_mean += cost
-        self.log(f"pool: {len(live)} -> {len(live) + 1} workers ({'refilling' if refill else 'all busy'}, load {self._estimate_now(now):.1f}/"
-                  f"{self.cpu_target:.1f} cores, {headroom / GB:.1f}G headroom, a worker holds {cost / GB:.2f}G)")
+        self.stats["pool_grown"] += started
+        self.log(f"pool: {len(live)} -> {len(live) + started} workers ({'refilling' if refill else 'all busy'}, load {load:.1f}/"
+                 f"{self.cpu_target:.1f} cores, {per_worker:.2f} a worker, {headroom / GB:.1f}G headroom, a worker holds {cost / GB:.2f}G)")
 
     def _send_home(self, node: WorkerController, held: int) -> bool:
         """Shut a worker down without it running the test it holds,
