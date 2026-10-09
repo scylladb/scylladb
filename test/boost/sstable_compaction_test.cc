@@ -5230,8 +5230,10 @@ SEASTAR_FIXTURE_TEST_CASE(simple_backlog_controller_test_incremental_gcs, gcs_fi
 }
 
 void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files = 64) {
+    // Half the files, so a full size tier splits into two jobs.
+    const unsigned max_threshold = all_files / 2;
 
-    auto get_cleanup_jobs = [&env, all_files] (compaction::compaction_strategy_type compaction_strategy_type,
+    auto get_cleanup_jobs = [&env, all_files, max_threshold] (compaction::compaction_strategy_type compaction_strategy_type,
                                                 std::map<sstring, sstring> strategy_options = {},
                                                 const api::timestamp_clock::duration step_base = 0ms,
                                                 unsigned sstable_level = 0) {
@@ -5241,6 +5243,7 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files 
                 .with_column("value", int32_type);
         builder.set_compaction_strategy(compaction_strategy_type);
         builder.set_compaction_strategy_options(std::move(strategy_options));
+        builder.set_max_compaction_threshold(max_threshold);
         auto s = builder.build();
 
         auto _ = env.tempdir().make_sweeper();
@@ -5298,7 +5301,7 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files 
     };
 
     // STCS: Check that 2 jobs are returned for a size tier containing 2x more files than max threshold.
-    run_cleanup_strategy_test(compaction::compaction_strategy_type::size_tiered, 32);
+    run_cleanup_strategy_test(compaction::compaction_strategy_type::size_tiered, max_threshold);
 
     // Default implementation: check that it will return one job for each file
     run_cleanup_strategy_test(compaction::compaction_strategy_type::null, 1);
@@ -5312,13 +5315,13 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files 
 
     const std::map<sstring, sstring> empty_opts;
     // LCS: Check that 2 jobs are returned for all similar-sized files in level 0.
-    run_cleanup_strategy_test(compaction::compaction_strategy_type::leveled, 32, empty_opts, 0ms, 0);
+    run_cleanup_strategy_test(compaction::compaction_strategy_type::leveled, max_threshold, empty_opts, 0ms, 0);
     // LCS: Check that 1 jobs is returned for all non-overlapping files in level 1, as incremental compaction can be employed
     // to limit memory usage and space requirement.
-    run_cleanup_strategy_test(compaction::compaction_strategy_type::leveled, 64, empty_opts, 0ms, 1);
+    run_cleanup_strategy_test(compaction::compaction_strategy_type::leveled, all_files, empty_opts, 0ms, 1);
 
     // ICS: Check that 2 jobs are returned for a size tier containing 2x more files (single-fragment runs) than max threshold.
-    run_cleanup_strategy_test(compaction::compaction_strategy_type::incremental, 32);
+    run_cleanup_strategy_test(compaction::compaction_strategy_type::incremental, max_threshold);
 }
 
 SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
@@ -5327,12 +5330,12 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
 SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
         *seastar::testing::async_fixture<s3_fixture>()) {
-    return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env); },
+    return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env, 8); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_compaction_strategy_cleanup_method_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env); },
+    return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env, 8); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
