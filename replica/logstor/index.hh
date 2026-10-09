@@ -567,6 +567,17 @@ public:
     size_t get_memory_usage() const noexcept { return _memory_usage; }
     uint64_t get_live_record_bytes() const noexcept { return _live_record_bytes; }
 
+    future<uint64_t> count_keys_in_token_range(dht::token_range tr) const {
+        static constexpr size_t batch_size = 1024;
+        uint64_t count = 0;
+        auto s = scan(tr);
+        while (auto b = s.next_batch(batch_size)) {
+            count += b->entry_count;
+            co_await coroutine::maybe_yield();
+        }
+        co_return count;
+    }
+
 };
 
 // Thrown when the record found at the indexed location holds a different key than the one that was looked up.
