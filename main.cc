@@ -1026,6 +1026,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
                 st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
                 st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
+                st_cfg.background_reclaim_goal = cfg->lsa_background_reclaim_goal_in_mb() << 20;
                 st_cfg.sanitizer_report_backtrace = cfg->sanitizer_report_backtrace();
                 logalloc::shard_tracker().configure(st_cfg);
             }).get();
@@ -1035,6 +1036,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return logalloc::shard_tracker().stop();
                 }).get();
             });
+
+            auto background_reclaim_goal_updater = serialized_action([&cfg] {
+                auto goal = cfg->lsa_background_reclaim_goal_in_mb() << 20;
+                return smp::invoke_on_all([goal] {
+                    logalloc::shard_tracker().set_background_reclaim_goal(goal);
+                }).then([goal] {
+                    startlog.info("Set background reclaim goal to {} bytes", goal);
+                });
+            });
+            auto join_background_reclaim_goal_updater = defer([&] () noexcept {
+                background_reclaim_goal_updater.join().get();
+            });
+            auto background_reclaim_goal_observer = cfg->lsa_background_reclaim_goal_in_mb.observe(
+                    background_reclaim_goal_updater.make_observer());
 
             if (cfg->broadcast_address().empty() && cfg->listen_address().empty()) {
                 startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");

@@ -441,6 +441,7 @@ public:
     named_value<int32_t> force_gossip_generation;
     named_value<std::vector<enum_option<experimental_features_t>>> experimental_features;
     named_value<size_t> lsa_reclamation_step;
+    named_value<size_t> lsa_background_reclaim_goal_in_mb;
     named_value<uint16_t> prometheus_port;
     named_value<sstring> prometheus_address;
     named_value<sstring> prometheus_prefix;

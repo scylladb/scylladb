@@ -405,13 +405,15 @@ class background_reclaimer {
     timer<lowres_clock> _adjust_shares_timer;
     // If engaged, main loop is not running, set_value() to wake it.
     promise<>* _main_loop_wait = nullptr;
-    future<> _done;
     bool _stopping = false;
-    static constexpr size_t free_memory_threshold = background_reclaim_free_memory_threshold;
+    // Amount of free memory to maintain. Zero means don't reclaim at all.
+    size_t _goal;
+    // Starts the main loop, so must be initialized last.
+    future<> _done;
 private:
     bool have_work() const {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
-        return memory::free_memory() < free_memory_threshold;
+        return memory::free_memory() < _goal;
 #else
         return false;
 #endif
@@ -437,14 +439,14 @@ private:
             if (_stopping) {
                 break;
             }
-            _reclaim(free_memory_threshold - memory::free_memory());
+            _reclaim(_goal - memory::free_memory());
             co_await coroutine::maybe_yield();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
     }
     void adjust_shares() {
         if (have_work()) {
-            auto shares = 1 + (1000 * (free_memory_threshold - memory::free_memory())) / free_memory_threshold;
+            auto shares = 1 + (1000 * (_goal - memory::free_memory())) / _goal;
             _sg.set_shares(shares);
             llogger.trace("background_reclaimer::adjust_shares: {}", shares);
             if (_main_loop_wait) {
@@ -453,13 +455,20 @@ private:
         }
     }
 public:
-    explicit background_reclaimer(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period, noncopyable_function<void (size_t target)> reclaim)
+    explicit background_reclaimer(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period, size_t goal, noncopyable_function<void (size_t target)> reclaim)
             : _sg(sg)
             , _reclaim(std::move(reclaim))
             , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
+            , _goal(goal)
             , _done(with_scheduling_group(_sg, [this] { return main_loop(); })) {
         if (sg != default_scheduling_group()) {
             _adjust_shares_timer.arm_periodic(adjust_shares_period);
+        }
+    }
+    void set_goal(size_t goal) noexcept {
+        _goal = goal;
+        if (have_work()) {
+            main_loop_wake();
         }
     }
     future<> stop() {
@@ -552,11 +561,16 @@ public:
     // Abort on allocation failure from LSA
     void enable_abort_on_bad_alloc() noexcept { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const noexcept { return _abort_on_bad_alloc; }
-    void setup_background_reclaim(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period) {
+    void setup_background_reclaim(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period, size_t goal) {
         SCYLLA_ASSERT(!_background_reclaimer);
-        _background_reclaimer.emplace(sg, adjust_shares_period, [this] (size_t target) {
+        _background_reclaimer.emplace(sg, adjust_shares_period, goal, [this] (size_t target) {
             reclaim(target, is_preemptible::yes);
         });
+    }
+    void set_background_reclaim_goal(size_t goal) noexcept {
+        if (_background_reclaimer) {
+            _background_reclaimer->set_goal(goal);
+        }
     }
     // const bool&, so interested parties can save a reference and see updates.
     const bool& sanitizer_report_backtrace() const { return _sanitizer_report_backtrace; }
@@ -2408,8 +2422,12 @@ void tracker::configure(const config& cfg) {
     if (cfg.abort_on_lsa_bad_alloc) {
         _impl->enable_abort_on_bad_alloc();
     }
-    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group, cfg.background_reclaim_shares_adjust_period);
+    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group, cfg.background_reclaim_shares_adjust_period, cfg.background_reclaim_goal);
     _impl->set_sanitizer_report_backtrace(cfg.sanitizer_report_backtrace);
+}
+
+void tracker::set_background_reclaim_goal(size_t goal) noexcept {
+    _impl->set_background_reclaim_goal(goal);
 }
 
 memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {

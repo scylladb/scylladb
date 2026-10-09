@@ -39,6 +39,7 @@
 #include "extensions.hh"
 #include "sstables/compressor.hh"
 #include "utils/log.hh"
+#include "utils/logalloc.hh"
 #include "service/tablet_allocator_fwd.hh"
 #include "backlog_controller_fwd.hh"
 #include "utils/config_file_impl.hh"
@@ -1487,6 +1488,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())
     , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step.")
+    , lsa_background_reclaim_goal_in_mb(this, "lsa_background_reclaim_goal_in_mb", liveness::LiveUpdate, value_status::Used, logalloc::default_background_reclaim_goal >> 20,
+        "Amount of free memory per shard, in MiB, which the background reclaimer tries to maintain. Set to 0 to disable background reclaiming.")
     , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable.")
     , prometheus_address(this, "prometheus_address", value_status::Used, {/* listen_address */}, "Prometheus listening address, defaulting to listen_address if not explicitly set.")
     , prometheus_prefix(this, "prometheus_prefix", value_status::Used, "scylla", "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.")
