@@ -117,7 +117,7 @@ def test_leftover_clusters_are_recycled_at_session_finish(pytester: pytest.Pytes
     item_a.parent.stash[CLUSTER_KEY] = shared   # the module node, shared by both items
     item_b.stash[CLUSTER_KEY] = None            # recycled normally: nothing to do
 
-    swept = asyncio.run(recycle_leftover_clusters(SimpleNamespace(items=[item_a, item_b])))
+    swept = asyncio.run(recycle_leftover_clusters(SimpleNamespace(items=[item_a, item_b], config=item_a.config)))
 
     assert swept == 2
 
