@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of Cassandra 4.1.3 (commit 2a4cd36475de3eb47207cd88d2d472b876c6816d)
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
