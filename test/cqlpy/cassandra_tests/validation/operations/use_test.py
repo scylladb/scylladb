@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -23,6 +23,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+
+# The Java test shouldRejectUseStatementWhenProhibited was not translated: it
+# checks Cassandra's "use_statements_enabled" configuration option by setting
+# it through Cassandra's internal APIs, which we can't do through CQL.
 
 def testUseStatementWithBindVariable(cql, test_keyspace):
     assert_invalid_syntax_message(cql, test_keyspace, "Bind variables cannot be used for keyspace names", "USE ?")
