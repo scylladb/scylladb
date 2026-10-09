@@ -391,12 +391,12 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_cluster_factory(request: pytest.FixtureRequest,
-                           build_mode: str,
-                           suite_log_dir: pathlib.Path,
-                           scylla_binary: str,
-                           testpy_logger: logging.Logger) -> ClusterFactory:
-    """A factory of Scylla clusters configured for the current suite and build mode."""
+def testpy_new_cluster(request: pytest.FixtureRequest,
+                       build_mode: str,
+                       suite_log_dir: pathlib.Path,
+                       scylla_binary: str,
+                       testpy_logger: logging.Logger) -> Callable[[], ScyllaCluster]:
+    """Creates an empty Scylla cluster configured for the current suite and build mode."""
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
     options = request.config.option
 
@@ -411,9 +411,8 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
         # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
         base_env["LLVM_PROFILE_FILE"] = str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")
 
-    @asynccontextmanager
-    async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
-        node.stash[CLUSTER_KEY] = cluster = ScyllaCluster(
+    def new_cluster() -> ScyllaCluster:
+        return ScyllaCluster(
             logger=testpy_logger,
             vardir=suite_log_dir,
             mode=build_mode,
@@ -424,6 +423,18 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
             scylla_exe=scylla_binary,
             save_log_on_success=options.save_log_on_success,
         )
+
+    return new_cluster
+
+
+@pytest.fixture(scope="module")
+def testpy_cluster_factory(testpy_new_cluster: Callable[[], ScyllaCluster],
+                           testpy_logger: logging.Logger) -> ClusterFactory:
+    """A factory of Scylla clusters configured for the current suite and build mode."""
+
+    @asynccontextmanager
+    async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
+        node.stash[CLUSTER_KEY] = cluster = testpy_new_cluster()
         testpy_logger.info("Created Scylla cluster %s for test %s", cluster, test_name)
         try:
             yield cluster
