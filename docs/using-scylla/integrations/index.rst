@@ -21,6 +21,7 @@ ScyllaDB Integrations and Connectors
    integration-databricks
    integration-jaeger
    integration-mindsdb
+   integration-libredb-studio
 
 .. panel-box::
   :title: ScyllaDB Integrations
@@ -49,6 +50,7 @@ ScyllaDB Integrations and Connectors
   * :doc:`Integrate ScyllaDB with Databricks <integration-databricks>`
   * :doc:`Integrate ScyllaDB with Jaeger Server <integration-jaeger>`
   * :doc:`Integrate ScyllaDB with MindsDB <integration-mindsdb>`
+  * :doc:`Integrate ScyllaDB with LibreDB Studio <integration-libredb-studio>`
 
 .. panel-box::
   :title: ScyllaDB Connectors
