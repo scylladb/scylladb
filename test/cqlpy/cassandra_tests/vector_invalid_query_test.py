@@ -9,7 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from ..util import is_scylla
+from ..util import is_scylla, wait_for_vector_index
 
 ANN_LIMIT_ERROR = "Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than %s. LIMIT was %s"
 # ANN() is an ordinary function as far as preparation is concerned - the vector search claims the
@@ -243,12 +243,16 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-# This test is skipped because although Scylla does support vector indexes,
-# this test framework doesn't run the vector store, so the request will fail
-# with "Vector Store is disabled" and not the error message that the test
-# expects to see.
-@pytest.mark.skip_env(reason="Vector store is disabled in this test framework")
-def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
+# This test needs a vector store: without it, Scylla fails the request with
+# "Vector Store is disabled" and not the error message that the test expects
+# to see. test/cqlpy/run runs a vector store with the "--vs" option.
+# Reproduces VECTOR-987: the vector store rejects the query with a misleading
+# error, "Global ANN query is not supported when only a local vector index
+# is available", instead of an error saying that the restricted column is
+# not a filtering column of the vector index. When this is fixed,
+# SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE above may need to change.
+@pytest.mark.xfail(reason="VECTOR-987")
+def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace, needs_vector_store):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
     )
@@ -259,6 +263,8 @@ def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_ke
     ) as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
+        keyspace, table_name = table.split('.')
+        wait_for_vector_index(cql, keyspace, table_name + '_v_idx')
 
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)")
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)")
