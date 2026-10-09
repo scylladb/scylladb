@@ -262,6 +262,8 @@ public:
 /// ignored if the schema has no clustering columns.
 /// Mutations are returned in ring order. Does not contain duplicate partitions.
 /// Futurized to avoid stalls.
+/// If `shard` is set, only generates partitions owned by that shard (retrying
+/// candidate keys as needed) instead of picking keys regardless of ownership.
 future<utils::chunked_vector<mutation>> generate_random_mutations(
         uint32_t seed,
         tests::random_schema& random_schema,
@@ -269,7 +271,8 @@ future<utils::chunked_vector<mutation>> generate_random_mutations(
         expiry_generator exp_gen = no_expiry_expiry_generator(),
         std::uniform_int_distribution<size_t> partition_count_dist = std::uniform_int_distribution<size_t>(8, 16),
         std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
-        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16),
+        std::optional<shard_id> shard = std::nullopt);
 
 future<utils::chunked_vector<mutation>> generate_random_mutations(
         tests::random_schema& random_schema,
@@ -277,9 +280,11 @@ future<utils::chunked_vector<mutation>> generate_random_mutations(
         expiry_generator exp_gen = no_expiry_expiry_generator(),
         std::uniform_int_distribution<size_t> partition_count_dist = std::uniform_int_distribution<size_t>(8, 16),
         std::uniform_int_distribution<size_t> clustering_row_count_dist = std::uniform_int_distribution<size_t>(16, 128),
-        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16));
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist = std::uniform_int_distribution<size_t>(4, 16),
+        std::optional<shard_id> shard = std::nullopt);
 
 /// Generate exactly partition_count partitions. See the more general overload above.
-future<utils::chunked_vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count);
+future<utils::chunked_vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count,
+        std::optional<shard_id> shard = std::nullopt);
 
 } // namespace tests

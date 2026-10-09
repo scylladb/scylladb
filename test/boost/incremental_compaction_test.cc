@@ -312,8 +312,19 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         // test ability of histogram to return a good estimation after merging keys.
         static int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
 
-        auto make_insert = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
-            auto key = partition_key::from_exploded(*s, {k});
+        // append a disambiguator to land the key on this shard, matching the
+        // shard-scoping used elsewhere for generated mutations.
+        auto shard_owned_key = [&] (const sstring& base) {
+            for (unsigned i = 0; ; i++) {
+                auto k = to_bytes(base + to_sstring(i));
+                auto key = partition_key::from_exploded(*s, {k});
+                if (dht::static_shard_of(*s, dht::get_token(*s, key)) == this_shard_id()) {
+                    return key;
+                }
+            }
+        };
+        auto make_insert = [&] (const sstring& base, uint32_t ttl, uint32_t expiration_time) {
+            auto key = shard_owned_key(base);
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
             auto live_cell = atomic_cell::make_live(*utf8_type, 0, bytes("a"), gc_clock::time_point(gc_clock::duration(expiration_time)), gc_clock::duration(ttl));
@@ -328,12 +339,12 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         for (auto i = 0; i < expired_keys; i++) {
             // generate expiration time at different time points or only a few entries would be created in histogram
             auto expiration_time = (now - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS*2+i)).time_since_epoch().count();
-            mutations.push_back(make_insert(to_bytes("expired_key" + to_sstring(i)), 1, expiration_time));
+            mutations.push_back(make_insert("expired_key" + to_sstring(i) + "_", 1, expiration_time));
         }
         auto remaining = total_keys-expired_keys;
         auto expiration_time = (now + gc_clock::duration(3600)).time_since_epoch().count();
         for (auto i = 0; i < remaining; i++) {
-            mutations.push_back(make_insert(to_bytes("key" + to_sstring(i)), 3600, expiration_time));
+            mutations.push_back(make_insert("key" + to_sstring(i) + "_", 3600, expiration_time));
         }
 
         table_for_tests cf = env.make_table_for_tests(s);
