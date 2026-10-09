@@ -224,6 +224,39 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
     }, cfg);
 }
 
+// Dropping a table or a view must not save truncation records. They used to be saved and
+// then removed right away, each save costing a blocking flush of system.truncated on every
+// shard, which made DROP take more than 10s on a loaded disk (SCYLLADB-4913).
+SEASTAR_TEST_CASE(test_drop_does_not_save_truncation_records) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto truncated_writes = [&] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return db.find_column_family(db::system_keyspace::NAME, db::system_keyspace::TRUNCATED).get_stats().writes.hist.count;
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+
+        e.execute_cql("CREATE KEYSPACE ks_drop WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_drop.test (pk int PRIMARY KEY, c int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks_drop.mv AS SELECT * FROM ks_drop.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)").get();
+
+        // TRUNCATE saves one record per shard for the table and for its view.
+        auto before = truncated_writes();
+        replica::database::truncate_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks_drop", "test", db_clock::now(), false /* with_snapshot */).get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - before, 2 * this_smp_shard_count());
+
+        // DROP only deletes the records, which is a single write.
+        before = truncated_writes();
+        e.execute_cql("DROP MATERIALIZED VIEW ks_drop.mv").get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - before, 1);
+
+        before = truncated_writes();
+        e.execute_cql("DROP TABLE ks_drop.test").get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - before, 1);
+    }, cfg);
+}
+
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env_thread([](cql_test_env& e) {
             // FIXME: restore indent.
