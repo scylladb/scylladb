@@ -4,7 +4,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import boto3
 import pytest
+
 import test.pylib.version_fetch_utils as vfu
 
 def test_list_scylla_release_entries_prefers_files_when_files_exist(monkeypatch):
@@ -31,7 +33,7 @@ def test_list_scylla_release_entries_prefers_files_when_files_exist(monkeypatch)
         assert region_name == "us-east-1"
         return fake_s3
 
-    monkeypatch.setattr(vfu.boto3, "client", fake_client)
+    monkeypatch.setattr(boto3, "client", fake_client)
 
     assert vfu._list_scylla_release_entries("downloads.scylladb.com", "downloads/scylla/relocatable") == [
         "scylla-2026.1.0-0.20260125.f94296e0ae43.x86_64.tar.gz"]
@@ -51,7 +53,7 @@ def test_list_scylla_release_entries_returns_folders_when_no_files_exist(monkeyp
                     {"Prefix": f"{prefix}scylladb-2026.1/"},
                     {"Prefix": f"{prefix}other/"}]}
 
-    monkeypatch.setattr(vfu.boto3, "client", lambda *args, **kwargs: FakeS3Client())
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: FakeS3Client())
 
     assert vfu._list_scylla_release_entries("downloads.scylladb.com", "downloads/scylla/relocatable") == [
         "scylladb-2025.1", "scylladb-2026.1"]
@@ -78,7 +80,7 @@ def test_list_scylla_release_entries_reads_all_pages(monkeypatch):
 
     fake_s3 = FakeS3Client()
 
-    monkeypatch.setattr(vfu.boto3, "client", lambda *args, **kwargs: fake_s3)
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: fake_s3)
 
     assert vfu._list_scylla_release_entries("downloads.scylladb.com", "downloads/scylla/relocatable/scylladb-2026.1/") == [
         "scylla-2026.1.0-0.20260125.f94296e0ae43.x86_64.tar.gz", "scylla-2026.1.1-0.20260301.f94296e0ae43.x86_64.tar.gz"]

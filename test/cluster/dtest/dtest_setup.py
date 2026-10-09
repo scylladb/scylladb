@@ -6,11 +6,17 @@
 
 from __future__ import annotations
 
+import glob
 import logging
+import operator
 import os
 import pprint
 import re
-from functools import partial, partialmethod
+import shutil
+import subprocess
+import threading
+from functools import partial, partialmethod, reduce
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import requests
@@ -27,9 +33,11 @@ from test.cluster.dtest.dtest_class import (
     get_port_from_node,
     make_execution_profile,
 )
+from test.cluster.dtest.ccmlib.common import is_win
 from test.cluster.dtest.ccmlib.scylla_cluster import ScyllaCluster
+from test.cluster.dtest.ccmlib.scylla_repository import setup_scylla_manager
 from test.cluster.dtest.tools.context import log_filter
-from test.cluster.dtest.tools.log_utils import DisableLogger, remove_control_chars
+from test.cluster.dtest.tools.log_utils import DisableLogger, get_test_log_name, remove_control_chars
 from test.cluster.dtest.tools.misc import retry_till_success
 
 if TYPE_CHECKING:
@@ -42,6 +50,10 @@ if TYPE_CHECKING:
 
 
 DEFAULT_PROTOCOL_VERSION = 4
+
+KEEP_CORES = os.environ.get("KEEP_CORES", "true").lower() in ("yes", "true")
+DTEST_CORE_COMPRESS_TOOL = os.environ.get("DTEST_CORE_COMPRESS_TOOL", "gzip")
+DTEST_CORE_COMPRESS_EXT = os.environ.get("DTEST_CORE_COMPRESS_EXT", "gz")
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +69,172 @@ def _should_retry_no_host(e):
     return not any(isinstance(err, AuthenticationFailed) for err in e.errors.values())
 
 
+# NOTE: restored verbatim (imports aside) from scylla-dtest's dtest_setup.py;
+# it was trimmed when this module was first ported in-tree, but
+# not-yet-adapted dtest/unported test modules still import it. It relies on
+# `dtest_config.cluster`/`dtest_config.find_cores()`, which are part of the
+# ccm-based DTestConfig from the original dtest, not the
+# test.pylib.scylla_cluster_manager-based one used in-tree; it is kept as-is
+# for import purposes only, not expected to work at runtime until the
+# consuming test modules are adapted.
+def copy_logs(request, dtest_config, directory=None, name=None, cores=None):  # noqa: PLR0912, PLR0915
+    """Copy the current cluster's log files somewhere, by default to LOG_SAVED_DIR with a name of 'last'"""
+    log_saved_dir = os.environ.get("LOG_SAVED_DIR", "logs")
+    try:
+        os.mkdir(log_saved_dir)
+    except OSError:
+        pass
+
+    if directory is None:
+        directory = log_saved_dir
+    if name is None:
+        name = os.path.join(log_saved_dir, "last")
+    else:
+        name = os.path.join(directory, name)
+    if not os.path.exists(directory):
+        os.mkdir(directory)
+
+    # Use shared helper function to ensure consistency with per-test log file naming
+    # Note: no extension chars reserved here since this is a directory name
+    basedir = get_test_log_name(request, directory=directory, reserve_extension_chars=0)
+    logdir = os.path.join(directory, basedir)
+    os.mkdir(logdir)
+
+    cluster_path = dtest_config.cluster.get_path()
+
+    for log in glob.glob(os.path.join(cluster_path, "**/logs/*"), recursive=True):
+        n = re.search(r"node\d+", log).group(0)
+        logname = os.path.basename(log)
+        # for backward compatibility, rename the logs:
+        #   nodeX/logs/system.log to nodeX.log
+        #   nodeX/logs/debug.log to nodeX_debug.log
+        if logname == "system.log":
+            dest = n + ".log"
+        else:
+            dest = f"{n}_{logname}"
+        shutil.copyfile(log, os.path.join(logdir, dest))
+
+    jmx_core_files = reduce(operator.iadd, [glob.glob(match) for match in ("core", "core.*", "hs_err_*", "replay_*")], [])
+    for jmx_core_file in jmx_core_files:
+        shutil.copyfile(jmx_core_file, Path(logdir) / Path(jmx_core_file).name)
+
+    for pcap in glob.glob(str(Path(cluster_path) / "tcpdump_*.pcap")):
+        shutil.copyfile(pcap, Path(logdir) / Path(pcap).name)
+
+    if hasattr(dtest_config.cluster, "_scylla_manager") and dtest_config.cluster._scylla_manager:
+        log = os.path.join(dtest_config.cluster._scylla_manager._get_path(), "scylla-manager.log")
+        if os.path.exists(log):
+            shutil.copyfile(log, os.path.join(logdir, "scylla-manager.log"))
+
+        logs = [(node.name, node.logfilename() + ".manager_agent") for node in dtest_config.cluster.nodes.values()]
+        if logs:
+            for node_name, agent_log in logs:
+                if os.path.exists(agent_log):
+                    shutil.copyfile(agent_log, os.path.join(logdir, node_name + ".manager_agent.log"))
+
+    if KEEP_CORES:
+        if cores is None:
+            cores, ignored_cores = dtest_config.find_cores()
+            cores += ignored_cores
+        if cores:
+            for n, src in cores:
+                dst = os.path.join(logdir, f"{n}-{os.path.basename(src)}")
+                logger.warning(f"Moving core file {src} to {dst}")
+                try:
+                    if DTEST_CORE_COMPRESS_TOOL == "":
+                        cmd = f"mv {src} {dst}"
+                        shutil.move(src, dst)
+                    else:
+                        cmd = f"{DTEST_CORE_COMPRESS_TOOL} < {src} > {dst}.{DTEST_CORE_COMPRESS_EXT} && rm {src}"
+                        subprocess.check_call(cmd, shell=True)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"`{cmd}` failed: {e}. Keeping directory.")
+
+    if os.path.exists(logdir):
+        if os.path.exists(name):
+            os.unlink(name)
+        if not is_win():
+            os.symlink(basedir, name)
+
+
+class _Runner:
+    """Run `func(i)` with an incrementing `i` in a background thread until stopped.
+
+    Any exception `func` raises is stashed rather than propagated, so the
+    background thread never crashes the process; `check()`/`stop()` re-raise
+    it in the caller instead, at a point of the caller's choosing.
+    """
+
+    def __init__(self, func, sleep=1.0):
+        self._func = func
+        self._sleep = sleep
+        self._exception = None
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        i = 0
+        while not self._stop_event.is_set():
+            try:
+                self._func(i)
+            except Exception as e:  # noqa: BLE001
+                self._exception = e
+                return
+            i += 1
+            # Pause between calls, as scylla-dtest's Runner: without it the function runs
+            # thousands of times instead of once a second.
+            self._stop_event.wait(self._sleep)
+
+    def check(self):
+        """Re-raise `func`'s exception, if it has raised one so far."""
+
+        if self._exception is not None:
+            raise self._exception
+
+    def stop(self):
+        """Stop the background thread and re-raise any exception it hit."""
+
+        self._stop_event.set()
+        self._thread.join()
+        self.check()
+
+
 class DTestSetup:
-    def __init__(self,
+    def __init__(self,  # noqa: PLR0913
                  dtest_config: DTestConfig | None = None,
                  setup_overrides: DTestSetupOverrides | None = None,
                  manager: ScyllaClusterManager | None = None,
                  scylla_mode: str | None = None,
-                 cluster_name: str = "test"):
+                 cluster_name: str = "test",
+                 manager_install_dir: str | Path | None = None,
+                 skip_manager_server: bool = False,
+                 ccm_parity: bool = False):
         self.dtest_config = dtest_config
+        # Whether this test's nodes run exactly as upstream's ccm ran them
+        # (ccmlib/ccm_parity.py): true for the ported tests.
+        self.ccm_parity = ccm_parity
         self.setup_overrides = setup_overrides
         self.cluster_name = cluster_name
         self.ignore_log_patterns = []
         self.ignore_cores_log_patterns = []
         self.ignore_cores = []
-        self.cluster = ScyllaCluster(manager=manager, scylla_mode=scylla_mode)
+        # Upgrade tests override the dtest_config fixture to name the version the
+        # cluster must *start* on (the oldest one in their upgrade path); every
+        # other test leaves it at the build under test.
+        self.cluster = ScyllaCluster(
+            manager=manager,
+            scylla_mode=scylla_mode,
+            scylla_version=getattr(dtest_config, "scylla_version", None),
+            manager_install_dir=manager_install_dir,
+            skip_manager_server=skip_manager_server,
+            ccm_parity=ccm_parity,
+            # scylla-dtest built every cluster this way (its dtest_setup.py).
+            # It makes a bare cluster.start() wait for CQL and for the other
+            # nodes to notice the new one, which is what the ported tests
+            # assume when they call start() with no arguments.
+            force_wait_for_cluster_start=True,
+        )
         self.cluster_options: dict[str, Any] = {}
         self.replacement_node = None
         self.allow_log_errors = False
@@ -79,6 +243,19 @@ class DTestSetup:
         self.base_cql_timeout = 10  # seconds
         self.cql_request_timeout = None
         self.scylla_features: set[str] = self.dtest_config.scylla_features
+
+    @staticmethod
+    def prepare_scylla_manager(manager_package: str | None = None) -> Path:
+        """Make the Scylla Manager binaries available and return their directory.
+
+        `manager_package` is a URL or a local .tar.gz relocatable; with neither,
+        the newest published release is used.  A local directory that already
+        holds the unpacked binaries is taken as-is.
+        """
+
+        if manager_package and not manager_package.startswith(("http://", "https://")) and Path(manager_package).is_dir():
+            return Path(manager_package)
+        return setup_scylla_manager(manager_package)
 
     def find_cores(self):
         cores = []
@@ -303,7 +480,9 @@ class DTestSetup:
             # longer than a test timeout.
             # The base delay decides how long a reconnect is delayed after a node is
             # already back up; max_attempts keeps the overall budget at ~251s.
-            reconnection_policy=ExponentialReconnectionPolicy(0.1, 1.0, 250),
+            # Under ccm parity, scylla-dtest's own policy (1s to 4s, no limit).
+            reconnection_policy=(ExponentialReconnectionPolicy(1.0, 4.0) if self.ccm_parity
+                                 else ExponentialReconnectionPolicy(0.1, 1.0, 250)),
         )
         try:
             session = cluster.connect(wait_for_all_pools=True)
@@ -322,6 +501,15 @@ class DTestSetup:
             self.connections.append(session)
 
         return session
+
+    def go(self, func):
+        """Run `func(i)`, with an incrementing `i`, in a background thread until stopped.
+
+        Returns a `_Runner`: call `.check()` to re-raise anything `func` has
+        thrown so far without stopping it, or `.stop()` to stop it and raise.
+        """
+
+        return _Runner(func)
 
     def patient_cql_connection(  # noqa: PLR0913
         self,
@@ -505,7 +693,12 @@ class DTestSetup:
 
         assert not found_cores, "Core file(s) found. Marking test as failed."
 
-    def init_default_config(self):  # noqa: PLR0912,PLR0915
+    def init_default_config(self, cluster: ScyllaCluster | None = None):  # noqa: PLR0912,PLR0915
+        """Give the test's cluster -- or, as scylla-dtest's secondary_cluster did with a
+        DTestSetup of its own, another `cluster` -- the dtest defaults.  Another cluster
+        gets none of the test's own cluster_options or setup overrides."""
+        own = cluster is None
+        cluster = self.cluster if own else cluster
         # the failure detector can be quite slow in such tests with quick start/stop
         timeout = self.cql_timeout() * 1000
         range_timeout = 3 * timeout
@@ -514,10 +707,13 @@ class DTestSetup:
         # need to adjust the session or query timeout respectively
         self.count_request_timeout = self.cql_timeout(400)
 
-        logger.debug(f"Scylla mode is '{self.cluster.scylla_mode}'")
+        logger.debug(f"Scylla mode is '{cluster.scylla_mode}'")
         logger.debug(f"Cluster *_request_timeout_in_ms={timeout}, range_request_timeout_in_ms={range_timeout}, cql request_timeout={self.cql_request_timeout}")
 
-        values: dict[str, Any] = self.cluster_options | {
+        # The test's own cluster_options go last: a @pytest.mark.cluster_options
+        # is how a test asks for something other than the defaults below, and
+        # merging it first meant sstable_format, say, could not be asked for.
+        values: dict[str, Any] = {
             "phi_convict_threshold": 5,
             "task_ttl_in_seconds": 0,
             "read_request_timeout_in_ms": timeout,
@@ -529,9 +725,16 @@ class DTestSetup:
             "request_timeout_in_ms": timeout,
             "num_tokens": None,
             "sstable_format": "mt",
-        }
+            # test.py's scylla.yaml sets strict_allow_filtering: true, which rejects queries that
+            # scylla-dtest ran against Scylla's default ("warn": run them, with a warning).
+            "strict_allow_filtering": "warn",
+        } | (self.cluster_options if own else {})
+        if self.ccm_parity and "sstable_format" not in (self.cluster_options if own else {}):
+            # scylla-dtest set no sstable_format: a node has its install's conf/scylla.yaml
+            # value -- mt for this tree, the default for an upgrade test's older release.
+            del values["sstable_format"]
 
-        if self.setup_overrides is not None and self.setup_overrides.cluster_options:
+        if own and self.setup_overrides is not None and self.setup_overrides.cluster_options:
             values.update(self.setup_overrides.cluster_options)
 
         if self.dtest_config.use_vnodes:
@@ -551,8 +754,7 @@ class DTestSetup:
         self.scylla_features |= set(values.get("experimental_features", []))
 
         logger.debug("Setting 'enable_tablets' to %s", self.dtest_config.tablets)
-        values["enable_tablets"] = self.dtest_config.tablets
-        values["tablets_mode_for_new_keyspaces"] = "enabled" if self.dtest_config.tablets else "disabled"
+        values.update(self.get_tablets_config(self.dtest_config.tablets))
         if self.dtest_config.tablets:
             self.scylla_features.add("tablets")
 
@@ -565,17 +767,44 @@ class DTestSetup:
             values["tablets_initial_scale_factor"] = 1
             values["tablets_per_shard_goal"] = 1000
 
-        self.cluster.set_configuration_options(values)
-        logger.debug("Done setting configuration options:\n" + pprint.pformat(self.cluster._config_options, indent=4))
+        if self.ccm_parity:
+            # What scylla-dtest's dtest_setup set on top of ccm (init_default_config()).
+            # test.py's scylla.yaml used to supply the superuser and set
+            # strict_allow_filtering to true, which is why the latter is overridden
+            # above; the ported tests get none of test.py's defaults, so it goes.
+            values.pop("strict_allow_filtering", None)
+            # upstream's --rf-rack-valid-keyspaces default, under a test's own cluster_options
+            values.setdefault("rf_rack_valid_keyspaces", True)
+            values.setdefault("auth_superuser_name", "cassandra")
+            # password is 'cassandra'
+            values.setdefault("auth_superuser_salted_password", "$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/")
+            values.setdefault("maintenance_socket", "ignore")
+
+        cluster.set_configuration_options(values)
+        logger.debug("Done setting configuration options:\n" + pprint.pformat(cluster._config_options, indent=4))
+
+    @staticmethod
+    def get_tablets_config(enable_tablets: bool) -> dict[str, Any]:
+        """The scylla.yaml options that turn tablets on or off.
+
+        Both spellings, because the boolean was the only one older versions knew
+        and the upgrade tests set this per version.
+        """
+        return {
+            "enable_tablets": enable_tablets,
+            "tablets_mode_for_new_keyspaces": "enabled" if enable_tablets else "disabled",
+        }
 
     def cql_timeout(self, seconds=None):
         if not seconds:
             seconds = self.base_cql_timeout
         factor = 1
         if isinstance(self.cluster, ScyllaCluster):
-            if self.cluster.scylla_mode == "debug":
+            # ccm's mode, under ccm parity: "release" for a cluster made from a repository version.
+            mode = self.cluster.ccm_scylla_mode if self.ccm_parity else self.cluster.scylla_mode
+            if mode == "debug":
                 factor = 3
-            elif self.cluster.scylla_mode != "release":
+            elif mode != "release":
                 factor = 2
         return seconds * factor
 

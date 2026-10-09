@@ -361,6 +361,9 @@ class ScyllaServer:
         # SCYLLA_CMDLINE_OPTIONS, the version's argv, and the cluster-level options.
         self._per_server_cmdline_options: List[str] = []
         self.auth_provider: Optional[AuthProvider] = None
+        # A command the server's executable is started through (e.g. setpriv), which
+        # must exec it so the server keeps the process id; empty by default.
+        self.launch_prefix: List[str] = []
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
@@ -565,24 +568,26 @@ class ScyllaServer:
         """
         return copy.deepcopy(self.config)
 
-    def update_config(self, config_options: dict[str, Any]) -> None:
+    def update_config(self, config_options: dict[str, Any], reload: bool = True) -> None:
         """Update conf/scylla.yaml with `config_options` dict.
 
-        If we're running, reload the config with a SIGHUP.
+        If we're running, reload the config with a SIGHUP, unless `reload` is False:
+        then the file only changes, and the server reads it when told to or when it
+        starts again.
         """
         self.config.update(config_options)
         self._write_config_file()
-        if self.cmd:
+        if self.cmd and reload:
             self.cmd.send_signal(signal.SIGHUP)
 
-    def remove_config_option(self, key: str) -> None:
+    def remove_config_option(self, key: str, reload: bool = True) -> None:
         """Remove an option from conf/scylla.yaml.
 
-        If we're running, reload the config with a SIGHUP.
+        If we're running, reload the config with a SIGHUP, unless `reload` is False.
         """
         self.config.pop(key, None)  # don't fail if there is no such option in the config
         self._write_config_file()
-        if self.cmd:
+        if self.cmd and reload:
             self.cmd.send_signal(signal.SIGHUP)
 
     def update_cmdline(self, cmdline_options: List[str]) -> None:
@@ -899,6 +904,7 @@ class ScyllaServer:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
         self.cmd = await asyncio.create_subprocess_exec(
+            *self.launch_prefix,
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
             cwd=self.workdir,
