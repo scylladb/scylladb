@@ -1409,6 +1409,8 @@ public:
                     return make_ready_future<>();
                 });
             }
+        }).handle_exception([this] (std::exception_ptr ex) {
+            return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
         });
     }
     virtual future<> fill_buffer() override {
@@ -1416,7 +1418,9 @@ public:
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return initialize().then([this] {
+            return initialize().handle_exception([this] (std::exception_ptr ex) {
+                return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
+            }).then([this] {
                 if (!is_initialized()) {
                     _end_of_stream = true;
                     return make_ready_future<>();
@@ -1443,12 +1447,8 @@ public:
                     });
                 });
             }
-        }).then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-            } catch(sstables::malformed_sstable_exception& e) {
-                throw_malformed_sstable_exception(format("Failed to read partition from SSTable {} due to {}", _sst->get_filename(), e.what()));
-            }
+        }).handle_exception([this] (std::exception_ptr ex) {
+            return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->get_filename(), "Failed to read partition from SSTable"));
         });
     }
     virtual future<> next_partition() override {
@@ -1471,7 +1471,9 @@ public:
         clear_buffer();
         if (!_partition_finished) {
             _end_of_stream = false;
-            return advance_context(_consumer.fast_forward_to(std::move(cr)));
+            return advance_context(_consumer.fast_forward_to(std::move(cr))).handle_exception([this] (std::exception_ptr ex) {
+                return make_exception_future<>(maybe_attribute_malformed_sstable_exception(std::move(ex), _sst->generation()));
+            });
         } else {
             _end_of_stream = true;
             return make_ready_future<>();
