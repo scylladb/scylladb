@@ -2888,7 +2888,7 @@ future<> segment_manager::write(write_buffer& wb) {
     return _impl->write(wb);
 }
 
-future<log_record> segment_manager::read(record_location location) {
+future<log_record> segment_manager::read(const index_read_guard&, record_location location) {
     return _impl->read(location);
 }
 

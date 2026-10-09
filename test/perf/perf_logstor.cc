@@ -267,6 +267,7 @@
 #include <charconv>
 #include <filesystem>
 #include <ranges>
+#include <variant>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -695,11 +696,12 @@ public:
     // holding a location from before the measurement would not survive compaction moving its record.
     future<> do_segment_read() {
         const auto& key = random_key();
-        auto entry = index().get(primary_index_key{key});
-        if (!entry) [[unlikely]] {
+        auto result = index().lookup_for_read(primary_index_key{key}, *_schema, false);
+        if (!result) [[unlikely]] {
             on_internal_error(logstor_logger, "key of the dataset is missing from the index");
         }
-        co_await _logstor->get_segment_manager().read(entry->location);
+        auto& where = std::get<primary_index::guarded_location>(*result);
+        co_await _logstor->get_segment_manager().read(where.guard, where.location);
     }
 
     // One DMA read of the size of a record, issued straight to the data file: what a read of a
@@ -801,7 +803,7 @@ public:
             if (!result) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            _sink += result->cached_mutation.has_value();
+            _sink += std::holds_alternative<mutation>(*result);
         }
     }
 

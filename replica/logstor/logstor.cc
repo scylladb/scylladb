@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <queue>
 #include <random>
+#include <variant>
 #include <vector>
 
 #pragma GCC diagnostic push
@@ -196,8 +197,6 @@ future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestam
 future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto gate_holder = _async_gate.hold();
 
-    auto op = index.start_read();
-
     primary_index_key pk(dk);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
@@ -206,24 +205,24 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
         co_return std::nullopt;
     }
 
-    if (lookup->cached_mutation) {
-        auto& cached = *lookup->cached_mutation;
-        if (cached.decorated_key().key() != dk.key()) [[unlikely]] {
-            co_await coroutine::return_exception(key_mismatch_error(dk.key(), cached.decorated_key().key(), key_mismatch_error::cache_location{}));
+    if (auto* cached = std::get_if<mutation>(&*lookup)) {
+        if (cached->decorated_key().key() != dk.key()) [[unlikely]] {
+            co_await coroutine::return_exception(key_mismatch_error(dk.key(), cached->decorated_key().key(), key_mismatch_error::cache_location{}));
         }
-        co_return std::move(cached);
+        co_return std::move(*cached);
     }
 
-    auto record = co_await _segment_manager.read(lookup->entry.location);
+    auto& where = std::get<primary_index::guarded_location>(*lookup);
+    auto record = co_await _segment_manager.read(where.guard, where.location);
 
     if (record.header.key.key() != dk.key()) [[unlikely]] {
-        co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.header.key.key(), lookup->entry.location));
+        co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.header.key.key(), where.location));
     }
 
     mutation m = decode_record_value(record.value, s, record.header);
 
     if (!bypass_cache) {
-        index.populate_cache(pk, lookup->entry.location, m);
+        index.populate_cache(pk, where.location, m);
     }
 
     co_return std::move(m);
@@ -427,6 +426,8 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
 
         struct mutation_batch {
             std::vector<batch_slot> slots;
+            // Keeps the locations of the slots readable until the batch is read.
+            index_read_guard guard;
             dht::token first_token;
             dht::token last_token;
             bool exhausted;
@@ -456,8 +457,9 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
         // Reads the records the cache did not have, filling each slot in place so that the batch
         // keeps the index order the scan produced. A range read does not populate the cache: a
         // scan would pull a whole table through it and evict what the point reads rely on.
-        future<std::vector<pending_mutation>> read_mutations_for_batch(std::vector<batch_slot>& slots) {
+        future<std::vector<pending_mutation>> read_mutations_for_batch(mutation_batch& batch) {
             auto guard = reader_permit::awaits_guard(_permit);
+            auto& slots = batch.slots;
 
             std::vector<future<>> reads;
             reads.reserve(slots.size());
@@ -466,7 +468,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                 if (slot.mut) {
                     continue;
                 }
-                reads.push_back(_logstor->_segment_manager.read(slot.location).then([this, &slot] (log_record record) {
+                reads.push_back(_logstor->_segment_manager.read(batch.guard, slot.location).then([this, &slot] (log_record record) {
                     auto mut = decode_record_value(record.value, _schema, record.header);
                     auto memory = _permit.consume_memory(mut.memory_usage(*_schema));
                     slot.mut = pending_mutation{std::move(mut), std::move(memory)};
@@ -533,6 +535,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
             }
 
             mutation_batch batch{
+                .guard = std::move(index_batch->guard),
                 .first_token = index_batch->first_token,
                 .last_token = index_batch->last_token,
                 .exhausted = index_batch->exhausted,
@@ -558,13 +561,12 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                 co_return false;
             }
 
-            auto op = _index.start_read();
             auto batch = collect_batch(read_ahead_entries);
             if (!batch) {
                 co_return false;
             }
 
-            auto mutations = co_await read_mutations_for_batch(batch->slots);
+            auto mutations = co_await read_mutations_for_batch(*batch);
             sort_and_filter_mutations_for_range(mutations);
 
             tracing::trace(_trace_state,
