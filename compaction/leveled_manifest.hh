@@ -14,7 +14,7 @@
 
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
-#include "size_tiered_compaction_strategy.hh"
+#include "incremental_compaction_strategy.hh"
 #include "utils/interval.hh"
 #include "utils/log.hh"
 
@@ -25,7 +25,7 @@ class leveled_manifest {
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
-    const size_tiered_compaction_strategy_options& _stcs_options;
+    const incremental_compaction_strategy_options& _ics_options;
 
     struct candidates_info {
         std::vector<sstables::shared_sstable> candidates;
@@ -54,11 +54,11 @@ public:
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
 private:
-    leveled_manifest(compaction_group_view& table_s, int max_sstable_size_in_MB, const size_tiered_compaction_strategy_options& stcs_options)
+    leveled_manifest(compaction_group_view& table_s, int max_sstable_size_in_MB, const incremental_compaction_strategy_options& ics_options)
         : _table_s(table_s)
         , _schema(table_s.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
-        , _stcs_options(stcs_options)
+        , _ics_options(ics_options)
     {
     }
 public:
@@ -76,8 +76,8 @@ public:
     }
 
     static leveled_manifest create(compaction_group_view& table_s, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
-            const size_tiered_compaction_strategy_options& stcs_options) {
-        leveled_manifest manifest = leveled_manifest(table_s, max_sstable_size_in_mb, stcs_options);
+            const incremental_compaction_strategy_options& ics_options) {
+        leveled_manifest manifest = leveled_manifest(table_s, max_sstable_size_in_mb, ics_options);
 
         // ensure all SSTables are in the manifest
         // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
@@ -212,14 +212,15 @@ public:
             if (score <= TARGET_SCORE) {
                 continue;
             }
-            // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
+            // before proceeding with a higher level, let's see if L0 is far enough behind to warrant size-tiering it
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
-                auto most_interesting = size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                    _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                auto most_interesting = most_interesting_l0_bucket();
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
-                    return compaction_descriptor(std::move(most_interesting));
+                    // As with ICS, the output is written as a run of fragments, so that the input can be
+                    // released incrementally.
+                    return compaction_descriptor(std::move(most_interesting), 0, _max_sstable_size_in_bytes);
                 }
             }
             auto descriptor = get_descriptor_for_level(i, last_compacted_keys, compaction_counter);
@@ -408,10 +409,9 @@ private:
             candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
             can_promote = true;
         } else {
-            // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
+            // size-tier L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
-            candidates = size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+            candidates = most_interesting_l0_bucket();
         }
         return { std::move(candidates), can_promote };
     }
@@ -495,6 +495,14 @@ public:
             throw std::runtime_error("Invalid level");
         }
         return _generations[level];
+    }
+
+    // The sstables of the most interesting size tier of L0, as bucketed by ICS. L0 is bucketed by
+    // runs, as its size-tiered compactions write runs of fragments.
+    std::vector<sstables::shared_sstable> most_interesting_l0_bucket() {
+        auto runs = incremental_compaction_strategy::sstables_to_runs(get_level(0));
+        return incremental_compaction_strategy::runs_to_sstables(incremental_compaction_strategy::most_interesting_bucket(runs,
+                _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _ics_options));
     }
 
     static int64_t get_estimated_tasks(const std::vector<std::vector<sstables::shared_sstable>>& levels, uint64_t max_sstable_size_in_bytes) {
