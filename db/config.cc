@@ -2091,19 +2091,27 @@ const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
 
-compression_parameters db::config::get_sstable_compression_user_table_options(bool dicts_feature_enabled) const {
-    if (sstable_compression_user_table_options.is_set()
-            || dicts_feature_enabled
-            || !sstable_compression_user_table_options().uses_dictionary_compressor()) {
-        return sstable_compression_user_table_options();
-    } else {
+compression_parameters db::config::get_sstable_compression_user_table_options(bool dicts_feature_enabled, bool raw_chunks_feature_enabled) const {
+    auto options = sstable_compression_user_table_options();
+    auto params = options.get_options();
+    bool changed = false;
+    if (!sstable_compression_user_table_options.is_set() && !dicts_feature_enabled && options.uses_dictionary_compressor()) {
         // Fall back to non-dict if dictionary compression is not enabled cluster-wide.
-        auto options = sstable_compression_user_table_options();
-        auto params = options.get_options();
         auto algo = compression_parameters::non_dict_equivalent(options.get_algorithm());
         params[compression_parameters::SSTABLE_COMPRESSION] = sstring(compression_parameters::algorithm_to_name(algo));
-        return compression_parameters{params};
+        changed = true;
     }
+    if (!raw_chunks_feature_enabled && options.min_compression_saving_percent()) {
+        // Old nodes can't read raw chunks, so don't write them until all nodes can.
+        static thread_local bool warned = false;
+        if (!std::exchange(warned, true) && this_shard_id() == 0) {
+            cfglogger.warn("sstable_compression_user_table_options: ignoring {} for new tables until all nodes support the SSTABLE_RAW_CHUNKS feature",
+                    compression_parameters::MIN_COMPRESSION_SAVING_PERCENT);
+        }
+        params.erase(compression_parameters::MIN_COMPRESSION_SAVING_PERCENT);
+        changed = true;
+    }
+    return changed ? compression_parameters{params} : options;
 }
 
 std::map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {

@@ -1073,6 +1073,10 @@ void writer::close_rows_writer() {
 }
 
 void writer::consume_new_partition(const dht::decorated_key& dk) {
+    auto& c = _sst._components->compression;
+    if (_compression_enabled && _data_writer->offset() - _c_stats.start_offset >= c.uncompressed_chunk_length()) {
+        c.note_partition_boundary(_data_writer->offset());
+    }
     _c_stats.start_offset = _data_writer->offset();
     _prev_row_start = _data_writer->offset();
 
@@ -1835,6 +1839,10 @@ void writer::consume_end_of_stream() {
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
+    if (sstlog.is_enabled(log_level::debug) && _sst._components->compression.max_compressed_length()) {
+        sstlog.debug("{}: stored {} of {} chunks raw", _sst.get_filename(),
+                _sst._components->compression.count_raw_chunks(), _sst._components->compression.offsets.size());
+    }
     // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`
     // can only compress, not decompress. We have to create a decompressing `compressor` here.
     // (The reason we split the two is that we don't want to keep the compressor-specific compression

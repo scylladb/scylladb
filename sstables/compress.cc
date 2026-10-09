@@ -7,6 +7,7 @@
  */
 
 #include <stdexcept>
+#include <charconv>
 #include <cstdlib>
 
 #include <seastar/core/align.hh>
@@ -220,12 +221,19 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
 }
 
 void compression::set_compressor(compressor_ptr c) {
-    options.elements.clear();
-    if (c) {
+    if (!c) {
+        options.elements.clear();
+    } else {
         unqualified_name uqn(compression_parameters::name_prefix, c->name());
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
-        for (auto& [k, v] : c->options()) {
+        auto c_options = c->options();
+        // Replace only what the compressor owns; other on-disk options such as crc_check_chance must survive a load.
+        auto [first, last] = std::ranges::remove_if(options.elements, [&] (const option& o) {
+            return c_options.contains(sstring(o.key.value.begin(), o.key.value.end()));
+        });
+        options.elements.erase(first, last);
+        for (auto& [k, v] : c_options) {
             if (k != compression_parameters::SSTABLE_COMPRESSION) {
                 options.elements.push_back({
                     {bytes(k.begin(), k.end())},
@@ -254,6 +262,41 @@ void compression::discard_hidden_options() {
 compressor& compression::get_compressor() const {
     SCYLLA_ASSERT(_compressor);
     return *_compressor.get();
+}
+
+void compression::set_min_compression_saving_percent(int percent) {
+    if (percent < 0 || percent > 99) {
+        throw_malformed_sstable_exception(format("invalid {} {}", compression_parameters::MIN_COMPRESSION_SAVING_PERCENT, percent));
+    }
+    _max_compressed_len = percent ? uint32_t((uint64_t(chunk_len) * (100 - percent) + 99) / 100) : 0;
+}
+
+void compression::init_min_compression_saving_percent_from_options() {
+    for (const auto& [k, v] : options.elements) {
+        if (std::string_view(reinterpret_cast<const char*>(k.value.data()), k.value.size()) != compression_parameters::MIN_COMPRESSION_SAVING_PERCENT) {
+            continue;
+        }
+        auto v_str = sstring(v.value.begin(), v.value.end());
+        int percent;
+        auto [ptr, ec] = std::from_chars(v_str.begin(), v_str.end(), percent);
+        if (ec != std::errc() || ptr != v_str.end()) {
+            throw_malformed_sstable_exception(format("invalid {} {}", compression_parameters::MIN_COMPRESSION_SAVING_PERCENT, v_str));
+        }
+        set_min_compression_saving_percent(percent);
+    }
+}
+
+uint64_t compression::count_raw_chunks() const {
+    if (!_max_compressed_len) {
+        return 0;
+    }
+    uint64_t n = 0;
+    auto acc = offsets.get_accessor();
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        auto end = i + 1 == offsets.size() ? _compressed_file_length : acc.at(i + 1);
+        n += end - acc.at(i) - 4 >= _max_compressed_len;
+    }
+    return n;
 }
 
 void compression::update(uint64_t compressed_file_length) {
@@ -380,7 +423,6 @@ public:
         if (buf.size() != addr.chunk_len) {
             sstables::throw_malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
         }
-        auto res_units = co_await _permit.request_memory(_compression_metadata->uncompressed_chunk_length());
         // The last 4 bytes of the chunk are the adler32/crc32 checksum
         // of the rest of the (compressed) chunk.
         auto compressed_len = addr.chunk_len - 4;
@@ -403,16 +445,29 @@ public:
             }
         }
 
-        // We know that the uncompressed data will take exactly
-        // chunk_length bytes (or less, if reading the last chunk).
-        temporary_buffer<char> out(
-                _compression_metadata->uncompressed_chunk_length());
-        // The compressed data is the whole chunk, minus the last 4
-        // bytes (which contain the checksum verified above).
-
-        auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
-
-        out.trim(len);
+        const uint64_t ucl = _compression_metadata->uncompressed_chunk_length();
+        const uint64_t max_len = _compression_metadata->max_compressed_length();
+        temporary_buffer<char> out;
+        if (max_len && compressed_len >= max_len) {
+            // A raw chunk holds the data itself; the remainder of a short last chunk is padding.
+            const uint64_t real_len = std::min(ucl, _compression_metadata->uncompressed_file_length() - (_pos - addr.offset));
+            if (compressed_len != std::max(real_len, max_len)) {
+                sstables::throw_malformed_sstable_exception(format("raw chunk at file offset {} has length {}, expected {}", _underlying_pos, compressed_len, std::max(real_len, max_len)));
+            }
+            // Zero-copy, no extra charge: the tracked file charges the shared read-ahead buffer to the permit.
+            buf.trim(real_len);
+            out = std::move(buf);
+        } else {
+            auto res_units = co_await _permit.request_memory(ucl);
+            // We know that the uncompressed data will take exactly
+            // chunk_length bytes (or less, if reading the last chunk).
+            out = temporary_buffer<char>(ucl);
+            // The compressed data is the whole chunk, minus the last 4
+            // bytes (which contain the checksum verified above).
+            auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
+            out.trim(len);
+            out = make_tracked_temporary_buffer(std::move(out), std::move(res_units));
+        }
         out.trim_front(addr.offset);
         _pos += out.size();
         _underlying_pos += addr.chunk_len;
@@ -424,7 +479,7 @@ public:
                 sstables::throw_malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
             }
         }
-        co_return make_tracked_temporary_buffer(std::move(out), std::move(res_units));
+        co_return out;
     }
 
     virtual future<> close() override {
@@ -608,25 +663,47 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     sstables::compression::segmented_offsets::writer _offsets;
     size_t _pos = 0;
     uint32_t _full_checksum;
+    // uint8_t to fit the padding after _full_checksum; _raw_streak saturates at skip_after.
+    sstables::raw_chunk_heuristic _heuristic;
+    uint8_t _raw_streak = 0;
+    uint8_t _skipped = 0;
 public:
-    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm)
+    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm, sstables::raw_chunk_heuristic heuristic)
             : _out(std::move(out))
             , _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_writer())
             , _full_checksum(ChecksumType::init_checksum())
+            , _heuristic(heuristic)
     {}
 
 private:
     future<> do_put(temporary_buffer<char> buf) {
-        auto output_len = _compression_metadata->get_compressor().compress_max_size(buf.size());
+        const size_t max_len = _compression_metadata->max_compressed_length();
+        bool probe = _compression_metadata->consume_probe();
+        bool raw = max_len && !probe && _raw_streak >= _heuristic.skip_after && ++_skipped < _heuristic.probe_interval;
+        temporary_buffer<char> compressed;
+        size_t len = 0;
+        if (!raw) {
+            auto output_len = _compression_metadata->get_compressor().compress_max_size(buf.size());
 
-        // account space for checksum that goes after compressed data.
-        temporary_buffer<char> compressed(output_len + 4);
+            // account space for checksum that goes after compressed data.
+            compressed = temporary_buffer<char>(output_len + 4);
 
-        // compress flushed data.
-        auto len = _compression_metadata->get_compressor().compress(buf.get(), buf.size(), compressed.get_write(), output_len);
-        if (len > output_len) {
-            return make_exception_future(std::runtime_error("possible overflow during compression"));
+            // compress flushed data.
+            len = _compression_metadata->get_compressor().compress(buf.get(), buf.size(), compressed.get_write(), output_len);
+            if (len > output_len) {
+                return make_exception_future(std::runtime_error("possible overflow during compression"));
+            }
+            raw = max_len && len >= max_len;
+            _raw_streak = raw ? std::min<uint8_t>(_raw_streak + 1, _heuristic.skip_after) : 0;
+            _skipped = 0;
+        }
+        if (raw) {
+            // A short last chunk is zero-padded to max_len so the reader still recognizes it as raw.
+            len = std::max(buf.size(), max_len);
+            compressed = temporary_buffer<char>(len + 4);
+            std::copy_n(buf.get(), buf.size(), compressed.get_write());
+            std::fill_n(compressed.get_write() + buf.size(), len - buf.size(), 0);
         }
 
         // total length of the uncompressed data.
@@ -677,9 +754,9 @@ template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 class compressed_file_data_sink : public data_sink {
 public:
-    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm)
+    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm, sstables::raw_chunk_heuristic heuristic)
         : data_sink(std::make_unique<compressed_file_data_sink_impl<ChecksumType, mode>>(
-                std::move(out), cm)) {}
+                std::move(out), cm, heuristic)) {}
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
@@ -687,7 +764,8 @@ requires ChecksumUtils<ChecksumType>
 inline output_stream<char> make_compressed_file_output_stream(output_stream<char> out,
          sstables::compression* cm,
          const compression_parameters& cp,
-         compressor_ptr p) {
+         compressor_ptr p,
+         sstables::raw_chunk_heuristic heuristic) {
     cm->set_compressor(std::move(p));
     // buffer of output stream is set to chunk length, because flush must
     // happen every time a chunk was filled up.
@@ -696,8 +774,14 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
     cm->options.elements.push_back({{"crc_check_chance"}, {"1.0"}});
+    if (auto percent = cp.min_compression_saving_percent()) {
+        auto v = to_sstring(percent);
+        const auto& k = compression_parameters::MIN_COMPRESSION_SAVING_PERCENT;
+        cm->options.elements.push_back({{bytes(k.begin(), k.end())}, {bytes(v.begin(), v.end())}});
+        cm->set_min_compression_saving_percent(percent);
+    }
 
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm));
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, heuristic));
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
@@ -720,9 +804,10 @@ input_stream<char> sstables::make_compressed_file_m_format_input_stream(stream_c
 output_stream<char> sstables::make_compressed_file_m_format_output_stream(output_stream<char> out,
         sstables::compression* cm,
         const compression_parameters& cp,
-        compressor_ptr p) {
+        compressor_ptr p,
+        raw_chunk_heuristic heuristic) {
     return make_compressed_file_output_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(out), cm, cp, std::move(p));
+            std::move(out), cm, cp, std::move(p), heuristic);
 }
 
 input_stream<char> sstables::make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,

@@ -988,17 +988,23 @@ Compression options
 The ``compression`` options define if and how the sstables of the table are compressed. The following sub-options are
 available:
 
-========================= =============== =============================================================================
- Option                    Default         Description
-========================= =============== =============================================================================
- ``sstable_compression``   LZ4Compressor   The compression algorithm to use. Available compressors are
-                                           LZ4Compressor, SnappyCompressor, DeflateCompressor, and ZstdCompressor.
- ``chunk_length_in_kb``    4               On disk SSTables are compressed by block (to allow random reads). This
-                                           defines the size (in KB) of the block. Bigger values may improve the
-                                           compression rate, but increases the minimum size of data to be read from disk
-                                           for a read. Allowed values are powers of two between 1 and 128.
- ``crc_check_chance``      1.0             Not implemented (option value is ignored).
-========================= =============== =============================================================================
+==================================== =============== =============================================================================
+ Option                               Default         Description
+==================================== =============== =============================================================================
+ ``sstable_compression``              LZ4Compressor   The compression algorithm to use. Available compressors are
+                                                      LZ4Compressor, SnappyCompressor, DeflateCompressor, and ZstdCompressor.
+ ``chunk_length_in_kb``               4               On disk SSTables are compressed by block (to allow random reads). This
+                                                      defines the size (in KB) of the block. Bigger values may improve the
+                                                      compression rate, but increases the minimum size of data to be read from disk
+                                                      for a read. Allowed values are powers of two between 1 and 128.
+ ``crc_check_chance``                 1.0             Not implemented (option value is ignored).
+ ``min_compression_saving_percent``   0               Store a block uncompressed unless compressing it saves at least this
+                                                      percentage (1-99) of its size, e.g. ``10`` stores blocks that compress by less
+                                                      than 10% as-is. For tables holding encrypted or already-compressed data, this
+                                                      saves CPU when flushing, compacting and reading, as such blocks are neither
+                                                      compressed nor decompressed. ``0`` disables it. Requires all nodes to
+                                                      support it; sstables written with it can't be read by versions that don't.
+==================================== =============== =============================================================================
 
 .. crc_check_chance was promoted to a top-level table option since Cassandra 3.0, but we didn't do this.
 
