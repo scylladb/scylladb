@@ -484,9 +484,8 @@ only ``ORDER BY BM25()`` is rejected.
             :   LIMIT `integer`
 
 In the ``WHERE`` clause, ``>`` is the only supported comparison operator, and the right-hand side must be
-the literal ``0``. The column must be of type ``text``, ``varchar``, or ``ascii``
-and have a ``fulltext_index``; it may be a regular or clustering-key column, but
-not a partition-key column.
+the literal ``0``. The column must be a regular column of type ``text``, ``varchar``, or
+``ascii`` and have a ``fulltext_index``.
 
 ``ORDER BY BM25()`` must be the only ordering in the query - it cannot be combined
 with another ``ORDER BY`` column, a second ``BM25()`` ordering, or an ``ANN``

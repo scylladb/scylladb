@@ -9,6 +9,15 @@ Vector indexes are custom indexes (USING 'vector\_index'). Their `target` option
 
 The `target` option acts as the interface for the vector-store service, providing the metadata necessary to determine which columns are indexed and how they are structured.
 
+## Only regular columns
+
+Only a regular column can be indexed. The Vector Store's full scan reads the indexed column's
+`writetime()`, which ScyllaDB refuses for a partition or clustering key column. It also fetches
+each row by its full primary key, which ScyllaDB refuses when only static columns are selected.
+Lifting this needs Vector Store changes: a key column has no write time to track its changes by.
+The other targets, the filtering columns (`fc`) and the partition key of a local index (`pk`),
+can be key columns: the Vector Store reads those as part of the primary key, without `writetime()`.
+
 ## Metadata semantics
 
 Vector indexes also store an `index_version` option in `system_schema.indexes`.

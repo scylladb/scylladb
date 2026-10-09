@@ -106,6 +106,15 @@ def test_create_vector_search_index_on_nonvector_column(cql, test_keyspace, scyl
         with pytest.raises(InvalidRequest, match="Vector indexes are only supported on columns of vectors of floats"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
 
+def test_create_vector_search_index_on_key_or_static_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """Only regular columns can be indexed: key and static columns are rejected."""
+    schema = 'p1 vector<float, 3>, p2 int, c vector<float, 3>, s vector<float, 3> static, v vector<float, 3>, PRIMARY KEY ((p1, p2), c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for column, kind in [('p1', 'PARTITION_KEY'), ('c', 'CLUSTERING_COLUMN'), ('s', 'STATIC')]:
+            with pytest.raises(InvalidRequest, match=f"Creating a vector index requires a regular column, but column {column} is a {kind} column"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}({column}) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
 def test_create_vector_search_global_index_with_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
