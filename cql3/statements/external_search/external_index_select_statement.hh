@@ -77,6 +77,7 @@ private:
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
 
+    virtual std::string_view index_type_name() const = 0;
     virtual std::string_view index_search_type_name() const = 0;
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(

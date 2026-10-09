@@ -12,6 +12,7 @@
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/filter.hh"
 #include "cql3/expr/temporary_allocator.hh"
+#include "index/vector_index.hh"
 
 #include <optional>
 
@@ -87,8 +88,12 @@ public:
             cql_stats& stats, ann_ordering_info ordering_info, external_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
 
 private:
+    std::string_view index_type_name() const override {
+        return secondary_index::vector_index::INDEX_TYPE_NAME;
+    }
+
     std::string_view index_search_type_name() const override {
-        return "Vector Search";
+        return secondary_index::vector_index::SEARCH_TYPE_NAME;
     }
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_search(

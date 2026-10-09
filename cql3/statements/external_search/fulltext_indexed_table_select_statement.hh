@@ -11,6 +11,7 @@
 #include "external_index_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/expr/temporary_allocator.hh"
+#include "index/fulltext_index.hh"
 
 #include <optional>
 
@@ -79,8 +80,12 @@ public:
             std::unique_ptr<cql3::attributes> attrs);
 
 private:
+    std::string_view index_type_name() const override {
+        return secondary_index::fulltext_index::INDEX_TYPE_NAME;
+    }
+
     std::string_view index_search_type_name() const override {
-        return "Full-Text Search";
+        return secondary_index::fulltext_index::SEARCH_TYPE_NAME;
     }
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
