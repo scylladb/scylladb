@@ -1404,3 +1404,54 @@ async def test_incremental_repair_rewrites_staging_sstable(manager: ScyllaCluste
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", rows)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", rows)
         await manager.server_start(servers[1].server_id)
+
+# The view building worker's state observer flushes the base table (waiting for
+# in-flight streams into it) when the coordinator selects it. It must not hold
+# group0's read-apply mutex while doing so, otherwise the node cannot apply any
+# group0 command for as long as the stream lasts, and can deadlock when the
+# stream itself needs a group0 operation to finish.
+# Reproduces SCYLLADB-4994, SCYLLADB-5061
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_observer_flush_does_not_block_group0_apply(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(2, config={'enable_file_stream': False}, cmdline=cmdline_loggers + ['--smp', '1'], property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int PRIMARY KEY, c int, v int)")
+        for i in range(100):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        # Move the only tablet to the other node and pause the incoming stream
+        # on the destination while it holds the table's stream-in-progress op.
+        src_host, src_shard = await get_tablet_replica(manager, servers[0], ks, "tab", 0)
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+        src, dst = (servers[0], servers[1]) if host_ids[0] == src_host else (servers[1], servers[0])
+        src_cql_host = next(h for h in hosts if str(h.address) == src.ip_addr)
+        dst_cql_host = next(h for h in hosts if str(h.address) == dst.ip_addr)
+        dst_host = await manager.get_host_id(dst.server_id)
+        await manager.api.enable_injection(dst.ip_addr, "stream_mutation_fragments", one_shot=False)
+        dst_log = await manager.server_open_log(dst.server_id)
+        mark = await dst_log.mark()
+        move = asyncio.create_task(manager.api.move_tablet(src.ip_addr, ks, "tab", src_host, src_shard, dst_host, 0, 0))
+        await dst_log.wait_for("stream_mutation_fragments: waiting", from_mark=mark, timeout=60)
+
+        # Creating a view makes the coordinator select the base table, so the
+        # observer on the destination flushes it and waits for the stream.
+        mark = await dst_log.mark()
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)", host=src_cql_host)
+        await dst_log.wait_for("Awaiting penging writes and streams", from_mark=mark, timeout=60)
+
+        # A schema change made through the source node must still be applied on the destination.
+        await cql.run_async(f"CREATE TABLE {ks}.other (p int PRIMARY KEY)", host=src_cql_host)
+        async def applied_on_dst():
+            rows = await cql.run_async(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'other'", host=dst_cql_host)
+            return True if rows else None
+        try:
+            await wait_for(applied_on_dst, time.time() + 30)
+        finally:
+            await manager.api.message_injection(dst.ip_addr, "stream_mutation_fragments")
+            await manager.api.disable_injection(dst.ip_addr, "stream_mutation_fragments")
+            await move
