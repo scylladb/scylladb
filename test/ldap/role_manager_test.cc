@@ -295,7 +295,9 @@ auto make_ldap_manager(cql_test_env& env, sstring query_template = default_query
     return std::unique_ptr<auth::ldap_role_manager, decltype(stop_role_manager)>(
             new auth::ldap_role_manager(query_template, /*target_attr=*/"cn", manager_dn, manager_password,
                     env.db_config().permissions_update_interval_in_ms(), env.db_config().permissions_update_interval_in_ms.observe([] (const uint32_t& v) {}),
-                    env.local_qp(), env.get_raft_group0_client(), env.migration_manager().local(), env.auth_cache().local(), auth::config{}),
+                    env.local_qp(), env.get_raft_group0_client(), env.migration_manager().local(), env.auth_cache().local(),
+                    auth::config{.ldap_reconnect_backoff_min = std::chrono::milliseconds(1),
+                                 .ldap_reconnect_backoff_max = std::chrono::milliseconds(32)}),
         std::move(stop_role_manager));
 }
 

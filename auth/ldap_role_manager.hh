@@ -43,6 +43,8 @@ class ldap_role_manager : public role_manager {
 
     mutable ldap_reuser _connection_factory; // Potentially modified by query_granted().
     seastar::abort_source _as;
+    std::chrono::milliseconds _reconnect_backoff_min;
+    std::chrono::milliseconds _reconnect_backoff_max;
     cache& _cache;
     seastar::future<> _cache_pruner;
   public:

@@ -220,6 +220,8 @@ ldap_role_manager::ldap_role_manager(
         , _permissions_update_interval_in_ms(permissions_update_interval_in_ms)
         , _permissions_update_interval_in_ms_observer(std::move(permissions_update_interval_in_ms_observer))
         , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this)))
+        , _reconnect_backoff_min(cfg.ldap_reconnect_backoff_min)
+        , _reconnect_backoff_max(cfg.ldap_reconnect_backoff_max)
         , _cache(cache)
         , _cache_pruner(make_ready_future<>()) {
 }
@@ -298,27 +300,20 @@ future<conn_ptr> ldap_role_manager::connect() {
 }
 
 future<conn_ptr> ldap_role_manager::reconnect() {
-    unsigned retries_left = 5;
-    using namespace std::literals::chrono_literals;
-    conn_ptr conn = co_await exponential_backoff_retry::do_until_value(1s, 32s, _as, [this, &retries_left] () -> future<std::optional<conn_ptr>> {
-        if (!retries_left) {
-            co_return conn_ptr{};
-        }
-        mylog.trace("reconnect() retrying ({} attempts left)", retries_left);
-        --retries_left;
+    constexpr unsigned max_attempts = 5;
+    exponential_backoff_retry backoff(_reconnect_backoff_min, _reconnect_backoff_max);
+    for (unsigned attempt = 1; ; ++attempt) {
+        mylog.trace("reconnect() attempt {} of {}", attempt, max_attempts);
         try {
             co_return co_await connect();
         } catch (...) {
             mylog.error("error in reconnect: {:t}", std::current_exception());
         }
-        co_return std::nullopt;
-    });
-
-    mylog.trace("reconnect() finished backoff, conn={}", reinterpret_cast<void*>(conn.get()));
-    if (conn) {
-        co_return std::move(conn);
+        if (attempt == max_attempts) {
+            co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format("reconnect failed after {} attempts", max_attempts))));
+        }
+        co_await backoff.retry(_as);
     }
-    co_return coroutine::exception(std::make_exception_ptr(std::runtime_error("reconnect failed after 5 attempts")));
 }
 
 future<> ldap_role_manager::stop() {

@@ -11,6 +11,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for
 from test.cluster.util import trigger_snapshot
+from test.cluster.test_raft_no_quorum import update_group0_raft_op_timeout
 
 from cassandra.protocol import EventMessage
 import cassandra.protocol
@@ -137,17 +138,27 @@ async def test_client_routes_lost_quorum(request, manager: ScyllaClusterManager)
     This test verifies that `/v2/client-routes` fails with a timeout if the Raft quorum cannot be reached.
     """
     num_servers = 3
-    timeout = 10
-    config = {'group0_raft_op_timeout_in_ms': timeout * 1000}
-    servers = await manager.servers_add(num_servers, config=config)
+    timeout = 1
+    servers = await manager.servers_add(num_servers)
     cql, hosts = await manager.get_ready_cql(servers)
 
     await wait_for_expected_client_routes_size(cql, 0)
     await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)], timeout=timeout + 60)
     await wait_for_expected_client_routes_size(cql, 1)
 
+    peer_host_ids = [await manager.get_host_id(server.server_id) for server in servers[1:]]
+    log = await manager.server_open_log(servers[0].server_id)
+    # A peer that dies before its first successful ping is never logged as dead.
+    for host_id in peer_host_ids:
+        await log.wait_for(f"marking Raft server {host_id} as alive for raft groups", timeout=60)
+    mark = await log.mark()
     for server in servers[1:]:
         await manager.server_stop(server.server_id, convict=False)
+    # The timeout error mentions the lost quorum only once the failure detector has marked the peers dead.
+    for host_id in peer_host_ids:
+        await log.wait_for(f"marking Raft server {host_id} as dead for raft groups", from_mark=mark, timeout=60)
+
+    await update_group0_raft_op_timeout(servers[0].server_id, manager, timeout * 1000)
 
     async def fail_req(f):
         with pytest.raises(HTTPError) as exc:
