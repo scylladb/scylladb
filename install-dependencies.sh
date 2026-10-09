@@ -32,6 +32,7 @@ fi
 debian_base_packages=(
     clang
     clang-tools
+    libclang-rt-dev
     gdb
     cargo
     wabt
