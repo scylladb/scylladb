@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....test_materialized_view_old import clock
 import random
 
 # Test for cassandra 8558
@@ -947,7 +948,12 @@ def testDeleteWithSecondaryIndices(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "DELETE FROM %s WHERE values CONTAINS ?", 3)
 
-def testDeleteWithOnlyPK(cql, test_keyspace):
+# The Java test sleeps 0.5, 0.5 and 1 seconds, to let gc_grace_seconds=1
+# pass so the compaction purges the tombstones. To make the test fast on
+# Scylla, we jump the server's clock instead (on Cassandra, clock.jump()
+# really sleeps). The clock can only jump by whole seconds, so the two
+# half-second sleeps became one-second jumps.
+def testDeleteWithOnlyPK(cql, test_keyspace, clock):
     with create_table(cql, test_keyspace, "(k int, v int, primary key (k, v)) WITH gc_grace_seconds=1") as table:
         # This is a regression test for CASSANDRA-11102
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 1, 2)
@@ -955,18 +961,18 @@ def testDeleteWithOnlyPK(cql, test_keyspace):
         execute(cql, table, "DELETE FROM %s WHERE k = ? AND v = ?", 1, 2)
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 2, 3)
 
-        time.sleep(0.5)
+        clock.jump(1)
 
         execute(cql, table, "DELETE FROM %s WHERE k = ? AND v = ?", 2, 3)
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 1, 2)
 
-        time.sleep(0.5)
+        clock.jump(1)
 
         flush(cql, table)
 
         assertRows(execute(cql, table, "SELECT * FROM %s"), row(1, 2))
 
-        time.sleep(1.0)
+        clock.jump(1)
         compact(cql, table)
 
         assertRows(execute(cql, table, "SELECT * FROM %s"), row(1, 2))
