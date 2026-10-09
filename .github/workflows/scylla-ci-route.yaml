@@ -249,9 +249,41 @@ jobs:
               BEFORE_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$BEFORE_SHA" --jq '.tree.sha' 2>/dev/null || true)
               AFTER_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$AFTER_SHA" --jq '.tree.sha' 2>/dev/null || true)
               if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
-                echo "No code changes detected (commit message edit only), skipping CI"
-                echo "should_continue=false" >> "$GITHUB_OUTPUT"
-                exit 0
+                # Same code, so the previous head's Jenkins results still apply.
+                # Only reuse them when they are complete and green; a failed,
+                # running or missing CI run must not be hidden by a reword.
+                JENKINS_STATUSES=$(gh_api_retry "repos/$PR_REPO/commits/$BEFORE_SHA/status?per_page=100" \
+                  --jq "[.statuses[] | select((.target_url // \"\") | startswith(\"$JENKINS_URL/\"))]" 2>/dev/null || echo '[]')
+                TOTAL=$(jq 'length' <<< "$JENKINS_STATUSES")
+                NOT_GREEN=$(jq '[.[] | select(.state != "success")] | length' <<< "$JENKINS_STATUSES")
+                if [ "$TOTAL" -gt 0 ] && [ "$NOT_GREEN" -eq 0 ]; then
+                  echo "No code changes detected (commit message edit only), reusing CI results of $BEFORE_SHA"
+                  # Carry the results over so the new head shows its CI state.
+                  # Skipping is only safe if every status made it; otherwise
+                  # the new head would be left without full CI results.
+                  COPY_FAILED=false
+                  while read -r STATUS; do
+                    if ! gh_api_retry "repos/$PR_REPO/statuses/$AFTER_SHA" \
+                      -f state="$(jq -r '.state' <<< "$STATUS")" \
+                      -f context="$(jq -r '.context' <<< "$STATUS")" \
+                      -f description="$(jq -r '.description // ""' <<< "$STATUS")" \
+                      -f target_url="$(jq -r '.target_url' <<< "$STATUS")" --silent; then
+                      echo "::warning::Failed to copy status '$(jq -r '.context' <<< "$STATUS")' to $AFTER_SHA"
+                      COPY_FAILED=true
+                    fi
+                  done < <(jq -c '.[]' <<< "$JENKINS_STATUSES")
+                  if [ "$COPY_FAILED" = "false" ]; then
+                    BUILD_URL=$(jq -r '[.[].target_url] | first' <<< "$JENKINS_STATUSES")
+                    GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+                      -f body="CI was not re-run for ${AFTER_SHA}: only the commit message changed since ${BEFORE_SHA} (same tree), which already passed CI ([build](${BUILD_URL})). Its results were copied to the new head. Use \`@scylladbbot trigger-ci\` to force a new run." --silent \
+                      || echo "::warning::Failed to post CI skip comment on PR #$PR_NUMBER"
+                    echo "should_continue=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  echo "No code changes detected, but copying the CI results of $BEFORE_SHA failed, running CI"
+                else
+                  echo "No code changes detected, but CI of $BEFORE_SHA did not pass ($NOT_GREEN of $TOTAL Jenkins statuses not successful), running CI"
+                fi
               fi
             fi
           fi
