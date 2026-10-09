@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -45,6 +45,19 @@ def testFor7684(cql, test_keyspace):
 
             for _ in before_and_after_flush(cql, table):
                 assert_rows(execute(cql, table, "SELECT v.x FROM %s WHERE k = ? AND v = {x:?}", 1, -104.99251), [-104.99251])
+
+# Reproduces #9215 (a UDT clustering column with descending order causes
+# errors)
+@pytest.mark.xfail(reason="#9215")
+def testDescendingOrderingOfUserTypesIsSupported(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(x double)") as myType:
+        with create_table(cql, test_keyspace, f"(k int, v frozen<{myType}>, b boolean static, PRIMARY KEY (k, v)) WITH CLUSTERING ORDER BY (v DESC)") as table:
+            execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, {x:?})", 1, -104.99251)
+            execute(cql, table, "UPDATE %s SET b = ? WHERE k = ?", True, 1)
+
+            for _ in before_and_after_flush(cql, table):
+                assert_rows(execute(cql, table, "SELECT v.x FROM %s WHERE k = ? AND v = {x:?}", 1, -104.99251),
+                            row(-104.99251))
 
 def testInvalidUDTStatements(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as myType:
@@ -111,6 +124,25 @@ def testInvalidUDTStatements(cql, test_keyspace):
         assert_invalid_message(cql, test_keyspace, "Non-frozen UDTs with nested non-frozen collections are not supported",
                 "CREATE TABLE " + test_keyspace + ".wrong (k int PRIMARY KEY, v " + myType2 + ")")
 
+# The Java testInvalidUDTStatements also checks that ALTER TYPE can't add a
+# non-frozen UDT field to a user type, and that ALTER TABLE can't add a
+# column of a non-frozen UDT with a nested non-frozen collection. We split
+# these checks into a separate test, so that the rest of
+# testInvalidUDTStatements keeps running on Scylla.
+# Reproduces SCYLLADB-5209 (ALTER TYPE and ALTER TABLE ADD don't check the
+# new field's or column's type like CREATE TYPE and CREATE TABLE do)
+@pytest.mark.xfail(reason="SCYLLADB-5209")
+def testInvalidUDTStatementsAlter(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int)") as myType, \
+         create_type(cql, test_keyspace, "(a int)") as ut1:
+        assert_invalid_message(cql, test_keyspace, "A user type cannot contain non-frozen",
+                "ALTER TYPE " + ut1 + " ADD b " + myType)
+
+    with create_type(cql, test_keyspace, "(userids SET<UUID>)") as userType, \
+         create_table(cql, test_keyspace, "(id int PRIMARY KEY)") as table:
+        assert_invalid_message(cql, table, "Non-frozen UDTs with nested non-frozen collections are not supported for column my_type",
+                               "alter TABLE %s add my_type " + userType)
+
 def testAlterUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as myType:
         with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b frozen<{myType}>)") as table:
@@ -123,6 +155,51 @@ def testAlterUDT(cql, test_keyspace):
                 assert_rows(execute(cql, table, "SELECT b.a, b.b FROM %s"),
                            [1, None],
                            [2, 2])
+
+# The Java test uses Cassandra's ByteOrderedPartitioner, so it gets the
+# partitions in the order of their keys. We use the default partitioner,
+# so we don't check the order of the partitions.
+def testNullsInIntUDT(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int)") as myType:
+        with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b frozen<{myType}>)") as table:
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, ?)", user_type("a", 1))
+
+            assert_rows(execute(cql, table, "SELECT b.a FROM %s"), row(1))
+
+            flush(cql, table)
+
+            cql.execute("ALTER TYPE " + myType + " ADD b int")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, {a: 2, b: 2})")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, {b: 3})")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, {a: null, b: 4})")
+
+            for _ in before_and_after_flush(cql, table):
+                assert_rows_ignoring_order(execute(cql, table, "SELECT b.a, b.b FROM %s"),
+                                           row(1, None),
+                                           row(2, 2),
+                                           row(None, 3),
+                                           row(None, 4))
+
+def testNullsInTextUDT(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a text)") as myType:
+        with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b frozen<{myType}>)") as table:
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, {a: ''})")
+
+            assert_rows(execute(cql, table, "SELECT b.a FROM %s"), row(""))
+
+            flush(cql, table)
+
+            cql.execute("ALTER TYPE " + myType + " ADD b text")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, {a: '', b: ''})")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, {b: ''})")
+            execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, {a: null, b: ''})")
+
+            for _ in before_and_after_flush(cql, table):
+                assert_rows_ignoring_order(execute(cql, table, "SELECT b.a, b.b FROM %s"),
+                                           row("", None),
+                                           row("", ""),
+                                           row(None, ""),
+                                           row(None, ""))
 
 def testAlterNonFrozenUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as myType:
@@ -591,3 +668,46 @@ def testSyntaxExceptions(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b int)") as columnType:
         with pytest.raises(SyntaxException):
             cql.execute(f'ALTER TYPE {columnType} RENAME b to ""')
+
+def testCreateTypeWithUndesiredFieldType(cql, test_keyspace):
+    typeName = test_keyspace + "." + unique_name()
+    assert_invalid_message(cql, test_keyspace, "A user type cannot contain counters", "CREATE TYPE " + typeName + " (f counter)")
+
+# Reproduces SCYLLADB-5209 (ALTER TYPE ADD doesn't check the new field's type
+# like CREATE TYPE does)
+@pytest.mark.xfail(reason="SCYLLADB-5209")
+def testAlterTypeWithUndesiredFieldType(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int)") as typeName:
+        assert_invalid_message(cql, test_keyspace, "A user type cannot contain counters", "ALTER TYPE " + typeName + " ADD f counter")
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlteringTypeWithIfNotExits(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int)") as columnType, \
+         create_table(cql, test_keyspace, "(k int PRIMARY KEY, y frozen<" + columnType + ">)") as table:
+        cql.execute("ALTER TYPE " + columnType + " ADD IF NOT EXISTS a int")
+
+        execute(cql, table, "INSERT INTO %s (k, y) VALUES(?, ?)", 1, userType("a", 1))
+        assert_rows(execute(cql, table, "SELECT * FROM %s"), row(1, userType("a", 1)))
+
+        # Scylla's message is "Cannot add new field a to type ...: a field of
+        # the same name already exists".
+        assert_invalid_throw_message_re(cql, table, "Cannot add (new )?field a to type .*: a field (with name a|of the same name) already exists",
+                                     InvalidRequest,
+                                     "ALTER TYPE " + columnType + " ADD a int")
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlteringTypeRenameWithIfExists(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int)") as columnType, \
+         create_table(cql, test_keyspace, "(k int PRIMARY KEY, y frozen<" + columnType + ">)") as table:
+        cql.execute("ALTER TYPE " + columnType + " RENAME IF EXISTS a TO z AND b TO Y;")
+
+        execute(cql, table, "INSERT INTO %s (k, y) VALUES(?, ?)", 1, userType("z", 1))
+        assert_rows(execute(cql, table, "SELECT * FROM %s"), row(1, userType("z", 1)))
+
+        # Cassandra's message has a typo, "Unkown field a in user type ...",
+        # Scylla's is "Unknown field a in type ...".
+        assert_invalid_throw_message_re(cql, table, "Unk(n)?own field a in (user )?type",
+                                     InvalidRequest,
+                                     "ALTER TYPE " + columnType + " RENAME a TO z;")
