@@ -47,7 +47,7 @@ from test.pylib import sched_dir
 from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
+from test.pylib.util import gather_safely, get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
@@ -145,6 +145,69 @@ CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
 # IO counter totals, keyed by metric name (SeastarIOMetricName).
 # Picked up by pytest_runtest_protocol to store with the per-test metrics.
 SEASTAR_IO_KEY = pytest.StashKey[dict[str, int]]()
+
+# The item pytest runs after the one being torn down, set by
+# pytest_runtest_teardown: the module-scoped scylla_cluster keeps its cluster
+# for reuse only if that item may want it.
+NEXT_ITEM = pytest.StashKey[pytest.Item | None]()
+
+type ClusterReuseKey = tuple[pathlib.Path, str]
+
+
+class IdleClusters:
+    """Clusters the module-scoped scylla_cluster fixture left clean for the
+    next module of the same suite and build mode on this worker, which then
+    skips booting a server of its own.
+
+    One per key, remembered with the module that used it last: that module's
+    last test may still fail in its teardown phase, which is reported after
+    the module's fixtures were finalized.
+    """
+
+    def __init__(self) -> None:
+        self._idle: dict[ClusterReuseKey, tuple[ScyllaCluster, _pytest.nodes.Node]] = {}
+
+    async def put(self, key: ClusterReuseKey, cluster: ScyllaCluster, module: _pytest.nodes.Node) -> None:
+        if (previous := self._idle.pop(key, None)) is not None:
+            await self._recycle(previous[0])
+        self._idle[key] = cluster, module
+
+    async def take(self, key: ClusterReuseKey) -> ScyllaCluster | None:
+        """The idle cluster for `key` if it is still fit for reuse; any other
+        idle cluster is recycled, as nothing on this worker is waiting for it."""
+        taken = None
+        for idle_key, (cluster, _) in list(self._idle.items()):
+            del self._idle[idle_key]
+            if idle_key == key and not cluster.is_dirty and cluster.servers_alive():
+                taken = cluster
+            else:
+                await self._recycle(cluster)
+        return taken
+
+    def mark_dirty_if_used_by(self, module: _pytest.nodes.Node, reason: str) -> None:
+        for cluster, last_module in self._idle.values():
+            if last_module is module:
+                cluster.mark_dirty(reason)
+
+    def pop_all(self) -> list[ScyllaCluster]:
+        clusters = [cluster for cluster, _ in self._idle.values()]
+        self._idle.clear()
+        return clusters
+
+    async def recycle_all(self) -> None:
+        await gather_safely(*(self._recycle(cluster) for cluster in self.pop_all()))
+
+    @staticmethod
+    async def _recycle(cluster: ScyllaCluster) -> None:
+        # Called from the setup or teardown of whichever module comes next:
+        # a cluster that fails to stop is not that module's failure.
+        try:
+            await cluster.recycle()
+        except Exception:
+            logger.warning("Failed to recycle idle cluster %s", cluster, exc_info=True)
+
+
+IDLE_CLUSTERS = pytest.StashKey[IdleClusters]()
 
 FAILED_TEST_DIR = "failed_test"
 
@@ -346,6 +409,13 @@ def pytest_runtest_protocol_skip_evicted(item, nextitem):
     if item.stash.get(EVICTED_KEY, False):
         return True
     return None
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None]:
+    item.config.stash[NEXT_ITEM] = nextitem
+    try:
+        return (yield)
+    finally:
+        del item.config.stash[NEXT_ITEM]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -459,16 +529,79 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
     return request.config.getoption("--exe-path") or path_to(build_mode, "scylla")
 
 
+def cluster_reuse_key(node: _pytest.nodes.Node) -> ClusterReuseKey | None:
+    """Which modules can share a scylla_cluster: those of the same suite run
+    in the same build mode, whose servers are started with the same options."""
+    params_stash = get_params_stash(node=node)
+    if params_stash is None or params_stash.get(TEST_SUITE, None) is None:
+        return None
+    return params_stash[TEST_SUITE].path, params_stash[BUILD_MODE]
+
+
+@pytest.fixture(scope="session")
+async def testpy_idle_clusters(request: pytest.FixtureRequest) -> AsyncGenerator[IdleClusters]:
+    request.config.stash[IDLE_CLUSTERS] = idle_clusters = IdleClusters()
+    yield idle_clusters
+    await idle_clusters.recycle_all()
+
+
+@pytest.fixture(autouse=True)
+async def recycle_unclaimed_clusters(testpy_idle_clusters: IdleClusters) -> None:
+    """Stop the servers still idle when a test starts.  A module using its
+    suite's server has taken it by now (module-scoped fixtures are set up
+    first), so these were kept for a module whose tests were all skipped."""
+    await testpy_idle_clusters.recycle_all()
+
+
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
-                         testpy_cluster_factory: ClusterFactory,
+                         testpy_new_cluster: Callable[[], ScyllaCluster],
+                         testpy_idle_clusters: IdleClusters,
+                         testpy_logger: logging.Logger,
+                         testpy_shortname: str,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
-    """A ScyllaCluster with one server, shared by the tests in a module."""
+    """A ScyllaCluster with one server, shared by the tests in a module.
 
-    async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
-        await cluster.add_server()
+    When the module is done, the cluster is handed to the next module of the
+    same suite on this worker, unless one of the module's tests failed, the
+    module left keyspaces behind (see ScyllaCluster.check_unchanged()) or
+    is listed in the suite's `dirties_cluster`.
+    """
+    key = cluster_reuse_key(request.node)
+    cluster = await testpy_idle_clusters.take(key)
+    reused = cluster is not None
+    if reused:
+        testpy_logger.info("Reusing Scylla cluster %s for test %s", cluster, testpy_uname)
+        cluster.logger = testpy_logger
+    else:
+        cluster = testpy_new_cluster()
+        testpy_logger.info("Created Scylla cluster %s for test %s", cluster, testpy_uname)
+    request.node.stash[CLUSTER_KEY] = cluster
+    kept = False
+    try:
+        if not reused:
+            await cluster.add_server()
+            cluster.initial_keyspaces = cluster.keyspaces()
+        cluster.write_log_marker(f"------ Starting test {testpy_uname} ------\n")
         cluster.take_log_savepoint()
         yield cluster
+
+        if testpy_shortname in (get_params_stash(node=request.node)[TEST_SUITE].cfg.get("dirties_cluster") or []):
+            cluster.mark_dirty(f"{testpy_shortname} is listed in dirties_cluster")
+        cluster.check_unchanged()
+        cluster.write_log_marker(f"------ Ending test {testpy_uname} ------\n")
+        nextitem = request.config.stash.get(NEXT_ITEM, None)
+        # Not checking that the next test uses scylla_cluster: some get it
+        # with request.getfixturevalue().  recycle_unclaimed_clusters() stops
+        # it if the next test doesn't take it.
+        if not cluster.is_dirty and nextitem is not None and cluster_reuse_key(nextitem) == key:
+            await testpy_idle_clusters.put(key, cluster, request.node)
+            kept = True
+    finally:
+        request.node.stash[CLUSTER_KEY] = None
+        if not kept:
+            testpy_logger.info("Test %s finished, recycling cluster %s", testpy_uname, cluster)
+            await cluster.recycle()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -744,11 +877,12 @@ def get_cluster_from_pytest_node(node: _pytest.nodes.Node) -> ScyllaCluster | No
 async def recycle_leftover_clusters(session: pytest.Session) -> int:
     """Dispose of the clusters whose fixtures never got to recycle them, e.g.
     because the run was interrupted: their CLUSTER_KEY stash entry is still
-    set, since the factory clears it only after a successful recycle().
+    set, since the factory clears it only after a successful recycle(), or
+    they are still waiting for reuse in IDLE_CLUSTERS.
 
     Returns the number of clusters disposed of.
     """
-    swept = 0
+    leftovers: list[ScyllaCluster] = []
     seen: set[_pytest.nodes.Node] = set()
     for item in getattr(session, "items", []):
         for node in (item, *item.iter_parents()):
@@ -756,21 +890,24 @@ async def recycle_leftover_clusters(session: pytest.Session) -> int:
                 continue
             seen.add(node)
             if cluster := node.stash.get(CLUSTER_KEY, None):
-                swept += 1
-                logger.warning("Cluster %s was never recycled, disposing of it at exit", cluster)
-                try:
-                    # The servers are killed here even if waiting for them to
-                    # exit fails: that wait belongs to the loop that spawned
-                    # them, which is gone by now.
-                    await cluster.stop()
-                except Exception:
-                    logger.warning("Stopping leftover cluster %s did not complete cleanly", cluster, exc_info=True)
-                try:
-                    # stop() is a no-op now, the rest is loop-free.
-                    await cluster.recycle()
-                except Exception:
-                    logger.warning("Failed to recycle leftover cluster %s", cluster, exc_info=True)
-    return swept
+                leftovers.append(cluster)
+    if (idle_clusters := session.config.stash.get(IDLE_CLUSTERS, None)) is not None:
+        leftovers.extend(idle_clusters.pop_all())
+    for cluster in leftovers:
+        logger.warning("Cluster %s was never recycled, disposing of it at exit", cluster)
+        try:
+            # The servers are killed here even if waiting for them to
+            # exit fails: that wait belongs to the loop that spawned
+            # them, which is gone by now.
+            await cluster.stop()
+        except Exception:
+            logger.warning("Stopping leftover cluster %s did not complete cleanly", cluster, exc_info=True)
+        try:
+            # stop() is a no-op now, the rest is loop-free.
+            await cluster.recycle()
+        except Exception:
+            logger.warning("Failed to recycle leftover cluster %s", cluster, exc_info=True)
+    return len(leftovers)
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -814,7 +951,12 @@ def pytest_runtest_makereport(item, call):
                 f.write(section[1] + "\n")
 
     if report.failed:
+        if (idle_clusters := item.config.stash.get(IDLE_CLUSTERS, None)) is not None:
+            # The last test of a module failing in its teardown phase, after
+            # the module's cluster was already left for reuse.
+            idle_clusters.mark_dirty_if_used_by(item.getparent(pytest.Module), f"test {item.name} failed")
         if cluster := get_cluster_from_pytest_node(item):
+            cluster.mark_dirty(f"test {item.name} failed")
             try:
                 failed_test_dir_path = make_failed_test_dir(item.config, item.stash[BUILD_MODE], item.name)
                 # For a call-phase failure the manager fixture's teardown
