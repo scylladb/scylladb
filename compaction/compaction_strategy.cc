@@ -77,6 +77,21 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const sstables::shared_
     return droppable_ratio >= _tombstone_threshold;
 }
 
+bool compaction_strategy_impl::worth_dropping_tombstones(const sstables::sstable_run& run, gc_clock::time_point compaction_time, const compaction_group_view& t) {
+    if (_disable_tombstone_compaction || run.empty()) {
+        return false;
+    }
+    // As with a single sstable, ignore runs that were created just recently.
+    if (db_clock::now()-_tombstone_compaction_interval < run.data_file_write_time()) {
+        return false;
+    }
+    if (_unchecked_tombstone_compaction) {
+        return true;
+    }
+    auto droppable_ratio = run.estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_state(), t.schema());
+    return droppable_ratio >= _tombstone_threshold;
+}
+
 uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {
     return partition_estimate;
 }
@@ -669,6 +684,8 @@ leveled_compaction_strategy::calculate_max_sstable_size_in_mb(std::optional<sstr
 time_window_compaction_strategy::time_window_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _options(options)
+    , _ics_options(options)
+    , _fragment_size(incremental_compaction_strategy::parse_fragment_size(options))
     , _stcs_options(options)
 {
     if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
@@ -685,7 +702,13 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
 // This helps making sure that only allowed options are being set.
 void time_window_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     time_window_compaction_strategy_options::validate(options, unchecked_options);
-    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+    // Windows are compacted with ICS, so TWCS takes its bucketing options and fragment size,
+    // but not the space amplification goal, which applies across tiers rather than within a window.
+    incremental_compaction_strategy_options::validate(options, unchecked_options);
+    incremental_compaction_strategy::validate_fragment_size_option(options, unchecked_options);
+    // Accept, and ignore, the one STCS option ICS doesn't have, which TWCS used to take, so
+    // that a schema dumped from an older version can still be replayed as-is.
+    size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {

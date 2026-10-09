@@ -76,7 +76,7 @@ For more information, see the :ref:`Compaction KB Article <incremental-compactio
 Time-window Compaction Strategy (TWCS)
 ======================================
 
-Time-Window Compaction Strategy compacts SSTables within each time window using size-tiered compaction.
+Time-Window Compaction Strategy compacts SSTables within each time window using incremental compaction.
 SSTables from different time windows are never compacted together. You set the :ref:`TimeWindowCompactionStrategy <time-window-compactionstrategy-twcs>` parameters when you create a table using a CQL command.
 
 .. include:: /rst_include/warning-ttl-twcs.rst
@@ -125,8 +125,7 @@ of operation, the benefits and the disadvantages, and
 :ref:`Incremental Compaction <incremental-compaction-strategy-ics>` for the
 parameters to set.
 
-Note that size-tiered compaction is still used internally, per time window, by
-`Time-window Compaction Strategy (TWCS)`_ and for level 0 by
+Note that size-tiered compaction is still used internally for level 0 by
 `Leveled Compaction Strategy (LCS)`_. That use is unrelated to the deprecated
 ``SizeTieredCompactionStrategy`` class name.
 

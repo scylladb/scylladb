@@ -128,6 +128,19 @@ def test_time_window_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"enable_optimized_twcs_queries value \(no\) must be \"true\" or \"false\"", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'enable_optimized_twcs_queries' : 'no' }")
     assert_throws(cql, table1, r"max_threshold value \(1\) must be bigger or equal to 2", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'max_threshold' : 1 }")
 
+# In ScyllaDB, TWCS compacts each window with ICS, so it takes the ICS bucketing
+# options and the fragment size, but not the space amplification goal, which
+# applies across size tiers rather than within a window. The one STCS option ICS
+# doesn't have, which TWCS used to take, is still accepted, and ignored.
+def test_time_window_compaction_strategy_ics_options(cql, test_keyspace, scylla_only):
+    twcs = "'class' : 'TimeWindowCompactionStrategy', 'compaction_window_unit' : 'HOURS'"
+    with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int",
+                        f"WITH compaction = {{ {twcs}, 'bucket_low' : 0.6, 'bucket_high' : 1.6, 'min_sstable_size' : 1024, 'sstable_size_in_mb' : 200 }}") as table:
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{ {twcs}, 'cold_reads_to_omit' : 0.5 }}")
+        assert_throws(cql, table, r"bucket_low value \(1.3\) must be between 0.0 and 1.0", f"ALTER TABLE %s WITH compaction = {{ {twcs}, 'bucket_low' : 1.3 }}")
+        assert_throws(cql, table, r"cold_reads_to_omit value \(3.5\) must be between 0.0 and 1.0", f"ALTER TABLE %s WITH compaction = {{ {twcs}, 'cold_reads_to_omit' : 3.5 }}")
+        assert_throws(cql, table, "space_amplification_goal", f"ALTER TABLE %s WITH compaction = {{ {twcs}, 'space_amplification_goal' : 1.5 }}")
+
 def test_leveled_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"sstable_size_in_mb value \(-5\) must be positive|sstable_size_in_mb must be larger than 0, but was -5", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : -5 }")
     # Refs SCYLLADB-4474. Scylla reports an unparsable integer as a syntax

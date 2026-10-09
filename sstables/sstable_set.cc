@@ -103,6 +103,13 @@ db_clock::time_point sstable_run::data_file_write_time() const {
     return std::ranges::max(_all | std::views::transform([](const shared_sstable& s) { return s->data_file_write_time(); }));
 }
 
+api::timestamp_type sstable_run::max_timestamp() const {
+    if (_all.empty()) {
+        return api::min_timestamp;
+    }
+    return std::ranges::max(_all | std::views::transform([] (const shared_sstable& s) { return s->get_stats_metadata().max_timestamp; }));
+}
+
 std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     os << "Run = {\n";
     if (run.all().empty()) {

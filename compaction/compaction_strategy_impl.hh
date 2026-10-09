@@ -67,6 +67,8 @@ public:
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
     bool worth_dropping_tombstones(const sstables::shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t);
+    // Same as above, for an sstable run as a whole.
+    bool worth_dropping_tombstones(const sstables::sstable_run& run, gc_clock::time_point compaction_time, const compaction_group_view& t);
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const = 0;
 

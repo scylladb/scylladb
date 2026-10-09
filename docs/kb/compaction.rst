@@ -43,7 +43,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 
 * :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - (default setting) Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers. ICS replaces STCS. It has the same read and write amplification, but has lower space amplification, as the temporary space overhead is reduced to a constant manageable level.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification. 
-* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses size-tiered compaction to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
+* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses incremental compaction to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to a single SSTable run.
 * `Size-tiered compaction strategy (STCS)`_ - deprecated. ``SizeTieredCompactionStrategy`` is now an alias of ICS.
 
 How to Set a Compaction Strategy
@@ -183,18 +183,18 @@ For example, when compacting two SSTables (or SSTable runs) holding 7GB each: in
 Time-window Compaction Strategy (TWCS)
 --------------------------------------
 
-Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_. SSTables from different time windows are never compacted together.
+Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window using :ref:`Incremental Compaction Strategy (ICS) <incremental-compaction-strategy-ics>`. SSTables from different time windows are never compacted together.
 
 .. include:: /rst_include/warning-ttl-twcs.rst
 
 The strategy works as follows:
 
 1. A time window is configured. The window is determined by the compaction window size :ref:`compaction_window_size <twcs-options>`  and the time unit (:ref:`compaction_window_unit <twcs-options>`).
-2. SSTables created within the time window are compacted using `Size-tiered Compaction Strategy (STCS)`_.
-3. Once a time window ends, take all SSTables which were created during the time window and compact the data into one SSTable.
-4. The final resulting SSTable is never compacted with other time-windows’ SSTables.
+2. SSTables created within the time window are compacted using :ref:`Incremental Compaction Strategy (ICS) <incremental-compaction-strategy-ics>`.
+3. Once a time window ends, take all SSTables which were created during the time window and compact the data into one SSTable run, made of fragments of up to ``sstable_size_in_mb``.
+4. The final resulting SSTable run is never compacted with other time-windows’ SSTables.
 
-With this explanation, if the time window was for one day, at the end of the day, the SSTables accumulated for that day only would be compacted into one SSTable.
+With this explanation, if the time window was for one day, at the end of the day, the SSTables accumulated for that day only would be compacted into one SSTable run.
 
 When time-series data gets out of order
 .......................................
