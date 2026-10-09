@@ -312,7 +312,9 @@ CREATE TABLE system.cdc_streams_state (
 
 ## system.client_routes
 
-Stores client connection routing information for each connection ID.
+Stores client-reachable proxy endpoints for nodes accessed through private
+connections such as AWS PrivateLink or Google Cloud Private Service Connect
+(PSC). Each row identifies one node through one private connection.
 
 Schema:
 ```cql
@@ -329,13 +331,44 @@ CREATE TABLE system.client_routes (
 ```
 
 **Columns:**
-- `connection_id`: Unique identifier for the connection
-- `host_id`: UUID of the host node (clustering key)
-- `address`: IP address of the host
-- `port`: CQL port number
-- `tls_port`: TLS-enabled CQL port number
-- `alternator_port`: Alternator (DynamoDB-compatible) port number
-- `alternator_https_port`: HTTPS port for Alternator
+- `connection_id`: Partition key assigned by the deployment's networking or
+  control-plane software to a private connection. Drivers are configured with
+  the connection IDs they can use. This is neither a CQL session ID nor a node ID.
+- `host_id`: Clustering key containing the stable UUID of the ScyllaDB node,
+  matching the host ID in cluster metadata.
+- `address`: Client-reachable proxy hostname or IP address, rather than the
+  node's internal broadcast address. Drivers resolve hostnames.
+- `port`: Proxy port for unencrypted CQL.
+- `tls_port`: Proxy port for TLS-encrypted CQL.
+- `alternator_port`: Proxy port for unencrypted Alternator.
+- `alternator_https_port`: Proxy port for HTTPS-encrypted Alternator.
+
+The composite `(connection_id, host_id)` key uniquely identifies a route, so a
+node can have different endpoints through different private connections. The
+port columns are optional because a route may expose only some protocols. The
+Client Routes Admin REST API requires at least one port in each entry and
+validates each specified port as an integer from 1 to 65535.
+
+**Lookup:** A driver connects through a private connectivity contact point,
+discovers node host IDs from cluster metadata, then reads only the
+`connection_id` partitions it is configured to use. It matches each host ID to
+a client-reachable `address` and the port for its protocol. For full cluster
+connectivity, every discovered node needs a usable route through at least one
+configured connection. Different routes may share an address and use different
+ports, or use different addresses with the same port. The driver must support
+both this table and the `CLIENT_ROUTES_CHANGE` event described in
+[protocol extensions](protocol-extensions.md#sending-the-client_routes_change-event).
+
+**Ownership:** ScyllaDB stores and distributes routes but does not discover
+proxy topology or populate this table automatically. Drivers consume the
+routes. ScyllaDB Cloud infrastructure and its control plane create, update,
+and remove rows in Cloud; custom deployment infrastructure must reconcile the
+private connection, proxy, and node topology itself. That infrastructure
+should update routes when connections, nodes, proxy endpoints, or exposed
+protocols change, and remove stale rows when a connection or node disappears.
+For every active private connection, it should maintain a route to each node
+clients must reach. Use the [Client Routes Admin REST API](../reference/api/client-routes.rst)
+to manage routes rather than writing directly to this table.
 
 ---
 

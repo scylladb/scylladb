@@ -6,6 +6,7 @@ API Reference
 
    authorization-cache
    cache-service
+   client-routes
    column-family
    commit-log
    compaction-manager
@@ -23,4 +24,4 @@ API Reference
    system
    task-manager-test
    task-manager
-   tasks 
+   tasks
