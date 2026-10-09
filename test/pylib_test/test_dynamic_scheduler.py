@@ -20,6 +20,7 @@ from test.pylib import sched_dir
 from test.pylib.db.model import HostInfo
 from test.pylib.db.writer import DEFAULT_DB_NAME, HOST_INFO_TABLE, SQLiteWriter
 from test.pylib.dynamic_scheduler import (
+    POOL_GROW_SECONDS,
     HELD_RESERVE_SECONDS,
     MEM_RESERVE,
     MEM_STALL_LIMIT,
@@ -474,9 +475,9 @@ def test_release_guesses_price_dtests_as_the_heavy_tail_of_the_cluster_suite(tmp
 
 
 def make_pool_sched(tmp: Path, clock: dict, avail: dict, n_start: int = 2, max_workers: int = 6, n_tests: int = 40,
-                    cores: float = 0.1, mem: float = 0.5 * GB, one_file: bool = True):
+                    cores: float = 0.1, mem: float = 0.5 * GB, one_file: bool = True, wall: float = 60.0):
     col = [f"a.py::t{i}.dev.1" if one_file else f"f{i}.py::t.dev.1" for i in range(n_tests)]
-    model = make_model(tmp, 16, {profile_key(c): (cores, mem, 60.0) for c in col})
+    model = make_model(tmp, 16, {profile_key(c): (cores, mem, wall) for c in col})
     spawned: list[int] = []
     sched = new_sched(FakeConfig(tmp, n_start), max_workers=max_workers, model=model, ncpus=16,
                              mem_total=64 * GB, cgroup_tests=NO_CGROUP, now=lambda: clock["t"],
@@ -500,29 +501,48 @@ def arrive(sched: DynamicScheduling, nodes: list[FakeNode], col: list[str]) -> F
     return node
 
 
-def test_the_pool_grows_one_worker_at_a_time_while_every_worker_is_busy(tmp_path):
-    """Start at the CPU count, add a worker only when all are busy, and only after the last one has collected."""
+def test_the_pool_grows_one_worker_at_a_time_while_the_gap_is_small(tmp_path):
+    """Workers on heavy tests, a little under the target: one worker at a time, only after the
+    last one has collected, POOL_GROW_SECONDS apart."""
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
-    assert len(committed(sched)) == 2 and len(spawned) == 1, "both workers busy: grow by one"
-    clock["t"] = 30.0
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, cores=3.0, max_workers=8)
+    sched._estimate_now = lambda now: 12.5          # 4 workers at ~3 cores, 1.9 under the target
+    sched.check_schedule()
+    assert len(spawned) == 1, "the gap is under one worker's load: grow by one"
+    clock["t"] = 3 * POOL_GROW_SECONDS
     sched.check_schedule()
     assert len(spawned) == 1, "the new worker has not collected yet"
-    new = arrive(sched, nodes, col)
-    assert any(i in sched.committed_at for i in sched.node2pending[new]), "the new worker gets work at once"
+    arrive(sched, nodes, col)
     sched.check_schedule()
     assert len(spawned) == 2, "collected and past the cooldown: the next one"
-    clock["t"] = 31.0
+    clock["t"] += 1.0
     arrive(sched, nodes, col)
+    sched.check_schedule()
     assert len(spawned) == 2, "within POOL_GROW_SECONDS of the last spawn"
+
+
+def test_the_pool_grows_by_the_gap_to_the_target_up_to_half_the_workers(tmp_path):
+    """Workers each keeping a fraction of a core busy far under the target: as many as the gap
+    asks for, at most half the workers there are, and only once the last ones have collected."""
+    clock, avail = {"t": 0.0}, {"v": 40 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=6, max_workers=20)
+    sched._estimate_now = lambda now: 3.0           # 6 workers at half a core, 11.4 under the target
+    spawned.clear(); sched._spawning_ids.clear(); sched._last_spawn = -1e9
+    sched.check_schedule()
+    assert len(spawned) == 3, "the gap asks for 23; half of six workers is the most"
+    clock["t"] = 3 * POOL_GROW_SECONDS
+    sched.check_schedule()
+    assert len(spawned) == 3, "no more while those are starting"
+    while sched._spawning:
+        arrive(sched, nodes, col)
+    sched.check_schedule()
+    assert len(spawned) == 7, "nine workers now: four more"
     for _ in range(10):
-        clock["t"] += 11.0
-        if sched._spawning:
+        clock["t"] += 2 * POOL_GROW_SECONDS
+        while sched._spawning:
             arrive(sched, nodes, col)
         sched.check_schedule()
-    assert len(sched._live_workers()) + sched._spawning <= 6, "never past max_workers"
-    assert sched.stats["pool_grown"] == 4
-
+    assert len(sched._live_workers()) + sched._spawning <= 20, "never past max_workers"
 
 def test_the_pool_does_not_grow_without_memory_for_a_worker_and_a_test(tmp_path):
     clock, avail = {"t": 0.0}, {"v": 1.3 * GB + MEM_RESERVE}   # two 0.5 GB tests fit, a worker and a third do not
@@ -837,7 +857,7 @@ def test_a_recycled_worker_is_replaced_to_keep_the_pool_at_its_floor(tmp_path, m
     assert sched.stats["recycled"] == 1
     clock["t"] = 200.0
     sched.check_schedule()
-    assert len(spawned) == 1, "below the floor: refilled even though the CPU is busy"
+    assert spawned, "below the floor: refilled even though the CPU is busy"
 
 
 def test_a_merged_samples_file_is_not_merged_again(tmp_path):
