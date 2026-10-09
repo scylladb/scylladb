@@ -16,6 +16,7 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ ORDER BY `ordering_clause` ]
                    : [ ORDER BY ( `vector_column_name` ANN OF `vector` | ANN '(' `vector_column_name` ',' `vector` ')' ) LIMIT `integer` ]
                    : [ WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0 ORDER BY BM25 '(' `column_name` ',' `term` ')' LIMIT `integer` ]
+                   : [ ORDER BY `fusion_function` '(' `search` ( ',' `search` )+ ')' LIMIT `integer` ]
                    : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
                    : [ LIMIT (`integer` | `bind_marker`) ]
                    : [ ALLOW FILTERING ]
@@ -415,9 +416,10 @@ index gave the row, and the row's **rank**, its position in the index's result c
       FROM ImageEmbeddings
       ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
-All three describe the search the rows are ranked by, so each is only accepted in a query that
-already orders by an ANN clause, and every occurrence must name the same column and the same query
-vector as that clause. A query using several of them still makes a single request.
+All three describe the search the rows are ranked by, so each is only accepted in a query whose
+``ORDER BY`` clause has an ANN search, in either form, on the same column, and every occurrence must
+use the same query vector as that search. A query using several of them still makes a single
+request.
 
 An index configured for :ref:`rescoring <create-vector-index-statement>` recomputes the similarity
 on the coordinator and reorders the rows by it, so the rank the Vector Store gave them no longer
@@ -472,7 +474,8 @@ referencing the **same** column and the **same** search term:
 * An ``ORDER BY BM25(column, 'term')`` clause that ranks the matching rows.
 
 Neither clause is accepted on its own. A query that has only ``WHERE BM25()`` or
-only ``ORDER BY BM25()`` is rejected.
+only ``ORDER BY BM25()`` is rejected. The exception is a :ref:`hybrid query <hybrid-queries>`,
+which ranks the rows by several searches at once and takes no ``WHERE`` clause.
 
 **Syntax:**
 
@@ -489,8 +492,9 @@ and have a ``fulltext_index``; it may be a regular or clustering-key column, but
 not a partition-key column.
 
 ``ORDER BY BM25()`` must be the only ordering in the query - it cannot be combined
-with another ``ORDER BY`` column, a second ``BM25()`` ordering, or an ``ANN``
-ordering.
+with another ``ORDER BY`` column. To rank the rows by several searches, such as a
+full-text and a vector search, fuse them into one ordering in a
+:ref:`hybrid query <hybrid-queries>`.
 
 A ``LIMIT`` clause is mandatory; queries without ``LIMIT`` are rejected. The
 specified value must not exceed 1000.
@@ -522,10 +526,10 @@ Return the score and the rank of each row::
 **rank**, its position in the index's result counted from 1. ``BM25_SCORE()`` and ``BM25_RANK()``
 return the two values on their own.
 
-All three describe the search the rows are ranked by, so each is only accepted in a query that
-already has the required ``WHERE`` and ``ORDER BY`` clauses, and every occurrence must reference the
-same column and the same search term. ``WHERE BM25(...) > 0`` compares the score, and is the same
-as ``WHERE BM25_SCORE(...) > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause.
+All three describe the search the rows are ranked by, so each is only accepted in a query whose
+``ORDER BY`` clause has a BM25 search on the same column, and every occurrence must use the same
+search term as that search. ``WHERE BM25(...) > 0`` compares the score, and is the same as
+``WHERE BM25_SCORE(...) > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause.
 
 The ``BM25()`` operator is not a reserved word. If a user-defined function named
 ``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
@@ -550,6 +554,86 @@ fragment could be found; the row itself is still returned. See
 
 For the full list of query constraints and requirements, see
 :doc:`Full-Text Search </features/fulltext-search>`.
+
+.. _hybrid-queries:
+
+Hybrid search queries :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A hybrid query ranks the rows by several searches at once, typically a :ref:`vector search
+<vector-queries>` and a :ref:`full-text search <fulltext-queries>` over the same table. Its
+``ORDER BY`` clause fuses the searches into one score:
+
+.. code-block::
+
+   hybrid_query: SELECT ... FROM `table_name`
+               :   ORDER BY `fusion_function` '(' `search` ( ',' `search` )+ ')'
+               :   LIMIT `integer`
+   search: ANN '(' `vector_column_name` ',' `vector` ')'
+         : | BM25 '(' `column_name` ',' `term` ')'
+
+For example::
+
+    SELECT id, title FROM articles
+        ORDER BY RRF(ANN(embedding, [0.1, 0.2, 0.3, 0.4]), BM25(body, 'distributed database'))
+        LIMIT 10;
+
+The searches are sent to their indexes in parallel. A row is a candidate if any of them returned
+it. The candidates are read, scored by the fusion function, sorted by that score, highest first,
+and only then cut to the ``LIMIT``.
+
+Each search passes the fusion function a ``tuple<float, int>``: the score the index gave the row
+and the row's rank, its position in the index's result counted from 1. Where a search did not
+return the row, both are null. Scores of different searches are on different scales, so a BM25
+relevance and a vector similarity cannot be meaningfully added; ranks can be compared, so fusion
+usually goes by rank.
+
+``RRF()`` is reciprocal rank fusion. A row scores ``1 / (60 + rank)`` for each search that returned
+it, summed over the searches. It takes any number of searches, at least two.
+
+A user-defined function can fuse the searches instead. It takes one ``tuple<float, int>`` argument
+per search and returns a ``float``. For example, to weigh the vector search three times as much as
+the full-text one::
+
+    CREATE FUNCTION ks.weighted(a tuple<float, int>, b tuple<float, int>)
+        CALLED ON NULL INPUT RETURNS float LANGUAGE lua AS
+        'local function w(hit) if hit[2] == nil then return 0 end return 1 / hit[2] end
+         return 3 * w(a) + w(b)';
+
+    SELECT id, title FROM articles
+        ORDER BY ks.weighted(ANN(embedding, [0.1, 0.2, 0.3, 0.4]), BM25(body, 'distributed database'))
+        LIMIT 10;
+
+A search is identified by its kind and its column. Two calls on the same column are the same search
+and must use the same query vector or search term; several columns of one kind are several
+searches, so ``RRF(BM25(title, 'database'), BM25(body, 'database'))`` fuses two full-text searches.
+
+``ANN()``, ``ANN_SCORE()``, ``ANN_RANK()``, ``BM25()``, ``BM25_SCORE()`` and ``BM25_RANK()`` may be
+selected to report what each search said about a row, provided the ``ORDER BY`` clause searches
+their column with the same query value. They return null for a row that search did not return::
+
+    SELECT id, ANN_RANK(embedding, [0.1, 0.2, 0.3, 0.4]) AS vector_rank,
+               BM25_RANK(body, 'distributed database') AS text_rank
+        FROM articles
+        ORDER BY RRF(ANN(embedding, [0.1, 0.2, 0.3, 0.4]), BM25(body, 'distributed database'))
+        LIMIT 10;
+
+:ref:`BM25_HIGHLIGHT() <fulltext-highlighting>` may be selected too, and is null in the same way: only
+the text of the rows the full-text search returned is sent to the index for an excerpt.
+
+Hybrid queries have the following limitations:
+
+* A hybrid query takes no ``WHERE`` clause.
+* A ``LIMIT`` clause is mandatory, and must not exceed 1000. Only the first ``LIMIT`` rows of each
+  search's answer are fused: a vector index with ``oversampling`` is asked for the ``LIMIT`` times
+  the oversampling factor, but its answer is cut to the ``LIMIT`` before the fusion.
+* A vector index configured for :ref:`rescoring <create-vector-index-statement>` cannot take part in
+  a hybrid query: the rescored order has no rank to fuse by. On such an index, ``ORDER BY`` accepts
+  only ``ANN()`` or ``ANN_SCORE()`` called directly.
+* The rank is the position in the index's result, not in the result set. If an index returns a row
+  that is no longer in the base table, the ranks after it are not renumbered.
+* Paging is not supported: the whole result is returned at once, with a warning if a page size
+  smaller than the ``LIMIT`` was requested.
 
 .. _limit-clause:
 

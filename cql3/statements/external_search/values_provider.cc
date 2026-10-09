@@ -9,7 +9,6 @@
 #include "values_provider.hh"
 
 #include <algorithm>
-#include <cmath>
 #include <span>
 #include <utility>
 
@@ -24,14 +23,6 @@ namespace cql3::statements::external_search {
 
 namespace {
 
-// The score an external result gave, or nothing if it is not one to report. JSON carries no literal
-// for an infinity, but the score is parsed into a float, so a magnitude too large for one arrives
-// as one; a NaN would mean a malformed reply. Neither is a score anything can be told.
-std::optional<float> similarity_at(const vector_search::vector_store_client::primary_keys& external_results, size_t result) {
-    const auto similarity = external_results[result].similarity;
-    return std::isfinite(similarity) ? std::optional(similarity) : std::nullopt;
-}
-
 /// The next cell of `iter`, as a value or nothing where the row has none for the column. The
 /// iterator moves past the cell either way, so it stays aligned with the columns it is read
 /// against; a cell whose value is not wanted has to be stepped over rather than left unread.
@@ -44,6 +35,10 @@ managed_bytes_opt next_value(query::result_row_view::iterator_type& iter, const 
     return cell ? managed_bytes_opt(managed_bytes(cell->value())) : std::nullopt;
 }
 
+/// What the searches said about a row: the hits of the candidate naming it, or none where no
+/// candidate does.
+using row_hits = std::span<const std::optional<vector_search::search_hit>>;
+
 /// Reads a fixed list of columns out of every row walked, in the order asked; see
 /// joined_row::columns. Unlike the result set builder, which reads every selected column, this
 /// reads a few columns out of what can be a large selection, so where each of them is found is
@@ -54,12 +49,20 @@ class column_reader {
     const query::partition_slice& _slice;
 
     /// A column asked for: where its value is found in a row - a component of the key, or a cell
-    /// among the cells of its kind the slice asked for - and the slot of the row's values it fills.
+    /// among the cells of its kind the slice asked for - the slot of the row's values it fills, and
+    /// the search it is read for, if any; see column_read.
     struct wanted_column {
         column_kind kind;
         size_t position;
         size_t slot;
+        std::optional<size_t> for_search;
     };
+
+    /// Whether `wanted` is read for a row with `hits`: always, or, for a search, only where it
+    /// returned the row.
+    static bool read_for_row(const wanted_column& wanted, row_hits hits) {
+        return !wanted.for_search || (*wanted.for_search < hits.size() && hits[*wanted.for_search]);
+    }
 
     /// One entry per column asked for, ordered by kind and then by position, which is the order a
     /// row's values are met in.
@@ -84,19 +87,22 @@ class column_reader {
     }
 
     /// Reads the cells `ids` names, in the order they arrive, keeping the ones of `kind` asked for
-    /// and stepping over the rest - the iterator only moves forward, so every cell up to the last
-    /// one wanted has to be passed.
+    /// that are read out of a row with `hits` and stepping over the rest - the iterator only moves forward, so
+    /// every cell up to the last one wanted has to be passed.
     void read_cells(query::result_row_view::iterator_type iter, const query::column_id_vector& ids, column_kind kind,
-            std::vector<managed_bytes_opt>& values) const {
+            std::vector<managed_bytes_opt>& values, row_hits hits) const {
         const auto wanted = wanted_of(kind);
         auto next = wanted.begin();
         for (size_t position = 0; next != wanted.end(); ++position) {
             const auto& column = _schema.column_at(kind, ids[position]);
-            if (position == next->position) {
+            const bool is_wanted = position == next->position;
+            if (is_wanted && read_for_row(*next, hits)) {
                 values[next->slot] = next_value(iter, column);
-                ++next;
             } else {
                 iter.skip(column);
+            }
+            if (is_wanted) {
+                ++next;
             }
         }
     }
@@ -122,14 +128,14 @@ class column_reader {
     }
 
 public:
-    column_reader(const schema& schema, const query::partition_slice& slice, std::span<const column_definition* const> columns)
+    column_reader(const schema& schema, const query::partition_slice& slice, std::span<const column_read> columns)
         : _schema(schema)
         , _slice(slice) {
         _wanted.reserve(columns.size());
         for (size_t slot = 0; slot < columns.size(); ++slot) {
-            const auto& column = *columns[slot];
+            const auto& column = *columns[slot].column;
             const auto position = column.is_primary_key() ? column.component_index() : cell_position_of(column);
-            _wanted.push_back(wanted_column{.kind = column.kind, .position = position, .slot = slot});
+            _wanted.push_back(wanted_column{.kind = column.kind, .position = position, .slot = slot, .for_search = columns[slot].for_search});
         }
         const auto location = [] (const wanted_column& w) { return std::pair(w.kind, w.position); };
         std::ranges::sort(_wanted, {}, location);
@@ -160,10 +166,10 @@ public:
         return values;
     }
 
-    /// Adds what a row of that partition gives: its clustering key and its cells. `key` is null
-    /// where the slice left the clustering key out, `row` for the row emitted for a partition
-    /// holding nothing but a static row.
-    void read_row(std::vector<managed_bytes_opt>& values, const clustering_key_prefix* key,
+    /// Adds what a row of that partition gives: its clustering key and its cells, only the ones read
+    /// out of a row with `hits`. `key` is null where the slice left the clustering key out,
+    /// `row` for the row emitted for a partition holding nothing but a static row.
+    void read_row(std::vector<managed_bytes_opt>& values, row_hits hits, const clustering_key_prefix* key,
             const query::result_row_view& static_row, const query::result_row_view* row) const {
         if (values.empty()) {
             return;
@@ -171,9 +177,16 @@ public:
         if (key) {
             read_key_components(*key, column_kind::clustering_key, values);
         }
-        read_cells(static_row.iterator(), _slice.static_columns, column_kind::static_column, values);
+        read_cells(static_row.iterator(), _slice.static_columns, column_kind::static_column, values, hits);
         if (row) {
-            read_cells(row->iterator(), _slice.regular_columns, column_kind::regular_column, values);
+            read_cells(row->iterator(), _slice.regular_columns, column_kind::regular_column, values, hits);
+        }
+        // A cell not read was never copied; a key component, which is small, was, and is dropped
+        // here.
+        for (const auto& wanted : _wanted) {
+            if (!read_for_row(wanted, hits)) {
+                values[wanted.slot] = std::nullopt;
+            }
         }
     }
 };
@@ -186,10 +199,11 @@ public:
 class joining_visitor {
     const schema& _schema;
 
-    // The external results to match the rows to, or null when the rows are not matched.
-    const vector_search::vector_store_client::primary_keys* _external_results;
+    // The candidates to match the rows to, or null when the rows are not matched. One list serves
+    // every search: their answers were joined by key before the read.
+    const std::vector<vector_search::search_candidate>* _candidates;
 
-    // The results naming rows of the partition being walked, settled when it opens while its key
+    // The candidates naming rows of the partition being walked, settled when it opens while its key
     // is in hand, so the key itself need not be kept.
     size_t _next_result = 0;
     size_t _partition_end = 0;
@@ -201,32 +215,38 @@ class joining_visitor {
     column_reader _columns;
     std::vector<managed_bytes_opt> _partition_values;
 
-    std::vector<managed_bytes_opt> read_columns(const clustering_key_prefix* key,
+    // What the searches said about the row `candidate` names, or nothing where none does.
+    row_hits hits_of(std::optional<size_t> candidate) const {
+        return candidate ? row_hits((*_candidates)[*candidate].hits) : row_hits();
+    }
+
+    std::vector<managed_bytes_opt> read_columns(row_hits hits, const clustering_key_prefix* key,
             const query::result_row_view& static_row, const query::result_row_view* row) const {
         auto values = _partition_values;
-        _columns.read_row(values, key, static_row, row);
+        _columns.read_row(values, hits, key, static_row, row);
         return values;
     }
 
     std::vector<joined_row> _rows;
 
-    // Whether the result matched to a row has a similarity to report; see joined_row::dropped. A
-    // row no result names has none. Nothing is dropped when the rows are not matched.
-    bool has_similarity(std::optional<size_t> result) const {
-        if (!_external_results) {
+    // Whether any search scored the candidate matched to a row; see joined_row::dropped. A row no
+    // candidate names has no score at all. Nothing is dropped when the rows are not matched.
+    bool has_score(std::optional<size_t> candidate) const {
+        if (!_candidates) {
             return true;
         }
-        return result && similarity_at(*_external_results, *result).has_value();
+        return candidate && std::ranges::any_of((*_candidates)[*candidate].hits,
+                [] (const std::optional<vector_search::search_hit>& hit) { return hit.has_value(); });
     }
 
-    void add_row(std::optional<size_t> result, std::vector<managed_bytes_opt> columns) {
-        _rows.push_back(joined_row{.external_result = result, .dropped = !has_similarity(result), .columns = std::move(columns)});
+    void add_row(std::optional<size_t> candidate, std::vector<managed_bytes_opt> columns) {
+        _rows.push_back(joined_row{.candidate = candidate, .dropped = !has_score(candidate), .columns = std::move(columns)});
     }
 
-    // Steps over this partition's results whose row the base table no longer has.
+    // Steps over this partition's candidates whose row the base table no longer has.
     std::optional<size_t> match(const clustering_key_prefix& row_ck) {
         for (; _next_result < _partition_end; ++_next_result) {
-            if (_schema.clustering_key_size() == 0 || (*_external_results)[_next_result].clustering.equal(_schema, row_ck)) {
+            if (_schema.clustering_key_size() == 0 || (*_candidates)[_next_result].clustering.equal(_schema, row_ck)) {
                 return _next_result++;
             }
         }
@@ -235,10 +255,11 @@ class joining_visitor {
 
 public:
     joining_visitor(const schema& schema, const query::partition_slice& slice,
-            const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns)
+            const std::vector<vector_search::search_candidate>* candidates, std::span<const column_read> columns)
         : _schema(schema)
-        , _external_results(external_results)
+        , _candidates(candidates)
         , _columns(schema, slice, columns) {
+        throwing_assert(_candidates || std::ranges::none_of(columns, [] (const column_read& c) { return c.for_search.has_value(); }));
     }
 
     std::vector<joined_row> rows() && {
@@ -251,14 +272,14 @@ public:
         _partition_values = _columns.partition_values(&key);
         _rows_in_partition = row_count;
         _partition_end = _next_result;
-        if (!_external_results || row_count == 0) {
+        if (!_candidates || row_count == 0) {
             // The index names rows, so nothing can name a partition that has none. Claiming no
             // results here is what leaves them for the partitions that follow.
             return;
         }
         // The rows arrive in the order of the results, and the read gives a partition its own
         // entry per contiguous run of results naming it, so this entry's run begins at the cursor.
-        const auto& results = *_external_results;
+        const auto& results = *_candidates;
         const auto names_this_partition = [&] (size_t i) { return results[i].partition.key().equal(_schema, key); };
         while (_next_result < results.size() && !names_this_partition(_next_result)) {
             ++_next_result;
@@ -270,7 +291,7 @@ public:
     void accept_new_partition(uint64_t row_count) {
         // Called when the slice left out the partition key, which matching compares and a
         // partition-key column is read from.
-        throwing_assert(!_external_results);
+        throwing_assert(!_candidates);
         throwing_assert(!_columns.reads_partition_key());
         _partition_values = _columns.partition_values(nullptr);
         _rows_in_partition = row_count;
@@ -278,22 +299,24 @@ public:
     }
 
     void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) {
-        add_row(match(key), read_columns(&key, static_row, &row));
+        const auto candidate = match(key);
+        add_row(candidate, read_columns(hits_of(candidate), &key, static_row, &row));
     }
 
     void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
         // Called when the slice left out the clustering key, which matching compares unless the
         // table has none.
-        throwing_assert(!_external_results || _schema.clustering_key_size() == 0);
+        throwing_assert(!_candidates || _schema.clustering_key_size() == 0);
         throwing_assert(!_columns.reads_clustering_key());
-        add_row(match(clustering_key_prefix::make_empty()), read_columns(nullptr, static_row, &row));
+        const auto candidate = match(clustering_key_prefix::make_empty());
+        add_row(candidate, read_columns(hits_of(candidate), nullptr, static_row, &row));
     }
 
     void accept_partition_end(const query::result_row_view& static_row) {
         if (_rows_in_partition == 0) {
             // The row emitted for a partition holding nothing but a static row: it has no cells of
             // its own, so only the static columns and the partition key can be read from it.
-            add_row(std::nullopt, read_columns(nullptr, static_row, nullptr));
+            add_row(std::nullopt, read_columns({}, nullptr, static_row, nullptr));
         }
     }
 };
@@ -301,58 +324,59 @@ public:
 } // anonymous namespace
 
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns) {
-    auto visitor = joining_visitor(schema, slice, external_results, columns);
+        const std::vector<vector_search::search_candidate>* candidates, std::span<const column_read> columns) {
+    auto visitor = joining_visitor(schema, slice, candidates, columns);
     query::result_view::consume(table_results, slice, visitor);
     return std::move(visitor).rows();
 }
 
 namespace {
 
-// The score of the external result that names `row`, or nothing if it has none to report: either no
-// result names the row, its key not having been in the search's reply, or the score is not one
-// similarity_at() gives back. These are the rows the join marked dropped.
-std::optional<float> similarity_of(const joined_row& row, const vector_search::vector_store_client::primary_keys& external_results) {
-    if (!row.external_result) {
+/// What one search said about `row`, or nothing where it said nothing: either no candidate names
+/// the row, its key not having been in any search's answer, or that search did not return the key.
+/// A hit whose score was not a finite number was recorded as absent when the answers were joined.
+std::optional<vector_search::search_hit> hit_of(
+        const joined_row& row, size_t search, const std::vector<vector_search::search_candidate>& candidates) {
+    if (!row.candidate) {
         return std::nullopt;
     }
-    return similarity_at(external_results, *row.external_result);
+    return candidates[*row.candidate].hits[search];
 }
 
 } // anonymous namespace
 
-std::vector<cql3::raw_value> similarities_of(
-        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results) {
+std::vector<cql3::raw_value> scores_of(
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::search_candidate>& candidates) {
     auto values = std::vector<cql3::raw_value>{};
     values.reserve(rows.size());
     for (const auto& row : rows) {
-        const auto similarity = similarity_of(row, external_results);
-        values.push_back(similarity ? cql3::raw_value::make_value(float_type->decompose(*similarity)) : cql3::raw_value::make_null());
+        const auto hit = hit_of(row, search, candidates);
+        values.push_back(hit ? cql3::raw_value::make_value(float_type->decompose(hit->score)) : cql3::raw_value::make_null());
     }
     return values;
 }
 
 std::vector<cql3::raw_value> ranks_of(
-        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results) {
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::search_candidate>& candidates) {
     auto values = std::vector<cql3::raw_value>{};
     values.reserve(rows.size());
     for (const auto& row : rows) {
-        // Same rows as similarities_of(): a row without a usable similarity has no rank either.
-        values.push_back(similarity_of(row, external_results)
-                        ? cql3::raw_value::make_value(int32_type->decompose(static_cast<int32_t>(*row.external_result + 1)))
-                        : cql3::raw_value::make_null());
+        // Same rows as scores_of(): a row a search did not return has no rank from it either.
+        const auto hit = hit_of(row, search, candidates);
+        values.push_back(
+                hit ? cql3::raw_value::make_value(int32_type->decompose(static_cast<int32_t>(hit->rank))) : cql3::raw_value::make_null());
     }
     return values;
 }
 
-std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows,
-        const vector_search::vector_store_client::primary_keys& external_results) {
+std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows, size_t search,
+        const std::vector<vector_search::search_candidate>& candidates) {
     std::vector<external_values> values;
     if (temporaries.score) {
-        values.push_back({.temporary_index = *temporaries.score, .values = similarities_of(rows, external_results)});
+        values.push_back({.temporary_index = *temporaries.score, .values = scores_of(rows, search, candidates)});
     }
     if (temporaries.rank) {
-        values.push_back({.temporary_index = *temporaries.rank, .values = ranks_of(rows, external_results)});
+        values.push_back({.temporary_index = *temporaries.rank, .values = ranks_of(rows, search, candidates)});
     }
     return values;
 }

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import pytest
 from cassandra.protocol import InvalidRequest
 
-from .util import new_test_table
+from .util import new_function, new_test_table
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +469,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         rows = list(cql.execute(stmt, [ANN_QUERY_VECTOR, ANN_QUERY_VECTOR]))
         assert [row.id for row in rows] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9], ANN_QUERY_VECTOR])
 
         # Case 2: the call the marker was written in is the one replaced with a temporary, so the
@@ -481,7 +481,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         assert [row.id for row in cql.execute(stmt, [ANN_QUERY_VECTOR])] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
         # Case 3: here the ordering's own expression is what mentions the marker.
@@ -492,7 +492,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         assert [row.id for row in cql.execute(stmt, [ANN_QUERY_VECTOR])] == [4, 3]
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
 
@@ -576,7 +576,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
         for row, d_row in zip(rows, data[:2]):
             assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9], ANN_QUERY_VECTOR])
 
         # Case 2
@@ -590,7 +590,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
         for row, d_row in zip(rows, data[:2]):
             assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
 
-        with pytest.raises(InvalidRequest, match="same query vector"):
+        with pytest.raises(InvalidRequest, match="the query vector differs"):
             cql.execute(stmt, [[0.9, 0.9]])
 
 
@@ -677,6 +677,59 @@ def test_without_rescoring_every_function_costs_one_request(cql, test_keyspace, 
             f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2"))
 
         assert len(vector_store_mock.ann_requests) - before == 1
+
+
+def test_ann_score_alone_orders_by_the_index(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """ORDER BY ANN_SCORE() alone means the index's own order, as ORDER BY ANN() does: the Vector
+    Store's order without rescoring, the recomputed similarity's order with it."""
+    data = TEST_DATA["cosine"]
+    for rescoring, expected in [("false", list(reversed([d_row.id for d_row in data]))),
+                                ("true", [d_row.id for d_row in data])]:
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"rescoring": rescoring}) as table:
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = cql.execute(f"SELECT id FROM {table} "
+                               f"ORDER BY ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT {len(data)}")
+            assert [row.id for row in rows] == expected
+
+
+def test_with_rescoring_order_by_only_a_direct_call(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """A rescoring index orders the rows only by ANN() or ANN_SCORE() called directly, not by a
+    function of them."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        body = "(x float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE lua AS 'return x'"
+        with new_function(cql, test_keyspace, body) as f:
+            with pytest.raises(InvalidRequest, match=r"ORDER BY supports only ANN\(\) or ANN_SCORE\(\) called directly"):
+                cql.prepare(f"SELECT id FROM {table} "
+                            f"ORDER BY {test_keyspace}.{f}(ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL})) LIMIT {len(data)}")
+
+
+def test_function_ordering_sees_only_the_limit_of_an_oversampled_answer(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """An oversampling index is asked for LIMIT x oversampling keys, but a function ordering the rows
+    sees only the first LIMIT of them, as a query in the index's own order does. Ordering by the rank
+    itself, worst first, shows which keys those are."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data, extra_options={"rescoring": "false"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        body = "(r int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE lua AS 'return r'"
+        with new_function(cql, test_keyspace, body) as f:
+            rows = cql.execute(f"SELECT id FROM {table} "
+                               f"ORDER BY {test_keyspace}.{f}(ANN_RANK(embedding, {ANN_QUERY_VECTOR_LITERAL})) LIMIT 2")
+
+            # The index oversamples by 2, so it is asked for 4 and answers ids 4, 3, 2, 1. Only 4 and 3,
+            # ranked 1 and 2, are kept; sorted by rank, highest first, they come out 3, 4.
+            assert json.loads(vector_store_mock.ann_requests[-1].body)["limit"] == 4
+            assert [row.id for row in rows] == [3, 4]
+
+
+def test_ann_rank_cannot_order_rows(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """A rank called directly is an int, not something ORDER BY can sort by."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data, extra_options={"rescoring": "false"}) as table:
+        with pytest.raises(InvalidRequest, match=r"ANN_RANK\(\) cannot be used as a scoring function in ORDER BY"):
+            cql.prepare(f"SELECT id FROM {table} "
+                        f"ORDER BY ANN_RANK(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT {len(data)}")
 
 
 def test_with_rescoring_ann_rank_rejected(cql, test_keyspace, vector_store_mock, skip_without_tablets):
