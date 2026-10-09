@@ -38,6 +38,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "utils/error_injection.hh"
 #include "db/commitlog/commitlog.hh"
+#include "test/lib/tmpdir.hh"
 #include "test/lib/make_random_string.hh"
 #include "db/extensions.hh"
 #include "db/config.hh"
@@ -1669,6 +1670,58 @@ SEASTAR_THREAD_TEST_CASE(test_memtable_reader_abort) {
     BOOST_REQUIRE(eventually_true([&] { return bool(permit.get_abort_exception()); }));
 
     BOOST_REQUIRE_THROW((*reader_opt)().get(), named_semaphore_timed_out);
+}
+
+// A write visible in the memtable must keep its commitlog segment pinned via the memtable's rp_set.
+SEASTAR_THREAD_TEST_CASE(test_apply_keeps_replay_position_on_allocation_failure) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = ss.make_pkey(0);
+
+    tmpdir tmp;
+    db::commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.commit_log_location = tmp.path().string();
+    auto log = db::commitlog::create_commitlog(cfg).get();
+    auto stop_log = defer([&] noexcept {
+        log.shutdown().get();
+        log.clear().get();
+    });
+
+    auto guardrails = db::noop_large_data_guardrail::instance();
+
+    for (bool use_frozen : {false, true}) {
+        memory::with_allocation_failures([&] {
+            db::rp_handle h;
+            lw_shared_ptr<replica::memtable> mt;
+            mutation m(s, pk);
+            {
+                memory::scoped_critical_alloc_section no_fail;
+                h = log.add_mutation(s->id(), 8, db::commitlog::force_sync::no, [] (db::commitlog::output& dst) {
+                    dst.write("12345678", 8);
+                }).get();
+                mt = make_lw_shared<replica::memtable>(s);
+                ss.add_row(m, ss.make_ckey(0), "v1");
+            }
+            auto rp = h.rp();
+            BOOST_REQUIRE(rp != db::replay_position());
+            try {
+                if (use_frozen) {
+                    mt->apply(freeze(m), s, *guardrails, nullptr, nullptr, std::move(h));
+                } else {
+                    mt->apply(m, nullptr, std::move(h));
+                }
+            } catch (const std::bad_alloc&) {
+            }
+            memory::scoped_critical_alloc_section no_fail;
+            auto usage = mt->get_and_discard_rp_set();
+            if (!mt->empty()) {
+                BOOST_REQUIRE_MESSAGE(usage.usage().contains(rp.id),
+                        "mutation is in the memtable but its replay position is not tracked");
+            }
+        });
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
