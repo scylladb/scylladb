@@ -168,6 +168,7 @@ else()
     set(Seastar_SCHEDULING_GROUPS_COUNT 25 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
     set(Seastar_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(Seastar_DOCS OFF CACHE BOOL "" FORCE)
     set(Seastar_LTTNG OFF CACHE BOOL "" FORCE)
     set(Seastar_ASSUME_C_ARES_DNS_FREEZE_FIXED ON CACHE BOOL "" FORCE)
     # Match configure.py's build_seastar_shared_libs: Debug and Dev
