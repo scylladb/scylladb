@@ -19,7 +19,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/byteorder.hh>
@@ -4821,16 +4820,16 @@ future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, 
 
 } // namespace sstables
 
-namespace seastar {
+namespace sstables {
 
-void
-lw_shared_ptr_deleter<sstables::sstable>::dispose(sstables::sstable* s) {
-    s->unused();
+void intrusive_ptr_add_ref(sstable* sst) noexcept {
+    ++sst->_refcount;
 }
 
-
-template
-sstables::sstable*
-seastar::internal::lw_shared_ptr_accessors<sstables::sstable, void>::to_value(seastar::lw_shared_ptr_counter_base*);
+void intrusive_ptr_release(sstable* sst) noexcept {
+    if (--sst->_refcount == 0) {
+        sst->unused();
+    }
+}
 
 }
