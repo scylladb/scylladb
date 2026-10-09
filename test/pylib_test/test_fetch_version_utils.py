@@ -121,6 +121,54 @@ def test_get_version_url_selects_latest_matching_arch(monkeypatch):
         "scylla-2026.1.1-0.20260301.f94296e0ae43.x86_64.tar.gz")
 
 
+def test_get_version_url_skips_release_missing_arch(monkeypatch):
+    # While a new release (here 2025.1.16) is being uploaded, its archive for
+    # one architecture may already be visible while the one we want isn't yet.
+    # We should pick the previous release instead of failing (SCYLLADB-4881).
+    def fake_list_scylla_release_entries(bucket, prefix, pack=""):
+        assert prefix == "downloads/scylla/relocatable/scylladb-2025.1/"
+        return ["scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.aarch64.tar.gz",
+                "scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.x86_64.tar.gz",
+                "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz"]
+
+    monkeypatch.setattr(vfu, "_list_scylla_release_entries", fake_list_scylla_release_entries)
+
+    assert vfu._get_version_url(major=2025, minor=1, arch="x86_64") == (
+        "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+        "scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.x86_64.tar.gz")
+    assert vfu._get_version_url(major=2025, minor=1, arch="aarch64") == (
+        "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+        "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz")
+
+
+def test_get_version_url_skips_branch_missing_arch(monkeypatch):
+    # Similarly, when the minor version isn't given, a new release branch
+    # (here 2026.2) whose first archive for the architecture we want isn't
+    # visible yet should be skipped in favor of the previous branch.
+    listings = {
+        "downloads/scylla/relocatable": ["scylladb-2025.1", "scylladb-2026.1", "scylladb-2026.2"],
+        "downloads/scylla/relocatable/scylladb-2026.1/": [
+            "scylla-2026.1.3-0.20260510.cccccccccccc.aarch64.tar.gz",
+            "scylla-2026.1.3-0.20260510.cccccccccccc.x86_64.tar.gz"],
+        "downloads/scylla/relocatable/scylladb-2026.2/": [
+            "scylla-2026.2.0~rc0-0.20260930.dddddddddddd.aarch64.tar.gz"],
+    }
+
+    def fake_list_scylla_release_entries(bucket, prefix, pack=""):
+        return listings.get(prefix, [])
+
+    monkeypatch.setattr(vfu, "_list_scylla_release_entries", fake_list_scylla_release_entries)
+
+    for major in (2026, None):
+        assert vfu._get_version_url(major=major, arch="x86_64") == (
+            "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2026.1/"
+            "scylla-2026.1.3-0.20260510.cccccccccccc.x86_64.tar.gz")
+        assert vfu._get_version_url(major=major, arch="aarch64") == (
+            "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2026.2/"
+            "scylla-2026.2.0~rc0-0.20260930.dddddddddddd.aarch64.tar.gz")
+    assert vfu._get_version_url(major=2025, arch="x86_64") is None
+
+
 def test_get_version_url_supports_rc_zero(monkeypatch):
     def fake_list_scylla_release_entries(bucket, prefix, pack=""):
         assert bucket == "downloads.scylladb.com"
@@ -258,8 +306,175 @@ def test_download_scylla_version_retries_after_url_error(monkeypatch, tmp_path):
     assert path.read_bytes() == b"data"
     assert calls == [url, url]
 
+
+def test_download_scylla_version_stops_retrying_after_deadline(monkeypatch, tmp_path):
+    # When the server is unreachable, each attempt can take minutes. Even with
+    # many retries allowed, we should give up after about 10 minutes, so the
+    # caller can still fall back to a cached version before the test times out.
+    url = "https://example.com/scylla.tar.gz"
+    now = 0
+    calls = []
+
+    def fake_urlopen(request_url, timeout):
+        nonlocal now
+        calls.append(request_url)
+        now += 120
+        raise vfu.urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(vfu.time, "monotonic", lambda: now)
+    monkeypatch.setattr(vfu.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(vfu.urllib.request, "urlopen", fake_urlopen)
+
+    assert vfu.download_scylla_version(url=url, output_dir=tmp_path, retry=40) is None
+    assert len(calls) == 6
+
+
 def test_with_file_lock_creates_parent_and_runs_body(tmp_path):
     lock_path = tmp_path / "locks" / "scylla.lock"
     with vfu.with_file_lock(lock_path):
         assert lock_path.exists()
     assert lock_path.exists()
+
+
+def make_cache(tmp_path, monkeypatch, installed, not_installed=()):
+    """Point XDG_CACHE_HOME to tmp_path, with a cache of the given release archives."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    cache_root = tmp_path / "scylladb" / "test.py" / "releases"
+    for name in [*installed, *not_installed]:
+        (cache_root / name).mkdir(parents=True)
+    for name in installed:
+        (cache_root / name / "installed.success").touch()
+    return cache_root
+
+
+# A cache with several versions installed, the latest 2025.1 for x86_64 being
+# 2025.1.15. The newer 2025.1.16 is only partly there: not installed for
+# x86_64, and installed only for aarch64 or as a different package.
+CACHED = ["scylla-2025.1.14-0.20260801.aaaaaaaaaaaa.x86_64.tar.gz",
+          "scylla-2025.1.15-0.20260901.bbbbbbbbbbbb.x86_64.tar.gz",
+          "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz",
+          "scylla-dev-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz",
+          "scylla-2026.1.3-0.20260510.cccccccccccc.x86_64.tar.gz"]
+NOT_INSTALLED = ["scylla-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz"]
+
+
+def test_fetch_and_install_falls_back_to_cache_on_s3_error(monkeypatch, tmp_path):
+    cache_root = make_cache(tmp_path, monkeypatch, CACHED, NOT_INSTALLED)
+
+    def fake_get_file_name_and_url_from_url(*args, **kwargs):
+        raise vfu.BotoCoreError()
+
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url", fake_get_file_name_and_url_from_url)
+
+    assert vfu.fetch_and_install_scylla_version(2025, 1) == (
+        cache_root / "scylla-2025.1.15-0.20260901.bbbbbbbbbbbb.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+    assert vfu.fetch_and_install_scylla_version(2025, 1, 14) == (
+        cache_root / "scylla-2025.1.14-0.20260801.aaaaaaaaaaaa.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+    assert vfu.fetch_and_install_scylla_version(2025, 1, arch="aarch64") == (
+        cache_root / "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz" / "installed" / "bin" / "scylla")
+    assert vfu.fetch_and_install_scylla_version(2025, 1, pack="dev") == (
+        cache_root / "scylla-dev-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+    assert vfu.fetch_and_install_scylla_version(2025) == (
+        cache_root / "scylla-2025.1.15-0.20260901.bbbbbbbbbbbb.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+    assert vfu.fetch_and_install_scylla_version() == (
+        cache_root / "scylla-2026.1.3-0.20260510.cccccccccccc.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+    with pytest.raises(RuntimeError, match="couldnt get archive name"):
+        vfu.fetch_and_install_scylla_version(2025, 2)
+
+
+def test_fetch_and_install_falls_back_to_cached_rc(monkeypatch, tmp_path):
+    # As in S3 lookup, a requested rc implies patch 0, so the fallback
+    # should pick the cached rc, not the newer cached stable release.
+    rc = "scylla-2026.1.0~rc0-0.20260125.f94296e0ae43.x86_64.tar.gz"
+    cache_root = make_cache(tmp_path, monkeypatch, [*CACHED, rc])
+
+    def fake_get_file_name_and_url_from_url(*args, **kwargs):
+        raise vfu.BotoCoreError()
+
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url", fake_get_file_name_and_url_from_url)
+
+    assert vfu.fetch_and_install_scylla_version(2026, 1, rc=0) == cache_root / rc / "installed" / "bin" / "scylla"
+    with pytest.raises(RuntimeError, match="couldnt get archive name"):
+        vfu.fetch_and_install_scylla_version(2026, 1, rc=1)
+
+
+def fake_install(monkeypatch):
+    """Make installing an archive succeed without downloading or running anything."""
+    def fake_download_scylla_version(url, output_dir, retry):
+        path = output_dir / url.rsplit("/", 1)[-1]
+        path.write_bytes(b"")
+        return path
+
+    def fake_extract_tar_no_same_owner(archive_path, unpack_dir):
+        (unpack_dir / "scylla").mkdir()
+
+    monkeypatch.setattr(vfu, "download_scylla_version", fake_download_scylla_version)
+    monkeypatch.setattr(vfu, "extract_tar_no_same_owner", fake_extract_tar_no_same_owner)
+    monkeypatch.setattr(vfu.subprocess, "run", lambda *args, **kwargs: None)
+
+
+def test_fetch_and_install_falls_back_to_cache_on_download_failure(monkeypatch, tmp_path):
+    cache_root = make_cache(tmp_path, monkeypatch, CACHED, NOT_INSTALLED)
+    url = ("https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+           "scylla-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz")
+
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url",
+                        lambda *args, **kwargs: (url, url.rsplit("/", 1)[-1]))
+    monkeypatch.setattr(vfu, "download_scylla_version", lambda *args, **kwargs: None)
+
+    assert vfu.fetch_and_install_scylla_version(2025, 1) == (
+        cache_root / "scylla-2025.1.15-0.20260901.bbbbbbbbbbbb.x86_64.tar.gz" / "installed" / "bin" / "scylla")
+
+
+def test_fetch_and_install_uses_cache_only_on_failure(monkeypatch, tmp_path):
+    # If S3 has a newer release than the cache, it is the one we should install.
+    cache_root = make_cache(tmp_path, monkeypatch, CACHED)
+    url = ("https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+           "scylla-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz")
+    name = url.rsplit("/", 1)[-1]
+    fake_install(monkeypatch)
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url", lambda *args, **kwargs: (url, name))
+
+    assert vfu.fetch_and_install_scylla_version(2025, 1) == cache_root / name / "installed" / "bin" / "scylla"
+    assert (cache_root / name / "installed.success").exists()
+
+
+def test_fetch_and_install_raises_without_cache(monkeypatch, tmp_path):
+    make_cache(tmp_path, monkeypatch, [])
+
+    def fake_get_file_name_and_url_from_url(*args, **kwargs):
+        raise vfu.BotoCoreError()
+
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url", fake_get_file_name_and_url_from_url)
+
+    with pytest.raises(RuntimeError, match="couldnt get archive name") as e:
+        vfu.fetch_and_install_scylla_version(2025, 1)
+    assert isinstance(e.value.__cause__, vfu.BotoCoreError)
+
+
+def test_fetch_and_install_direct_url_does_not_fall_back(monkeypatch, tmp_path):
+    # A direct URL asks for one specific archive, so another cached version won't do.
+    make_cache(tmp_path, monkeypatch, CACHED)
+    url = "https://example.com/scylla-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz"
+    monkeypatch.setattr(vfu, "download_scylla_version", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="Couldnt download Scylla archive"):
+        vfu.fetch_and_install_scylla_version(url=url)
+
+
+def test_fetch_and_install_does_not_fall_back_to_direct_url(monkeypatch, tmp_path):
+    # An archive fetched from a direct URL (e.g., test.py --exe-url) may be an
+    # unofficial build with a release-like name, so it must not be mistaken
+    # for that release, neither as a fallback nor when installing the release.
+    cache_root = make_cache(tmp_path, monkeypatch, CACHED)
+    name = "scylla-2025.1.16-0.20260924.4f24ebf84be6.x86_64.tar.gz"
+    fake_install(monkeypatch)
+    url_install = vfu.fetch_and_install_scylla_version(url=f"https://example.com/{name}")
+    assert not url_install.is_relative_to(cache_root)
+
+    def fake_get_file_name_and_url_from_url(*args, **kwargs):
+        raise vfu.BotoCoreError()
+
+    monkeypatch.setattr(vfu, "get_file_name_and_url_from_url", fake_get_file_name_and_url_from_url)
+    assert vfu.fetch_and_install_scylla_version(2025, 1) == (
+        cache_root / "scylla-2025.1.15-0.20260901.bbbbbbbbbbbb.x86_64.tar.gz" / "installed" / "bin" / "scylla")
