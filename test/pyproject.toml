@@ -28,6 +28,7 @@ dependencies = [
     "setuptools_scm==10.2.3",
     "unidiff==1.0.0",
     "boto3==1.43.88",
+    "alternator-client==2.0.0",
     "aiohttp==3.13.5",
     "colorama==0.4.6",
     "cryptography==50.0.1",
