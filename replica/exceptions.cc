@@ -15,12 +15,13 @@
 
 namespace replica {
 
-exception_variant try_encode_replica_exception(std::exception_ptr eptr) {
+exception_variant try_encode_replica_exception(std::exception_ptr eptr, encode_timeouts enc_timeouts) {
     if (const auto* e = try_catch<const rate_limit_exception>(eptr)) return *e;
     if (const auto* e = try_catch<const stale_topology_exception>(eptr)) return *e;
     if (const auto* e = try_catch<const abort_requested_exception>(eptr)) return *e;
     if (const auto* e = try_catch<const critical_disk_utilization_exception>(eptr)) return *e;
     if (const auto* e = try_catch<const large_data_exception>(eptr)) return *e;
+    if (enc_timeouts && is_timeout_exception(eptr)) return timed_out_error();
     return no_exception{};
 }
 

@@ -198,6 +198,9 @@ public:
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    // Replicas send replica::timed_out_error only once the whole cluster can decode it:
+    // older nodes log it as an error when it comes back in a read reply.
+    gms::feature typed_timeout_errors_in_replica_rpc { *this, "TYPED_TIMEOUT_ERRORS_IN_REPLICA_RPC"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

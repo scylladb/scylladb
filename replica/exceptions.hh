@@ -15,6 +15,8 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/timed_out_error.hh>
+#include <seastar/util/bool_class.hh>
 
 namespace replica {
 
@@ -101,6 +103,8 @@ public:
 
 using abort_requested_exception = seastar::abort_requested_exception;
 
+using timed_out_error = seastar::timed_out_error;
+
 struct exception_variant {
     std::variant<unknown_exception,
             no_exception,
@@ -108,7 +112,8 @@ struct exception_variant {
             stale_topology_exception,
             abort_requested_exception,
             critical_disk_utilization_exception,
-            large_data_exception
+            large_data_exception,
+            timed_out_error
     > reason;
 
     exception_variant()
@@ -127,9 +132,12 @@ struct exception_variant {
     }
 };
 
+using encode_timeouts = seastar::bool_class<class encode_timeouts_tag>;
+
 // Tries to encode the exception into an exception_variant.
 // If given exception cannot be encoded into one of the replica exception types,
-// returns no_exception.
-exception_variant try_encode_replica_exception(std::exception_ptr eptr);
+// returns no_exception. Timeouts are encoded only with encode_timeouts::yes,
+// i.e. once the whole cluster can decode timed_out_error.
+exception_variant try_encode_replica_exception(std::exception_ptr eptr, encode_timeouts enc_timeouts);
 
 }

@@ -157,7 +157,7 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 template<typename ResultType>
 static future<ResultType> encode_replica_exception_for_rpc(const gms::feature_service& features, std::exception_ptr eptr) {
     if (features.typed_errors_in_read_rpc) {
-        if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
+        if (auto ex = replica::try_encode_replica_exception(eptr, replica::encode_timeouts(features.typed_timeout_errors_in_replica_rpc)); ex) {
             if constexpr (std::is_same_v<ResultType, replica::exception_variant>) {
                 return make_ready_future<ResultType>(std::move(ex));
             } else {
@@ -645,8 +645,11 @@ private:
                     } catch (...) {
                         std::exception_ptr eptr = std::current_exception();
                         errors.count++;
-                        errors.local = replica::try_encode_replica_exception(eptr);
+                        errors.local = replica::try_encode_replica_exception(eptr,
+                                replica::encode_timeouts(p->features().typed_timeout_errors_in_replica_rpc));
                         seastar::log_level l = seastar::log_level::warn;
+                        // Not holds_alternative<replica::timed_out_error>: until the cluster feature is
+                        // enabled, a timeout is encoded as no_exception and must still be logged at debug.
                         if (is_timeout_exception(eptr)
                                 || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)
                                 || std::holds_alternative<replica::large_data_exception>(errors.local.reason)
@@ -803,6 +806,8 @@ private:
                     } else if constexpr (std::is_same_v<Ex, replica::large_data_exception>) {
                         msg = e.message();
                         return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::timed_out_error>) {
+                        return error::TIMEOUT;
                     }
                 }, exception->reason);
             }

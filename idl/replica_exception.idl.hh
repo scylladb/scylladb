@@ -33,6 +33,9 @@ class large_data_exception {
     sstring message();
 };
 
+class timed_out_error {
+};
+
 struct exception_variant {
     std::variant<replica::unknown_exception,
             replica::no_exception,
@@ -40,7 +43,8 @@ struct exception_variant {
             replica::stale_topology_exception,
             replica::abort_requested_exception,
             replica::critical_disk_utilization_exception,
-            replica::large_data_exception
+            replica::large_data_exception,
+            replica::timed_out_error
     > reason;
 };
 
