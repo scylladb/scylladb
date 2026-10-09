@@ -65,10 +65,7 @@ private:
         return get_buckets(runs, _options);
     }
 
-    std::vector<sstables::frozen_sstable_run>
-    most_interesting_bucket(std::vector<std::vector<sstables::frozen_sstable_run>> buckets, size_t min_threshold, size_t max_threshold);
-
-    uint64_t avg_size(std::vector<sstables::frozen_sstable_run>& runs) const;
+    static uint64_t avg_size(std::vector<sstables::frozen_sstable_run>& runs);
 
     static bool is_bucket_interesting(const std::vector<sstables::frozen_sstable_run>& bucket, size_t min_threshold);
 
@@ -76,18 +73,45 @@ private:
 
     compaction_descriptor find_garbage_collection_job(const compaction_group_view& t, std::vector<size_bucket_t>& buckets);
 
-    static std::vector<sstables::shared_sstable> runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs);
-    static std::vector<sstables::frozen_sstable_run> sstables_to_runs(std::vector<sstables::shared_sstable> sstables);
     static void sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema);
 public:
     incremental_compaction_strategy() = default;
 
     incremental_compaction_strategy(const std::map<sstring, sstring>& options);
 
+    // For strategies that apply ICS to a subset of their sstables, e.g. a time window, and
+    // use it to reshape or clean up that subset. Tombstone compaction options are left at
+    // their defaults, as these jobs do not consult them.
+    incremental_compaction_strategy(incremental_compaction_strategy_options options, uint64_t fragment_size);
+
+    // The fragment size, in bytes, the given options ask for, and its validation, for the
+    // strategies that write ICS runs and accept the FRAGMENT_SIZE_OPTION.
+    static uint64_t parse_fragment_size(const std::map<sstring, sstring>& options);
+    static void validate_fragment_size_option(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     // Group runs of similar size into buckets.
     static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
+
+    // Of the given buckets, return the one with the most runs among those holding at least
+    // min_threshold of them, trimmed to max_threshold runs. Empty if none qualifies.
+    static std::vector<sstables::frozen_sstable_run>
+    most_interesting_bucket(std::vector<std::vector<sstables::frozen_sstable_run>> buckets, size_t min_threshold, size_t max_threshold);
+
+    // Bucket the given runs by size and return the most interesting bucket, as above.
+    // Used by strategies that apply size-tiering to a subset of their sstables, e.g. a
+    // time window. Unlike get_sstables_for_compaction(), min_threshold is always honored.
+    static std::vector<sstables::frozen_sstable_run>
+    most_interesting_bucket(const std::vector<sstables::frozen_sstable_run>& runs, size_t min_threshold, size_t max_threshold,
+            const incremental_compaction_strategy_options& options);
+
+    // The number of compactions needed to bring the given runs down to below min_threshold per bucket.
+    static int64_t estimated_pending_compactions(const std::vector<sstables::frozen_sstable_run>& runs, size_t min_threshold, size_t max_threshold,
+            const incremental_compaction_strategy_options& options);
+
+    static std::vector<sstables::shared_sstable> runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs);
+    static std::vector<sstables::frozen_sstable_run> sstables_to_runs(std::vector<sstables::shared_sstable> sstables);
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
