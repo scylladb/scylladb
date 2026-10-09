@@ -3,7 +3,7 @@
 #
 # Copyright (C) 2015-present ScyllaDB
 #
-
+print("testin")
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
