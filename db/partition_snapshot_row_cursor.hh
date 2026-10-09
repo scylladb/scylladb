@@ -620,6 +620,22 @@ public:
         bool inserted = false;
     };
 
+    // Insert a row created by this cursor into the cache LRU.
+    // Rows of multi-row (clustering key) partitions go directly to the
+    // protected segment and are never demoted; single-row-partition rows
+    // go through the W-TinyLFU admission window. The partition's sketch
+    // key is inherited from an adjacent entry when available.
+    void insert_to_lru(rows_entry& e, const rows_entry* key_donor) {
+        if (key_donor && key_donor->has_sketch_key()) {
+            e.set_sketch_key(key_donor->sketch_key());
+        }
+        if (_snp.schema()->clustering_key_size() > 0) {
+            _snp.tracker()->insert_to_protected(e);
+        } else {
+            _snp.tracker()->insert(e);
+        }
+    }
+
     // Makes sure that a rows_entry for the row under the cursor exists in the latest version.
     // Doesn't change logical value or continuity of the snapshot.
     // Can be called only when cursor is valid and pointing at a row.
@@ -658,7 +674,8 @@ public:
                     re.set_range_tombstone(l->range_tombstone());
                 }
                 if (res.second) {
-                    _snp.tracker()->insert(re);
+                    auto l = std::next(res.first);
+                    insert_to_lru(re, l != rows.end() ? &*l : nullptr);
                 }
                 return {*res.first, res.first, res.second};
             } else {
@@ -672,7 +689,7 @@ public:
                     e->set_range_tombstone(range_tombstone_for_row());
                 }
                 auto i = rows.insert_before(latest_i, std::move(e));
-                _snp.tracker()->insert(re);
+                insert_to_lru(re, latest_i ? &*latest_i : nullptr);
                 return {re, i, true};
             }
         }
@@ -735,7 +752,7 @@ public:
             e->set_range_tombstone(range_tombstone());
         }
         auto e_i = rows.insert_before(latest_i, std::move(e));
-        _snp.tracker()->insert(*e_i);
+        insert_to_lru(*e_i, latest_i ? &*latest_i : nullptr);
         return ensure_result{*e_i, e_i, true};
     }
 

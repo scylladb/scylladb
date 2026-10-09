@@ -333,3 +333,50 @@ SEASTAR_THREAD_TEST_CASE(test_evict_gently) {
 
     cache.evict_gently().get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_entry_release_reenters_protected_segment) {
+    ::lru lru;
+    simple_schema s;
+    logalloc::region r;
+    partition_index_cache_stats stats;
+    partition_index_cache cache(lru, r, stats);
+
+    auto page0_loader = [&] (partition_index_cache::key_type k) {
+        return yield().then([&] {
+            return make_page0(r, s);
+        });
+    };
+
+    // While the entry_ptr is held, the entry stays out of the LRU so it
+    // cannot be evicted under a reader.
+    auto ptr = cache.get_or_load(0, page0_loader).get();
+    BOOST_REQUIRE_EQUAL(lru.window_size() + lru.probation_size() + lru.protected_size(), 0);
+
+    // Index pages are routed straight to the protected segment on release
+    // (lru::add_index), bypassing the W-TinyLFU admission window. Under a
+    // multi-row workload probation stays empty and the window is drained on
+    // every eviction cycle, so an index page admitted through the window is
+    // evicted before it can be re-accessed and promoted -- hot index pages
+    // would thrash. In protected they are ordered by recency instead, so a
+    // hot page touched on every use survives while a cold (scan) page read
+    // once ages to the front and is evicted first.
+    ptr = nullptr;
+    BOOST_REQUIRE_EQUAL(lru.protected_size(), 1);
+    BOOST_REQUIRE_EQUAL(lru.window_size(), 0);
+
+    // A hit on a resident entry unlinks it again — this is a touch...
+    ptr = cache.get_or_load(0, page0_loader).get();
+    BOOST_REQUIRE_EQUAL(stats.hits, 1);
+    BOOST_REQUIRE_EQUAL(lru.protected_size(), 0);
+    BOOST_REQUIRE_EQUAL(lru.window_size(), 0);
+
+    // ...and the release re-enters the protected segment.
+    ptr = nullptr;
+    BOOST_REQUIRE_EQUAL(lru.protected_size(), 1);
+    BOOST_REQUIRE_EQUAL(lru.window_size(), 0);
+
+    with_allocator(r.allocator(), [&] {
+        lru.evict_all();
+    });
+    BOOST_REQUIRE_EQUAL(stats.evictions, 1);
+}
