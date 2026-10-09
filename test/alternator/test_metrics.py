@@ -329,6 +329,11 @@ def test_export_table_operations(test_table_s, metrics):
         with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
             test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
 
+# ListExports has no table of its own, so like ListTables it only counts against the cluster.
+def test_list_exports_operations(dynamodb, metrics):
+    with check_increases_operation(metrics, ['ListExports']):
+        dynamodb.meta.client.list_exports(MaxResults=1)
+
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['DescribeEndpoints']):

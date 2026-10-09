@@ -83,6 +83,10 @@ public:
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
 
+    /* Alternator export to S3 metadata tables. */
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORTS = "alternator_export_to_s3_exports";
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
+
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
@@ -126,6 +130,18 @@ public:
     // NOTE: there's a sibling `read_cdc_for_tablets_current_generation_timestamp` in `system_keyspace`, that does the same for tables backed up by tablets.
     // NOTE: currently used only by alternator
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
+
+    /* An export reduced to what ListExports reports about it. */
+    struct alternator_export_summary {
+        sstring export_arn;
+        /* The columns below are unset in a row which lacks them. */
+        std::optional<sstring> status;
+        /* The original ExportTableToPointInTime request, as JSON. ExportType is read back from it. */
+        std::optional<sstring> request;
+    };
+
+    // Returns every export there is, in no particular order.
+    future<std::vector<alternator_export_summary>> list_alternator_exports(context);
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
