@@ -16,6 +16,7 @@
 
 #include "audit/audit.hh"
 #include "audit/audit_rule.hh"
+#include "audit/audit_syslog_storage_helper.hh"
 #include "audit/preprocessed_audit_rules.hh"
 #include "db/config.hh"
 
@@ -47,11 +48,9 @@ bool role_matches(const sstring& pattern, const sstring& name) {
 
 } // anonymous namespace
 
-namespace audit {
-
-void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_set>>& sink_tables,
-        audit_sink sink, const std::pair<sstring, sstring>& table);
-
+BOOST_AUTO_TEST_CASE(test_escape_syslog_field) {
+    BOOST_CHECK_EQUAL(audit::escape_syslog_field("plain"), "plain");
+    BOOST_CHECK_EQUAL(audit::escape_syslog_field("quote\" slash\\"), "quote\\\" slash\\\\");
 }
 
 BOOST_AUTO_TEST_CASE(test_parse_audit_rules_json) {
@@ -369,17 +368,20 @@ SEASTAR_THREAD_TEST_CASE(test_preprocessed_empty_rules_skip_cache) {
 }
 
 BOOST_AUTO_TEST_CASE(test_alternator_batch_sink_tables_aggregate_per_sink) {
-    std::vector<std::pair<audit::audit_sink, audit::audit_table_set>> sink_tables;
-    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, {"ks", "table_only"});
-    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, {"ks", "both_sinks"});
-    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::syslog, {"ks", "both_sinks"});
+    const audit::audit_table_set tables{{"ks", "table_only"}, {"ks", "both_sinks"}};
+    std::vector<std::pair<audit::audit_sink, audit::audit_table_refs>> sink_tables;
+    auto table_only = tables.find({"ks", "table_only"});
+    auto both_sinks = tables.find({"ks", "both_sinks"});
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, *table_only, tables.size());
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, *both_sinks, tables.size());
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::syslog, *both_sinks, tables.size());
 
     BOOST_REQUIRE_EQUAL(sink_tables.size(), 2u);
     BOOST_CHECK(sink_tables[0].first == audit::audit_sink::table);
     BOOST_CHECK_EQUAL(sink_tables[0].second.size(), 2u);
-    BOOST_CHECK(sink_tables[0].second.contains({"ks", "table_only"}));
-    BOOST_CHECK(sink_tables[0].second.contains({"ks", "both_sinks"}));
+    BOOST_CHECK_EQUAL(&sink_tables[0].second[0].get(), &*table_only);
+    BOOST_CHECK_EQUAL(&sink_tables[0].second[1].get(), &*both_sinks);
     BOOST_CHECK(sink_tables[1].first == audit::audit_sink::syslog);
     BOOST_CHECK_EQUAL(sink_tables[1].second.size(), 1u);
-    BOOST_CHECK(sink_tables[1].second.contains({"ks", "both_sinks"}));
+    BOOST_CHECK_EQUAL(&sink_tables[1].second[0].get(), &*both_sinks);
 }
