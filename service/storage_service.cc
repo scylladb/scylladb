@@ -871,6 +871,7 @@ future<> storage_service::view_building_state_load() {
 
     _view_building_state_machine.building_state = std::move(building_state);
     _view_building_state_machine.views_state = std::move(views_state);
+    ++_view_building_state_machine.version;
 }
 
 future<> storage_service::view_building_transition() {

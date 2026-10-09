@@ -164,7 +164,7 @@ public:
 
 private:
     future<view_building_state> get_latest_view_building_state(raft::term_t term);
-    future<> check_for_aborted_tasks();
+    future<> check_for_aborted_tasks(view_building_state building_state);
 
     future<> run_view_building_state_observer();
     future<> update_built_views();
