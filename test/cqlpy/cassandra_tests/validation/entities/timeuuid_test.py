@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -33,14 +33,20 @@ def testTimeuuid(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k = 0 AND t = ?", rows[0][1]), 1)
 
-        assert_invalid(cql, table, "SELECT dateOf(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1])
+        # Cassandra's test uses the new function names min_timeuuid(),
+        # to_timestamp(), to_unix_timestamp() and max_timeuuid(), which
+        # Scylla doesn't support yet (SCYLLADB-5141). Cassandra still
+        # supports the old names minTimeuuid(), toTimestamp(), etc., so we
+        # use those, to keep testing the rest of this test on Scylla.
+        assert_invalid_message(cql, table, "k cannot be passed as argument 0 of function",
+                               "SELECT minTimeuuid(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1])
 
         for i in range(4):
             uuid = rows[i][1]
             datetime = datetime_from_uuid1(uuid)
-            # Before comparing this datetime to the result of dateOf(), we
+            # Before comparing this datetime to the result of toTimestamp(), we
             # must truncate the resolution of datetime to milliseconds.
-            # he problem is that the dateOf(timeuuid) CQL function converts a
+            # The problem is that the toTimestamp(timeuuid) CQL function converts a
             # timeuuid to CQL's "timestamp" type, which has millisecond
             # resolution, but datetime *may* have finer resolution. It will
             # usually be whole milliseconds, because this is what the now()
@@ -49,10 +55,11 @@ def testTimeuuid(cql, test_keyspace):
             # millisecond part.
             datetime = datetime.replace(microsecond=datetime.microsecond//1000*1000)
             timestamp = round(datetime.replace(tzinfo=timezone.utc).timestamp() * 1000)
-            assert_rows(execute(cql, table, "SELECT dateOf(t), unixTimestampOf(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
+            assert_rows(execute(cql, table, "SELECT toTimestamp(t), toUnixTimestamp(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
                        [datetime, timestamp])
 
         assert_empty(execute(cql, table, "SELECT t FROM %s WHERE k = 0 AND t > maxTimeuuid(1234567) AND t < minTimeuuid('2012-11-07 18:18:22-0800')"))
+        assert_empty(execute(cql, table, "SELECT t FROM %s WHERE k = 0 AND t > maxTimeuuid(1564830182000) AND t < minTimeuuid('2012-11-07 18:18:22-0800')"))
 
 # Test for 5386,
 # migrated from cql_tests.py:TestCQL.function_and_reverse_type_test()
