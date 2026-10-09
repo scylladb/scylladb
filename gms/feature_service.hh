@@ -198,6 +198,10 @@ public:
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    // Gates advertising the SCYLLA_FAILURE_REASON_MAP CQL protocol extension.
+    // A request forwarded to another node carries the client's negotiated
+    // extensions, and a node that does not know an extension fails to accept them.
+    gms::feature cql_failure_reason_map { *this, "CQL_FAILURE_REASON_MAP"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
