@@ -9,7 +9,6 @@
 #include <algorithm>
 #include "local_strategy.hh"
 #include "dht/token.hh"
-#include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 
 
@@ -105,9 +104,5 @@ future<dht::token_range_vector> local_effective_replication_map::get_ranges(host
     }
     return make_ready_future<dht::token_range_vector>();
 }
-
-using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params, const topology*>;
-static registry registrator("org.apache.cassandra.locator.LocalStrategy");
-static registry registrator_short_name("LocalStrategy");
 
 }

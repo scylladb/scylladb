@@ -47,7 +47,7 @@
 #include "azure_key_provider.hh"
 #include "azure_host.hh"
 #include "bytes.hh"
-#include "utils/class_registrator.hh"
+#include "utils/unqualified_name.hh"
 #include "cql3/query_processor.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"

@@ -31,5 +31,8 @@ struct cdc_partitioner final : public dht::i_partitioner {
     virtual dht::token get_token(const sstables::key_view& key) const override;
 };
 
+// Makes cdc_partitioner available to dht::make_partitioner() on the calling shard.
+void register_cdc_partitioner();
+
 
 }

@@ -65,7 +65,6 @@
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
-#include "utils/class_registrator.hh"
 #include "utils/error_injection.hh"
 #include "utils/runtime.hh"
 #include "utils/log.hh"
@@ -112,6 +111,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/generation_service.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
 #include "alternator/controller.hh"
@@ -1010,6 +1010,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //    feature_service.stop().get();
             //});
 
+            smp::invoke_on_all([] { cdc::register_cdc_partitioner(); }).get();
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();

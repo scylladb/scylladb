@@ -14,7 +14,6 @@
 #include <seastar/core/seastar.hh>
 #include "gms/versioned_value.hh"
 #include "gms/gossiper.hh"
-#include "utils/class_registrator.hh"
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
@@ -219,7 +218,4 @@ future<> gossiping_property_file_snitch::pause_io() {
     co_await stop_io();
 }
 
-using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;
-static registry_default registrator_default("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
-static registry_default registrator_default_short_name("GossipingPropertyFileSnitch");
 } // namespace locator

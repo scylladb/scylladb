@@ -9,7 +9,9 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/local_strategy.hh"
-#include "utils/class_registrator.hh"
+#include "locator/simple_strategy.hh"
+#include "locator/network_topology_strategy.hh"
+#include "locator/everywhere_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
@@ -69,22 +71,42 @@ abstract_replication_strategy::abstract_replication_strategy(
     }
 }
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* topo) {
-    try {
-        return create_object<abstract_replication_strategy, replication_strategy_params, const locator::topology*>(strategy_name, std::move(params), std::move(topo));
-    } catch (const no_such_class& e) {
-        throw exceptions::configuration_exception(e.what());
-    }
+template <typename Strategy>
+static abstract_replication_strategy::ptr_type construct_replication_strategy(replication_strategy_params params, const topology* topo) {
+    return seastar::make_shared<Strategy>(std::move(params), topo);
 }
 
-// class registry signature must match the actual replication strategies' signature
-using strategy_class_registry = class_registry<
-    locator::abstract_replication_strategy,
-    replication_strategy_params,
-    const topology*>;
+struct replication_strategy_class {
+    std::string_view qualified_name;
+    std::string_view short_name;
+    abstract_replication_strategy::ptr_type (*construct)(replication_strategy_params, const topology*);
+};
+
+static constexpr replication_strategy_class replication_strategy_classes[] = {
+    {"org.apache.cassandra.locator.SimpleStrategy", "SimpleStrategy", construct_replication_strategy<simple_strategy>},
+    {"org.apache.cassandra.locator.LocalStrategy", "LocalStrategy", construct_replication_strategy<local_strategy>},
+    {"org.apache.cassandra.locator.NetworkTopologyStrategy", "NetworkTopologyStrategy", construct_replication_strategy<network_topology_strategy>},
+    {"org.apache.cassandra.locator.EverywhereStrategy", "EverywhereStrategy", construct_replication_strategy<everywhere_replication_strategy>},
+};
+
+static const replication_strategy_class* find_replication_strategy_class(std::string_view strategy_class_name) {
+    auto it = std::ranges::find_if(replication_strategy_classes, [strategy_class_name] (const replication_strategy_class& strategy_class) {
+        return strategy_class_name == strategy_class.qualified_name || strategy_class_name == strategy_class.short_name;
+    });
+    return it != std::ranges::end(replication_strategy_classes) ? &*it : nullptr;
+}
+
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* topo) {
+    auto strategy_class = find_replication_strategy_class(strategy_name);
+    if (!strategy_class) {
+        throw exceptions::configuration_exception(fmt::format("unable to find class '{}'", strategy_name));
+    }
+    return strategy_class->construct(std::move(params), topo);
+}
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
-    return strategy_class_registry::to_qualified_class_name(strategy_class_name);
+    auto strategy_class = find_replication_strategy_class(strategy_class_name);
+    return sstring(strategy_class ? strategy_class->qualified_name : strategy_class_name);
 }
 
 static const std::unordered_set<locator::host_id>* find_token(const ring_mapping& ring_mapping, const token& token) {

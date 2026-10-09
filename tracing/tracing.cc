@@ -11,7 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
-#include "utils/class_registrator.hh"
+#include "tracing/trace_keyspace_helper.hh"
 #include "utils/UUID_gen.hh"
 
 namespace tracing {
@@ -130,13 +130,11 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
 }
 
 future<> tracing::start(cql3::query_processor& qp, service::migration_manager& mm) {
-    try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
+    if (_tracing_backend_helper_class_name == "trace_keyspace_helper") {
+        _tracing_backend_helper_ptr = std::make_unique<trace_keyspace_helper>(*this);
+    } else {
         tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
+        throw std::invalid_argument(seastar::format("Tracing backend helper {} is not supported", _tracing_backend_helper_class_name));
     }
 
     co_await _tracing_backend_helper_ptr->start(qp, mm);

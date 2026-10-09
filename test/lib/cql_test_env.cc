@@ -17,6 +17,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/test_utils.hh"
 #include "cdc/generation_service.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
@@ -508,6 +509,8 @@ public:
                 auto success = active.compare_exchange_strong(old_active, false);
                 SCYLLA_ASSERT(success);
             });
+
+            smp::invoke_on_all([] { cdc::register_cdc_partitioner(); }).get();
 
             // FIXME: make the function storage non static
             auto clear_funcs = defer([] noexcept {
