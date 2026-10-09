@@ -214,7 +214,7 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
         });
         return;
     }
-    auto token_range = range.transform(std::mem_fn(&dht::ring_position::token));
+    auto token_range = dht::to_token_range(range);
     auto sgs = storage_groups_for_token_range(token_range);
     reserve_fn(std::ranges::fold_left(sgs | std::views::transform(std::mem_fn(&storage_group::memtable_count)), uint64_t(0), std::plus{}));
     for (auto& sg : sgs) {
