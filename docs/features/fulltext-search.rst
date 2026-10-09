@@ -226,3 +226,7 @@ FTS queries enforce the following rules:
        are returned in a single page.
    * - Grouping not supported
      - FTS queries cannot include a ``GROUP BY`` clause.
+   * - ``DISTINCT`` not supported
+     - ``SELECT DISTINCT`` is not supported in FTS queries. It is currently
+       accepted, but does not remove duplicate partition keys: one row is
+       returned per matching row.
