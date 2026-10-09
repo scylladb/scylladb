@@ -323,13 +323,12 @@ struct test_flush_controller {
             throw std::runtime_error("injected flush failure");
         }
 
-        wb.seal(segment_sequence{next_sequence++}, std::nullopt, ondisk::block_alignment);
         auto base_position = segment_position{
             .segment = log_segment_id{next_segment_id++},
             .offset = 0,
         };
         flushed_buffers.push_back(flushed_buffer{
-            .data = copy_chunk(wb.chunk()),
+            .data = copy_chunk(wb.seal(segment_sequence{next_sequence++}, std::nullopt)),
             .base_position = base_position,
             .record_count = wb.record_count(),
         });
@@ -800,9 +799,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
     auto expected_records_size = size_t(ondisk::record_frame_header_size) + writer.record_size();
     expected_records_size = ((expected_records_size + ondisk::record_alignment - 1) / ondisk::record_alignment) * ondisk::record_alignment;
     wb.append(std::move(writer));
-    wb.seal(segment_sequence{17}, schema->id(), ondisk::block_alignment);
 
-    const auto chunk = wb.chunk();
+    const auto chunk = wb.seal(segment_sequence{17}, schema->id());
     BOOST_REQUIRE_EQUAL(chunk.size() % ondisk::block_alignment, 0u);
 
     seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(chunk.data()), chunk.size());
@@ -1062,9 +1060,25 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     BOOST_REQUIRE(wb.can_fit(writer));
 
     wb.append(writer);
-    wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
-    BOOST_REQUIRE_EQUAL(wb.chunk().size(), ondisk::block_alignment);
+    BOOST_REQUIRE_EQUAL(wb.seal(segment_sequence{29}, std::nullopt).size(), ondisk::block_alignment);
+}
+
+// Checks that the size finish() returns is the size of the chunk seal() returns, and that the
+// chunk carries the sequence number seal() got.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_finish_returns_the_final_chunk_size) {
+    auto schema = make_kv_schema();
+
+    raw_write_buffer wb(4 * ondisk::block_alignment, segment_kind::mixed);
+    wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(1))));
+    const auto size = wb.finish();
+    BOOST_REQUIRE_EQUAL(size % ondisk::block_alignment, 0u);
+    BOOST_REQUIRE_EQUAL(wb.finish(), size);
+
+    auto chunk = copy_chunk(wb.seal(segment_sequence{3}, std::nullopt));
+    BOOST_REQUIRE_EQUAL(chunk.size(), size);
+    BOOST_REQUIRE_EQUAL(read_chunk_header(chunk).value().segment.segment_seq.value, 3u);
+    BOOST_REQUIRE_THROW(wb.seal(segment_sequence{3}, std::nullopt), std::runtime_error);
 }
 
 // The record frame header holds the key size in 16 bits, so a write with a larger key fails, and the
@@ -1502,11 +1516,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
     wb1.append(log_record_writer(make_log_record(schema, "pk2", "v2", api::timestamp_type(13))));
     wb1.append(log_record_writer(make_log_record(schema, long_pk, "value-three-is-even-longer-than-before", api::timestamp_type(14))));
 
-    wb0.seal(segment_sequence{23}, std::nullopt, ondisk::block_alignment);
-    wb1.seal(segment_sequence{23}, std::nullopt, ondisk::block_alignment);
-
-    auto serialized0 = copy_chunk(wb0.chunk());
-    auto serialized1 = copy_chunk(wb1.chunk());
+    auto serialized0 = copy_chunk(wb0.seal(segment_sequence{23}, std::nullopt));
+    auto serialized1 = copy_chunk(wb1.seal(segment_sequence{23}, std::nullopt));
     auto segment = concat_chunks({&serialized0, &serialized1});
     const auto segment_size = segment.size();
     const auto* segment_data = segment.get();
@@ -1571,11 +1582,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         wb0.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(31))));
         wb0.append(log_record_writer(make_log_record(schema, "pk1", "value1", api::timestamp_type(32))));
         wb1.append(log_record_writer(make_log_record(schema, "pk2", "value2", api::timestamp_type(33))));
-        wb0.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
-        wb1.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
-        auto serialized0 = copy_chunk(wb0.chunk());
-        auto serialized1 = copy_chunk(wb1.chunk());
+        auto serialized0 = copy_chunk(wb0.seal(segment_sequence{29}, std::nullopt));
+        auto serialized1 = copy_chunk(wb1.seal(segment_sequence{29}, std::nullopt));
         // The first record_frame_header of the first chunk follows the chunk header; key_size is its first field.
         seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size(segment_kind::mixed), sizeof(uint16_t));
         ser::serialize(out, key_size);
@@ -1612,9 +1621,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_record_with_an_unk
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(31))));
     wb.append(log_record_writer(make_log_record(schema, "pk1", "value1", api::timestamp_type(32))));
-    wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{29}, std::nullopt));
     // The first record_frame_header follows the chunk header; flags is its second field.
     seastar::simple_memory_output_stream out(serialized.get_write() + ondisk::chunk_header_size(segment_kind::mixed) + sizeof(uint16_t), sizeof(uint16_t));
     ser::serialize(out, uint16_t(~ondisk::known_record_flags));
@@ -1644,16 +1652,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     wb.append(log_record_writer(make_log_record(schema, "pk-full-0", "x", api::timestamp_type(31))));
     wb.append(log_record_writer(make_log_record(schema, "pk-full-1-with-longer-key", "medium-value", api::timestamp_type(32))));
     wb.append(log_record_writer(make_log_record(schema, "pk-full-2", "value-with-a-significantly-longer-payload-to-exercise-varying-record-sizes", api::timestamp_type(33))));
-    wb.seal(segment_sequence{41}, schema->id(), ondisk::block_alignment);
+    const auto sealed = wb.seal(segment_sequence{41}, schema->id());
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(sealed);
     auto maybe_header = read_chunk_info_from_bytes(serialized);
     auto in = seastar::util::as_input_stream(std::move(serialized));
 
     std::vector<segment_info> seen_segment_infos;
     std::vector<log_record> seen_records;
 
-    segment_scanner scanner(in, log_segment_id{7}, wb.chunk().size());
+    segment_scanner scanner(in, log_segment_id{7}, sealed.size());
     while (auto* chunk = scanner.next_chunk().get()) {
         seen_segment_infos.push_back(chunk->info());
         for (const auto& record : chunk->records()) {
@@ -1711,11 +1719,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_chunk_lower_se
     wb1.append(log_record_writer(make_log_record(schema, "pk2", "value2", api::timestamp_type(53))));
     wb1.append(log_record_writer(make_log_record(schema, "pk3", "value3", api::timestamp_type(54))));
 
-    wb0.seal(segment_sequence{61}, std::nullopt, ondisk::block_alignment);
-    wb1.seal(segment_sequence{60}, std::nullopt, ondisk::block_alignment);
-
-    auto serialized0 = copy_chunk(wb0.chunk());
-    auto serialized1 = copy_chunk(wb1.chunk());
+    auto serialized0 = copy_chunk(wb0.seal(segment_sequence{61}, std::nullopt));
+    auto serialized1 = copy_chunk(wb1.seal(segment_sequence{60}, std::nullopt));
     auto segment = concat_chunks({&serialized0, &serialized1});
     const auto segment_size = segment.size();
     auto in = seastar::util::as_input_stream(std::move(segment));
@@ -1762,11 +1767,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     wb1.append(log_record_writer(make_log_record(schema, "pk2", "value2", api::timestamp_type(93))));
     wb1.append(log_record_writer(make_log_record(schema, "pk3", "value3", api::timestamp_type(94))));
 
-    wb0.seal(segment_sequence{101}, std::nullopt, ondisk::block_alignment);
-    wb1.seal(segment_sequence{101}, std::nullopt, ondisk::block_alignment);
-
-    auto serialized0 = copy_chunk(wb0.chunk());
-    auto serialized1 = copy_chunk(wb1.chunk());
+    auto serialized0 = copy_chunk(wb0.seal(segment_sequence{101}, std::nullopt));
+    auto serialized1 = copy_chunk(wb1.seal(segment_sequence{101}, std::nullopt));
     // Flip a byte of crc, which is the last field of the header of a mixed segment.
     flip_byte(serialized1, ondisk::chunk_header_size(segment_kind::mixed) - sizeof(uint32_t));
 
@@ -1805,9 +1807,8 @@ void require_segment_read_fails(std::function<void(ondisk::chunk_header_common&)
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(71))));
-    wb.seal(segment_sequence{81}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{81}, std::nullopt));
     rewrite_chunk_header(serialized, std::move(change));
 
     const auto contains_expected = exception_predicate::message_contains(expected);
@@ -1833,9 +1834,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_corrupt_flag) {
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(71))));
-    wb.seal(segment_sequence{81}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{81}, std::nullopt));
     // flags is the 16-bit field at offset 6 of the chunk header.
     flip_byte(serialized, 6);
 
@@ -1856,11 +1856,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_stale_chunk_of_ano
     wb0.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(71))));
     wb1.append(log_record_writer(make_log_record(schema, "pk1", "value1", api::timestamp_type(72))));
 
-    wb0.seal(segment_sequence{81}, std::nullopt, ondisk::block_alignment);
-    wb1.seal(segment_sequence{80}, std::nullopt, ondisk::block_alignment);
-
-    auto serialized0 = copy_chunk(wb0.chunk());
-    auto serialized1 = copy_chunk(wb1.chunk());
+    auto serialized0 = copy_chunk(wb0.seal(segment_sequence{81}, std::nullopt));
+    auto serialized1 = copy_chunk(wb1.seal(segment_sequence{80}, std::nullopt));
     rewrite_chunk_header(serialized1, [] (ondisk::chunk_header_common& ch) {
         ch.version = ondisk::current_version + 1;
         ch.flags = ~ondisk::known_chunk_flags;
@@ -1896,9 +1893,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_full_chunk_he
 
     raw_write_buffer wb(64 * 1024, segment_kind::full);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(111))));
-    wb.seal(segment_sequence{121}, schema->id(), ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{121}, schema->id()));
     BOOST_REQUIRE(read_chunk_info_from_bytes(serialized));
     // Flip the last byte of the header of a full segment, which is a reserved byte that the CRC
     // also covers.
@@ -1947,8 +1943,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_torn_chunk) {
                 .value = encode_record_value(m),
             }));
         }
-        wb.seal(seq, std::nullopt, ondisk::block_alignment);
-        return copy_chunk(wb.chunk());
+        return copy_chunk(wb.seal(seq, std::nullopt));
     };
     auto old_incarnation = make_chunk("old", api::timestamp_type(1), segment_sequence{10});
     auto new_incarnation = make_chunk("new", api::timestamp_type(11), segment_sequence{11});
@@ -2004,8 +1999,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_skips_chunk_with_failed_body)
     auto make_chunk = [&] (api::timestamp_type ts, segment_sequence seq) {
         raw_write_buffer wb(64 * 1024, segment_kind::mixed);
         wb.append(log_record_writer(make_log_record(schema, sstring(fmt::format("pk{}", ts)), "value", ts)));
-        wb.seal(seq, std::nullopt, ondisk::block_alignment);
-        return copy_chunk(wb.chunk());
+        return copy_chunk(wb.seal(seq, std::nullopt));
     };
     auto make_failed_chunk = [&] (api::timestamp_type ts, segment_sequence seq) {
         auto chunk = make_chunk(ts, seq);
@@ -2067,8 +2061,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_gives_info_of_chunk_with_cut_
     auto make_chunk = [&] (api::timestamp_type ts) {
         raw_write_buffer wb(64 * 1024, segment_kind::mixed);
         wb.append(log_record_writer(make_log_record(schema, "pk", "value", ts)));
-        wb.seal(segment_sequence{151}, std::nullopt, ondisk::block_alignment);
-        return copy_chunk(wb.chunk());
+        return copy_chunk(wb.seal(segment_sequence{151}, std::nullopt));
     };
     const auto chunk0 = make_chunk(api::timestamp_type(1));
     const auto chunk1 = make_chunk(api::timestamp_type(2));
@@ -2116,9 +2109,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(201))));
     wb.append(log_record_writer(make_log_record(schema, "pk1-longer-key", "value1", api::timestamp_type(202))));
     wb.append(log_record_writer(make_log_record(schema, "pk2", "value2-with-a-longer-payload", api::timestamp_type(203))));
-    wb.seal(segment_sequence{211}, schema->id(), ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{211}, schema->id()));
     auto rewritten = rewrite_streamed_segment(log_segment_id{33}, segment_sequence{221}, std::span(&serialized, 1));
     auto ch = read_chunk_header(rewritten.data);
     BOOST_REQUIRE(ch);
@@ -2163,9 +2155,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_with_reserved_bytes_set) {
 
     raw_write_buffer wb(64 * 1024, segment_kind::full);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(141))));
-    wb.seal(segment_sequence{151}, schema->id(), ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{151}, schema->id()));
     // The reserved bytes of chunk_header_full_part are the last bytes of the header.
     constexpr size_t reserved_size = std::tuple_size_v<decltype(ondisk::chunk_header_full_part::reserved)>;
     const auto full_part_reserved = std::span(serialized.get_write() + ondisk::chunk_header_size(segment_kind::full) - reserved_size, reserved_size);
@@ -2192,9 +2183,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_handles_fragment
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(231))));
-    wb.seal(segment_sequence{241}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{241}, std::nullopt));
     auto split = ondisk::chunk_header_common_size - 1;
     std::vector<temporary_buffer<char>> pieces;
     pieces.push_back(slice_buffer(serialized, 0, split));
@@ -2214,9 +2204,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rejects_invalid_
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(291))));
-    wb.seal(segment_sequence{301}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{301}, std::nullopt));
     flip_byte(serialized, 0);
 
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{39}, segment_sequence{311}, std::span(&serialized, 1)), std::runtime_error);
@@ -2228,9 +2217,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rejects_truncate
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(321))));
-    wb.seal(segment_sequence{331}, std::nullopt, ondisk::block_alignment);
 
-    auto serialized = copy_chunk(wb.chunk());
+    auto serialized = copy_chunk(wb.seal(segment_sequence{331}, std::nullopt));
     auto truncated = slice_buffer(serialized, 0, ondisk::chunk_header_common_size - 1);
 
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{41}, segment_sequence{341}, std::span(&truncated, 1)), std::runtime_error);

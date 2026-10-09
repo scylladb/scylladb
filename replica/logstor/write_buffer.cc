@@ -42,11 +42,12 @@ raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
 
 void raw_write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
-    _header_stream = _stream.write_substream(chunk_header_size());
+    _stream.skip(chunk_header_size());
     _record_bytes = 0;
     _record_count = 0;
     _min_token = std::nullopt;
     _max_token = std::nullopt;
+    _finished_body = std::nullopt;
     _sealed = false;
 }
 
@@ -71,6 +72,10 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     }
     if (const size_t key_size = header_size - ondisk::record_header_fixed_size; key_size > ondisk::max_key_size) {
         on_internal_error(logstor_logger, fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size));
+    }
+
+    if (_finished_body) {
+        on_internal_error(logstor_logger, "Cannot append a record to a finished write buffer");
     }
 
     const auto record_size = header_size + value_size;
@@ -100,10 +105,6 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     };
 }
 
-size_t raw_write_buffer::chunk_size(size_t alignment) const noexcept {
-    return align_up(serialized_size(), alignment);
-}
-
 void raw_write_buffer::pad_to_alignment(size_t alignment) {
     auto current_pos = serialized_size();
     auto next_pos = align_up(current_pos, alignment);
@@ -113,30 +114,36 @@ void raw_write_buffer::pad_to_alignment(size_t alignment) {
     }
 }
 
-void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment) {
+size_t raw_write_buffer::finish() {
+    if (_finished_body) {
+        return serialized_size();
+    }
+    const size_t records_size = serialized_size() - chunk_header_size();
+    const auto body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_header_size(), records_size));
+
+    pad_to_alignment(ondisk::block_alignment);
+
+    _finished_body = finished_body{
+        .records_size = static_cast<uint32_t>(records_size),
+        .body_crc = body_crc,
+    };
+
+    return serialized_size();
+}
+
+bytes_view raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id> table) {
     if (_sealed) {
         throw std::runtime_error("Cannot seal write buffer more than once");
     }
-    const auto records_size = static_cast<uint32_t>(serialized_size() - chunk_header_size());
-    pad_to_alignment(alignment);
-    write_header(segment_seq, table, records_size);
-    _sealed = true;
-}
+    finish();
 
-bytes_view raw_write_buffer::chunk() const {
-    if (!_sealed) {
-        on_internal_error(logstor_logger, "Write buffer has no chunk before it is sealed");
-    }
-    return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
-}
-
-void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table, uint32_t records_size) {
     ondisk::chunk_header ch {
         .segment = { .segment_seq = segment_seq },
         .flags = 0,
-        .records_size = records_size,
-        .body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_header_size(), records_size)),
+        .records_size = _finished_body->records_size,
+        .body_crc = _finished_body->body_crc,
     };
+
     switch (_segment_kind) {
     case segment_kind::mixed:
         break;
@@ -148,7 +155,12 @@ void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<
         };
         break;
     }
-    ondisk::write_chunk_header(_header_stream, ch);
+
+    // The header goes into the room that reset() left ahead of the records.
+    ostream out(_buffer.get(), chunk_header_size());
+    ondisk::write_chunk_header(out, ch);
+    _sealed = true;
+    return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
 }
 
 size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
