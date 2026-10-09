@@ -26,7 +26,7 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
     // lists managed by the manifest may become outdated. For example, one
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
-    leveled_manifest manifest = leveled_manifest::create(table_s, candidates, _max_sstable_size_in_mb, _stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(table_s, candidates, _max_sstable_size_in_mb, _ics_options);
     if (!state->last_compacted_keys) {
         generate_last_compacted_keys(*state, manifest);
     }
@@ -203,8 +203,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_ssta
     }
 
     if (level_info[0].size() > offstrategy_threshold) {
-        size_tiered_compaction_strategy stcs(_stcs_options);
-        return stcs.get_reshaping_job(std::move(level_info[0]), schema, cfg);
+        incremental_compaction_strategy ics(_ics_options, max_sstable_size_in_bytes);
+        return ics.get_reshaping_job(std::move(level_info[0]), schema, cfg);
     }
 
     for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
@@ -230,7 +230,7 @@ leveled_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& 
 
     auto levels = leveled_manifest::get_levels(candidates);
 
-    ret = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(levels[0]));
+    ret = incremental_compaction_strategy(_ics_options, _max_sstable_size_in_mb * 1024 * 1024).get_cleanup_compaction_jobs(table_s, std::move(levels[0]));
     for (size_t level = 1; level < levels.size(); level++) {
         if (levels[level].empty()) {
             continue;

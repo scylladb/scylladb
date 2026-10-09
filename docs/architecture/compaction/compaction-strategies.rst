@@ -125,10 +125,6 @@ of operation, the benefits and the disadvantages, and
 :ref:`Incremental Compaction <incremental-compaction-strategy-ics>` for the
 parameters to set.
 
-Note that size-tiered compaction is still used internally for level 0 by
-`Leveled Compaction Strategy (LCS)`_. That use is unrelated to the deprecated
-``SizeTieredCompactionStrategy`` class name.
-
 .. _which-strategy-is-best:
 
 Which strategy is best

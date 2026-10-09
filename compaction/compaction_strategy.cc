@@ -406,29 +406,25 @@ public:
 };
 
 class leveled_compaction_backlog_tracker final : public compaction_backlog_tracker::impl {
-    // Because we can do SCTS in L0, we will account for that in the backlog.
+    // Because we size-tier L0 with ICS, we will account for that in the backlog.
     // Whatever backlog we accumulate here will be added to the main backlog.
-    size_tiered_backlog_tracker _l0_scts;
+    incremental_compaction_strategy_options _ics_options;
+    incremental_subset_backlog _l0;
     std::vector<uint64_t> _size_per_level;
     uint64_t _max_sstable_size;
 public:
-    leveled_compaction_backlog_tracker(int32_t max_sstable_size_in_mb, size_tiered_compaction_strategy_options stcs_options)
-        : _l0_scts(stcs_options)
+    leveled_compaction_backlog_tracker(int32_t max_sstable_size_in_mb, incremental_compaction_strategy_options ics_options)
+        : _ics_options(std::move(ics_options))
         , _size_per_level(leveled_manifest::MAX_LEVELS, uint64_t(0))
         , _max_sstable_size(max_sstable_size_in_mb * 1024 * 1024)
     {}
 
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         std::vector<uint64_t> effective_size_per_level = _size_per_level;
-        compaction_backlog_tracker::ongoing_writes l0_partial_writes;
         compaction_backlog_tracker::ongoing_compactions l0_compacted;
 
         for (auto& op : ow) {
-            auto level = op.second->level();
-            if (level == 0) {
-                l0_partial_writes.insert(op);
-            }
-            effective_size_per_level[level] += op.second->written();
+            effective_size_per_level[op.second->level()] += op.second->written();
         }
 
         for (auto& cp : oc) {
@@ -439,7 +435,7 @@ public:
             effective_size_per_level[level] -= cp.second->compacted();
         }
 
-        double b = _l0_scts.backlog(src, l0_partial_writes, l0_compacted);
+        double b = _l0.backlog(src.schema()->min_compaction_threshold(), _ics_options, l0_compacted);
 
         size_t max_populated_level = [&effective_size_per_level] () -> size_t {
             auto it = std::find_if(effective_size_per_level.rbegin(), effective_size_per_level.rend(), [] (uint64_t s) {
@@ -504,27 +500,24 @@ public:
     // Provides strong exception safety guarantees
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {
         auto tmp_size_per_level = _size_per_level;
-        std::vector<sstables::shared_sstable> l0_old_ssts, l0_new_ssts;
+        auto tmp_l0 = _l0;
         for (auto& sst : new_ssts) {
             auto level = sst->get_sstable_level();
             tmp_size_per_level[level] += sst->data_size();
             if (level == 0) {
-                l0_new_ssts.push_back(std::move(sst));
+                tmp_l0.add(sst);
             }
         }
         for (auto& sst : old_ssts) {
             auto level = sst->get_sstable_level();
             tmp_size_per_level[level] -= sst->data_size();
             if (level == 0) {
-                l0_old_ssts.push_back(std::move(sst));
+                tmp_l0.remove(sst);
             }
-        }
-        if (l0_old_ssts.size() || l0_new_ssts.size()) {
-            // stcs replace_sstables guarantees strong exception safety
-            _l0_scts.replace_sstables(std::move(l0_old_ssts), std::move(l0_new_ssts));
         }
         std::invoke([&] () noexcept {
             _size_per_level = std::move(tmp_size_per_level);
+            _l0 = std::move(tmp_l0);
         });
     }
 };
@@ -569,7 +562,7 @@ public:
 leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring, sstring>& options)
         : compaction_strategy_impl(options)
         , _max_sstable_size_in_mb(calculate_max_sstable_size_in_mb(compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION)))
-        , _stcs_options(options)
+        , _ics_options(options)
 {
 }
 
@@ -577,7 +570,12 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
 // unchecked_options is an analogical map from which already checked options are deleted.
 // This helps making sure that only allowed options are being set.
 void leveled_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
-    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+    // Level 0 is size-tiered with ICS, so LCS takes its bucketing options. sstable_size_in_mb is
+    // LCS's own, and is also the size of the fragments written by those compactions.
+    incremental_compaction_strategy_options::validate(options, unchecked_options);
+    // Accept, and ignore, the one STCS option ICS doesn't have, which LCS used to take, so
+    // that a schema dumped from an older version can still be replayed as-is.
+    size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
 
     auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
     auto min_sstables_size = cql3::statements::property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
@@ -588,7 +586,7 @@ void leveled_compaction_strategy::validate_options(const std::map<sstring, sstri
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() const {
-    return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options);
+    return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _ics_options);
 }
 
 int32_t

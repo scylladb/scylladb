@@ -90,6 +90,10 @@ LCS options
      'class' : 'LeveledCompactionStrategy', 
      'sstable_size_in_mb' : int}
 
+When Level 0 falls behind, it is compacted using incremental compaction, so LCS also takes the
+``bucket_low``, ``bucket_high`` and ``min_sstable_size`` options of :ref:`ICS <ics-options>`,
+which apply to Level 0.
+
 ``sstable_size_in_mb`` (default: 160)
    This is the target size in megabytes, that will be used as the goal for an SSTable size following a compression. 
    Although SSTable sizes should be less or equal to sstable_size_in_mb, it is possible that compaction could produce a larger SSTable during compaction. This occurs when data for a given partition key is exceptionally large.

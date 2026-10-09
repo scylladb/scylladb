@@ -455,8 +455,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
                 BOOST_REQUIRE(sst->data_size() >= min_sstable_size);
                 candidates.push_back(sst);
             }
-            compaction::size_tiered_compaction_strategy_options stcs_options;
-            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+            compaction::incremental_compaction_strategy_options ics_options;
+            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -856,8 +856,8 @@ void leveled_01_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst1, sst2) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
@@ -919,8 +919,8 @@ void leveled_02_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst2, sst3) == false);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
@@ -983,8 +983,8 @@ void leveled_03_fn(test_env& env) {
 
     auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
@@ -1050,8 +1050,8 @@ void leveled_04_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst2, sst4) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 1);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     BOOST_REQUIRE(manifest.get_level_size(2) == 1);
@@ -1130,8 +1130,8 @@ void leveled_06_fn(test_env& env) {
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 0);
     BOOST_REQUIRE(manifest.get_level_size(1) == 1);
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
@@ -1159,6 +1159,41 @@ SEASTAR_FIXTURE_TEST_CASE(leveled_06_gcs, gcs_fixture, *tests::check_run_test_de
     return test_env::do_with_async([](test_env& env) { leveled_06_fn(env); }, test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// LCS size-tiers L0 with ICS while L0 isn't worth promoting yet, and those compactions write
+// runs of fragments into L0, so L0 is bucketed by runs: the fragments of a single run aren't
+// similar-sized sstables to compact together.
+SEASTAR_TEST_CASE(leveled_size_tiers_l0_by_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto schema = table_for_tests::make_default_schema();
+        // L0 holds less than an sstable's worth of data, so it's not worth promoting.
+        const int max_sstable_size_in_mb = 1000;
+
+        auto l0_candidates = [&] (bool single_run) {
+            auto cf = env.make_table_for_tests(schema);
+            auto stop_cf = deferred_stop(cf);
+            auto keys = tests::generate_partition_keys(schema->min_compaction_threshold(), schema);
+            auto run_id = sstables::run_id::create_random_id();
+            for (auto& key : keys) {
+                auto sst = env.make_sstable(schema);
+                sstables::test(sst).set_values_for_leveled_strategy(1024*1024, 0, 0, key.key(), key.key());
+                sstables::test(sst).set_run_identifier(single_run ? run_id : sstables::run_id::create_random_id());
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            auto candidates = get_candidates_for_leveled_strategy(*cf);
+            compaction::incremental_compaction_strategy_options ics_options;
+            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
+            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+            return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+        };
+
+        BOOST_REQUIRE(l0_candidates(true).sstables.empty());
+        auto desc = l0_candidates(false);
+        BOOST_REQUIRE_EQUAL(desc.sstables.size(), size_t(schema->min_compaction_threshold()));
+        BOOST_REQUIRE_EQUAL(desc.level, 0);
+    });
+}
+
 void leveled_07_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);
@@ -1169,8 +1204,8 @@ void leveled_07_fn(test_env& env) {
         add_sstable_for_leveled_test(env, cf, 1024*1024, /*level*/0, key.key(), key.key(), i /* max timestamp */);
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1211,8 +1246,8 @@ SEASTAR_TEST_CASE(leveled_fan_out_cache) {
             add_sstable_for_leveled_test(env, cf, level2_size, /*level*/2, keys[0].key(), keys[1].key());
 
             auto candidates = get_candidates_for_leveled_strategy(*cf);
-            compaction::size_tiered_compaction_strategy_options stcs_options;
-            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            compaction::incremental_compaction_strategy_options ics_options;
+            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1253,8 +1288,8 @@ void leveled_invariant_fix_fn(test_env& env) {
     expected.insert(add_sstable_for_leveled_test(env, cf, sstable_max_size, 1, keys[1].key(), max_key.key()));
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
 
@@ -1307,10 +1342,10 @@ void leveled_stcs_on_L0_fn(test_env& env) {
 
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
+    compaction::incremental_compaction_strategy_options ics_options;
 
     {
-        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
+        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, ics_options);
         BOOST_REQUIRE(!manifest.worth_promoting_L0_candidates(manifest.get_level(0)));
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
@@ -1322,7 +1357,7 @@ void leveled_stcs_on_L0_fn(test_env& env) {
     }
     {
         candidates.resize(2);
-        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
+        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, ics_options);
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
         BOOST_REQUIRE(candidate.sstables.empty());
@@ -1362,11 +1397,11 @@ SEASTAR_TEST_CASE(leveled_estimated_tasks_L0_promotion) {
 
         std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
         std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
-        compaction::size_tiered_compaction_strategy_options stcs_options;
+        compaction::incremental_compaction_strategy_options ics_options;
 
         auto check = [&] (bool expect_compaction) {
             auto candidates = get_candidates_for_leveled_strategy(*cf);
-            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
             auto estimated_tasks = compaction::leveled_manifest::get_estimated_tasks(compaction::leveled_manifest::get_levels(candidates), max_sstable_size_in_bytes);
             if (expect_compaction) {
@@ -1502,8 +1537,8 @@ void overlapping_starved_sstables_fn(test_env& env) {
     compaction_counter[3] = compaction::leveled_manifest::NO_COMPACTION_LIMIT+1;
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
