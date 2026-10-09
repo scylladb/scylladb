@@ -1198,6 +1198,56 @@ def test_the_target_follows_pressure_as_a_pi_controller(tmp_path, monkeypatch):
         assert not sched._pressure_guard()
     assert sched.cpu_target == pytest.approx(full), "back to the full target, not past it"
 
+def _process_samples(gain=2.0, delay=20.0, n=300, step=2.0):
+    """(time, target, load, pressure): the target wanders, the load follows it `delay`
+    seconds later, the pressure is `gain` points per core of load."""
+    import math as _m
+    out = []
+    for i in range(n):
+        t = i * step
+        target = 24 + 4 * _m.sin(t / 37.0) + 2 * _m.sin(t / 11.0)
+        lagged = 24 + 4 * _m.sin((t - delay) / 37.0) + 2 * _m.sin((t - delay) / 11.0)
+        out.append((t, target, lagged, 25 + gain * (lagged - 24)))
+    return out
+
+
+def test_the_pressure_process_is_identified_from_target_load_and_pressure():
+    import test.pylib.dynamic_scheduler as bs
+    gain, delay = bs.identify_pressure_process(_process_samples(gain=2.0, delay=20.0))
+    assert gain == pytest.approx(2.0, rel=0.05)
+    assert delay == pytest.approx(20.0, abs=2.5)
+    flat = [(t, 24.0, 24.0, 25.0) for t, *_ in _process_samples()]
+    assert bs.identify_pressure_process(flat) is None, "a load that never moved says nothing"
+
+
+def test_simc_gains_follow_the_process_and_stay_near_the_defaults():
+    import test.pylib.dynamic_scheduler as bs
+    kc2, ki2 = bs.simc_gains(2.0, 25.0, 32)
+    kc4, ki4 = bs.simc_gains(4.0, 25.0, 32)
+    assert kc4 == pytest.approx(kc2 / 2), "a steeper process gets half the gain"
+    assert ki2 == pytest.approx(kc2 / 40.0), "integral time 1.6 x the delay"
+    kp0, ki0 = bs.TARGET_KP * 32, bs.TARGET_KI * 32
+    for g, d in ((0.3, 3.0), (10.0, 60.0)):
+        kc, ki = bs.simc_gains(g, d, 32)
+        assert kp0 / 4 <= kc <= 4 * kp0 and ki0 / 4 <= ki <= 4 * ki0
+
+
+def test_the_controller_tunes_itself_once_it_has_seen_enough(tmp_path, monkeypatch):
+    import test.pylib.dynamic_scheduler as bs
+    col = [f"a.py::t{i}.dev.1" for i in range(4)]
+    clock = {"t": 0.0}
+    model = make_model(tmp_path, 4, {profile_key(n): (0.5, 1e8, 1.0) for n in col})
+    sched = new_sched(FakeConfig(tmp_path, 1), model=model, ncpus=32, mem_total=20 * GB,
+                      cgroup_tests=NO_CGROUP, now=lambda: clock["t"])
+    defaults = (sched.target_kp, sched.target_ki)
+    for t, target, load, psi in _process_samples(gain=4.0, delay=24.0, n=320):
+        clock["t"] = t
+        sched.cpu_target, sched.measured_load = target, load
+        sched._tune(t, psi)
+    assert sched.stats["controller_tunings"] >= 1
+    assert sched.target_kp < defaults[0], "a steep process: a lower gain than the default"
+
+
 def test_a_test_is_predicted_at_its_average_parallelism(tmp_path):
     """One number per test: CPU-seconds over wall time, and nothing once it is well past its wall."""
     model = CostModel(tmp_path / "p.json", ncpus=8)
