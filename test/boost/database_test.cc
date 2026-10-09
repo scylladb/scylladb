@@ -2580,6 +2580,7 @@ SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
     cql_test_config cfg;
     cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
     cfg.initial_tablets = 2;
+    cfg.need_remote_proxy = true; // DROP TABLE on tablets cleans view building state via proxy remote
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table ks.cf (k int primary key, v int);").get();
         auto table = e.local_db().find_column_family("ks", "cf").shared_from_this();

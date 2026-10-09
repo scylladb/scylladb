@@ -56,6 +56,20 @@ view_building_task_mutation_builder& view_building_task_mutation_builder::del_ta
     return *this;
 }
 
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_tasks(const base_table_tasks& tasks) {
+    for (auto& [_, replica_tasks]: tasks) {
+        for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+            for (auto& [id, _]: view_tasks) {
+                del_task(id);
+            }
+        }
+        for (auto& [id, _]: replica_tasks.staging_tasks) {
+            del_task(id);
+        }
+    }
+    return *this;
+}
+
 view_building_task_mutation_builder& view_building_task_mutation_builder::del_tasks_before(utils::UUID id) {
     auto ck = get_ck(id);
     range_tombstone rt(

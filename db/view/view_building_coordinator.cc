@@ -267,6 +267,21 @@ future<std::optional<service::group0_guard>> view_building_coordinator::update_s
     vbc_logger.debug("Currently processed base table: {}", _vb_sm.building_state.currently_processed_base_table);
 
     utils::chunked_vector<mutation> muts;
+    // Tasks of a dropped base table (e.g. registered by a worker racing with DROP TABLE)
+    // would fail forever and block processing of other base tables. Delete them.
+    view_building_task_mutation_builder orphan_builder(guard.write_timestamp());
+    for (auto& [base_id, base_tasks]: _vb_sm.building_state.tasks_state) {
+        if (!_db.column_family_exists(base_id)) {
+            vbc_logger.warn("Base table {} no longer exists, deleting its view building tasks: {}", base_id, base_tasks);
+            orphan_builder.del_tasks(base_tasks);
+        }
+    }
+    if (!orphan_builder.empty()) {
+        muts.push_back(orphan_builder.build());
+        co_await commit_mutations(std::move(guard), std::move(muts), "delete view building tasks of dropped base tables");
+        co_return std::nullopt;
+    }
+
     if (_vb_sm.building_state.currently_processed_base_table) {
         auto base_id = *_vb_sm.building_state.currently_processed_base_table;
         vbc_logger.debug("Tasks for currently processed base table: {}", _vb_sm.building_state.tasks_state.contains(base_id) ? _vb_sm.building_state.tasks_state.at(base_id) : base_table_tasks{});
