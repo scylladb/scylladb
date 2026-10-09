@@ -59,11 +59,6 @@ public:
         return _impl.register_handler(t, std::forward<Func>(func));
     }
 
-    template<typename Func>
-    auto register_handler(messaging_verb t, scheduling_group sg, Func &&func) {
-        return _impl.register_handler(t, sg, std::forward<Func>(func));
-    }
-
     future<> unregister_handler(messaging_verb t) { return _impl.unregister_handler(t); }
 
     void set_logger(::seastar::logger *logger) { _impl.set_logger(logger); }
@@ -118,7 +113,7 @@ public:
 // Register a handler (a callback lambda) for verb
 template<typename Func>
 void register_handler(messaging_service *ms, messaging_verb verb, Func &&func) {
-    ms->rpc()->register_handler(verb, ms->scheduling_group_for_verb(verb), std::move(func));
+    ms->rpc()->register_handler(verb, std::move(func));
 }
 
 // Send a message for verb
