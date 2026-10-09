@@ -736,6 +736,12 @@ class ScyllaClusterManager:
         It does not .connect() yet.
         """
         assert hosts, "python driver connection needs at least one host to connect to"
+        ssl_context = None
+        if use_ssl:
+            # Test clusters use self-signed certificates.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
         profile = ExecutionProfile(
             load_balancing_policy=load_balancing_policy,
             consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -768,7 +774,7 @@ class ScyllaClusterManager:
             # NOTE: No auth provider as auth keysppace has RF=1 and topology will take
             # down nodes, causing errors. If auth is needed in the future for topology
             # tests, they should bump up auth RF and run repair.
-            ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) if use_ssl else None,
+            ssl_context=ssl_context,
             # The default timeouts should have been more than enough, but in some
             # extreme cases with a very slow debug build running on a slow or very busy
             # machine, they may not be. Observed tests reach 160 seconds. So it's

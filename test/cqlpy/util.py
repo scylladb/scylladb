@@ -215,7 +215,10 @@ def cql_session(host, port, is_ssl, username, password, request_timeout=120, pro
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=request_timeout)
     if is_ssl:
+        # Scylla is started with a self-signed certificate.
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
     else:
         ssl_context = None
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
