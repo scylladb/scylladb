@@ -42,12 +42,30 @@ if '--vnodes' in sys.argv:
     run_without_tablets.orig_cmd = cmd
     cmd = run_without_tablets
 
+# If the "--vs" option is given, also run a vector store alongside Scylla,
+# and configure Scylla to use it (see run.run_vector_store() for where it
+# looks for the vector store executable). Tests which need a working vector
+# store - tests that really perform vector searches, as opposed to just
+# checking syntax - use the needs_vector_store fixture, and are skipped
+# when Scylla is run without "--vs".
+vector_store = '--vs' in sys.argv
+if vector_store:
+    sys.argv.remove('--vs')
+    def run_with_vector_store(pid, dir):
+        (c, e) = run_with_vector_store.orig_cmd(pid, dir)
+        c += run.vector_store_scylla_options(run.pid_to_ip(pid))
+        return (c, e)
+    run_with_vector_store.orig_cmd = cmd
+    cmd = run_with_vector_store
+
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)
 
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
+if vector_store:
+    run.run_vector_store(ip)
 
 run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),

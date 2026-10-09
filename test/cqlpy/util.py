@@ -73,6 +73,56 @@ def is_scylla(cql):
     names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
     return any('scylla' in name for name in names)
 
+# Wait until the vector index with the given name, in the given keyspace,
+# is ready for vector searches. In Scylla, a vector index is built
+# asynchronously by an external vector store (see the "--vs" option of
+# test/cqlpy/run), so a test that creates a vector index and immediately
+# searches it may get an error that the index is missing. We wait until all
+# the vector store nodes report the index as SERVING, and, if expected_size
+# is given, until they have indexed this number of vectors - writes reach
+# the vector store asynchronously too. In Cassandra, the vector index (SAI)
+# is updated synchronously, so there is nothing to wait for.
+VECTOR_STORE_TIMEOUT = 20
+VECTOR_STORE_POLL_INTERVAL = 0.05
+
+def wait_for_vector_index(cql, keyspace, index, expected_size=None, timeout=VECTOR_STORE_TIMEOUT):
+    if not is_scylla(cql):
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        rows = list(cql.execute("SELECT index_state, size FROM system.custom_indexes WHERE keyspace_name = %s AND index_name = %s", (keyspace, index)))
+        if rows and all(r.index_state == 'SERVING' and (expected_size is None or r.size == expected_size) for r in rows):
+            return
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'Timed out waiting for vector index {keyspace}.{index}: {rows}')
+        time.sleep(VECTOR_STORE_POLL_INTERVAL)
+
+# Repeatedly runs a vector search (or any other) query, until condition(rows)
+# is true for its result rows, or `timeout` seconds elapse - like Alternator's
+# test_vector.py::wait_for_search_vectors(). In Scylla, the vector store is
+# eventually consistent: after a write, the vector index takes time to
+# reflect it, so a test that checks a search result needs to retry. Errors
+# are tolerated while waiting, but if the deadline is reached, we fail with
+# `message`, and the last error (if any). In Cassandra, the vector index is
+# updated synchronously, so the first attempt is expected to succeed.
+def wait_for_vector_search(cql, query, condition, message, *args, timeout=VECTOR_STORE_TIMEOUT):
+    deadline = time.monotonic() + timeout
+    last_exception = None
+    rows = None
+    while True:
+        try:
+            rows = list(cql.execute(query, args) if args else cql.execute(query))
+            if condition(rows):
+                return rows
+        except Exception as e:
+            last_exception = e
+        if time.monotonic() > deadline:
+            msg = message(rows) if callable(message) else message
+            if last_exception is not None:
+                msg += f' (last error: {last_exception})'
+            raise AssertionError(msg)
+        time.sleep(VECTOR_STORE_POLL_INTERVAL)
+
 # Check whether we are running against Cassandra older than the given
 # version (a tuple, e.g., (6, 0)). Always false on Scylla (whose system.local
 # reports a fake old release_version). Useful for tests of features which

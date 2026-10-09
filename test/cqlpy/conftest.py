@@ -314,6 +314,20 @@ def _vector_store_mock_session(cql):
         mock.stop()
 
 
+# Fixture for tests which need a working vector store - tests that really
+# perform vector searches, as opposed to tests which only check syntax.
+# On Scylla, such tests are skipped unless Scylla is configured to use a
+# vector store (e.g., test/cqlpy/run was run with the "--vs" option, which
+# also runs a vector store). Cassandra has vector search built in, so these
+# tests always run on Cassandra.
+@pytest.fixture(scope=dynamic_scope())
+def needs_vector_store(cql):
+    if is_scylla(cql):
+        uri = list(cql.execute("SELECT value FROM system.config WHERE name = 'vector_store_primary_uri'"))
+        # The value is JSON, so an empty URI is '""'.
+        if not uri or not json.loads(uri[0].value):
+            skip_env('Vector Store is not configured (run with --vs)')
+
 @pytest.fixture(scope="function")
 def vector_store_mock(_vector_store_mock_session):
     _vector_store_mock_session.reset()
