@@ -517,6 +517,70 @@ def wait_for_services(pid, checkers):
 def wait_for_cql(pid, ip):
     wait_for_services(pid, [lambda: check_cql(ip)])
 
+##############################
+
+# Specific code for running a *Vector Store* alongside Scylla, used by the
+# "--vs" option of test/cqlpy/run and test/alternator/run.
+#
+# To get the vector store, do
+#     git clone git@github.com:scylladb/vector-store.git
+#     cargo build --release
+# next to the Scylla working directory.
+
+# The vector store runs on the same IP address as Scylla, on this port.
+# Scylla is told to find it with the option that vector_store_scylla_options()
+# returns.
+VECTOR_STORE_PORT = 6080
+
+def vector_store_scylla_options(ip):
+    return ['--vector-store-primary-uri', f'http://{ip}:{VECTOR_STORE_PORT}']
+
+# Find the vector-store executable. We look for it in the vector-store/
+# directory next to the Scylla working directory, taking the newest built
+# executable, but it can also be specified by the user by setting the
+# VECTOR_STORE environment variable to the path of the executable.
+def find_vector_store():
+    if os.getenv('VECTOR_STORE'):
+        vector_store_executable = os.path.abspath(os.getenv('VECTOR_STORE'))
+    else:
+        vector_store_dir = os.path.join(os.path.dirname(source_path), 'vector-store')
+        vector_stores = glob.glob(os.path.join(vector_store_dir, 'target/*/vector-store'))
+        if not vector_stores:
+            print(f"Can't find a compiled Vector Store in {vector_store_dir}.\nPlease build Vector Store or set VECTOR_STORE to the path of a Vector Store executable.")
+            exit(1)
+        vector_store_executable = max(vector_stores, key=os.path.getmtime)
+    if not os.access(vector_store_executable, os.X_OK):
+        print(f"Cannot execute '{vector_store_executable}'.\nPlease set VECTOR_STORE to the path of a Vector Store executable.")
+        exit(1)
+    return vector_store_executable
+
+# Run the vector store, connected to the Scylla running on the given IP
+# address (which was started with vector_store_scylla_options(ip)). The
+# vector store is run in its own temporary directory, but on the same IP
+# address as Scylla (otherwise, the first of the two which we will run will
+# not know where to find the second). It logs in to Scylla as the superuser
+# "cassandra" which run_scylla_cmd() sets up.
+def run_vector_store(ip):
+    vector_store_executable = find_vector_store()
+    print(f"Vector Store is: {vector_store_executable}.")
+    def run_vector_store_cmd(pid, dir):
+        print('Booting Vector Store on ' + ip + ' in ' + dir + '...')
+        with open(f'{dir}/.password', 'w') as f:
+            print('cassandra', file=f)
+        env = {
+            'VECTOR_STORE_URI': f'{ip}:{VECTOR_STORE_PORT}',
+            'VECTOR_STORE_SCYLLADB_URI': f'{ip}:9042',
+            'VECTOR_STORE_SCYLLADB_USERNAME': 'cassandra',
+            'VECTOR_STORE_SCYLLADB_PASSWORD_FILE': f'{dir}/.password',
+            # Reduce the vector store's default sleep intervals, to make tests
+            # notice changes faster, and pass faster.
+            'VECTOR_STORE_MONITOR_INDEXES_INTERVAL': '50ms',
+            'VECTOR_STORE_CDC_FINE_SLEEP_INTERVAL': '50ms',
+            'VECTOR_STORE_INDEX_STATUS_UPDATE_INTERVAL': '50ms',
+        }
+        return ([vector_store_executable], env)
+    return run_with_temporary_dir(run_vector_store_cmd)
+
 
 def _has_marker_expression(pytest_args: list[str]) -> bool:
     """Return True when *pytest_args* already defines a pytest marker expression."""
