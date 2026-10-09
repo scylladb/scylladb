@@ -53,6 +53,7 @@
 #include "compaction/compaction_manager.hh"
 #include "tasks/types.hh"
 #include "cql3/untyped_result_set.hh"
+#include "utils/error_injection.hh"
 #include "utils/rjson.hh"
 #include "utils/http.hh"
 #include "utils/azure/identity/exceptions.hh"
@@ -1508,6 +1509,44 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_network_error, local_gcp_kms_wrapper, *check_
         );
         return std::make_tuple(scopts_map({ { "key_provider", "GcpKeyProviderFactory" }, { "gcp_host", "gcp_test" } }), yaml);
     });
+}
+
+/**
+ * Verify that a transient network error (e.g. ENETUNREACH while the NIC is being
+ * reconfigured at startup) is retried instead of failing startup. The injected
+ * error is nested, like the one from a failed metadata token fetch.
+ */
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_retry_network_unreachable, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    tmpdir tmp;
+
+    auto yaml = fmt::format(R"foo(
+        gcp_hosts:
+            gcp_test:
+                master_key: {0}
+                gcp_project_id: {1}
+                gcp_location: {2}
+                gcp_credentials_file: {3}
+                endpoint: '{4}'
+                )foo"
+        , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
+    );
+
+    // The host verifies the master key on startup, on shard 0. Fail its first attempt.
+    utils::get_local_injector().enable("gcp_host_network_unreachable", true);
+
+    try {
+        co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    } catch (...) {
+        BOOST_FAIL(format("Startup should survive the injected network error: {}", std::current_exception()));
+    }
+
+    // Check that the error was actually injected, i.e. startup survived it through
+    // the retry. A one-shot injection disables itself once triggered.
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("gcp_host_network_unreachable"));
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_key_cache_metrics, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {

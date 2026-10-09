@@ -37,8 +37,11 @@
 #include "symmetric_key.hh"
 #include "key_cache.hh"
 #include "utils.hh"
+#include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/hash.hh"
+#include "utils/http_client_error_processing.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
@@ -282,6 +285,14 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
         bool refreshing = true;
 
         try {
+            // Fails like a metadata token fetch while the network is down.
+            utils::get_local_injector().inject("gcp_host_network_unreachable", [] {
+                try {
+                    throw std::system_error(ENETUNREACH, std::system_category(), "connect");
+                } catch (...) {
+                    std::throw_with_nested(utils::gcp::bad_configuration("Injected token fetch failure"));
+                }
+            });
             if (creds) {
                 bearer.clear();
                 co_await creds->refresh(KMS_SCOPE, _certs);
@@ -325,6 +336,17 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
             }
             std::throw_with_nested(service_error(std::string(uri)));
         } catch (...) {
+            // Transient network errors (e.g. ENETUNREACH while the NIC is being
+            // reconfigured at startup) -> backoff + retry. The error can come
+            // nested, e.g. from the credentials refresh.
+            auto ep = std::current_exception();
+            auto* se = try_catch_nested<std::system_error>(ep);
+            if (se && retry < max_retries && utils::http::from_system_error(*se)) {
+                gcp_log.debug("{}: Retryable system error ({}), retry {}/{}: {}", uri, se->code().message(), retry + 1, max_retries, ep);
+                do_backoff = true;
+                did_auth_retry = false;
+                continue;
+            }
             std::throw_with_nested(network_error(std::string(uri)));
         }
     }
