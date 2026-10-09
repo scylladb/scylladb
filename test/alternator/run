@@ -6,7 +6,6 @@ import run
 
 import os
 import requests
-import glob
 import signal
 
 # When tests are to be run against AWS (the "--aws" option), it is not
@@ -99,7 +98,7 @@ def run_alternator_cmd(pid, dir):
             '--alternator-encryption-options', f'truststore={dir}/ca.crt',
         ]
     if '--vs' in sys.argv:
-        cmd += ['--vector-store-primary-uri', f'http://{ip}:6080']
+        cmd += run.vector_store_scylla_options(ip)
     cmd += extra_scylla_options
 
     for i in remove_scylla_options:
@@ -130,53 +129,11 @@ if '--https' in sys.argv:
 else:
     alternator_url=f"http://{ip}:8000"
 
-# If the "--vs" option is given, also run the vector store process.
-# The vector store is run in its own temporary directory, but runs
-# on the same IP address as Scylla (otherwise, the first of the two
-# which we will run will not know where to find the second).
-def run_vector_store_cmd(pid, dir):
-    global ip # same IP as Scylla, see comment above
-    print('Booting Vector Store on ' + ip + ' in ' + dir + '...')
-    with open(f'{dir}/.password', 'w') as f:
-        print('cassandra', file=f)
-    env = {
-        'VECTOR_STORE_URI': f'{ip}:6080',
-        'VECTOR_STORE_SCYLLADB_URI': f'{ip}:9042',
-        'VECTOR_STORE_SCYLLADB_USERNAME': 'cassandra',
-        'VECTOR_STORE_SCYLLADB_PASSWORD_FILE': f'{dir}/.password',
-        # Reduce the vector store's default sleep intervals, to make tests
-        # notice changes faster, and pass faster.
-        'VECTOR_STORE_MONITOR_INDEXES_INTERVAL': '50ms',
-        'VECTOR_STORE_CDC_FINE_SLEEP_INTERVAL': '50ms',
-        'VECTOR_STORE_INDEX_STATUS_UPDATE_INTERVAL': '50ms',
-    }
-    global vector_store_executable # set by the code below
-    cmd = [
-        vector_store_executable
-    ]
-    return (cmd, env)
-
+# If the "--vs" option is given, also run the vector store process (see
+# run.run_vector_store() for where it looks for the vector store executable).
 if '--vs' in sys.argv:
     sys.argv.remove('--vs')
-    # Find the vector-store executable. We look for it in the vector-store/
-    # directory next to the Scylla working directory taking the newest built
-    # executable, but it can also be specified by the user by setting the
-    # VECTOR_STORE environment variable to the path of if os.getenv('SCYLLA'):
-    global vector_store_executable
-    if os.getenv('VECTOR_STORE'):
-        vector_store_executable = os.path.abspath(os.getenv('VECTOR_STORE'))
-    else:
-        vector_store_dir = os.path.join(os.path.dirname(run.source_path), 'vector-store')
-        vector_stores = glob.glob(os.path.join(vector_store_dir, 'target/*/vector-store'))
-        if not vector_stores:
-            print(f"Can't find a compiled Vector Store in {vector_store_dir}.\nPlease build Vector Store or set VECTOR_STORE to the path of a Vector Store executable.")
-            exit(1)
-        vector_store_executable = max(vector_stores, key=os.path.getmtime)
-        if not os.access(vector_store_executable, os.X_OK):
-            print(f"Cannot execute '{vector_store_executable}'.\nPlease set VECTOR_STORE to the path of a Vector Store executable.")
-            exit(1)
-    print(f"Vector Store is: {vector_store_executable}.")
-    run.run_with_temporary_dir(run_vector_store_cmd)
+    run.run_vector_store(ip)
 
 
 # Wait for both CQL and Alternator APIs to become responsive. We obviously
