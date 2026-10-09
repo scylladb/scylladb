@@ -143,7 +143,7 @@ HARNESS_CONFTEST = textwrap.dedent("""\
     import pytest
 
     from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, scylla_cluster,
-                                   testpy_cluster_factory)
+                                   testpy_cluster_factory, testpy_new_cluster)
 
     def pytest_addoption(parser):
         parser.addoption("--tmpdir")
