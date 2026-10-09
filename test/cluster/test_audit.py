@@ -136,7 +136,7 @@ class AuditTester:
             restart = any(k in current for k in absent_keys - LIVE_AUDIT_KEYS)
 
         # Auth config changes also require a restart.
-        has_auth = any(k in current for k in AUTH_CONFIG)
+        has_auth = any(str(current.get(k, "")) == str(v) for k, v in AUTH_CONFIG.items())
         if user:
             restart = restart or any(
                 str(current.get(k, "")) != str(v)
@@ -159,7 +159,7 @@ class AuditTester:
             needs_restart = await self._check_restart_needed(current, target_config, absent_keys, user)
 
             # Transitioning from auth to no-auth: remove auth keys before restart.
-            has_auth = any(k in current for k in AUTH_CONFIG)
+            has_auth = any(str(current.get(k, "")) == str(v) for k, v in AUTH_CONFIG.items())
             if not user and has_auth:
                 for k in AUTH_CONFIG:
                     await self.manager.server_remove_config_option(srv.server_id, k)
