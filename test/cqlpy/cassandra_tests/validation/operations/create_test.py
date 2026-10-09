@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 8d91b469afd3fcafef7ef85c10c8acc11703ba2d
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -26,6 +26,33 @@ from ...porting import *
 from cassandra.util import Duration
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID
+
+# Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
+# identifier P as a duration literal, so it can't be used as a name).
+@pytest.mark.xfail(reason="SCYLLADB-5200")
+def testCreateTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
+    # CASSANDRA-17919
+    # The Java test creates the table with the fixed name P, so this name
+    # (unquoted, so really "p") is what we use too.
+    try:
+        cql.execute("CREATE TABLE " + test_keyspace + ".P (a INT PRIMARY KEY, b DURATION);")
+        cql.execute("INSERT INTO " + test_keyspace + ".P (a, b) VALUES (1, PT0S)")
+        assertRows(cql.execute("SELECT * FROM " + test_keyspace + ".P"), row(1, Duration(0, 0, 0)))
+    finally:
+        cql.execute("DROP TABLE IF EXISTS " + test_keyspace + ".P")
+
+# The Java test uses SimpleStrategy, which Scylla doesn't support with
+# tablets, so we use NetworkTopologyStrategy instead.
+# Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
+# identifier P as a duration literal, so it can't be used as a name).
+@pytest.mark.xfail(reason="SCYLLADB-5200")
+def testCreateKeyspaceWithNameCapitalP(cql):
+    # CASSANDRA-17919
+    try:
+        cql.execute("CREATE KEYSPACE IF NOT EXISTS P WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+        cql.execute("DROP KEYSPACE P")
+    finally:
+        cql.execute("DROP KEYSPACE IF EXISTS P")
 
 def testCreateTableWithSmallintColumns(cql, test_keyspace):
     short_max_value = 2**15-1
@@ -473,31 +500,12 @@ def testMultiOrderingValidation(cql, test_keyspace):
 #    // tests CASSANDRA-4278
 #    public void testHyphenDatacenters() throws Throwable
 #    {
-#        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch()
-#
-#        // Register an EndpointSnitch which returns fixed values for test.
-#        DatabaseDescriptor.setEndpointSnitch(new AbstractEndpointSnitch()
-#        {
-#            @Override
-#            public String getRack(InetAddressAndPort endpoint) { return RACK1; }
-#
-#            @Override
-#            public String getDatacenter(InetAddressAndPort endpoint) { return "us-east-1"; }
-#
-#            @Override
-#            public int compareEndpoints(InetAddressAndPort target, Replica a1, Replica a2) { return 0; }
-#        })
-#
-#        // this forces the dc above to be added to the list of known datacenters (fixes static init problem
+#        // this forces the dc 'us-east-1' to be added to the list of known datacenters (fixes static init problem
 #        // with this group of tests), ok to remove at some point if doing so doesn't break the test
-#        StorageService.instance.getTokenMetadata().updateHostId(UUID.randomUUID(), InetAddressAndPort.getByName("127.0.0.255"))
-#        execute(cql, table, "CREATE KEYSPACE Foo WITH replication = { 'class' : 'NetworkTopologyStrategy', 'us-east-1' : 1 };")
-#
-#        // Restore the previous EndpointSnitch
-#        DatabaseDescriptor.setEndpointSnitch(snitch)
-#
-#        // clean up
-#        execute(cql, table, "DROP KEYSPACE IF EXISTS Foo")
+#        ClusterMetadataService.instance().commit(new Register(new NodeAddresses(endpoint(255)),
+#                                                              new Location("us-east-1", RACK1),
+#                                                              NodeVersion.CURRENT));
+#        execute("CREATE KEYSPACE Foo WITH replication = { 'class' : 'NetworkTopologyStrategy', 'us-east-1' : 1 };");
 #    }
 
 # tests CASSANDRA-9565
@@ -530,14 +538,16 @@ def testDoubleWith(cql, test_keyspace):
 #    {
 #        createTable("CREATE TABLE %s (a text, b int, c int, primary key (a, b))")
 #        assertSame(MemtableParams.DEFAULT.factory(), getCurrentColumnFamilyStore().metadata().params.memtable.factory())
+#        Class<? extends Memtable> defaultClass = getCurrentColumnFamilyStore().getTracker().getView().getCurrentMemtable().getClass()
 #
 #        assertSchemaOption("memtable", null)
 #
 #        testMemtableConfig("skiplist", SkipListMemtable.FACTORY, SkipListMemtable.class)
+#        testMemtableConfig("trie", MemtableParams.get("trie").factory(), TrieMemtable.class)
 #        testMemtableConfig("skiplist_remapped", SkipListMemtable.FACTORY, SkipListMemtable.class)
 #        testMemtableConfig("test_fullname", TestMemtable.FACTORY, SkipListMemtable.class)
 #        testMemtableConfig("test_shortname", SkipListMemtable.FACTORY, SkipListMemtable.class)
-#        testMemtableConfig("default", MemtableParams.DEFAULT.factory(), SkipListMemtable.class)
+#        testMemtableConfig("default", MemtableParams.DEFAULT.factory(), defaultClass)
 #
 #        assertThrowsConfigurationException("The 'class_name' option must be specified.",
 #                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
@@ -598,20 +608,14 @@ def testCreateTableWithCompression(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 32, 'enabled': true };") as table:
         assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "32", "class": "org.apache.cassandra.io.compress.SnappyCompressor"})
 
-    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'chunk_length_in_kb' : 32 };") as table:
-        assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "32", "class": "org.apache.cassandra.io.compress.SnappyCompressor"})
-
-    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'min_compress_ratio' : 2 };") as table:
+    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 2 };") as table:
         assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "16", "class": "org.apache.cassandra.io.compress.SnappyCompressor", "min_compress_ratio": "2.0"})
 
-    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'min_compress_ratio' : 1 };") as table:
+    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 1 };") as table:
         assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "16", "class": "org.apache.cassandra.io.compress.SnappyCompressor", "min_compress_ratio": "1.0"})
-#
-    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'min_compress_ratio' : 0 };") as table:
-        assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "16", "class": "org.apache.cassandra.io.compress.SnappyCompressor"})
 
-    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'sstable_compression' : '', 'chunk_length_kb' : 32 };") as table:
-        assertSchemaOption(cql, table, "compression", {"enabled": "false"})
+    with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 0 };") as table:
+        assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "16", "class": "org.apache.cassandra.io.compress.SnappyCompressor"})
 
     with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b)) WITH compression = { 'enabled' : 'false' };") as table:
         assertSchemaOption(cql, table, "compression", {"enabled": "false"})
@@ -633,14 +637,6 @@ def testCreateTableWithCompression(cql, test_keyspace):
                                            "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
                                            + " WITH compression = { 'enabled' : 'false', 'chunk_length_in_kb' : 32};")
 
-    assertThrowsConfigurationException(cql, table, "The 'sstable_compression' option must not be used if the compression algorithm is already specified by the 'class' option",
-                                       "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
-                                           + " WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'class' : 'SnappyCompressor'};")
-
-    assertThrowsConfigurationException(cql, table, "The 'chunk_length_kb' option must not be used if the chunk length is already specified by the 'chunk_length_in_kb' option",
-                                           "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
-                                           + " WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_kb' : 32 , 'chunk_length_in_kb' : 32 };")
-
     assertThrowsConfigurationException(cql, table, "chunk_length_in_kb must be a power of 2",
                                            "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
                                            + " WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_in_kb' : 31 };")
@@ -656,6 +652,10 @@ def testCreateTableWithCompression(cql, test_keyspace):
     assertThrowsConfigurationException(cql, table, "Unknown compression options unknownOption",
                                            "CREATE TABLE %s (a text, b int, c int, primary key (a, b))"
                                             + " WITH compression = { 'class' : 'SnappyCompressor', 'unknownOption' : 32 };")
+
+# The Java test testNotUsingDeterministicTableIDOnCreate was not translated:
+# it checks Cassandra's internal TableMetadata, comparing the new table's ID
+# to the one Cassandra would derive from its name.
 
 def assertThrowsConfigurationException(cql, table, message, cmd, *args):
     with pytest.raises(ConfigurationException, match=re.escape(message)):
