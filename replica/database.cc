@@ -1905,6 +1905,11 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
         co_await coroutine::return_exception(replica::rate_limit_exception());
     }
 
+    if (auto table = utils::get_local_injector().inject_parameter<std::string_view>("database_query_force_timeout", "table");
+            table && *table == cf.schema()->cf_name()) {
+        co_await coroutine::return_exception(timed_out_error{});
+    }
+
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
 

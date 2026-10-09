@@ -4,13 +4,16 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import asyncio
+import time
 from typing import Any, Callable, NamedTuple
 
 import pytest
+from cassandra import ReadTimeout, WriteTimeout
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics, inject_error
+from test.pylib.util import wait_for_feature
 
 from .util import new_test_keyspace, new_test_table
 
@@ -194,3 +197,41 @@ async def test_replica_database_apply_timeout(manager: ScyllaClusterManager):
         db=db,
         injection=injection
     )
+
+@pytest.mark.parametrize("tbl_schema, injection, stmt, expected", [
+    pytest.param("p int, c int, PRIMARY KEY (p)", "database_apply_force_timeout",
+                 "INSERT INTO {tbl} (p, c) VALUES (0, 0)", WriteTimeout, id="write"),
+    pytest.param("p int, c counter, PRIMARY KEY (p)", "database_apply_counter_update_force_timeout",
+                 "UPDATE {tbl} SET c = c + 1 WHERE p = 0", WriteTimeout, id="counter"),
+    # The coordinator ignores a replica's read timeout and waits for its own timer,
+    # so keep it short.
+    pytest.param("p int, c int, PRIMARY KEY (p)", "database_query_force_timeout",
+                 "SELECT * FROM {tbl} WHERE p = 0 USING TIMEOUT 5s", ReadTimeout, id="read"),
+])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_remote_replica_timeout_is_reported_as_timeout(manager: ScyllaClusterManager, tbl_schema, injection, stmt, expected):
+    """
+    A replica that gives up on a request because of its deadline must make the
+    coordinator report a timeout, not a failure. The coordinator already does this
+    when it is the replica itself; this checks the case where the replica is a
+    different node and the timeout has to travel back in the RPC reply.
+
+    The injection makes the replica time out immediately, so its reply reaches the
+    coordinator long before the coordinator's own timer fires.
+    """
+    servers = await manager.servers_add(2)
+    cql, hosts = await manager.get_ready_cql(servers)
+    deadline = time.time() + 60
+    await asyncio.gather(*(wait_for_feature("TYPED_TIMEOUT_ERRORS_IN_REPLICA_RPC", cql, h, deadline) for h in hosts))
+
+    async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : '1' }") as ks:
+        async with new_test_table(manager, ks, tbl_schema) as tbl:
+            table_name = tbl.split('.')[1]
+            [replica_ip] = await manager.api.natural_endpoints(servers[0].ip_addr, ks, table_name, "0")
+            replica = next(s for s in servers if s.ip_addr == replica_ip)
+            coordinator = next(s for s in servers if s.ip_addr != replica_ip)
+            cql = await manager.get_cql_exclusive(coordinator)
+
+            async with inject_error(manager.api, replica.ip_addr, injection, parameters={"table": table_name}):
+                with pytest.raises(expected):
+                    cql.execute(stmt.format(tbl=tbl))
