@@ -41,23 +41,9 @@ public:
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 };
 
-class streaming_task_impl : public tasks::task_manager::task::impl {
-private:
-    streaming::stream_reason _reason;
-    std::optional<shared_future<>>& _result;
-    std::function<future<>()> _action;
-public:
-    streaming_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id parent_id,
-            streaming::stream_reason reason,
-            std::optional<shared_future<>>& result,
-            std::function<future<>()> action) noexcept;
-
-    virtual std::string type() const override;
-    virtual tasks::is_internal is_internal() const noexcept override;
-protected:
-    virtual future<> run() override;
-};
+inline std::string streaming_task_type(streaming::stream_reason reason) {
+    return fmt::format("{}: streaming", reason);
+}
 
 class task_manager_module : public tasks::task_manager::module {
 private:
