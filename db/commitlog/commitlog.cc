@@ -1281,6 +1281,10 @@ public:
                 // such sync, all later allocations will block on _pending_ops until it is done.
                 co_await with_timeout(timeout, sync());
             }
+        } catch (timed_out_error&) {
+            // The caller only stopped waiting. The write and flush go on in
+            // the background, so the segment is still good.
+            throw;
         } catch (...) {
             // If we get an IO exception (which we assume this is)
             // we should close the segment.
