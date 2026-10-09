@@ -1838,6 +1838,7 @@ private:
     uint32_t _critical_disk_utilization_mode_count = 0;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
+    bool _vnodes_cleanup_allowed = false;
     querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -1958,6 +1959,13 @@ public:
 
     void enable_autocompaction_toggle() noexcept { _enable_autocompaction_toggle = true; }
     friend class api::autocompaction_toggle_guard;
+
+    // Set once this node's own view of the ring/tablet map is known to be settled
+    // (see storage_service::join_cluster()), on every shard. Before that, this
+    // node may still be receiving data for ranges it owns, so vnodes cleanup
+    // (which assumes ownership is final) is not safe to run.
+    void allow_vnodes_cleanup() noexcept { _vnodes_cleanup_allowed = true; }
+    bool vnodes_cleanup_allowed() const noexcept { return _vnodes_cleanup_allowed; }
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)

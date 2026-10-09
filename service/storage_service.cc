@@ -1766,6 +1766,13 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     // let it know that the bootstrap is completed as well
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     set_mode(mode::NORMAL);
+    // Reaching NORMAL here means this node's ring/tablet ownership is settled,
+    // regardless of whether this run actually went through mode::BOOTSTRAP above
+    // (a node that was already bootstrapped skips that branch entirely). So this
+    // is the universal point to allow vnodes cleanup, not "leaving BOOTSTRAP".
+    co_await _db.invoke_on_all([] (replica::database& db) {
+        db.allow_vnodes_cleanup();
+    });
     // Load schema version into the database object
     co_await db::schema_tables::update_schema_version_and_announce(_sys_ks, proxy, co_await db::schema_tables::get_group0_schema_version(_sys_ks.local()));
 
@@ -7441,17 +7448,6 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
 
 future<> storage_service::notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys) {
     co_await _client_routes.local().notify_client_routes_change(client_route_keys);
-}
-
-future<bool> storage_service::is_vnodes_cleanup_allowed(sstring keyspace) {
-    return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
-        const auto my_id = ss.get_token_metadata().get_my_id();
-        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_static_effective_replication_map()->has_pending_ranges(my_id);
-        const bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
-        slogger.debug("is_vnodes_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
-                keyspace, is_bootstrap_mode, pending_ranges);
-        return !is_bootstrap_mode && !pending_ranges;
-    });
 }
 
 bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason reason) {

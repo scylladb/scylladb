@@ -223,69 +223,6 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
     });
 }
 
-scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
-    scrub_info info;
-    auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
-    info.keyspace = std::move(keyspace);
-    info.column_families = table_infos | std::views::transform(&table_info::name) | std::ranges::to<std::vector>();
-    auto scrub_mode_str = req->get_query_param("scrub_mode");
-    auto scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
-
-    if (scrub_mode_str.empty()) {
-        const auto skip_corrupted = get_query_param<bool>(*req, "skip_corrupted");
-
-        if (skip_corrupted) {
-            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
-        }
-    } else {
-        if (scrub_mode_str == "ABORT") {
-            scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
-        } else if (scrub_mode_str == "SKIP") {
-            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
-        } else if (scrub_mode_str == "SEGREGATE") {
-            scrub_mode = compaction::compaction_type_options::scrub::mode::segregate;
-        } else if (scrub_mode_str == "VALIDATE") {
-            scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
-        } else {
-            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
-        }
-    }
-
-    if (!get_query_param<bool>(*req, "disable_snapshot") && !info.column_families.empty()) {
-        info.snapshot_tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-    }
-
-    info.opts = {
-        .operation_mode = scrub_mode,
-    };
-    const sstring quarantine_mode_str = get_query_param<sstring>(*req, "quarantine_mode", "INCLUDE");
-    if (quarantine_mode_str == "INCLUDE") {
-        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::include;
-    } else if (quarantine_mode_str == "EXCLUDE") {
-        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::exclude;
-    } else if (quarantine_mode_str == "ONLY") {
-        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::only;
-    } else {
-        throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
-    }
-
-    if (get_query_param<bool>(*req, "drop_unfixable_sstables")) {
-        if(scrub_mode != compaction::compaction_type_options::scrub::mode::segregate) {
-            throw httpd::bad_param_exception("The 'drop_unfixable_sstables' parameter is only valid when 'scrub_mode' is 'SEGREGATE'");
-        }
-        info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
-    }
-
-    if (req->get_query_param("quarantine_invalid_sstables") != "") {
-        if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
-            throw httpd::bad_param_exception("The 'quarantine_invalid_sstables' parameter is only valid when 'scrub_mode' is 'VALIDATE'");
-        }
-        info.opts.quarantine_sstables = compaction::compaction_type_options::scrub::quarantine_invalid_sstables(get_query_param<bool>(*req, "quarantine_invalid_sstables", true));
-    }
-
-    return info;
-}
-
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
     ss::start_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
@@ -789,26 +726,6 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         });
 
         co_return json::json_return_type(0);
-}
-
-static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
-        if (rs.is_local() || !rs.is_vnode_based()) {
-            auto reason = rs.is_local() ? "require" : "support";
-            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
-            co_return nullptr;
-        }
-        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_vnodes_cleanup_allowed(keyspace)) {
-            auto msg = "Can not perform cleanup operation when topology changes";
-            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
-            co_await coroutine::return_exception(std::runtime_error(msg));
-        }
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 static
@@ -1910,21 +1827,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::cdc_streams_check_and_repair.set(r, gated(ss, rest_bind(rest_cdc_streams_check_and_repair, ss)));
     ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
     ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
-    t::force_keyspace_cleanup_async.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        tasks::task_id id = tasks::task_id::create_null_id();
-        auto task = co_await force_keyspace_cleanup(ctx, ss, std::move(req));
-        if (task) {
-            id = task->get_status().id;
-        }
-        co_return json::json_return_type(id.to_sstring());
-    });
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto task = co_await force_keyspace_cleanup(ctx, ss, std::move(req));
-        if (task) {
-            co_await task->done();
-        }
-        co_return json::json_return_type(0);
-    });
     ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
     ss::logstor_compaction.set(r, gated(ss, rest_bind(rest_logstor_compaction, ctx)));
     ss::logstor_flush.set(r, gated(ss, rest_bind(rest_logstor_flush, ctx)));
@@ -2006,8 +1908,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::cdc_streams_check_and_repair.unset(r);
     ss::cleanup_all.unset(r);
     ss::reset_cleanup_needed.unset(r);
-    t::force_keyspace_cleanup_async.unset(r);
-    ss::force_keyspace_cleanup.unset(r);
     ss::logstor_compaction.unset(r);
     ss::logstor_flush.unset(r);
     ss::decommission.unset(r);
@@ -2212,33 +2112,6 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& db = ctx.db;
-        auto info = parse_scrub_options(ctx, std::move(req));
-
-        if (!info.snapshot_tag.empty()) {
-            db::snapshot_options opts = {.skip_flush = false};
-            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
-        }
-
-        compaction::compaction_stats stats;
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.start_scrub_sstables_keyspace_compaction(db, info.keyspace, info.column_families, info.opts, &stats);
-        try {
-            co_await task->done();
-            if (stats.validation_errors) {
-                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
-            }
-        } catch (const compaction::compaction_aborted_exception&) {
-            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
-        } catch (...) {
-            apilog.error("scrub keyspace={} tables={} failed: {:t}", info.keyspace, info.column_families, std::current_exception());
-            throw;
-        }
-
-        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
-    });
-
     ss::start_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto endpoint = req->get_query_param("endpoint");
         auto keyspace = req->get_query_param("keyspace");
@@ -2317,7 +2190,6 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::take_snapshot.unset(r);
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
-    ss::scrub.unset(r);
     ss::start_backup.unset(r);
     cf::get_true_snapshots_size.unset(r);
     cf::get_all_true_snapshots_size.unset(r);
