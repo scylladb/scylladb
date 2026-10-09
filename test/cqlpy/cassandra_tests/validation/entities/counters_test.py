@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -29,6 +29,19 @@ def testRegularCounters(cql, test_keyspace):
                                  "non counter",
                                  (InvalidRequest, ConfigurationException),
                                  "CREATE TABLE %s (id bigint PRIMARY KEY, count counter, things set<text>)")
+
+# Cassandra's messages are 'Cannot have a non counter column ("t") in a
+# counter table' and 'Cannot have a counter column ("c") in a non counter
+# table', Scylla's are "Cannot add a non counter column (t) in a counter
+# column family" and "Cannot add a counter column (c) in a non counter column
+# family", so we accept both.
+def testCannotAlterWithNonCounterColumn(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, c counter)") as table:
+        assert_invalid_throw_message_re(cql, table, "Cannot (have|add) a non counter column \\(\"?t\"?\\) in a counter (table|column family)",
+                ConfigurationException, "ALTER TABLE %s ADD t text")
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t text)") as table:
+        assert_invalid_throw_message_re(cql, table, "Cannot (have|add) a counter column \\(\"?c\"?\\) in a non counter (table|column family)",
+                ConfigurationException, "ALTER TABLE %s ADD c counter")
 
 # Migrated from cql_tests.py:TestCQL.collection_counter_test()
 def testCountersOnCollections(cql, test_keyspace):
