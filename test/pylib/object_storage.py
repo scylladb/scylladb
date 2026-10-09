@@ -15,6 +15,7 @@ import contextlib
 import logging
 import os
 import re
+import subprocess
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
@@ -333,6 +334,18 @@ async def stop_gcs_upload_validator(handle):
             handle.logf.close()
 
 
+def _fake_gcs_container(log_dir):
+    # note: need to set 'public-host' to the IP we connect to, to make XML (s3) API work for listing
+    image_args = lambda host, port: ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
+    return DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", log_dir,
+                            logfilenamebase="fake-gcs-server",
+                            image_args=image_args,
+                            success_string="server started at",
+                            failure_string="address already in use",
+                            port=4443
+                            )
+
+
 class GSServerImpl(GSFront):
     def __init__(self, log_dir):
         super(GSServerImpl, self).__init__(None, 'testbucket', None)
@@ -363,19 +376,8 @@ class GSServerImpl(GSFront):
             elif os.environ.get(k):
                 del os.environ[k]
 
-    def _image_args(self, host, port):
-        # pylint: disable=unused-argument
-        # note: need to set 'public-host' to the IP we connect to, to make XML (s3) API work for listing
-        return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
-
     async def start(self):
-        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", self.log_dir,
-                                       logfilenamebase="fake-gcs-server",
-                                       image_args=self._image_args,
-                                       success_string="server started at",
-                                       failure_string="address already in use",
-                                       port=4443
-                                       )
+        self.server = _fake_gcs_container(self.log_dir)
         await self.server.start()
         self.port = self.server.port
         self.host = self.server.host
@@ -459,6 +461,74 @@ class GSServerImpl(GSFront):
 # Keep the old name as an alias for backward compatibility (conftest.py imports it)
 GSServer = GSServerImpl
 
+# Not GS_SERVER_ADDRESS_FOR_TEST: the boost gcs_fixture would pick it up and
+# inject faults into a validator every test shares.
+SHARED_GS_ENV = 'FAKE_GS_SERVER_ADDRESS_FOR_TEST'
+
+
+class SharedGSServer(GSServerImpl):
+    """The run-wide fake-gcs-server, see start_shared_gs_server(); buckets stay per test."""
+
+    def __init__(self, endpoint):
+        super().__init__(None)
+        self.endpoint = endpoint
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+
+async def start_shared_gs_server(log_dir, timeout=30):
+    """Start fake-gcs-server behind the upload validator for the whole test.py run.
+
+    Runs in the pytest master, whose event loop is idle while tests run, so the
+    validator logs straight to a file rather than to a pipe someone must drain.
+    Returns an async stop callback.
+    """
+    server = _fake_gcs_container(log_dir)
+    await server.start()
+    validator = None
+    try:
+        endpoint = f'http://{server.host}:{server.port}'
+        if not os.environ.get('GCP_STORAGE_SKIP_UPLOAD_VALIDATOR'):
+            logpath = Path(log_dir) / 'gcs-upload-validator.log'
+            with open(logpath, 'wb') as logf:
+                validator = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).parent / 'gcs_upload_validator.py'),
+                     '--upstream-host', server.host, '--upstream-port', str(server.port),
+                     '--bind-host', server.host, '--port', '0'],
+                    stdout=subprocess.DEVNULL, stderr=logf)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while not (m := VALIDATOR_PORT_RE.search(logpath.read_text(errors='replace'))):
+                if validator.poll() is not None or loop.time() > deadline:
+                    raise RuntimeError(f'GCS upload validator did not start, see {logpath}')
+                await asyncio.sleep(0.1)
+            if validator.poll() is not None:
+                raise RuntimeError(f'GCS upload validator exited during startup, see {logpath}')
+            endpoint = f'http://{server.host}:{m.group(1)}'
+    except BaseException:
+        if validator:
+            validator.kill()
+            validator.wait()
+        await server.stop()
+        raise
+    os.environ[SHARED_GS_ENV] = endpoint
+
+    async def stop():
+        del os.environ[SHARED_GS_ENV]
+        if validator:
+            validator.terminate()
+            try:
+                await asyncio.wait_for(asyncio.to_thread(validator.wait), 10)
+            except asyncio.TimeoutError:
+                validator.kill()
+                await asyncio.to_thread(validator.wait)
+        await server.stop()
+    return stop
+
 
 def create_s3_server(pytestconfig, tmpdir, log_dir):
     server = None
@@ -508,6 +578,8 @@ def create_gs_server(log_dir):
 
     if endpoint is not None and bucket is not None:
         return GSFront(endpoint, bucket, credentials_file)
+    if shared := os.environ.get(SHARED_GS_ENV):
+        return SharedGSServer(shared)
     return GSServerImpl(log_dir)
 
 
