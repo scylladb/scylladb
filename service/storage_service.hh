@@ -914,6 +914,10 @@ private:
     std::optional<shared_future<>> _decommission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+
+    std::optional<shared_future<>> _decommission_hints_drain;
+    future<> drain_hints_before_leaving();
+
     tablet_op_registry _tablet_ops;
     // This tracks active topology cmd rpc. There can be only one active
     // cmd running and by inspecting this structure it can be checked which
