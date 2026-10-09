@@ -113,7 +113,7 @@ Scylla doesn't have and isn't likely to have (e.g., guardrails, SASI,
 Accord transactions, audit and full query logging, Cassandra's virtual
 tables, the CIDR authorizer, mTLS identities, and the unified compaction
 strategy). The few test files which mostly test CQL features which Scylla
-has were translated:
+has, or should have, were translated:
 
 * auth/: BatchAuthTest, CassandraAuthorizerTest, CreateAndAlterRoleTest
   and GrantAndRevokeTest.
@@ -122,14 +122,24 @@ has were translated:
 * index/internal/: CassandraIndexTest.
 * schema/: CreateTableValidationTest, and createlike/ (CreateLikeTest,
   CreateLikeCqlParseTest and CreateLikeWithSessionTest).
+* constraints/: AlterTableWithTableConstraintValidationTest,
+  CreateTableWithColumnCqlConstraintValidationTest,
+  CreateTableWithColumnNotNullConstraintInvalidTest,
+  CreateTableWithColumnNotNullConstraintValidTest and
+  CreateTableWithColumnOctetLengthConstraintValidationTest. These test
+  Cassandra 6's column constraints (CHECK and NOT NULL, CEP-42,
+  CASSANDRA-19947) through CQL. Scylla doesn't support constraints yet
+  (SCYLLADB-5234), so these tests are xfail. The other tests in that
+  directory test the constraints' Java classes directly.
 
 Some other test files outside cql3 test CQL features, but were not
 translated, because:
 
-* constraints/ tests Cassandra 6's column constraints (CEP-42,
-  CASSANDRA-19947), and db/filter/IndexHintsTest.java tests Cassandra 6's
-  index hints (SELECT ... WITH included_indexes, CASSANDRA-18112) - big
-  features which Scylla doesn't have.
+* db/filter/IndexHintsTest.java tests Cassandra 6's index hints
+  (SELECT ... WITH included_indexes, CASSANDRA-18112), which Scylla doesn't
+  have (SCYLLADB-5235). Its tests either test Cassandra's internal
+  IndexHints class and its serialization, or check which index was picked
+  by inspecting Cassandra's internal index query plan (mostly with SAI).
 * db/guardrails/ tests Cassandra's guardrails, which are configured
   differently from Scylla's few guardrails.
 * index/CustomIndexTest.java tests custom index implementations written
