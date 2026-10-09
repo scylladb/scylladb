@@ -11,6 +11,7 @@
 #include "cql3/statements/index_latency.hh"
 #include "cql3/query_processor.hh"
 #include "db/consistency_level_validations.hh"
+#include "exceptions/exceptions.hh"
 #include "query/query_result_merger.hh"
 #include "service/storage_proxy.hh"
 #include "utils/result_loop.hh"
@@ -169,6 +170,13 @@ void external_index_select_statement::setup_execute(service::query_state& state,
     update_stats();
 }
 
+void external_index_select_statement::throw_cannot_continue_paged_query(std::string_view index_type_name, std::string_view search_type_name) {
+    throw exceptions::invalid_request_exception(fmt::format(
+            "Cannot continue paged query: this query is served by a {} index, and {} queries are not paged. "
+            "Please retry the query from the beginning.",
+            index_type_name, search_type_name));
+}
+
 void external_index_select_statement::maybe_add_paging_warning(
         const ::shared_ptr<cql_transport::messages::result_message>& result, const query_options& options, uint64_t limit) const {
     auto page_size = options.get_page_size();
@@ -179,6 +187,11 @@ void external_index_select_statement::maybe_add_paging_warning(
 
 future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
+    // Ignoring the paging state would return the full result again as if it were the next page.
+    if (options.get_paging_state()) {
+        throw_cannot_continue_paged_query(index_type_name(), index_search_type_name());
+    }
+
     auto limit = get_limit(options, _limit);
 
     auto result = co_await measure_index_latency(

@@ -38,6 +38,8 @@ public:
             const secondary_index::index& index,
             std::unique_ptr<cql3::attributes> attrs);
 
+    [[noreturn]] static void throw_cannot_continue_paged_query(std::string_view index_type_name, std::string_view search_type_name);
+
 protected:
     /// Base-table rows read for the keys an external index returned, together with the command they
     /// were read with. The command's slice is needed to walk the rows.
