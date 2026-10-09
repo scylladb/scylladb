@@ -593,6 +593,9 @@ public:
     // that can be aborted and waiting for all the rest to complete
     // any unfinished apply/snapshot operation may return an error after
     // this function is called
+    //
+    // No function of this interface is called after abort() is called,
+    // so implementations don't have to handle that case.
     virtual future<> abort() = 0;
 };
 

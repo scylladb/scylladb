@@ -18,6 +18,8 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
@@ -30,6 +32,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/to_string.hh"
 #include "test/raft/helpers.hh"
@@ -427,6 +430,7 @@ public:
     void check_rpc_removed(::check_rpc_removed expected) const;
     void rpc_reset_counters(::rpc_reset_counters nodes);
     future<> reconfigure_all();
+    future<raft::snapshot_reply> receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp);
     future<> partition(::partition p);
     future<> tick(::tick t);
     future<> read(read_value r);
@@ -435,6 +439,7 @@ public:
     void disconnect(::disconnect nodes);
     future<> isolate(::isolate node);
     void verify();
+    bool sm_aborted(size_t id) const;
 private:
     test_server create_server(size_t id, initial_state state);
 };
@@ -447,6 +452,12 @@ class raft_cluster<Clock>::state_machine : public raft::state_machine {
     size_t _seen = 0;
     promise<> _done;
     snapshots* _snapshots;
+
+    seastar::abort_source _as;
+    bool _abort_requested = false;
+    // Counts the calls raft made after aborting this state machine. Must stay 0.
+    size_t _calls_after_abort = 0;
+
 public:
     lw_shared_ptr<hasher_int> hasher;
     state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
@@ -454,6 +465,7 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(raft::log_entry_ptr_list commands) override {
+        note_call("apply");
         if (delay_apply == _id) {
             // Hold this server's applier fiber here, so that its io_fiber
             // goes on committing entries it cannot apply yet. Cleared before
@@ -463,6 +475,10 @@ public:
             apply_entered.signal();
             co_await apply_release.wait();
         }
+        co_await utils::get_local_injector().inject("raft_test_sm_block_apply",
+                std::chrono::minutes(5), _as);
+        utils::get_local_injector().inject("raft_test_sm_apply_failure",
+                [] { throw std::runtime_error("raft_test_sm_apply_failure"); });
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -476,16 +492,21 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
+        note_call("take_snapshot");
+        co_await utils::get_local_injector().inject("raft_test_sm_block_take_snapshot",
+                std::chrono::minutes(5), _as);
         auto snp_id = raft::snapshot_id::create_random_id();
         (*_snapshots)[_id][snp_id].hasher = *hasher;
         tlogger.debug("sm[{}] takes snapshot id {} {} seen {}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), snp_id, _seen);
         (*_snapshots)[_id][snp_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(snp_id);
+        co_return snp_id;
     }
     void drop_snapshot(raft::snapshot_id snp_id) override {
+        note_call("drop_snapshot");
         (*_snapshots)[_id].erase(snp_id);
     }
     future<> load_snapshot(raft::snapshot_id snp_id) override {
+        note_call("load_snapshot");
         if (delay_load_snapshot == _id) {
             // Hold this server's applier fiber inside the load, so that its
             // io_fiber goes on publishing commits and snapshots the fiber
@@ -495,6 +516,8 @@ public:
             load_snapshot_entered.signal();
             co_await load_snapshot_release.wait();
         }
+        co_await utils::get_local_injector().inject("raft_test_sm_block_load_snapshot",
+                std::chrono::minutes(5), _as);
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
         tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
         _seen = (*_snapshots)[_id][snp_id].idx.value();
@@ -507,10 +530,32 @@ public:
         }
         co_return;
     };
-    future<> abort() override { return make_ready_future<>(); }
+    future<> abort() override {
+        _abort_requested = true;
+        _as.request_abort();
+        if (utils::get_local_injector().enter("raft_test_state_machine_abort_failure")) {
+            return make_exception_future<>(std::runtime_error("raft_test_state_machine_abort_failure"));
+        }
+        return make_ready_future<>();
+    }
 
     future<> done() {
         return _done.get_future();
+    }
+
+    void note_call(std::string_view op) {
+        if (_abort_requested) {
+            tlogger.error("sm[{}] {}: called after abort()", _id, op);
+            ++_calls_after_abort;
+        }
+    }
+
+    size_t calls_after_abort() const {
+        return _calls_after_abort;
+    }
+
+    bool aborted() const {
+        return _abort_requested;
     }
 };
 
@@ -542,9 +587,10 @@ public:
         co_return raft::index_t{0};
     }
     future<> store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) override {
+        co_await utils::get_local_injector().inject("raft_test_persistence_block_store_snapshot_descriptor",
+                utils::wait_for_message(std::chrono::minutes(5)));
         (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id][snap.id]);
         tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id][snap.id].hasher.finalize_uint64());
-        return make_ready_future<>();
     }
     future<raft::snapshot_descriptor> load_snapshot_descriptor() override {
         return make_ready_future<raft::snapshot_descriptor>(_conf.snapshot);
@@ -665,6 +711,10 @@ public:
     }
     void unpublish() {
         _net.erase(_id);
+    }
+    // Feeds an install_snapshot into the local server as if it came from `from`.
+    future<raft::snapshot_reply> receive_snapshot(raft::server_id from, raft::install_snapshot snp) {
+        return _client->apply_snapshot(from, std::move(snp));
     }
     bool drop_packet() {
         return _rpc_config.drops && !(rand() % 5);
@@ -958,10 +1008,25 @@ raft::server& raft_cluster<Clock>::get_server(size_t id) {
 }
 
 template <typename Clock>
+future<raft::snapshot_reply> raft_cluster<Clock>::receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp) {
+    return _servers[id].rpc->receive_snapshot(from, std::move(snp));
+}
+
+template <typename Clock>
+bool raft_cluster<Clock>::sm_aborted(size_t id) const {
+    return _servers[id].sm->aborted();
+}
+
+template <typename Clock>
 future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     cancel_ticker(id);
     _servers[id].rpc->unpublish();
-    co_await _servers[id].server->abort(std::move(reason));
+    auto aborted = co_await coroutine::as_future(_servers[id].server->abort(std::move(reason)));
+    // Checked even if abort() failed: the fibers are stopped either way.
+    BOOST_CHECK_EQUAL(_servers[id].sm->calls_after_abort(), 0);
+    if (aborted.failed()) {
+        co_await coroutine::return_exception_ptr(std::move(aborted).get_exception());
+    }
     if (_snapshots->contains(to_raft_id(id))) {
         BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), 2);
         _snapshots->erase(to_raft_id(id));

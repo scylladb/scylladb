@@ -20,6 +20,7 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
@@ -535,6 +536,13 @@ private:
     future<> wait_for_apply(index_t idx, abort_source*);
 
     void check_not_aborted();
+    // Whether abort() was called, after which the state machine must not be
+    // used anymore.
+    bool state_machine_aborted() const;
+    // Throws stop_apply_fiber if state_machine_aborted(). Called by the applier
+    // fiber right before each state machine call. The io fiber, which only
+    // drops snapshots, skips that instead.
+    void check_state_machine_usable() const;
     void handle_background_error(const char* fiber_name);
 
     // Triggered on the next tick, used to delay retries in add_entry, modify_config, read_barrier.
@@ -1560,8 +1568,12 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
     }
 
-    for (const auto& snp_id: batch.snps_to_drop) {
-        _state_machine->drop_snapshot(snp_id);
+    // Dropping snapshots is just cleanup, so it's skipped rather than
+    // stopping the fiber.
+    if (!state_machine_aborted()) {
+        for (const auto& snp_id: batch.snps_to_drop) {
+            _state_machine->drop_snapshot(snp_id);
+        }
     }
 
     if (batch.log_entries.size()) {
@@ -1803,6 +1815,7 @@ future<> server_impl::applier_fiber() {
                 utils::wait_for_message(std::chrono::minutes(5)));
         // Apply snapshot it to the state machine
         logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
+        check_state_machine_usable();
         co_await _state_machine->load_snapshot(snp.id);
         // Resolve the apply waiters covered by the snapshot only now, after
         // load_snapshot(): a resolved "applied" waiter promises that the
@@ -1842,6 +1855,7 @@ future<> server_impl::applier_fiber() {
         snp.term = *_fsm->log_term_for(snp.idx);
         snp.config = _fsm->log_last_conf_for(snp.idx);
         logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
+        check_state_machine_usable();
         snp.id = co_await _state_machine->take_snapshot();
         // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
         // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon find
@@ -1860,11 +1874,10 @@ future<> server_impl::applier_fiber() {
     auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
             if (_applier_mailbox.stopped()) {
-                // abort() waits for this fiber before it aborts the state
-                // machine, so nothing else will interrupt apply() -- and the
-                // backlog here is unbounded, io_fiber never having been
-                // throttled by the applier. Stop after the batch in hand, as
-                // the bounded queue this replaced did when its pop threw.
+                // The server is being aborted, and the backlog here is
+                // unbounded, io_fiber never having been throttled by the
+                // applier. Stop after the batch in hand, as the bounded queue
+                // this replaced did when its pop threw.
                 throw stop_apply_fiber{};
             }
             const index_t first_idx = _applied_idx + index_t{1};
@@ -1914,6 +1927,7 @@ future<> server_impl::applier_fiber() {
 
             const auto size = commands.size();
             if (size) {
+                check_state_machine_usable();
                 try {
                     co_await _state_machine->apply(std::move(commands));
                 } catch (abort_requested_exception& e) {
@@ -2157,11 +2171,31 @@ void server_impl::check_not_aborted() {
     }
 }
 
+bool server_impl::state_machine_aborted() const {
+    // abort() sets _aborted before it aborts the state machine.
+    return _aborted.has_value();
+}
+
+void server_impl::check_state_machine_usable() const {
+    if (state_machine_aborted()) {
+        throw stop_apply_fiber{};
+    }
+}
+
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    if (_aborted) {
+        // abort() aborts the state machine while the fibers still run, so a
+        // call in progress may fail because of that.
+        const bool expected = try_catch_nested<seastar::abort_requested_exception>(e)
+                || try_catch_nested<seastar::gate_closed_exception>(e);
+        logger.log(expected ? log_level::debug : log_level::error,
+                "[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+        // Not passed to on_background_error even if unexpected: the server is
+        // already being stopped, and abort() fails all the waiters anyway.
+        // Some users escalate on_background_error to on_internal_error, which
+        // would turn a shutdown into a crash.
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
@@ -2171,6 +2205,22 @@ void server_impl::handle_background_error(const char* fiber_name) {
 }
 
 future<> server_impl::abort(sstring reason) {
+    // Every step below has to run even if an earlier one failed: the server is
+    // destroyed as soon as abort() resolves, so whatever is left running would
+    // use freed memory. Report the first error once everything is stopped.
+    std::exception_ptr first_error;
+    const auto maybe_note_error = [this, &first_error] (future<> f, const std::string_view step) -> future<> {
+        auto result = co_await coroutine::as_future(std::move(f));
+        if (!result.failed()) {
+            co_return;
+        }
+        std::exception_ptr e = result.get_exception();
+        logger.error("[{}] abort: {} failed: {}", _tag, step, e);
+        if (!first_error) {
+            first_error = std::move(e);
+        }
+    };
+
     _is_alive = false;
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _tag);
@@ -2181,15 +2231,21 @@ future<> server_impl::abort(sstring reason) {
     _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // transfers, so abort them first. Aborting the state machine here
+    // to interrupt ongoing apply/snapshot operations.
     _applier_mailbox.stop();
-    co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
+
+    auto abort_sm = _state_machine->abort();
+    co_await maybe_note_error(
+        seastar::when_all_succeed(
+            std::move(_io_status),
+            std::move(_applier_status)).discard_result(),
+        "waiting for the io and applier fibers");
 
     // Start RPC abort before aborting snapshot applications or destroying entry waiters.
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
-    auto abort_sm = _state_machine->abort();
     auto abort_persistence = _persistence->abort();
 
     // Abort snapshot applications before waiting for `abort_rpc`,
@@ -2225,7 +2281,12 @@ future<> server_impl::abort(sstring reason) {
     }
     _awaited_indexes.clear();
 
-    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
+    co_await maybe_note_error(
+        seastar::when_all_succeed(
+            std::move(abort_rpc),
+            std::move(abort_sm),
+            std::move(abort_persistence)).discard_result(),
+        "aborting the rpc, the state machine, and the persistence");
 
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error(*_aborted));
@@ -2250,7 +2311,14 @@ future<> server_impl::abort(sstring reason) {
 
     auto all_futures = std::views::concat(append_futures, gates);
 
-    co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
+    co_await maybe_note_error(
+        seastar::when_all_succeed(
+            all_futures.begin(), all_futures.end()).discard_result(),
+        "waiting for in-flight requests");
+
+    if (first_error) {
+        co_await coroutine::return_exception_ptr(std::move(first_error));
+    }
 }
 
 bool server_impl::is_alive() const {
