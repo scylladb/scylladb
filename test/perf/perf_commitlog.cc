@@ -42,6 +42,8 @@ struct test_config {
 
     uint64_t min_flush_delay_in_ms;
     uint64_t max_flush_delay_in_ms;
+
+    unsigned replay_iterations = 0;
 };
 
 using clperf_result = perf_result_with_aio_writes;
@@ -122,6 +124,10 @@ struct commitlog_service {
     future<> init(const db::commitlog::config& cfg) {
         SCYLLA_ASSERT(!log);
         log.emplace(co_await db::commitlog::create_commitlog(cfg));
+        if (this->cfg.replay_iterations) {
+            // Segments must stay on disk for the replay pass.
+            co_return;
+        }
         fa.emplace(log->add_flush_handler(std::bind(&commitlog_service::flush_handler, this, std::placeholders::_1, std::placeholders::_2)));
     }
     future<> stop() {
@@ -152,6 +158,63 @@ static std::vector<clperf_result> do_commitlog_test(sharded<commitlog_service>& 
     }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, true, &clperf_result::update);
 }
 
+struct replay_stats {
+    uint64_t bytes = 0;
+    uint64_t entries = 0;
+    uint64_t instructions = 0;
+    uint64_t cycles = 0;
+    uint64_t allocations = 0;
+    uint64_t tasks = 0;
+
+    replay_stats operator+(const replay_stats& o) const {
+        return {bytes + o.bytes, entries + o.entries, instructions + o.instructions, cycles + o.cycles, allocations + o.allocations, tasks + o.tasks};
+    }
+};
+
+static future<replay_stats> replay_segments(commitlog_service& cls) {
+    replay_stats st;
+    auto segs = cls.log->get_active_segment_names();
+    auto pfx = cls.log->active_config().fname_prefix;
+    auto insns = linux_perf_event::user_instructions_retired();
+    auto cycles = linux_perf_event::user_cpu_cycles_retired();
+    auto allocs = perf_mallocs();
+    auto tasks = perf_tasks_processed();
+    insns.enable();
+    cycles.enable();
+    for (auto& s : segs) {
+        co_await db::commitlog::read_log_file(s, pfx, [&st](db::commitlog::buffer_and_replay_position bp) {
+            st.bytes += bp.buffer.size_bytes();
+            ++st.entries;
+            return make_ready_future<>();
+        });
+    }
+    insns.disable();
+    cycles.disable();
+    st.instructions = insns.read();
+    st.cycles = cycles.read();
+    st.allocations = perf_mallocs() - allocs;
+    st.tasks = perf_tasks_processed() - tasks;
+    co_return st;
+}
+
+static future<> do_replay_test(sharded<commitlog_service>& cls, const test_config& cfg) {
+    co_await cls.invoke_on_all([](commitlog_service& s) {
+        return s.log->sync_all_segments();
+    });
+    for (unsigned i = 0; i < cfg.replay_iterations; ++i) {
+        auto start = std::chrono::steady_clock::now();
+        auto st = co_await cls.map_reduce0(replay_segments, replay_stats{}, std::plus<>());
+        auto secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (!st.bytes) {
+            std::cout << "replay: no data\n";
+            co_return;
+        }
+        auto mb = st.bytes / double(1 << 20);
+        std::cout << fmt::format("replay: {:.1f} MB, {} entries, {:.1f} MB/s, {:.0f} insns/MB, {:.0f} cycles/MB, {:.1f} allocs/MB, {:.1f} tasks/MB\n", mb,
+                st.entries, mb / secs, st.instructions / mb, st.cycles / mb, st.allocations / mb, st.tasks / mb);
+    }
+}
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -174,6 +237,7 @@ int main(int argc, char** argv) {
         ("min-flush-delay-in-ms", bpo::value<uint64_t>()->default_value(10), "minimum flush response delay")
         ("max-flush-delay-in-ms", bpo::value<uint64_t>()->default_value(800), "maximum flush response delay")
 
+        ("replay", bpo::value<unsigned>()->default_value(0), "after writing, replay the written segments this many times; segments are not flushed, so writes beyond --commitlog-total-space-in-mb block forever")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ;
 
@@ -219,6 +283,7 @@ int main(int argc, char** argv) {
         }
         cfg.min_data_size = app.configuration()["min-data-size"].as<size_t>();
         cfg.max_data_size = app.configuration()["max-data-size"].as<size_t>();
+        cfg.replay_iterations = app.configuration()["replay"].as<unsigned>();
         cfg.min_flush_delay_in_ms = app.configuration()["min-flush-delay-in-ms"].as<uint64_t>();
         cfg.max_flush_delay_in_ms = app.configuration()["min-flush-delay-in-ms"].as<uint64_t>();
 
@@ -266,6 +331,9 @@ int main(int argc, char** argv) {
 
             if (app.configuration().contains("json-result")) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median_result, mad, max, min);
+            }
+            if (cfg.replay_iterations) {
+                co_await do_replay_test(test_commitlog, cfg);
             }
         } catch (...) {
             ex = std::current_exception();
