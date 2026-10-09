@@ -12,7 +12,9 @@
 
 from .util import unique_name, unique_key_int
 from cassandra.protocol import InvalidRequest
+from cassandra.query import BoundStatement
 import pytest
+import struct
 import time
 
 @pytest.fixture(scope="module")
@@ -248,3 +250,28 @@ def test_rewrite_multiple_cells_using_same_timestamp(cql, table1):
     cql.execute(f"INSERT INTO {table} (k, v, w) VALUES ({k}, {values[0]['v']}, {values[0]['w']}) USING TIMESTAMP {ts} AND TTL {ttl1}")
     cql.execute(f"INSERT INTO {table} (k, v, w) VALUES ({k}, {values[1]['v']}, {values[1]['w']}) USING TIMESTAMP {ts} AND TTL {ttl2}")
     assert_values(k, values[1])
+
+# A null value bound to USING TIMESTAMP ? is rejected with InvalidRequest.
+def test_null_timestamp(cql, table1):
+    p = unique_key_int()
+    write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(write, [p, 1, None])
+
+# An empty (zero-length) value bound to USING TIMESTAMP ? should also be
+# rejected with InvalidRequest. In Scylla, it causes a server error instead
+# (SCYLLADB-5208). Cassandra fails here too, with a NullPointerException
+# server error (CASSANDRA-21738). For USING TTL ?, Cassandra fixed the same
+# NullPointerException in CASSANDRA-17822 by treating an empty TTL like a
+# null one, and the translated Cassandra test testEmptyTTL (in
+# cassandra_tests/validation/operations/insert_test.py) checks that.
+@pytest.mark.xfail(reason="SCYLLADB-5208")
+def test_empty_timestamp(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
+    # The Python driver can't send an empty value for a bigint bind
+    # variable, so we send the raw serialized values ourselves.
+    bound = BoundStatement(write)
+    bound.values = [struct.pack('>i', p), struct.pack('>i', 1), b'']
+    with pytest.raises(InvalidRequest):
+        cql.execute(bound)
