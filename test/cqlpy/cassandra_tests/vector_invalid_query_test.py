@@ -9,7 +9,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from ..util import is_scylla, wait_for_vector_index
+from ..util import is_scylla
+from . import vector_tester
 
 ANN_LIMIT_ERROR = "Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than %s. LIMIT was %s"
 # ANN() is an ordinary function as far as preparation is concerned - the vector search claims the
@@ -256,15 +257,17 @@ def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_ke
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
     )
-    with create_table(
+    # This test uses the vector store, so it needs vector_tester's
+    # create_table(), which uses a fresh table name, and not the one from
+    # porting, which may reuse the name of a dropped table. See the
+    # explanation in vector_tester.py.
+    with vector_tester.create_table(
         cql,
         test_keyspace,
         "(pk1 int, pk2 int, ck1 int, ck2 int, v vector<float, 1>, c int, primary key ((pk1, pk2), ck1, ck2))"
     ) as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
-        execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
-        keyspace, table_name = table.split('.')
-        wait_for_vector_index(cql, keyspace, table_name + '_v_idx')
+        vector_tester.create_index(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
 
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)")
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)")
