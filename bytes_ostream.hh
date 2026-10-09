@@ -469,6 +469,20 @@ public:
 
     managed_bytes to_managed_bytes() && {
         if (_size) {
+            // clear(), retract() and remove_suffix() can leave empty chunks, which managed_bytes_view can't handle.
+            auto* ref = &_begin;
+            while (auto c = ref->ptr) {
+                if (c->frag_size) {
+                    ref = &c->next;
+                    continue;
+                }
+                *ref = c->next;
+                if (c->next) {
+                    c->next->backref = ref;
+                }
+                c->~chunk();
+                ::free(c);
+            }
             _begin.ptr->size = _size;
             _current = nullptr;
             _size = 0;
