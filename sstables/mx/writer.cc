@@ -23,8 +23,8 @@
 #include "keys/keys.hh"
 
 #include <functional>
+#include <iterator>
 #include <queue>
-#include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
 
 logging::logger slogger("mc_writer");
@@ -74,44 +74,43 @@ private:
 
 public:
     // Use the same type for iterator and const_iterator
-    using const_iterator = class iterator
-        : public boost::iterator_facade<
-            iterator,
-            const ValueType,
-            std::input_iterator_tag,
-            const ValueType
-        >
-    {
+    using const_iterator = class iterator {
     private:
         const InputRange* _range;
 
         friend class input_range_base;
-        friend class boost::iterator_core_access;
 
         explicit iterator(const InputRange& range)
             : _range(range.next() ? &range : nullptr)
         {}
 
-        void increment() {
-            SCYLLA_ASSERT(_range);
-            if (!_range->next()) {
-                _range = nullptr;
-            }
-        }
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = ValueType;
+        using difference_type = std::ptrdiff_t;
 
-        bool equal(iterator that) const {
-            return (_range == that._range);
-        }
+        iterator() : _range{} {}
 
-        const ValueType dereference() const {
+        const ValueType operator*() const {
             SCYLLA_ASSERT(_range);
             return _range->get_value();
         }
 
-    public:
-        iterator() : _range{} {}
+        iterator& operator++() {
+            SCYLLA_ASSERT(_range);
+            if (!_range->next()) {
+                _range = nullptr;
+            }
+            return *this;
+        }
 
+        void operator++(int) {
+            ++*this;
+        }
+
+        bool operator==(const iterator&) const = default;
     };
+    static_assert(std::input_iterator<iterator>);
 
     iterator begin() const { return iterator{self()}; }
     iterator end() const   { return iterator{}; }
