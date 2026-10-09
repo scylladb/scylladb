@@ -5023,9 +5023,6 @@ future<> storage_service::local_topology_barrier() {
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
-        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for strongly consistent tablet raft groups to be torn down", version);
-        co_await ss._groups_manager.local_topology_barrier(ss._shared_token_metadata.get(), ss._abort_source);
-
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
 }
@@ -5794,40 +5791,20 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
         }
-        if (group_id) {
-            co_await _groups_manager.container().invoke_on(shard,
-                    [tablet, group_id = *group_id, shard] (strong_consistency::groups_manager& gm) -> future<> {
-                // The raft group of a strongly consistent tablet must be gone before its
-                // storage is cleaned up: nothing may apply raft entries to a tablet whose
-                // compaction groups have been stopped, and a late apply would kill the raft
-                // server's applier fiber, which is a fatal background error.
-                //
-                // groups_manager::update() tears the group down as soon as the stage that
-                // ended this node's membership is published, and the barrier that precedes
-                // this cleanup waits for the teardown to complete. Failing here means that
-                // ordering broke, so fail the cleanup rather than corrupt the tablet - the
-                // coordinator retries it.
-                if (gm.is_group_running(group_id)) {
-                    throw std::runtime_error(fmt::format("Tablet {} still has a running raft group {} on shard {}",
-                            tablet, group_id, shard));
-                }
-
-                // This replica has left the group for good - this is the cleanup of either
-                // the leaving replica or, on the rollback path, the pending one - so its
-                // persisted raft state has to go with the tablet's storage. Left behind, it
-                // would let the node rejoin the group later claiming a commit index whose
-                // entries it no longer holds, and the leader never resends those.
-                //
-                // Before the storage below rather than after, so that no ordering of a
-                // crash in between leaves raft state describing a tablet whose storage is
-                // already gone. It is not a guarantee: system.raft_groups goes through the
-                // ordinary commitlog with periodic sync, so a crash can lose this delete
-                // while the storage removal below survives. What covers that is commitlog
-                // replay refusing a group whose tablet has no replica on the shard.
-                co_await gm.erase_raft_group_state(group_id);
-            });
-        }
-        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) -> future<> {
+        co_await _db.invoke_on(shard, [tablet, group_id, &gm = _groups_manager.container(), &sys_ks = _sys_ks,
+                &vbw = _view_building_worker] (replica::database& db) -> future<> {
+            if (group_id) {
+                // Before the storage cleanup. The raft server must be gone first: an entry
+                // applied to stopped compaction groups kills its applier fiber, a fatal
+                // error. Its teardown was scheduled when the stage that ended this
+                // replica's hosting was applied, which do_tablet_operation()'s read barrier
+                // guarantees here. The persisted raft state goes too, or a later return of
+                // the tablet would rejoin the group claiming a commit index whose entries it
+                // no longer holds. A crash can still lose that delete (system.raft_groups
+                // uses the periodic commitlog); commitlog replay then refuses the group,
+                // because the tablet has no replica on this shard.
+                co_await gm.local().cleanup_group(tablet, *group_id);
+            }
             auto& table = db.find_column_family(tablet.table);
             co_await vbw.local().cleanup_staging_sstables(table.get_effective_replication_map(), tablet.table, tablet.tablet);
             co_await table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
