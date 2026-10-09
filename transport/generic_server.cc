@@ -280,6 +280,9 @@ future<> server::shutdown() {
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
      co_await std::move(_listeners_stopped);
+    // Close the listening sockets now, so a restarted server can bind while
+    // lingering requests still delay stop().
+    _listeners.clear();
 
     // Shutdown RX side of the connections, so no new requests could be received.
     // Leave the TX side so the responses to ongoing requests could be sent.
