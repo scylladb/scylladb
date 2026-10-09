@@ -12,6 +12,9 @@ on:
         description: 'the md5sum for scylla executable'
         value: ${{ jobs.build.outputs.md5sum }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   read-toolchain:
     uses: ./.github/workflows/read-toolchain.yaml
@@ -24,7 +27,7 @@ jobs:
     outputs:
       md5sum: ${{ steps.checksum.outputs.md5sum }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Generate the building system
