@@ -319,7 +319,11 @@ BURST = 0.05               # bookings grow by at most this share of the CPUs a s
 PSI_CPU_LIMIT = 25.0       # tests' CPU "some avg10" % above which admission pauses, target shrinks
 PSI_MEM_LIMIT = 5.0        # machine memory "some avg10" % above which admission pauses
 TARGET_KP = 0.006          # the CPU target moves this share of the CPUs per point of pressure off the limit...
-TARGET_KI = 0.00015        # ...and, integrated, this share per point and second it stays off
+TARGET_KI = 0.00015        # ...and, integrated, this share per point and second it stays off (until tuned)
+PSI_TAU = 10.0             # seconds the kernel's avg10 averages pressure over: the controller's own lag
+TUNE_WINDOW = 600.0        # seconds of target, load and pressure the controller tunes itself on
+TUNE_EVERY = 60.0          # how often it does
+TUNE_MAX_LAG = 60.0        # the longest delay from a target to the pressure it causes it looks for
 DEPTH = 1                  # tests a worker may hold queued behind the one it runs
 SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more (see _depth)
 JOIN_SETUP_FRACTION = 0.1  # a long module is shared only if its setup is at most this much of a test
@@ -738,6 +742,43 @@ def read_psi(kind: str, path: Path | None = None, line_kind: str = "some") -> fl
     return 0.0
 
 
+def identify_pressure_process(samples: list[tuple[float, float, float, float]]) -> tuple[float, float] | None:
+    """(points of pressure per core of load, seconds from a target change to
+    the pressure it causes) from (time, target, load, pressure) samples about
+    two seconds apart, or None when they say too little: the load hardly
+    moved, or nothing the target did shows in the pressure."""
+    if len(samples) < 60:
+        return None
+    step = (samples[-1][0] - samples[0][0]) / (len(samples) - 1)
+    tg = [x[1] for x in samples]; ld = [x[2] for x in samples]; ps = [x[3] for x in samples]
+    ml, mp, mt = statistics.mean(ld), statistics.mean(ps), statistics.mean(tg)
+    var_load = sum((x - ml) ** 2 for x in ld)
+    if var_load / len(ld) < 1.0:
+        return None
+    gain = sum((x - ml) * (y - mp) for x, y in zip(ld, ps)) / var_load
+    dt = [x - mt for x in tg]; dp = [y - mp for y in ps]
+    best, lag = 0.2, None
+    for k in range(1, int(TUNE_MAX_LAG / step) + 1):
+        a, b = dt[:-k], dp[k:]
+        den = math.sqrt(sum(x * x for x in a) * sum(y * y for y in b))
+        c = sum(x * y for x, y in zip(a, b)) / den if den else 0.0
+        if c > best:
+            best, lag = c, k * step
+    if lag is None:
+        return None
+    return min(10.0, max(0.3, gain)), lag
+
+
+def simc_gains(gain: float, delay: float, ncpus: int) -> tuple[float, float]:
+    """PI gains, cores per point and per point-second, for a process of
+    `gain` points per core answering after `delay` seconds (see _tune)."""
+    theta = max(2.0, delay - PSI_TAU)
+    kc = PSI_TAU / (gain * 2 * theta)
+    ki = kc / max(20.0, 1.6 * delay)
+    kp0, ki0 = TARGET_KP * ncpus, TARGET_KI * ncpus
+    return min(4 * kp0, max(kp0 / 4, kc)), min(4 * ki0, max(ki0 / 4, ki))
+
+
 class DoneWindow:
     """The tests that finished in the last `window` seconds, with the
     sums the measured work rate needs kept up to date as they come and
@@ -1050,6 +1091,10 @@ class DynamicScheduling:
         self._first_run_done: set[str] = set()
         self._target_t: float | None = None          # when the CPU target last moved
         self._target_i = 0.0                         # the integral part of the CPU target, in cores (<= 0)
+        self.target_kp = TARGET_KP * self.ncpus      # controller gains in cores per point and per point-second:
+        self.target_ki = TARGET_KI * self.ncpus      # the defaults until the controller has tuned itself
+        self._tune_hist: deque[tuple[float, float, float, float]] = deque()   # (time, target, load, pressure)
+        self._tuned_at = -math.inf
         self._pressured = False
         self._last_retire = -math.inf
         self._psi = (0.0, 0.0)
@@ -2138,9 +2183,10 @@ class DynamicScheduling:
                     (self.psi_mem_limit - psi_mem) * self.psi_cpu_limit / max(self.psi_mem_limit, 1e-9))
         full = self.cpu_target_frac * self.ncpus
         lowest = self.cpu_target_floor - full
-        self._target_i = min(0.0, max(lowest, self._target_i + TARGET_KI * self.ncpus * error * dt))
+        self._target_i = min(0.0, max(lowest, self._target_i + self.target_ki * error * dt))
         old = self.cpu_target
-        self.cpu_target = min(full, max(self.cpu_target_floor, full + TARGET_KP * self.ncpus * error + self._target_i))
+        self.cpu_target = min(full, max(self.cpu_target_floor, full + self.target_kp * error + self._target_i))
+        self._tune(now, psi_cpu)
         if pressured != self._pressured:
             if pressured:
                 self.stats["pressure_cuts"] += 1
@@ -2150,6 +2196,42 @@ class DynamicScheduling:
         return pressured
 
     # -- selection ---------------------------------------------------
+
+    def _tune(self, now: float, psi: float) -> None:
+        """Set the controller's gains from how this machine answers it.
+
+        Every TUNE_EVERY seconds, from the last TUNE_WINDOW of samples:
+        the process gain K, points of pressure per core of load (least
+        squares), and the delay L, the lag at which the target and the
+        pressure follow each other best.  Then SIMC (Skogestad's rules
+        for a first-order process with dead time): with tau the
+        avg10's own lag and theta = L - tau, Kc = tau / (K * 2 theta).
+        Not SIMC's integral time, min(tau, 8 theta), which is tau here:
+        the pressure carries slow noise from the changing test mix,
+        and a ten-second integral chased it -- a debug run's target and
+        pressure swung every minute or two; against a model of those
+        runs an integral over 1.6 L, forty seconds for the 25-second
+        delay CI shows, halves the swing.  Estimates are blended in a
+        third at a time and kept within a quarter and four times the
+        defaults, so a poor one cannot wreck the controller.
+        """
+        if self._tune_hist and now - self._tune_hist[-1][0] < 2.0:
+            return
+        self._tune_hist.append((now, self.cpu_target, self.measured_load, psi))
+        while self._tune_hist and now - self._tune_hist[0][0] > TUNE_WINDOW:
+            self._tune_hist.popleft()
+        if now - self._tuned_at < TUNE_EVERY:
+            return
+        self._tuned_at = now
+        est = identify_pressure_process(list(self._tune_hist))
+        if est is None:
+            return
+        kc, ki = simc_gains(*est, self.ncpus)
+        self.target_kp = 0.7 * self.target_kp + 0.3 * kc
+        self.target_ki = 0.7 * self.target_ki + 0.3 * ki
+        self.stats["controller_tunings"] += 1
+        self.log(f"pressure controller: {est[0]:.2f} points per core, {est[1]:.0f}s delay; gains "
+                 f"{self.target_kp:.3f} cores/point, {self.target_ki:.4f} cores/point/s")
 
     def _pick(self, node: WorkerController, park: bool = True) -> int | None:
         """Next test for this worker.
