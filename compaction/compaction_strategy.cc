@@ -668,6 +668,8 @@ leveled_compaction_strategy::calculate_max_sstable_size_in_mb(std::optional<sstr
 time_window_compaction_strategy::time_window_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _options(options)
+    , _ics_options(options)
+    , _fragment_size(incremental_compaction_strategy::parse_fragment_size(options))
     , _stcs_options(options)
 {
     if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
@@ -684,7 +686,13 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
 // This helps making sure that only allowed options are being set.
 void time_window_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     time_window_compaction_strategy_options::validate(options, unchecked_options);
-    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+    // Windows are compacted with ICS, so TWCS takes its bucketing options and fragment size,
+    // but not the space amplification goal, which applies across tiers rather than within a window.
+    incremental_compaction_strategy_options::validate(options, unchecked_options);
+    incremental_compaction_strategy::validate_fragment_size_option(options, unchecked_options);
+    // Accept, and ignore, the one STCS option ICS doesn't have, which TWCS used to take, so
+    // that a schema dumped from an older version can still be replayed as-is.
+    size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
