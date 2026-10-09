@@ -433,7 +433,7 @@ class UnixSockerListener:
         self.notification_id = 0
         self.condition = threading.Condition(self.server.mutex)
 
-        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01})
         self.thread.start()
 
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
