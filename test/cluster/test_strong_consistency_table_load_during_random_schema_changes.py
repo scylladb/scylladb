@@ -34,6 +34,7 @@ import random
 import sys
 import time
 import uuid as _uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Awaitable, Optional, Callable
 
@@ -300,6 +301,8 @@ class SCSchemaTestState:
     reader_table_absent: int = 0
     schema_ops: int = 0
     recreate_count: int = 0
+    op_weights: list[tuple[str, int]] = field(default_factory=lambda: list(SCHEMA_OPS))
+    op_counts: Counter = field(default_factory=Counter)
 
     # Closed windows for completed DROP+CREATE sequences.  Written by the
     # schema changer's recreate operations, read by the readers and writers.
@@ -647,7 +650,7 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
 
         while result is None and not state.stop_event.is_set():
             available_ops = [
-                (name, weight) for name, weight in SCHEMA_OPS
+                (name, weight) for name, weight in state.op_weights
                 # BUG_ALTER_TYPE:
                 # if not (name == "alter_type" and state.current_c_type != "int")
                 if not (name == "drop_column" and not state.added_columns)
@@ -671,6 +674,7 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
             break
 
         state.schema_ops += 1
+        state.op_counts[op_name] += 1
         logger.info("DDL: %s (schema op #%d) done at time_ns=%d",
                     result, state.schema_ops, t_end_ns)
         await asyncio.sleep(rng.uniform(*SCHEMA_OP_PAUSE_S))
@@ -678,10 +682,18 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
     logger.info("Schema changer finished: %d ops", state.schema_ops)
 
 
+# The `all` mix may never pick a rare operation; each per-operation variant
+# guarantees that its operations run.
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
+@pytest.mark.parametrize("schema_ops", [
+    pytest.param(SCHEMA_OPS, id="all"),
+    pytest.param([("add_column", 1), ("drop_column", 1)], id="add_drop_column"),
+    pytest.param([("drop_recreate", 1)], id="drop_recreate"),
+    pytest.param([("drop_recreate_ks", 1)], id="drop_recreate_ks"),
+])
 async def test_sc_linearizability_with_schema_changes(
-    manager: ScyllaClusterManager, tmp_path,
+    manager: ScyllaClusterManager, tmp_path, schema_ops,
 ):
     # Logged so that a failing run can be replayed.  Only the choice of schema
     # operations is reproducible: the interleaving of the concurrent readers,
@@ -702,7 +714,7 @@ async def test_sc_linearizability_with_schema_changes(
         cql, servers, time.time() + CQL_READY_TIMEOUT_S)
 
     async with new_test_keyspace(manager, KEYSPACE_OPTS) as ks:
-        state = SCSchemaTestState(ks=ks, seed=seed)
+        state = SCSchemaTestState(ks=ks, seed=seed, op_weights=list(schema_ops))
 
         await cql.run_async(f"CREATE TABLE {state.fqtn} {TABLE_SCHEMA}")
         prepare_rw_statements(state, cql)
@@ -766,6 +778,13 @@ async def test_sc_linearizability_with_schema_changes(
             f"Too few schema operations ({state.schema_ops}), "
             f"expected >= {MIN_EXPECTED_SCHEMA_OPS}"
         )
+        logger.info("Schema operations by kind: %s", dict(state.op_counts))
+        if schema_ops is not SCHEMA_OPS:
+            for name, _ in schema_ops:
+                assert state.op_counts[name] >= MIN_EXPECTED_SCHEMA_OPS, (
+                    f"Too few {name} operations ({state.op_counts[name]}), "
+                    f"expected >= {MIN_EXPECTED_SCHEMA_OPS}: {dict(state.op_counts)}"
+                )
 
         checker_output_dir = tmp_path / "porcupine-checker-output"
         logger.info(

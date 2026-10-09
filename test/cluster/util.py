@@ -13,6 +13,7 @@ import math
 import operator
 import time
 import re
+import uuid
 from contextlib import asynccontextmanager, contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -28,6 +29,35 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_
 from typing import Optional, List, Union
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CMDLINE = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
+
+
+async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
+                          expected_host_id: str | None = None):
+    """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
+    reports that one.
+
+    current_leader() on a follower is the last leader it heard from, so a replica that a
+    migration has just removed keeps being reported until the follower's election timeout
+    fires. A caller that knows which node has to end up leading must wait that window out
+    instead of asserting on the first reading.
+    """
+    async def get_leader_host_id():
+        result = await manager.api.get_raft_leader(s.ip_addr, group_id)
+        if uuid.UUID(result).int == 0:
+            return None
+        return result if expected_host_id is None or result == expected_host_id else None
+    label = f"group {group_id} to be led by {expected_host_id}" if expected_host_id else f"a leader of group {group_id}"
+    return await wait_for(get_leader_host_id, time.time() + 60, label=label)
+
+async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
+    table_id = await manager.get_table_id(ks, table)
+    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
+    return str(rows[0].raft_group_id)
 
 UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
 
