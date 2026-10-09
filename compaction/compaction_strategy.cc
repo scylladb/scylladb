@@ -30,6 +30,7 @@
 #include "leveled_manifest.hh"
 #include "utils/to_string.hh"
 #include "incremental_compaction_strategy.hh"
+#include "incremental_backlog_tracker.hh"
 #include "sstables/sstable_set_impl.hh"
 
 namespace compaction {
@@ -340,127 +341,92 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
 
 extern logging::logger clogger;
 
-// The backlog for TWCS is just the sum of the individual backlogs in each time window.
-// We'll keep various SizeTiered backlog tracker objects-- one per window for the static SSTables.
-// We then scan the current compacting and in-progress writes and matching them to existing time
-// windows.
+// The ICS backlog of a subset of the sstables of a compaction group, e.g. a time window or
+// level 0, for the strategies which compact such a subset with ICS. It is computed by an
+// incremental_backlog_tracker, from a compaction_backlog_source handing out the sstables of
+// the subset alone.
+class sstable_subset_backlog final : public compaction_backlog_source {
+    schema_ptr _schema;
+    lw_shared_ptr<sstables::sstable_set> _sstables;
+    incremental_backlog_tracker _tracker;
+public:
+    sstable_subset_backlog(schema_ptr schema, incremental_compaction_strategy_options options)
+        : _schema(std::move(schema))
+        , _sstables(make_lw_shared<sstables::sstable_set>(std::make_unique<sstables::partitioned_sstable_set>(_schema)))
+        , _tracker(std::move(options))
+    {}
+
+    void insert(const sstables::shared_sstable& sst) {
+        _sstables->insert(sst);
+    }
+
+    double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+        return _tracker.backlog(*this, ow, oc);
+    }
+
+    virtual const schema_ptr& schema() const noexcept override {
+        return _schema;
+    }
+
+    virtual lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override {
+        return _sstables;
+    }
+};
+
+// The backlog for TWCS is just the sum of the individual backlogs in each time window. Each window
+// is compacted with ICS, so its backlog is the ICS backlog of the runs in it.
 //
-// With the above we have everything we need to just calculate the backlogs individually and sum
-// them. Just need to be careful that for the current in progress backlog we may have to create
-// a new object for the partial write at this time.
+// The sstables are grouped into their windows on the first backlog() after they change. Each
+// window takes the compacted parts of the compactions in progress off the runs of its own it
+// reads from, which are matched by run identifier. Sstables written by an older compaction
+// spanning multiple windows may share it across windows, so each window is only given the
+// compactions in progress of its own sstables. As with ICS, the writes in progress aren't
+// accounted for.
 class time_window_backlog_tracker final : public compaction_backlog_tracker::impl {
     time_window_compaction_strategy_options _twcs_options;
-    size_tiered_compaction_strategy_options _stcs_options;
-    std::unordered_map<api::timestamp_type, size_tiered_backlog_tracker> _windows;
+    incremental_compaction_strategy_options _ics_options;
+
+    // Window lower bound -> the backlog of the window. Empty until the first backlog() after
+    // the sstables changed.
+    mutable std::optional<std::unordered_map<api::timestamp_type, sstable_subset_backlog>> _windows;
 
     api::timestamp_type lower_bound_of(api::timestamp_type timestamp) const {
         timestamp_type ts = time_window_compaction_strategy::to_timestamp_type(_twcs_options.timestamp_resolution, timestamp);
         return time_window_compaction_strategy::get_window_lower_bound(_twcs_options.sstable_window_size, ts);
     }
 public:
-    time_window_backlog_tracker(time_window_compaction_strategy_options twcs_options, size_tiered_compaction_strategy_options stcs_options)
+    time_window_backlog_tracker(time_window_compaction_strategy_options twcs_options, incremental_compaction_strategy_options ics_options)
         : _twcs_options(twcs_options)
-        , _stcs_options(stcs_options)
+        , _ics_options(std::move(ics_options))
     {}
 
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
-        auto no_ow = compaction_backlog_tracker::ongoing_writes();
-        auto no_oc = compaction_backlog_tracker::ongoing_compactions();
-
-        // Common case: nothing in flight, skip building the per-window write/compaction maps.
-        if (ow.empty() && oc.empty()) {
-            double b = 0;
-            for (auto& windows : _windows) {
-                b += windows.second.backlog(src, no_ow, no_oc);
-            }
-            return b;
+        if (!_windows) {
+            std::unordered_map<api::timestamp_type, sstable_subset_backlog> windows;
+            src.sstables_for_backlog()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
+                windows.try_emplace(bound, src.schema(), _ics_options).first->second.insert(sst);
+            });
+            _windows = std::move(windows);
         }
 
-        std::unordered_map<api::timestamp_type, compaction_backlog_tracker::ongoing_writes> writes_per_window;
-        std::unordered_map<api::timestamp_type, compaction_backlog_tracker::ongoing_compactions> compactions_per_window;
-        double b = 0;
-
-        for (auto& wp : ow) {
-            auto bound = lower_bound_of(wp.second->maximum_timestamp());
-            writes_per_window[bound].insert(wp);
-        }
-
+        std::unordered_map<api::timestamp_type, compaction_backlog_tracker::ongoing_compactions> oc_per_window;
         for (auto& cp : oc) {
-            auto bound = lower_bound_of(cp.first->get_stats_metadata().max_timestamp);
-            compactions_per_window[bound].insert(cp);
+            oc_per_window[lower_bound_of(cp.first->get_stats_metadata().max_timestamp)].insert(cp);
         }
-
-        // Match the in-progress backlogs to existing windows. Compactions should always match an
-        // existing windows. Writes in progress can fall into an non-existent window.
-        for (auto& windows : _windows) {
-            auto bound = windows.first;
-            auto* ow_this_window = &no_ow;
-            auto itw = writes_per_window.find(bound);
-            if (itw != writes_per_window.end()) {
-                ow_this_window = &itw->second;
-            }
-            auto* oc_this_window = &no_oc;
-            auto itc = compactions_per_window.find(bound);
-            if (itc != compactions_per_window.end()) {
-                oc_this_window = &itc->second;
-            }
-            b += windows.second.backlog(src, *ow_this_window, *oc_this_window);
-            if (itw != writes_per_window.end()) {
-                // We will erase here so we can keep track of which
-                // writes belong to existing windows. Writes that don't belong to any window
-                // are writes in progress to new windows and will be accounted in the final
-                // loop before we return
-                writes_per_window.erase(itw);
-            }
-        }
-
-        // Partial writes that don't belong to any window are accounted here.
-        for (auto& current : writes_per_window) {
-            b += size_tiered_backlog_tracker(_stcs_options).backlog(src, current.second, no_oc);
+        static const compaction_backlog_tracker::ongoing_compactions no_compactions;
+        double b = 0;
+        for (auto& [bound, w] : *_windows) {
+            auto it = oc_per_window.find(bound);
+            b += w.backlog(ow, it != oc_per_window.end() ? it->second : no_compactions);
         }
         return b;
     }
 
-    // Provides strong exception safety guarantees
+    // The replaced sstables are already reflected in the group's sstable set, so this
+    // only invalidates the windows.
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {
-        struct replacement {
-            std::vector<sstables::shared_sstable> old_ssts;
-            std::vector<sstables::shared_sstable> new_ssts;
-        };
-        std::unordered_map<api::timestamp_type, replacement> per_window_replacement;
-        auto tmp_windows = _windows;
-
-        for (auto& sst : new_ssts) {
-            auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
-            if (!tmp_windows.contains(bound)) {
-                tmp_windows.emplace(bound, size_tiered_backlog_tracker(_stcs_options));
-            }
-            per_window_replacement[bound].new_ssts.push_back(std::move(sst));
-        }
-        for (auto& sst : old_ssts) {
-            auto bound = lower_bound_of(sst->get_stats_metadata().max_timestamp);
-            if (tmp_windows.contains(bound)) {
-                per_window_replacement[bound].old_ssts.push_back(std::move(sst));
-            }
-        }
-
-        for (auto& [bound, r] : per_window_replacement) {
-            // All windows must exist here, as windows are created for new files and will
-            // remain alive as long as there's a single file in them
-            auto it = tmp_windows.find(bound);
-            if (it == tmp_windows.end()) {
-                on_internal_error(clogger, fmt::format("window for bound {} not found", bound));
-            }
-            auto& w = it->second;
-            w.replace_sstables(r.old_ssts, r.new_ssts);
-            if (w.total_bytes() <= 0) {
-                tmp_windows.erase(bound);
-            }
-        }
-
-        std::invoke([&] () noexcept {
-            _windows = std::move(tmp_windows);
-        });
+        _windows.reset();
     }
 };
 
@@ -670,7 +636,6 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     , _options(options)
     , _ics_options(options)
     , _fragment_size(incremental_compaction_strategy::parse_fragment_size(options))
-    , _stcs_options(options)
 {
     if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
         _disable_tombstone_compaction = true;
@@ -696,7 +661,7 @@ void time_window_compaction_strategy::validate_options(const std::map<sstring, s
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
-    return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
+    return std::make_unique<time_window_backlog_tracker>(_options, _ics_options);
 }
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)

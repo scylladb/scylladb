@@ -5034,6 +5034,100 @@ SEASTAR_FIXTURE_TEST_CASE(twcs_single_key_reader_through_compound_set_test_gcs,
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// The backlog of a strategy which compacts some subset of its sstables with ICS, given
+// min_threshold sstables in that subset, either as fragments of a single run, or as runs
+// of their own.
+static double backlog_of_runs(test_env& env, compaction::compaction_strategy_type type, bool single_run) {
+    static constexpr uint64_t fragment_size = 1UL*1024UL*1024UL*1024UL;
+    auto schema = table_for_tests::make_default_schema();
+    // The tracker takes the sstables from the table's sstable set.
+    table_for_tests cf = env.make_table_for_tests(schema);
+    auto stop_cf = defer([&] noexcept { cf.stop().get(); });
+    cf->disable_auto_compaction().get();
+    auto tracker = compaction::make_compaction_strategy(type, {}).make_backlog_tracker();
+    auto keys = tests::generate_partition_keys(schema->min_compaction_threshold(), schema, local_shard_only::yes);
+    auto run_identifier = sstables::run_id::create_random_id();
+    for (auto& key : keys) {
+        auto sst = sstable_for_overlapping_test(env, schema, key.key(), key.key());
+        sstables::test(sst).set_data_file_size(fragment_size);
+        sstables::test(sst).set_run_identifier(single_run ? run_identifier : sstables::run_id::create_random_id());
+        cf->add_sstable_and_update_cache(sst).get();
+        tracker.replace_sstables({}, {std::move(sst)});
+    }
+    return tracker.backlog(cf.as_compaction_backlog_source());
+}
+
+// TWCS compacts each window with ICS, so the backlog of a window is that of its runs: a
+// window compacted into a single run of many fragments has nothing left to compact, while
+// the same data as separate runs of a similar size does.
+SEASTAR_TEST_CASE(twcs_backlog_counts_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE_EQUAL(backlog_of_runs(env, compaction::compaction_strategy_type::time_window, true), 0);
+        BOOST_REQUIRE_GT(backlog_of_runs(env, compaction::compaction_strategy_type::time_window, false), 0);
+    });
+}
+
+namespace {
+
+struct fully_compacted_progress : public compaction::backlog_read_progress_manager {
+    uint64_t _compacted;
+    explicit fully_compacted_progress(uint64_t compacted) : _compacted(compacted) {}
+    virtual uint64_t compacted() const override {
+        return _compacted;
+    }
+};
+
+}
+
+// The TWCS backlog of min_threshold runs in each of two windows, while an sstable of the first
+// window is being compacted. When shared_run_id is set, that sstable shares its run identifier
+// with an sstable of the second window, as the per-window sstables written by an older
+// compaction spanning both windows do.
+static double twcs_backlog_while_compacting(test_env& env, bool shared_run_id) {
+    static constexpr uint64_t data_size = 1UL*1024UL*1024UL*1024UL;
+    auto schema = table_for_tests::make_default_schema();
+    table_for_tests cf = env.make_table_for_tests(schema);
+    auto stop_cf = defer([&] noexcept { cf.stop().get(); });
+    cf->disable_auto_compaction().get();
+    fully_compacted_progress progress(data_size);
+    auto tracker = compaction::make_compaction_strategy(compaction::compaction_strategy_type::time_window, {}).make_backlog_tracker();
+    const unsigned per_window = schema->min_compaction_threshold();
+    // Disjoint keys in each window, as the table's sstable set would give an sstable overlapping
+    // another of its run a run identifier of its own.
+    auto keys = tests::generate_partition_keys(2 * per_window, schema, local_shard_only::yes);
+    // The default window is a day.
+    const int64_t window = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::days(1)).count();
+    auto shared_run = sstables::run_id::create_random_id();
+    shared_sstable compacting;
+    for (unsigned w = 0; w < 2; w++) {
+        for (unsigned i = 0; i < per_window; i++) {
+            auto& key = keys[w * per_window + i].key();
+            auto sst = env.make_sstable(schema);
+            sstables::test(sst).set_values_for_leveled_strategy(data_size, 0, w * window, key, key);
+            if (i == 0 && (w == 0 || shared_run_id)) {
+                sstables::test(sst).set_run_identifier(shared_run);
+            }
+            if (i == 0 && w == 0) {
+                compacting = sst;
+            }
+            cf->add_sstable_and_update_cache(sst).get();
+            tracker.replace_sstables({}, {std::move(sst)});
+        }
+    }
+    tracker.register_compacting_sstable(compacting, progress);
+    auto b = tracker.backlog(cf.as_compaction_backlog_source());
+    tracker.revert_charges(compacting);
+    return b;
+}
+
+// The compaction of an sstable is only taken off the backlog of its own window, even when
+// another window has an sstable of the same run identifier.
+SEASTAR_TEST_CASE(twcs_backlog_of_compaction_in_its_own_window_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE_CLOSE(twcs_backlog_while_compacting(env, true), twcs_backlog_while_compacting(env, false), 0.001);
+    });
+}
+
 void basic_ics_controller_correctness_fn(test_env& env) {
     static constexpr uint64_t default_fragment_size = 1UL*1024UL*1024UL*1024UL;
 
