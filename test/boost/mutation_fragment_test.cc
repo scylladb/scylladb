@@ -787,3 +787,23 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_ring_order_same
                 fmt::format("validator accepted out-of-ring-order key {} after {}", dkeys[i].key().with_schema(s), dkeys[i + 1].key().with_schema(s)));
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_move_to_permit) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    auto from = semaphore.make_permit();
+    auto to = semaphore.make_permit();
+
+    auto mf = ss.make_row(from, ss.make_ckey(0), "value");
+    auto expected = mutation_fragment(*s, to, mf);
+    auto memory = mf.memory_usage();
+    auto from_memory = from.consumed_resources().memory;
+    auto to_memory = to.consumed_resources().memory;
+
+    auto moved = mutation_fragment(*s, to, std::move(mf));
+    BOOST_REQUIRE_EQUAL(moved.memory_usage(), memory);
+    BOOST_REQUIRE(moved.equal(*s, expected));
+    BOOST_REQUIRE_EQUAL(from.consumed_resources().memory, from_memory - ssize_t(memory));
+    BOOST_REQUIRE_EQUAL(to.consumed_resources().memory, to_memory + ssize_t(memory));
+}
