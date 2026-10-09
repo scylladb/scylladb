@@ -1275,23 +1275,23 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
     log = await manager.server_open_log(coord_serv.server_id)
     mark = await log.mark()
 
-    await alter_keyspace("'dc1': ['rack1a', 'rack1b']")
+    # ALTER returns only after the topology goes idle, which the endless retries
+    # prevent while the injection is enabled. So don't await ALTERs until it's disabled.
+    alter1 = asyncio.create_task(alter_keyspace("'dc1': ['rack1a', 'rack1b']"))
 
     await log.wait_for('updating topology state: Retry failed tablet rebuilds', from_mark=mark)
 
-    failed = False
-    try:
-        await alter_keyspace("'dc1': ['rack1a', 'rack1b', 'rack1c']")
-    except Exception:
-        failed = True
-    assert failed
+    alter2 = asyncio.create_task(alter_keyspace("'dc1': ['rack1a', 'rack1b', 'rack1c']"))
+    await log.wait_for("Couldn't process global_topology_request::keyspace_rf_change", from_mark=mark)
 
+    mark1 = await log.mark()
     [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
 
-    log1 = await manager.server_open_log(coord_serv.server_id)
-    mark1 = await log1.mark()
+    await log.wait_for('No failed RF change rebuilds to retry', from_mark=mark1)
 
-    await log1.wait_for('No failed RF change rebuilds to retry', from_mark=mark1)
+    await alter1
+    with pytest.raises(InvalidRequest, match="Invalid state of a tablet"):
+        await alter2
 
     await manager.api.quiesce_topology(coord_serv.ip_addr)
 
