@@ -3477,3 +3477,101 @@ async def test_migration_with_orphan_view_build_status(manager: ScyllaClusterMan
 
         logger.info("Verifying that group0 still applies commands")
         await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY)", timeout=60)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaClusterManager):
+    """Verify that staging sstables pending on an upgraded node are handled
+    correctly when the migration is rolled back.
+
+    Staging sstables written by a repair before the migration can still be
+    pending when a node restarts for its storage upgrade. While the keyspace
+    uses vnodes, the node must keep handling them with the node-local view
+    update generator, so that rolling back the migration leaves no view
+    building tasks that reference a deleted tablet map.
+
+    Steps:
+    1. Write rows that one node fails to apply, then repair the table so that the
+       node gets them as staging sstables, and keep their processing failing.
+    2. Start the migration, and upgrade and restart that node.
+    3. Roll back the migration and let staging processing succeed.
+       - Verify that the staging sstables are processed and the view on that
+         node has all the rows.
+       - Verify that no view building tasks exist and view building still
+         works, by building a view in a tablet keyspace.
+    """
+    fail_staging = "view_update_generator_consume_staging_sstable"
+    num_keys = 100
+
+    cfg = {'num_tokens': 16, 'hinted_handoff_enabled': False}
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg,
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(2)])
+    server, other = servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def view_building_tasks():
+        return await cql.run_async("SELECT id, base_id FROM system.view_building_tasks")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.t "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv', 2)
+
+        logger.info("Writing rows that the node fails to apply")
+        await manager.api.enable_injection(server.ip_addr, "database_apply", one_shot=False,
+                                           parameters={"ks_name": ks, "cf_name": "t", "what": "throw"})
+        stmt = SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (%s, %s)", consistency_level=ConsistencyLevel.ONE)
+        for k in range(num_keys):
+            await cql.run_async(stmt, [k, k])
+        await manager.api.disable_injection(server.ip_addr, "database_apply")
+
+        logger.info("Repairing the table while staging processing fails on the node")
+        workdir = await manager.server_get_workdir(server.server_id)
+        staging_glob = os.path.join(workdir, "data", ks, "t-*", "staging", "*-Data.db")
+        await manager.api.enable_injection(server.ip_addr, fail_staging, one_shot=False)
+        await manager.api.repair(server.ip_addr, ks, 't')
+        assert glob.glob(staging_glob), "Expected the repair to write staging sstables on the node"
+
+        logger.info("Starting the migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(other.ip_addr, ks)
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", [fail_staging])
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        assert glob.glob(staging_glob), "Expected the staging sstables to survive the upgrade"
+
+        logger.info("Rolling back the migration")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(other.ip_addr, ks)
+
+        logger.info("Letting staging processing succeed")
+        await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
+        await manager.api.disable_injection(server.ip_addr, fail_staging)
+
+        async def staging_processed():
+            return True if not glob.glob(staging_glob) else None
+        await wait_for(staging_processed, time.time() + 60)
+
+        logger.info("Verifying that the view on the node has all the rows")
+        await manager.server_stop_gracefully(other.server_id)
+        cql, hosts = await manager.get_ready_cql([server])
+        rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.mv", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+        assert len(rows) == num_keys, f"Expected {num_keys} rows in the view, got {len(rows)}"
+        await manager.server_start(other.server_id)
+        await manager.servers_see_each_other(servers)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that no view building tasks are left and view building still works")
+        tasks = await view_building_tasks()
+        assert len(tasks) == 0, f"Expected no view building tasks after the rollback, got {len(tasks)}"
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': true}") as tablets_ks:
+            await cql.run_async(f"CREATE TABLE {tablets_ks}.t (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {tablets_ks}.mv_tablets AS SELECT pk, c FROM {tablets_ks}.t "
+                                "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+            await wait_for_view(cql, 'mv_tablets', 2, timeout=60)
