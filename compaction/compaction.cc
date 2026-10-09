@@ -2209,9 +2209,40 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
     return descriptor.options.visit(visitor_factory);
 }
 
+static uint64_t total_bytes_on_disk(const std::vector<sstables::shared_sstable>& sstables) {
+    return std::ranges::fold_left(sstables | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
+}
+
+// For compactions bypassing the `compaction` class, like scrub in validate
+// mode or component rewrite. Must be called before the input sstables are
+// replaced or moved.
+static compaction_result initialize_compaction_result(const compaction_descriptor& descriptor) {
+    return compaction_result {
+        .shard_id = this_shard_id(),
+        .type = descriptor.options.type(),
+        .sstables_in = extract_basic_info_from_sstables(descriptor.sstables),
+        .stats = {
+            .started_at = db_clock::now(),
+            .start_size = total_bytes_on_disk(descriptor.sstables),
+        },
+    };
+}
+
+// For compactions bypassing the `compaction` class.
+// `bloom_filter_checks`, `reader_statistics` and `tombstone_purge_stats` are
+// default initialized, as neither scrub validate nor component rewrite would
+// populate them.
+static compaction_result finalize_compaction_result(compaction_result result) {
+    result.sstables_out = extract_basic_info_from_sstables(result.new_sstables);
+    result.stats.end_size = total_bytes_on_disk(result.new_sstables);
+    result.stats.ended_at = db_clock::now();
+    return result;
+}
+
 static future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, sstables::read_monitor_generator& monitor_generator) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
+    auto result = initialize_compaction_result(descriptor);
 
     uint64_t validation_errors = 0;
     cdata.compaction_size = std::ranges::fold_left(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->data_size(); }), int64_t(0), std::plus{});
@@ -2242,13 +2273,8 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
         }
     }
 
-    co_return compaction_result {
-        .new_sstables = {},
-        .stats = {
-            .ended_at = db_clock::now(),
-            .validation_errors = validation_errors,
-        },
-    };
+    result.stats.validation_errors = validation_errors;
+    co_return finalize_compaction_result(std::move(result));
 }
 
 future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
@@ -2260,11 +2286,7 @@ future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor des
 
 future<compaction_result> rewrite_sstables_component(compaction_descriptor descriptor, compaction_group_view& table_s) {
     return seastar::async([descriptor = std::move(descriptor), &table_s] () mutable {
-        compaction_result result {
-            .stats = {
-                .started_at = db_clock::now(),
-            },
-        };
+        auto result = initialize_compaction_result(descriptor);
 
         const auto& options = descriptor.options.as<compaction_type_options::component_rewrite>();
         // When rewriting a component, we cannot use the standard descriptor creator
@@ -2280,8 +2302,7 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
 
         descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
 
-        result.stats.ended_at = db_clock::now();
-        return result;
+        return finalize_compaction_result(std::move(result));
     });
 }
 

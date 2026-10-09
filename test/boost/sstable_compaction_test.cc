@@ -6666,6 +6666,42 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) 
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
+// Component rewrite bypasses the regular compaction machinery, so it has to
+// fill in the result consumed by compaction_manager::update_history() by itself.
+SEASTAR_TEST_CASE(test_component_rewrite_compaction_result) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto mut = mutation(s, ss.make_pkey());
+        mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+        table->add_sstable_and_update_cache(sst).get();
+
+        auto desc = compaction::compaction_descriptor({sst});
+        desc.options = compaction::compaction_type_options::make_component_rewrite(component_type::Statistics,
+                [] (sstable& new_sst) { new_sst.mutate_sstable_level(5); });
+        auto res = compact_sstables(env, std::move(desc), table, [&] { return env.make_sstable(s); }).get();
+
+        BOOST_REQUIRE_EQUAL(res.new_sstables.size(), 1);
+        auto new_sst = res.new_sstables.front();
+        BOOST_REQUIRE_EQUAL(res.shard_id, this_shard_id());
+        BOOST_REQUIRE(res.type == compaction::compaction_type::RewriteComponent);
+        BOOST_REQUIRE_EQUAL(res.sstables_in.size(), 1);
+        BOOST_REQUIRE(res.sstables_in[0].generation == sst->generation());
+        BOOST_REQUIRE_EQUAL(res.sstables_in[0].size, sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.sstables_out.size(), 1);
+        BOOST_REQUIRE(res.sstables_out[0].generation == new_sst->generation());
+        BOOST_REQUIRE_EQUAL(res.sstables_out[0].size, new_sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.stats.start_size, sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.stats.end_size, new_sst->bytes_on_disk());
+        BOOST_REQUIRE(res.stats.started_at.time_since_epoch().count() > 0);
+        BOOST_REQUIRE(res.stats.started_at <= res.stats.ended_at);
+    });
+}
+
 void do_test_component_rewrite_failure(test_env& env) {
     simple_schema ss;
     auto s = ss.schema();
