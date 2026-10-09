@@ -4973,11 +4973,13 @@ future<> storage_service::local_topology_barrier() {
     // raft_topology_cmd_handler runs a group0 read barrier first.
     const bool evict_blocking_repairs = should_abort_repair(_topology_state_machine._topology);
 
+    // Once per node at info; per-shard progress is at debug so a barrier costs O(1) lines per node.
+    rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}", version);
     co_await container().invoke_on_all([version, evict_blocking_repairs] (storage_service& ss) -> future<> {
         const auto current_version = ss._shared_token_metadata.get()->get_version();
-        rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, "
-                      "current version {}, stale versions (version: use_count): {}",
-                      version, current_version, ss._shared_token_metadata.describe_stale_versions());
+        rtlogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, "
+                       "current version {}, stale versions (version: use_count): {}",
+                       version, current_version, ss._shared_token_metadata.describe_stale_versions());
 
         // This shouldn't happen under normal operation, it's only plausible
         // if the topology change coordinator has
@@ -4994,7 +4996,7 @@ future<> storage_service::local_topology_barrier() {
                              version, current_version)));
         }
 
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
         {
             // A user-requested repair on a vnode keyspace holds its
             // effective_replication_map, and thus pins a stale token metadata
@@ -5020,14 +5022,15 @@ future<> storage_service::local_topology_barrier() {
             warn_timer.arm_periodic(std::chrono::minutes(5));
             co_await ss._shared_token_metadata.stale_versions_in_use();
         }
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
         rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: waiting for strongly consistent tablet raft groups to be torn down", version);
         co_await ss._groups_manager.local_topology_barrier(ss._shared_token_metadata.get(), ss._abort_source);
 
-        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
+        rtlogger.debug("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
+    rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
 }
 
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
