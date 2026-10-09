@@ -21,29 +21,27 @@ namespace compaction {
 // backlog is computed for, rather than being maintained by the tracker on every
 // sstable replacement.
 class incremental_backlog_tracker final : public compaction_backlog_tracker::impl {
+public:
+    struct backlog_calculation_result {
+        int64_t total_bytes = 0;
+        int64_t total_backlog_bytes = 0;
+        float sstables_backlog_contribution = 0.0f;
+        std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
+    };
+private:
     incremental_compaction_strategy_options _options;
 
-    // Cached backlog contribution fields, recalculated lazily when _backlog_dirty is set.
-    // Marked mutable because they are caches updated on first backlog() call after a change.
+    // Cached backlog contribution, recalculated lazily when _backlog_dirty is set.
+    // Marked mutable because it's a cache updated on first backlog() call after a change.
     mutable bool _backlog_dirty = true;
-    mutable int64_t _total_bytes = 0;
-    mutable int64_t _total_backlog_bytes = 0;
-    mutable double _sstables_backlog_contribution = 0.0f;
-    mutable std::unordered_set<sstables::run_id> _sstable_runs_contributing_backlog;
+    mutable backlog_calculation_result _contribution;
 
     struct inflight_component {
         int64_t total_bytes = 0;
         double contribution = 0;
     };
 
-    inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
-
-    struct backlog_calculation_result {
-        int64_t total_bytes;
-        int64_t total_backlog_bytes;
-        float sstables_backlog_contribution;
-        std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
-    };
+    static inflight_component compacted_backlog(const backlog_calculation_result& contribution, const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions);
 
 public:
     static double log4(double x) {
@@ -52,6 +50,14 @@ public:
     }
 
     static backlog_calculation_result calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options);
+
+    // The contribution of the given runs, compacted together by ICS, to the backlog. Also used
+    // by the strategies applying ICS to a subset of their sstables, e.g. a time window.
+    static backlog_calculation_result calculate_runs_backlog_contribution(const std::vector<sstables::frozen_sstable_run>& runs, int min_threshold,
+            const incremental_compaction_strategy_options& options);
+
+    // The backlog left of a contribution, given the compactions in progress.
+    static double backlog_of(const backlog_calculation_result& contribution, const compaction_backlog_tracker::ongoing_compactions& oc);
 
     incremental_backlog_tracker(incremental_compaction_strategy_options options);
 
