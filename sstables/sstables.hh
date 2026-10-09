@@ -66,6 +66,10 @@ class large_data_handler;
 class corrupt_data_handler;
 }
 
+namespace hll {
+class HyperLogLog;
+}
+
 namespace sstables {
 
 template <typename ChecksumType, bool calculate_chunk_checksums>
@@ -1060,6 +1064,8 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
+    // Partition key cardinality sketch; nullopt if absent or not in our encoding (e.g. written by Cassandra).
+    std::optional<hll::HyperLogLog> get_cardinality_estimator() const;
     const serialization_header& get_serialization_header() const {
         return get_mutable_serialization_header(*_components);
     }
