@@ -387,8 +387,11 @@ struct append_reply {
         index_t last_idx;
     };
     struct accepted {
-        // Last entry that was appended (may be smaller than max log index
-        // in case follower's log is longer and appended entries match).
+        // Last entry that was appended, or that the follower already had.
+        // May be smaller than the last index of the request in two cases:
+        // the follower's log is longer and the appended entries match, or
+        // the follower refused to grow its log beyond max_follower_log_size
+        // and appended only a prefix of the request (see log::maybe_append).
         index_t last_new_idx;
     };
     // Current term, for leader to update itself.
@@ -411,6 +414,13 @@ struct append_reply {
     // transfer and nothing more. False on a node with leases disabled, and on
     // one that predates this field.
     bool clock_ok = false;
+    // Set if the in-memory log of the follower has reached
+    // max_follower_log_size, so it will refuse further entries until a snapshot
+    // shrinks the log. Advisory: it lets the leader stop sending entries the
+    // follower would discard. The follower enforces the bound itself, so a
+    // leader which ignores the flag - an older version during an upgrade -
+    // costs only bandwidth.
+    bool log_full = false;
 };
 
 struct vote_request {

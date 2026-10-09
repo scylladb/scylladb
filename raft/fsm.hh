@@ -97,6 +97,41 @@ struct fsm_config {
     // the sum of sizes of trailing log entries, otherwise the state
     // machine will deadlock.
     size_t max_log_size;
+    // Limit in bytes on the size of the in-memory part of the log while this
+    // server is not a leader. A follower appends only the prefix of an
+    // append_request which fits into this limit and reports back the index it
+    // actually reached, which makes the leader stop replicating to it until a
+    // snapshot shrinks the log again.
+    //
+    // At least max_log_size + snapshot_trailing_size, which is what a follower
+    // legitimately holds: the leader's entire log, plus its own trailing
+    // entries, which the leader may already have dropped.
+    //
+    // The escape hatch in append_entries() - while can_shrink_log() is false
+    // we let one entry through per request - keeps this bound, because while
+    // it is open the leader's log bounds ours. We cannot shrink while nothing
+    // above our snapshot index is committed, and append_entries() reads a
+    // request's commit index before it decides, so the leader has committed
+    // nothing above our snapshot index either. Its snapshot index is then at
+    // or below ours, so its log holds every entry above our snapshot index it
+    // can send us, and our log is a subset of it.
+    //
+    // A leader's log is at most this large: it admits up to max_log_size, and
+    // become_leader() charges the log it already holds to
+    // log_limiter_semaphore, so a leader elected with a full follower's log
+    // admits nothing more until that log shrinks.
+    //
+    // The hatch closes on the first request whose commit index passes our
+    // snapshot index.
+    //
+    // Members configured with different max_log_size are supported, and bound
+    // a follower by the leader's log: a leader configured larger pushes a
+    // smaller follower past this value, and the follower throttles it from
+    // there, so replication runs at the pace of the smallest limit in the
+    // group.
+    //
+    // Zero means unlimited.
+    size_t max_follower_log_size;
     // If set to true will enable prevoting stage during election
     bool enable_prevoting;
     // Enables fast bootstrap and selects which voting member becomes the initial
@@ -305,6 +340,15 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // The value of log_is_full() report_log_full() last reported to a leader.
+    // Its log lines mark the transitions, and apply_snapshot() prods the leader
+    // to resume while it is true and the log has room.
+    bool _log_full_reported = false;
+    // Pace the two lines report_log_full() logs, one per direction of the
+    // transition: a follower whose state machine stays slow crosses the limit
+    // once per snapshot cycle.
+    seastar::logger::rate_limit _log_full_rate_limit{std::chrono::seconds(10)};
+    seastar::logger::rate_limit _log_has_room_rate_limit{std::chrono::seconds(10)};
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -436,6 +480,15 @@ private:
     // Replicate entries to a follower. If there are no entries to send
     // and allow_empty is true, send a heartbeat.
     void replicate_to(follower_progress& progress, bool allow_empty);
+    // Send an empty append_entries request to a follower which reported a full
+    // log, bypassing follower_progress::can_send_to(). Sends no entries, so it
+    // cannot grow the follower's log; it refreshes follower_progress::log_full
+    // and carries leader_commit_idx so that the follower can drain what it
+    // already has.
+    void send_throttled_heartbeat(follower_progress& progress);
+    // Return log_is_full(), logging whenever the answer changes since the last
+    // time we reported it to a leader. Used to fill in append_reply::log_full.
+    bool report_log_full();
     void replicate();
     void append_entries(server_id from, append_request&& append_request);
 
@@ -697,6 +750,38 @@ public:
     // (it is a programming error otherwise, the function will abort).
     const log_entry_ptr& log_entry_at(index_t idx) {
         return _log[idx.value()];
+    }
+
+    // True if the applier fiber can shrink the log on its own: it snapshots
+    // once it applies past the snapshot index, and it applies only committed
+    // entries, so something has to be committed above the snapshot.
+    //
+    // While this is false append_entries() lets one entry through per request;
+    // see max_follower_log_size for the bound that costs.
+    bool can_shrink_log() const {
+        return _commit_idx > _log.get_snapshot().idx;
+    }
+
+    // True if we will refuse further entries from a leader until a snapshot
+    // shrinks the log. Reported to the leader in every append_reply, so it can
+    // stop replicating to us. Always false if the limit is disabled.
+    //
+    // Requires can_shrink_log(): while we cannot shrink we let one entry
+    // through per request, so the flag would promise a refusal we do not make.
+    // A leader that stops replicating on that promise can commit nothing - not
+    // its election dummy, nor the entries that overwrite a diverged tail of our
+    // log - and those are what let us shrink again.
+    bool log_is_full() const {
+        return _config.max_follower_log_size != 0 &&
+               _log.memory_usage() >= _config.max_follower_log_size &&
+               can_shrink_log();
+    }
+
+    // Number of followers which reported a full log, i.e. which we are not
+    // currently replicating to. Leader only.
+    size_t throttled_followers() const {
+        return std::ranges::count_if(leader_state().tracker,
+                [] (const auto& p) { return p.second.log_full; });
     }
 
     server_id id() const { return _my_id; }
