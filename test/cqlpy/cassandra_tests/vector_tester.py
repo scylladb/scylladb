@@ -92,15 +92,22 @@
 #   and waits until the vector store has indexed the expected number of
 #   vectors.
 # * When a write doesn't change the number of indexed vectors (e.g., it
-#   overwrites a vector), a test can use wait_for_vector_search() from
-#   util.py, which repeats a search until it returns the expected result.
+#   overwrites a vector), a test can use wait_for_search(), which repeats a
+#   search until it returns the expected result.
+#
+# A wait must not be satisfied before all the writes it waits for reached
+# the vector store. For example, if a test inserts two rows and deletes one,
+# waiting for one indexed vector may return after the vector store saw just
+# the first insert. So in such cases, the translated tests wait after each
+# step - e.g., for two vectors after the inserts, and then for one after the
+# delete - although the original Java test had no wait between these steps.
 #
 # On Cassandra, all these helpers return immediately, because there is
 # nothing to wait for.
 
 from contextlib import contextmanager
 from .porting import *
-from ..util import is_scylla, unique_name, wait_for_vector_index
+from ..util import is_scylla, unique_name, wait_for_vector_index, wait_for_vector_search
 
 # Replaces porting.create_table() for the vector search tests. That one
 # reuses the names of dropped tables, to exercise dropping and re-creating
@@ -141,3 +148,12 @@ def wait_for_vector_writes(cql, table, expected_size=None):
     keyspace = table.split('.')[0]
     for index in vector_index_names(cql, table):
         wait_for_vector_index(cql, keyspace, index, expected_size)
+
+# Repeat the given search (a statement with %s standing for the table) until
+# condition(rows) is true for its result rows. See the explanation above. On
+# Cassandra, returns immediately.
+def wait_for_search(cql, table, query, condition):
+    if not is_scylla(cql):
+        return
+    wait_for_vector_search(cql, subs_table(query, table), condition,
+                           "The vector store didn't return the expected search result")
