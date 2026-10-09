@@ -1,6 +1,9 @@
 All tests in this directory and its subdirectories were translated from
 Apache Cassandra's unit tests - the test/unit/org/apache/cassandra/cql3
-directory in the Apache Cassandra source code repository.
+directory in the Apache Cassandra source code repository. The exception
+are the vector search tests vector_*_test.py (and their helper,
+vector_tester.py), which were translated from Cassandra's
+test/unit/org/apache/cassandra/index/sai/cql directory - see below.
 
 The organization of this directory mirrors that of the Cassandra directory,
 with test files renamed from SomeThingTest.java to some_thing_test.py.
@@ -74,3 +77,27 @@ translated at all, because their tests test internal Java classes directly:
 * restrictions/: Cassandra's internal restriction classes and its LIKE
   pattern class.
 * terms/: Cassandra's internal classes for lists and IN markers.
+
+The vector search tests vector_*_test.py were translated from Cassandra's
+test/unit/org/apache/cassandra/index/sai/cql directory, which tests
+Cassandra's storage-attached indexes (SAI). Scylla doesn't have SAI, but it
+accepts SAI's syntax for creating an index on a vector column, so we
+translated the tests of vector search, Vector*Test.java. The differences
+between Cassandra's and Scylla's vector search, and which tests could and
+could not be translated, are explained in vector_tester.py. Most of these
+tests need a vector store - see the "--vs" option of test/cqlpy/run.
+Individual tests which were not translated are listed, with the reason, in
+comments in the translated files. The following files in that directory
+were not translated:
+
+* The test files not named Vector*Test.java, and the subdirectories
+  intersection/ and types/, which test SAI on non-vector columns. Scylla
+  doesn't support SAI on non-vector columns, and has its own secondary
+  indexes instead.
+* VectorSegmentationTest.java: tests how the vector index is split into
+  segments, by changing SAI's internal segment size
+  (SegmentBuilder.updateLastValidSegmentRowId()).
+* VectorSiftSmallTest.java: measures the recall of vector search on the
+  standard "SIFT small" benchmark data set, which would need to be copied
+  into Scylla's repository (5 MB). Its second test also creates an SAI
+  index on a non-vector column.
