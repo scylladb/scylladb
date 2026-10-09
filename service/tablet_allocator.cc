@@ -1214,8 +1214,8 @@ public:
     }
 
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
-            db_clock::duration& diff, service::auto_repair_stats& stats) {
+            const std::optional<locator::repair_scheduler_config>& config, db_clock::duration diff,
+            service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
             co_return true;
@@ -1230,8 +1230,6 @@ public:
         }
         auto threshold = _db.get_config().auto_repair_threshold_default_in_seconds();
         auto repair_time_threshold = std::chrono::seconds(threshold);
-        auto& last_repair_time = info.repair_time;
-        diff = now - last_repair_time;
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
                 gid, diff, info.repair_time, repair_time_threshold);
         if (diff < repair_time_threshold) {
@@ -1387,12 +1385,13 @@ public:
                     co_return;
                 }
 
-                db_clock::duration diff;
+                // Time since the last repair; orders the plans and is printed by the plan dump.
+                auto diff = now - info.repair_time;
                 auto is_user_request = info.repair_task_info && info.repair_task_info->is_user_repair_request();
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, config, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
