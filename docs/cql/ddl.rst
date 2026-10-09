@@ -121,7 +121,7 @@ name                 kind       mandatory    default    description
 =================== ========== =========== =========== ===================================================================
 
 A keyspace also accepts the options that can be set through CQL at the ``KEYSPACE`` scope, such as
-``auto_repair_enabled``; setting one to ``NULL`` removes it from the keyspace. See
+``auto_repair_enabled`` and ``auto_repair_threshold_in_seconds``; setting one to ``NULL`` removes it from the keyspace. See
 :doc:`configuring a cluster with CQL </cql/cluster-config>`.
 
 The ``replication`` property is optional. Omitting it is equivalent to supplying an empty map (``replication = {}``),
@@ -902,6 +902,10 @@ A table supports the following options:
      - simple
      - inherited
      - Enable automatic repair for tablet-based tables. When not set for the table, the keyspace or cluster value applies. Set to ``NULL`` to remove the table setting. See :doc:`configuring a cluster with CQL </cql/cluster-config>`.
+   * - ``auto_repair_threshold_in_seconds``
+     - simple
+     - inherited
+     - Time in seconds since the last repair after which a tablet of the table is eligible for automatic repair; ``0`` disables time-based automatic repair. When not set for the table, the keyspace or cluster value applies. Set to ``NULL`` to remove the table setting. See :doc:`configuring a cluster with CQL </cql/cluster-config>`.
    * - ``compaction``
      - map
      - see below

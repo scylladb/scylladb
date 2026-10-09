@@ -6408,6 +6408,9 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             locator::combined_load_stats combined_ls { table->table_load_stats() };
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
             tablet_sizes_per_shard[this_shard_id()].size += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+            if (!combined_ls.tablet_unrepaired_ls.unrepaired_sizes.empty()) {
+                load_stats.tablet_unrepaired_stats[this_host].add_unrepaired_sizes(combined_ls.tablet_unrepaired_ls);
+            }
 
             co_await coroutine::maybe_yield();
         }

@@ -31,6 +31,8 @@ namespace replica {
 
 using namespace locator;
 
+// No longer read or written; the type and the repair_scheduler_config static column stay
+// in the system.tablets schema for compatibility.
 static thread_local auto repair_scheduler_config_type = user_type_impl::get_instance(
         "system", "repair_scheduler_config", {"auto_repair_enabled", "auto_repair_threshold"},
         {boolean_type, long_type}, false);
@@ -229,14 +231,6 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
     return result;
 };
 
-data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler_config& config) {
-    data_value result = make_user_value(repair_scheduler_config_type, {
-        data_value(config.auto_repair_enabled),
-        data_value(int64_t(config.auto_repair_threshold.count())),
-    });
-    return result;
-};
-
 // Based on calibration run measuring 6ms time to freeze
 // mutation with 16K tablets (with 9 replicas each) on a
 // 3.4GHz amd64 cpu, and twice as much for unfreeze.
@@ -284,13 +278,6 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     }
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
-    }
-
-    if (features.tablet_repair_scheduler) {
-        auto config = tablets.get_repair_scheduler_config();
-        if (config) {
-            m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(*config), ts);
-        }
     }
 
     if (tablets.target_pow2_tablet_count() > 0) {
@@ -453,12 +440,6 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::set_repair_scheduler_config(locator::repair_scheduler_config config) {
-    _m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(config), _ts);
-    return *this;
-}
-
-tablet_mutation_builder&
 tablet_mutation_builder::set_repair_time(dht::token last_token, db_clock::time_point repair_time) {
     _m.set_clustered_cell(get_ck(last_token), "repair_time", data_value(repair_time), _ts);
     return *this;
@@ -592,21 +573,6 @@ static
 locator::tablet_task_info deserialize_tablet_task_info(cql3::untyped_result_set_row::view_type raw_value) {
     return tablet_task_info_from_cell(
             tablet_task_info_type->deserialize_value(raw_value));
-}
-
-locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
-    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
-    auto result = locator::repair_scheduler_config{
-        value_cast<bool>(dv[0]),
-        std::chrono::seconds(value_cast<int64_t>(dv[1])),
-    };
-    return result;
-}
-
-static
-locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyped_result_set_row::view_type raw_value) {
-    return repair_scheduler_config_from_cell(
-            repair_scheduler_config_type->deserialize_value(raw_value));
 }
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
@@ -958,11 +924,6 @@ struct tablet_metadata_builder {
             }
             if (row.has("resize_task_info")) {
                 current->map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
-            }
-
-            if (row.has("repair_scheduler_config")) {
-                auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
-                current->map.set_repair_scheduler_config(std::move(config));
             }
 
             if (row.has("target_pow2_tablet_count")) {

@@ -2431,9 +2431,28 @@ utils::file_size_stats compaction_group::live_sstable_disk_space_used() const no
     return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
 }
 
+uint64_t compaction_group::unrepaired_disk_space_used() const {
+    auto sstables_repaired_at = get_sstables_repaired_at();
+    auto sum_unrepaired = [&] (const sstables::sstable_set& set) {
+        uint64_t ret = 0;
+        for (auto& sst : *set.all()) {
+            if (!repair::is_repaired(sstables_repaired_at, sst)) {
+                ret += sst->bytes_on_disk();
+            }
+        }
+        return ret;
+    };
+    return sum_unrepaired(*_main_sstables) + sum_unrepaired(*_maintenance_sstables);
+}
+
 uint64_t storage_group::live_disk_space_used() const {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
+}
+
+uint64_t storage_group::unrepaired_disk_space_used() const {
+    auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
+    return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::unrepaired_disk_space_used)), uint64_t(0), std::plus{});
 }
 
 uint64_t compaction_group::total_disk_space_used() const noexcept {
@@ -3671,6 +3690,8 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
     table_stats.split_ready_seq_number = _split_ready_seq_number;
 
     locator::tablet_load_stats tablet_stats;
+    locator::tablet_unrepaired_load_stats tablet_unrepaired_stats;
+    const bool report_unrepaired_sizes = _t.get_sstables_manager().get_features().tablet_unrepaired_load_stats;
 
     for_each_storage_group([&] (size_t id, storage_group& sg) {
         auto tid = locator::tablet_id(id);
@@ -3732,11 +3753,20 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
             // Make sure the token range is in the form (a, b]
             SCYLLA_ASSERT(!trange.start()->is_inclusive() && trange.end()->is_inclusive());
             tablet_stats.tablet_sizes[gid.table][trange] = tablet_size;
+            // Reported under the same filter as the tablet size, so that the two are always
+            // reported together and the unrepaired fraction is computed from a consistent pair.
+            if (report_unrepaired_sizes) {
+                tablet_unrepaired_stats.unrepaired_sizes[gid.table][trange] = locator::tablet_unrepaired_size{
+                    .unrepaired_size = sg.unrepaired_disk_space_used(),
+                    .sstables_repaired_at = sg.main_compaction_group()->get_sstables_repaired_at(),
+                };
+            }
         }
     });
     return locator::combined_load_stats{
         .table_ls = std::move(table_stats),
-        .tablet_ls = std::move(tablet_stats)
+        .tablet_ls = std::move(tablet_stats),
+        .tablet_unrepaired_ls = std::move(tablet_unrepaired_stats)
     };
 }
 

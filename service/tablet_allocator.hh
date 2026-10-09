@@ -15,9 +15,11 @@
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/sharded.hh>
 
 namespace db {
 class system_keyspace;
+class cluster_config_manager;
 }
 
 namespace locator {
@@ -33,6 +35,10 @@ struct auto_repair_stats {
     size_t enabled_nr = 0;
     // Number of tabelts with auto repair enabled that currently needs repair.
     size_t needs_repair_nr = 0;
+    // Of those, the ones each trigger selected. A tablet selected by more than one trigger
+    // is counted by each, so these do not sum to needs_repair_nr.
+    size_t needs_repair_by_time_nr = 0;
+    size_t needs_repair_by_size_nr = 0;
 };
 
 struct load_balancer_dc_stats {
@@ -99,6 +105,8 @@ struct load_balancer_cluster_stats {
     uint64_t resizes_revoked = 0;
     uint64_t resizes_finalized = 0;
     uint64_t auto_repair_needs_repair_nr = 0;
+    uint64_t auto_repair_needs_repair_by_time_nr = 0;
+    uint64_t auto_repair_needs_repair_by_size_nr = 0;
     uint64_t auto_repair_enabled_nr = 0;
 
     uint64_t repairs_produced = 0;
@@ -365,7 +373,8 @@ private:
     std::unique_ptr<impl> _impl;
     tablet_allocator_impl& impl();
 public:
-    tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db);
+    tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db,
+            sharded<db::cluster_config_manager>& cluster_config_manager);
 public:
     future<> stop();
 

@@ -101,7 +101,7 @@ the next broader scope, or to its default:
 .. code-block:: cql
 
    ALTER TABLE ks.tbl WITH auto_repair_enabled = NULL;   -- ks.tbl now follows its keyspace
-   ALTER CLUSTER WITH auto_repair_enabled = NULL;        -- back to the built-in default
+   ALTER CLUSTER WITH auto_repair_enabled = NULL;        -- back to the default
 
 Only the bare ``NULL`` keyword removes a value. The string ``'null'`` is an ordinary value and is
 validated like any other, so a boolean option rejects it.
@@ -160,4 +160,13 @@ Available options
    * - ``auto_repair_enabled``
      - boolean
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
-     - Enable automatic repair for tablet-based tables. Default: ``false``.
+     - Enable :doc:`automatic repair </features/automatic-repair>` for tablet-based tables. Default:
+       ``false``. Until the deprecated ``auto_repair_enabled_default`` option is removed, a node
+       that sets it in ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``auto_repair_threshold_in_seconds``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Time in seconds since the last repair after which a tablet is eligible for automatic repair;
+       ``0`` disables time-based automatic repair. Default: ``86400``. Until the deprecated ``auto_repair_threshold_default_in_seconds`` option
+       is removed, a node that sets it in ``scylla.yaml`` uses that value when no scope sets this
+       option.
