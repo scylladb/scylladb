@@ -329,7 +329,8 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (topology_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
+        // No system.tablets mutations means tablets are unchanged; an empty hint avoids a full re-read.
+        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations).value_or(locator::tablet_metadata_change_hint{})};
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
     },
     [&] (mixed_change& chng) -> future<> {
