@@ -33,7 +33,9 @@
 #include "utils/exponential_backoff_retry.hh"
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
+#include <random>
 
 namespace service::strong_consistency {
 
@@ -50,6 +52,15 @@ static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
+
+// How often a shard checks whether its groups should be led from somewhere else.
+// Rarely on purpose: a wrong leader is a latency problem, not a correctness one. Each
+// wait gets a random part of leader_placement_jitter so nodes don't hand over in lockstep.
+static constexpr auto leader_placement_interval = std::chrono::seconds(5);
+static constexpr auto leader_placement_jitter = std::chrono::seconds(1);
+// How long a handover may block the group's writes while the target catches up.
+// Short: on timeout we give up and try again at the next check.
+static constexpr auto leader_placement_timeout = std::chrono::seconds(1);
 
 // Tests may lengthen the tick interval via error injection so that any
 // unwanted waiting on a raft tick becomes visible as a large delay.
@@ -1016,6 +1027,11 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
+    // A fresh node starts before it joins, and the feature is enabled during the join.
+    _leader_placement_listener = _features.strongly_consistent_tables.when_enabled([this] {
+        _leader_placement = leader_placement_fiber();
+    });
+
     if (!_features.strongly_consistent_tables) {
         return;
     }
@@ -1025,10 +1041,70 @@ void groups_manager::start() {
     }
 }
 
+future<> groups_manager::leader_placement_fiber() {
+    static thread_local std::default_random_engine re{std::random_device{}()};
+    const auto jitter = [] (std::chrono::milliseconds up_to) {
+        return std::chrono::milliseconds(std::uniform_int_distribution<int64_t>{0, up_to.count()}(re));
+    };
+
+    try {
+        // Spread the first check over the whole interval: a restarted node may lead many
+        // groups at once, and all its shards start together.
+        co_await sleep_abortable(jitter(leader_placement_interval), _leader_placement_as);
+        while (true) {
+            co_await hand_over_leadership();
+            co_await sleep_abortable(leader_placement_interval + jitter(leader_placement_jitter),
+                    _leader_placement_as);
+        }
+    } catch (const sleep_aborted&) {
+        logger.debug("leader_placement_fiber(): stopped");
+    } catch (...) {
+        on_internal_error(logger, ::format("leader_placement_fiber(): unexpected exception: {}",
+            std::current_exception()));
+    }
+}
+
+future<> groups_manager::hand_over_leadership() {
+    const auto timeout_ticks = std::max<int64_t>(leader_placement_timeout / get_tick_interval(), 1);
+
+    co_await coroutine::parallel_for_each(_raft_groups, [&] (auto& entry) -> future<> {
+        auto& [gid, state] = entry;
+
+        const auto srv = try_acquire_server(state);
+        if (!srv) {
+            co_return;
+        }
+        const auto target = srv->server().preferred_handover_target();
+        if (!target) {
+            co_return;
+        }
+
+        logger.debug("hand_over_leadership(): group id {}: handing the leadership over to {}", gid, *target);
+        try {
+            co_await srv->server().stepdown(raft::logical_clock::duration(timeout_ticks), *target);
+            logger.debug("hand_over_leadership(): group id {}: leadership transferred to {}", gid, *target);
+        } catch (...) {
+            // Most likely it didn't catch up in time; tried again next check.
+            logger.debug("hand_over_leadership(): group id {}: failed to transfer the leadership to {}: {}",
+                gid, *target, std::current_exception());
+        }
+    });
+}
+
+future<> groups_manager::stop_leader_placement() {
+    _leader_placement_listener.reset();
+    if (!_leader_placement_as.abort_requested()) {
+        _leader_placement_as.request_abort();
+    }
+    co_await std::exchange(_leader_placement, make_ready_future<>());
+}
+
 future<> groups_manager::stepdown_leaders() {
     if (!_started || !_features.strongly_consistent_tables) {
         co_return;
     }
+    // Only one stepdown per group at a time, and the leadership is leaving this node anyway.
+    co_await stop_leader_placement();
     if (_raft_groups.size() == 0) {
         logger.debug("stepdown_leaders(): no tablet raft groups on this node");
         co_return;
@@ -1070,6 +1146,7 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
+    co_await stop_leader_placement();
     schedule_raft_groups_deletion(true);
 
     while (!_raft_groups.empty()) {
