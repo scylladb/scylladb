@@ -318,18 +318,20 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     auto all_buckets = get_buckets(single_window, _options);
     single_window.clear();
     for (auto& [bucket, ssts] : all_buckets.first) {
-        if (ssts.size() >= offstrategy_threshold) {
-            clogger.debug("time_window_compaction_strategy::get_reshaping_job: bucket={} bucket_size={}", bucket, ssts.size());
+        // A compacted window holds a single run, of possibly many fragments, so count runs, as ICS does.
+        auto run_count = incremental_compaction_strategy::sstable_run_count(ssts);
+        if (run_count >= offstrategy_threshold) {
+            clogger.debug("time_window_compaction_strategy::get_reshaping_job: bucket={} bucket_size={} runs={}", bucket, ssts.size(), run_count);
             if (all_disjoint) {
                 std::copy(ssts.begin(), ssts.end(), std::back_inserter(single_window));
                 continue;
             }
 
-            // reuse STCS reshape logic which will only compact similar-sized files, to increase overall efficiency
+            // reuse the ICS reshape logic which will only compact similar-sized runs, to increase overall efficiency
             // when reshaping time buckets containing a huge amount of files
-            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, cfg);
+            auto desc = incremental_compaction_strategy(_ics_options, _fragment_size).get_reshaping_job(std::move(ssts), schema, cfg);
             if (!desc.sstables.empty()) {
-                return desc;
+                return with_fragment_size(std::move(desc));
             }
         }
     }
@@ -337,7 +339,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
         maybe_trim_job(single_window, get_job_size(single_window), all_disjoint);
         compaction_descriptor desc(std::move(single_window));
         desc.options = compaction_type_options::make_reshape();
-        return desc;
+        return with_fragment_size(std::move(desc));
     }
 
     return compaction_descriptor();
@@ -347,7 +349,9 @@ future<compaction_descriptor>
 time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     auto state = get_state(table_s);
     auto compaction_time = gc_clock::now();
-    auto candidates = co_await control.candidates(table_s);
+    // Taken as runs, as in ICS, so that a run is a candidate only when none of its fragments is
+    // being compacted.
+    auto candidates = co_await control.candidates_as_runs(table_s);
 
     if (candidates.empty()) {
         co_return compaction_descriptor();
@@ -358,7 +362,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
         // Find fully expired SSTables. Those will be included no matter what.
-        auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
+        auto expired = table_s.fully_expired_sstables(incremental_compaction_strategy::runs_to_sstables(candidates), compaction_time);
         if (!expired.empty()) {
             clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
             co_return compaction_descriptor(has_only_fully_expired::yes, std::vector<sstables::shared_sstable>(expired.begin(), expired.end()));
@@ -375,7 +379,28 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time, *state);
     clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
-    co_return compaction_descriptor(std::move(compaction_candidates));
+    co_return with_fragment_size(compaction_descriptor(std::move(compaction_candidates)));
+}
+
+bool time_window_compaction_strategy::is_single_window(const std::vector<sstables::shared_sstable>& sstables) const {
+    if (sstables.empty()) {
+        return false;
+    }
+    auto window = get_window_for(_options, sstables.front()->get_stats_metadata().max_timestamp);
+    return std::ranges::all_of(sstables, [&] (const sstables::shared_sstable& sst) {
+        auto& stats = sst->get_stats_metadata();
+        return get_window_for(_options, stats.min_timestamp) == window && get_window_for(_options, stats.max_timestamp) == window;
+    });
+}
+
+compaction_descriptor time_window_compaction_strategy::with_fragment_size(compaction_descriptor desc) const {
+    // Writing a run of fragments lets the compaction release exhausted input early, which is
+    // only safe when the output is written by a single writer, i.e. when it isn't segregated
+    // by window. Data spanning windows is split into a writer per window, which the release
+    // of exhausted input doesn't account for, and is compacted per window after the split,
+    // so a tombstone could be purged while the data it shadows, in another window, is kept.
+    desc.max_sstable_bytes = is_single_window(desc.sstables) ? _fragment_size : compaction_descriptor::default_max_sstable_bytes;
+    return desc;
 }
 
 size_t time_window_compaction_strategy::window_min_threshold(const compaction_group_view& cg,
@@ -392,15 +417,15 @@ size_t time_window_compaction_strategy::window_min_threshold(const compaction_gr
 
 time_window_compaction_strategy::bucket_compaction_mode
 time_window_compaction_strategy::compaction_mode(const time_window_compaction_strategy_state& state,
-        const bucket_t& bucket, timestamp_type bucket_key,
+        size_t run_count, timestamp_type bucket_key,
         timestamp_type now, size_t min_threshold) const {
-    // STCS will also be performed on older window buckets, to avoid a bad write and
+    // Size-tiered compaction will also be performed on older window buckets, to avoid a bad write and
     // space amplification when something like read repair cause small updates to
     // those past windows.
 
-    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && state.recent_active_windows.contains(bucket_key)) {
+    if (run_count >= 2 && !is_last_active_bucket(bucket_key, now) && state.recent_active_windows.contains(bucket_key)) {
         return bucket_compaction_mode::major;
-    } else if (bucket.size() >= size_t(min_threshold)) {
+    } else if (run_count >= size_t(min_threshold)) {
         return bucket_compaction_mode::size_tiered;
     }
     return bucket_compaction_mode::none;
@@ -408,8 +433,8 @@ time_window_compaction_strategy::compaction_mode(const time_window_compaction_st
 
 std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control,
-        std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time, time_window_compaction_strategy_state& state) {
-    auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables, state);
+        std::vector<sstables::frozen_sstable_run> non_expiring_runs, gc_clock::time_point compaction_time, time_window_compaction_strategy_state& state) {
+    auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_runs, state);
 
     if (!most_interesting.empty()) {
         return most_interesting;
@@ -419,24 +444,35 @@ time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_
         return {};
     }
 
-    // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
-    // ratio is greater than threshold.
-    std::erase_if(non_expiring_sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
+    // if there is no sstable to compact in standard way, try compacting the run of a single sstable whose
+    // droppable tombstone ratio is greater than threshold.
+    auto worth_dropping = incremental_compaction_strategy::runs_to_sstables(non_expiring_runs);
+    std::erase_if(worth_dropping, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
         return !worth_dropping_tombstones(sst, compaction_time, table_s);
     });
-    if (non_expiring_sstables.empty()) {
+    if (worth_dropping.empty()) {
         return {};
     }
-    auto it = std::ranges::min_element(non_expiring_sstables, [] (auto& i, auto& j) {
+    auto it = std::ranges::min_element(worth_dropping, [] (auto& i, auto& j) {
         return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
     });
-    return { *it };
+    // Compact its whole run, so that the window keeps a single run. The run is taken from the
+    // window's bucket, as a run spanning windows is split by window there.
+    auto [buckets, _] = get_buckets(std::move(non_expiring_runs), _options);
+    auto& bucket = buckets[get_window_for(_options, (*it)->get_stats_metadata().max_timestamp)];
+    auto run = std::ranges::find_if(bucket, [sst = *it] (const sstables::frozen_sstable_run& run) {
+        return std::ranges::contains(run->all(), sst);
+    });
+    if (run == bucket.end()) {
+        on_internal_error(clogger, fmt::format("time_window_compaction_strategy: sstable {} not found in its window", (*it)->get_filename()));
+    }
+    return incremental_compaction_strategy::runs_to_sstables({*run});
 }
 
 std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control,
-    std::vector<sstables::shared_sstable> candidate_sstables, time_window_compaction_strategy_state& state) {
-    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
+    std::vector<sstables::frozen_sstable_run> candidate_runs, time_window_compaction_strategy_state& state) {
+    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_runs), _options);
     // Update the highest window seen, if necessary
     state.highest_window_seen = std::max(state.highest_window_seen, max_timestamp);
 
@@ -471,15 +507,47 @@ time_window_compaction_strategy::get_buckets(std::vector<sstables::shared_sstabl
     return std::make_pair(std::move(buckets), max_timestamp);
 }
 
+std::pair<time_window_compaction_strategy::buckets_t, timestamp_type>
+time_window_compaction_strategy::get_buckets(std::vector<sstables::frozen_sstable_run> runs, const time_window_compaction_strategy_options& options) {
+    buckets_t buckets;
+    timestamp_type max_timestamp = 0;
+    auto window_of = [&options] (const sstables::shared_sstable& sst) {
+        return get_window_lower_bound(options.sstable_window_size, to_timestamp_type(options.timestamp_resolution, sst->get_stats_metadata().max_timestamp));
+    };
+    for (auto& run : runs) {
+        if (run->all().empty()) {
+            continue;
+        }
+        auto window = window_of(*run->all().begin());
+        if (std::ranges::all_of(run->all(), [&] (const sstables::shared_sstable& sst) { return window_of(sst) == window; })) {
+            buckets[window].push_back(std::move(run));
+            max_timestamp = std::max(max_timestamp, window);
+            continue;
+        }
+        // The fragments of a run don't overlap, so those of each window make a run too.
+        std::map<timestamp_type, sstables::sstable_run> split;
+        for (auto& sst : run->all()) {
+            if (!split[window_of(sst)].insert(sst)) {
+                on_internal_error(clogger, fmt::format("time_window_compaction_strategy: fragment {} overlaps its run", sst->get_filename()));
+            }
+        }
+        for (auto& [w, r] : split) {
+            buckets[w].push_back(make_lw_shared<const sstables::sstable_run>(std::move(r)));
+            max_timestamp = std::max(max_timestamp, w);
+        }
+    }
+    return std::make_pair(std::move(buckets), max_timestamp);
+}
+
 }
 
 template <>
-struct fmt::formatter<std::map<compaction::timestamp_type, std::vector<sstables::shared_sstable>>> {
+struct fmt::formatter<compaction::time_window_compaction_strategy::buckets_t> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const std::map<compaction::timestamp_type, std::vector<sstables::shared_sstable>>& buckets, fmt::format_context& ctx) const {
+    auto format(const compaction::time_window_compaction_strategy::buckets_t& buckets, fmt::format_context& ctx) const {
         auto out = fmt::format_to(ctx.out(), "  buckets = {{\n");
-        for (auto& [timestamp, sstables] : buckets | std::views::reverse) {
-            out = fmt::format_to(out, "    key={}, size={}\n", timestamp, sstables.size());
+        for (auto& [timestamp, runs] : buckets | std::views::reverse) {
+            out = fmt::format_to(out, "    key={}, runs={}\n", timestamp, runs.size());
         }
         return fmt::format_to(out, "  }}\n");
     }
@@ -488,25 +556,25 @@ struct fmt::formatter<std::map<compaction::timestamp_type, std::vector<sstables:
 namespace compaction {
 
 std::vector<sstables::shared_sstable>
-time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<timestamp_type, std::vector<sstables::shared_sstable>> buckets,
+time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, buckets_t buckets,
         int min_threshold, int max_threshold, timestamp_type now, time_window_compaction_strategy_state& state) {
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
-    for (auto&& [key, bucket] : buckets | std::views::reverse) {
+    for (auto&& [key, runs] : buckets | std::views::reverse) {
         bool last_active_bucket = is_last_active_bucket(key, now);
         if (last_active_bucket) {
             state.recent_active_windows.insert(key);
         }
         auto threshold = window_min_threshold(table_s, key, now, min_threshold);
-        switch (compaction_mode(state, bucket, key, now, threshold)) {
+        switch (compaction_mode(state, runs.size(), key, now, threshold)) {
         case bucket_compaction_mode::size_tiered: {
-            // If we're in the newest bucket, we'll use STCS to prioritize sstables.
-            auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, threshold, max_threshold, _stcs_options);
+            // If we're in the newest bucket, we'll use ICS to prioritize sstable runs.
+            auto interesting_runs = incremental_compaction_strategy::most_interesting_bucket(runs, threshold, max_threshold, _ics_options);
 
-            // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
-            if (!stcs_interesting_bucket.empty()) {
-                clogger.debug("bucket size {} >= 2, key {}, performing STCS on what's here", bucket.size(), key);
-                return stcs_interesting_bucket;
+            // If the runs in the current bucket aren't eligible for size-tiered compaction, we'll skip it and look for other buckets
+            if (!interesting_runs.empty()) {
+                clogger.debug("bucket size {} >= 2, key {}, performing size-tiered compaction on what's here", runs.size(), key);
+                return incremental_compaction_strategy::runs_to_sstables(std::move(interesting_runs));
             }
             break;
         }
@@ -515,8 +583,8 @@ time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, s
             if (control.has_ongoing_compaction(table_s)) {
                 break;
             }
-            clogger.debug("bucket size {} >= 2 and not in current bucket, key {}, compacting what's here", bucket.size(), key);
-            return trim_to_threshold(std::move(bucket), max_threshold);
+            clogger.debug("bucket size {} >= 2 and not in current bucket, key {}, compacting what's here", runs.size(), key);
+            return incremental_compaction_strategy::runs_to_sstables(trim_to_threshold(std::move(runs), max_threshold));
         default:
             // windows needing major will remain with major state until they're compacted into one file.
             // after that, they will fall into default mode where we'll stop considering them as a recent window
@@ -524,18 +592,20 @@ time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, s
             if (!last_active_bucket) {
                 state.recent_active_windows.erase(key);
             }
-            clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", bucket.size(), key, now);
+            clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", runs.size(), key, now);
             break;
         }
     }
     return {};
 }
 
-std::vector<sstables::shared_sstable>
-time_window_compaction_strategy::trim_to_threshold(std::vector<sstables::shared_sstable> bucket, int max_threshold) {
+std::vector<sstables::frozen_sstable_run>
+time_window_compaction_strategy::trim_to_threshold(std::vector<sstables::frozen_sstable_run> bucket, int max_threshold) {
     auto n = std::min(bucket.size(), size_t(max_threshold));
-    // Trim the largest sstables off the end to meet the maxThreshold
-    std::ranges::partial_sort(bucket, bucket.begin() + n, std::ranges::less(), std::mem_fn(&sstables::sstable::ondisk_data_size));
+    // Trim the largest runs off the end to meet the maxThreshold
+    std::ranges::partial_sort(bucket, bucket.begin() + n, std::ranges::less(), [] (const sstables::frozen_sstable_run& run) {
+        return run->data_size();
+    });
     bucket.resize(n);
     return bucket;
 }
@@ -545,15 +615,14 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
     auto main_set = co_await table_s.main_sstable_set();
-    auto candidate_sstables = *main_set->all() | std::ranges::to<std::vector>();
-    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
+    auto [buckets, max_timestamp] = get_buckets(main_set->all_sstable_runs(), _options);
 
     int64_t n = 0;
-    for (auto& [bucket_key, bucket] : buckets) {
+    for (auto& [bucket_key, runs] : buckets) {
         auto threshold = window_min_threshold(table_s, bucket_key, max_timestamp, min_threshold);
-        switch (compaction_mode(*state, bucket, bucket_key, max_timestamp, threshold)) {
+        switch (compaction_mode(*state, runs.size(), bucket_key, max_timestamp, threshold)) {
         case bucket_compaction_mode::size_tiered:
-            n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, threshold, max_threshold, _stcs_options);
+            n += incremental_compaction_strategy::estimated_pending_compactions(runs, threshold, max_threshold, _ics_options);
             break;
         case bucket_compaction_mode::major:
             n++;
@@ -568,9 +637,11 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
 std::vector<compaction_descriptor>
 time_window_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
+    incremental_compaction_strategy ics(_ics_options, _fragment_size);
     for (auto&& [_, sstables] : get_buckets(std::move(candidates), _options).first) {
-        auto per_window_jobs = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(sstables));
-        std::move(per_window_jobs.begin(), per_window_jobs.end(), std::back_inserter(ret));
+        for (auto& desc : ics.get_cleanup_compaction_jobs(table_s, std::move(sstables))) {
+            ret.push_back(with_fragment_size(std::move(desc)));
+        }
     }
     return ret;
 }

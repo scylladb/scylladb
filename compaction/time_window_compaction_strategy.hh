@@ -11,6 +11,7 @@
 #pragma once
 
 #include "compaction_strategy_impl.hh"
+#include "incremental_compaction_strategy.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "mutation/timestamp.hh"
 #include "sstables/shared_sstable.hh"
@@ -71,6 +72,11 @@ using time_window_compaction_strategy_state_ptr = seastar::shared_ptr<time_windo
 
 class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
+    // Each window is compacted with ICS: its sstables are bucketed into size tiers by
+    // these options, and the per-window compactions write runs of _fragment_size fragments.
+    incremental_compaction_strategy_options _ics_options;
+    uint64_t _fragment_size;
+    // FIXME: only for the per-window backlog, which is still size-tiered.
     size_tiered_compaction_strategy_options _stcs_options;
 public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
@@ -79,9 +85,12 @@ public:
     static constexpr uint64_t max_data_segregation_window_count = 100;
     static constexpr float reshape_target_space_overhead = 0.1f;
 
-    using bucket_t = std::vector<sstables::shared_sstable>;
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
+    // The sstable runs of a window, and the windows, keyed by their lower bound.
+    using bucket_t = std::vector<sstables::frozen_sstable_run>;
+    using buckets_t = std::map<api::timestamp_type, bucket_t>;
+
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
@@ -110,15 +119,25 @@ private:
     size_t window_min_threshold(const compaction_group_view& cg, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
 
     // Returns which compaction type should be performed on a given window bucket.
+    // A window's compaction mode is decided by the number of sstable runs in it, as a
+    // window compacted with ICS holds a single run made of possibly many fragments.
     bucket_compaction_mode
-    compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
+    compaction_mode(const time_window_compaction_strategy_state&, size_t run_count, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
+
+    // Whether all data of the given sstables belongs to a single window.
+    bool is_single_window(const std::vector<sstables::shared_sstable>& sstables) const;
+
+    // Has the compaction described by desc write a run of _fragment_size fragments, so that it
+    // can release its input incrementally, if its input belongs to a single window, and whole
+    // sstables otherwise, see the definition.
+    compaction_descriptor with_fragment_size(compaction_descriptor desc) const;
 
     std::vector<sstables::shared_sstable>
-    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> non_expiring_sstables,
+    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::frozen_sstable_run> non_expiring_runs,
         gc_clock::time_point compaction_time, time_window_compaction_strategy_state& state);
 
     std::vector<sstables::shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control,
-        std::vector<sstables::shared_sstable> candidate_sstables, time_window_compaction_strategy_state& state);
+        std::vector<sstables::frozen_sstable_run> candidate_runs, time_window_compaction_strategy_state& state);
 public:
     // Find the lowest timestamp for window of given size
     static api::timestamp_type
@@ -130,12 +149,19 @@ public:
     static std::pair<std::map<api::timestamp_type, std::vector<sstables::shared_sstable>>, api::timestamp_type>
     get_buckets(std::vector<sstables::shared_sstable> files, const time_window_compaction_strategy_options& options);
 
+    // Group sstable runs into buckets by window, like the above. A run whose fragments belong
+    // to different windows is split into a run for each window: sstables written for different
+    // windows by an older compaction share its run identifier, and they're kept in a single run
+    // by the sstable set when they don't overlap.
+    static std::pair<buckets_t, api::timestamp_type>
+    get_buckets(std::vector<sstables::frozen_sstable_run> runs, const time_window_compaction_strategy_options& options);
+
     std::vector<sstables::shared_sstable>
-    newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<sstables::shared_sstable>> buckets,
+    newest_bucket(compaction_group_view& table_s, strategy_control& control, buckets_t buckets,
         int min_threshold, int max_threshold, api::timestamp_type now, time_window_compaction_strategy_state& state);
 
-    static std::vector<sstables::shared_sstable>
-    trim_to_threshold(std::vector<sstables::shared_sstable> bucket, int max_threshold);
+    static std::vector<sstables::frozen_sstable_run>
+    trim_to_threshold(std::vector<sstables::frozen_sstable_run> bucket, int max_threshold);
 
     static int64_t
     get_window_for(const time_window_compaction_strategy_options& options, api::timestamp_type ts) {

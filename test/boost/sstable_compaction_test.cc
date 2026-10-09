@@ -2442,6 +2442,16 @@ SEASTAR_FIXTURE_TEST_CASE(time_window_strategy_ts_resolution_check_gcs, gcs_fixt
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// newest_bucket() takes the sstable runs of each window.
+static compaction::time_window_compaction_strategy::buckets_t
+to_run_buckets(const std::map<api::timestamp_type, std::vector<shared_sstable>>& buckets) {
+    compaction::time_window_compaction_strategy::buckets_t ret;
+    for (const auto& [window, sstables] : buckets) {
+        ret[window] = compaction::incremental_compaction_strategy::sstables_to_runs(sstables);
+    }
+    return ret;
+}
+
 void time_window_strategy_correctness_fn(test_env& env) {
     using namespace std::chrono;
     auto builder = schema_builder(this_smp_shard_count(), "tests", "time_window_strategy")
@@ -2490,13 +2500,13 @@ void time_window_strategy_correctness_fn(test_env& env) {
 
     auto state = cf.as_compaction_group_view().get_compaction_strategy_state().get<compaction::time_window_compaction_strategy_state_ptr>();
     auto now = api::timestamp_clock::now().time_since_epoch().count();
-    auto new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32,
+    auto new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), 4, 32,
         compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), *state);
     // incoming bucket should not be accepted when it has below the min threshold SSTables
     BOOST_REQUIRE(new_bucket.empty());
 
     now = api::timestamp_clock::now().time_since_epoch().count();
-    new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 2, 32,
+    new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), 2, 32,
         compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), *state);
     // incoming bucket should be accepted when it is larger than the min threshold SSTables
     BOOST_REQUIRE(!new_bucket.empty());
@@ -2531,7 +2541,7 @@ void time_window_strategy_correctness_fn(test_env& env) {
     }
 
     now = api::timestamp_clock::now().time_since_epoch().count();
-    new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32,
+    new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), 4, 32,
         compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), *state);
     // new bucket should be trimmed to max threshold of 32
     BOOST_REQUIRE(new_bucket.size() == size_t(32));
@@ -2539,6 +2549,96 @@ void time_window_strategy_correctness_fn(test_env& env) {
 
 SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_correctness_fn(env); });
+}
+
+// TWCS compacts each window with ICS, so a past window that was compacted into a single run
+// holds possibly many fragments of it. That window is done, and must not be picked for the
+// per-window major again because it holds more than one sstable, only once it holds more than
+// one run.
+SEASTAR_TEST_CASE(time_window_strategy_counts_runs_in_past_window_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        using namespace std::chrono;
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "time_window_strategy")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
+        auto s = builder.build();
+
+        auto now = api::timestamp_clock::now().time_since_epoch().count();
+        auto past = now - duration_cast<microseconds>(hours(2)).count();
+        auto make_sstable = [&] (int key) {
+            mutation m(s, partition_key::from_exploded(*s, {to_bytes(format("key{}", key))}));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), past);
+            return make_sstable_containing(env.make_sstable(s), {std::move(m)}).get();
+        };
+
+        auto window = compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), past);
+        auto run_id = sstables::run_id::create_random_id();
+        std::map<api::timestamp_type, std::vector<shared_sstable>> buckets;
+        for (int key = 0; key < 3; key++) {
+            auto sst = make_sstable(key);
+            sstables::test(sst).set_run_identifier(run_id);
+            buckets[window].push_back(std::move(sst));
+        }
+
+        std::map<sstring, sstring> options;
+        compaction::time_window_compaction_strategy twcs(options);
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto control = make_strategy_control_for_test(false);
+        auto state = cf.as_compaction_group_view().get_compaction_strategy_state().get<compaction::time_window_compaction_strategy_state_ptr>();
+        auto now_window = compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now);
+
+        // The past window still needs its major compaction, but holds a single run already.
+        state->recent_active_windows.insert(window);
+        auto selected = twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), 4, 32, now_window, *state);
+        BOOST_REQUIRE(selected.empty());
+
+        // An sstable of another run lands in the window, e.g. from repair: it now needs compacting.
+        buckets[window].push_back(make_sstable(3));
+        state->recent_active_windows.insert(window);
+        selected = twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), 4, 32, now_window, *state);
+        BOOST_REQUIRE_EQUAL(selected.size(), 4);
+    });
+}
+
+// Sstables written for different windows by an older compaction share its run identifier, and
+// the sstable set keeps them in a single run when they don't overlap. Grouping runs by window
+// splits such a run into a run for each window.
+SEASTAR_TEST_CASE(time_window_strategy_splits_run_by_window_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        using namespace std::chrono;
+        simple_schema ss;
+        auto s = ss.schema();
+        auto keys = tests::generate_partition_keys(4, s);
+        const auto window_size = duration_cast<seconds>(hours(1));
+        const auto window = duration_cast<microseconds>(window_size).count();
+        auto run_id = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> sstables;
+        // Two disjoint fragments in each of two windows, all of the same run.
+        for (unsigned i = 0; i < keys.size(); i++) {
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, (i / 2) * window, keys[i].key(), keys[i].key());
+            sstables::test(sst).set_run_identifier(run_id);
+            sstables.push_back(std::move(sst));
+        }
+        auto runs = compaction::incremental_compaction_strategy::sstables_to_runs(sstables);
+        BOOST_REQUIRE_EQUAL(runs.size(), 1);
+
+        compaction::time_window_compaction_strategy_options options({
+                { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+                { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        });
+        auto [buckets, max_timestamp] = compaction::time_window_compaction_strategy::get_buckets(std::move(runs), options);
+        BOOST_REQUIRE_EQUAL(buckets.size(), 2);
+        BOOST_REQUIRE_EQUAL(max_timestamp, window);
+        for (unsigned w = 0; w < 2; w++) {
+            auto& bucket = buckets[w * window];
+            BOOST_REQUIRE_EQUAL(bucket.size(), 1);
+            auto fragments = bucket.front()->all() | std::ranges::to<std::unordered_set<shared_sstable>>();
+            BOOST_REQUIRE(fragments == (std::unordered_set<shared_sstable>{sstables[2 * w], sstables[2 * w + 1]}));
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(time_window_strategy_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
@@ -2613,7 +2713,7 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
 
     // past window cannot be compacted because it has a single SSTable
     auto state = cf.as_compaction_group_view().get_compaction_strategy_state().get<compaction::time_window_compaction_strategy_state_ptr>();
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 0);
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), min_threshold, max_threshold, now, *state).size() == 0);
 
     // create min_threshold-1 sstables into current time window
     for (api::timestamp_type t = 0; t < min_threshold - 1; t++) {
@@ -2626,18 +2726,18 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
 
     // past window can now be compacted into a single SSTable because it was the previous current (active) window.
     // current window cannot be compacted because it has less than min_threshold SSTables
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 2);
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), min_threshold, max_threshold, now, *state).size() == 2);
 
     major_compact_bucket(past_window_ts);
 
     // now past window cannot be compacted again, because it was already compacted into a single SSTable, now it switches to STCS mode.
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 0);
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), min_threshold, max_threshold, now, *state).size() == 0);
 
     // make past window contain 2 similar-sized SSTables, fewer than min_threshold, which applies only to the current window.
     add_new_sstable_to_bucket(1, past_window_ts);
 
     // now past window can be compacted again because it switched to STCS mode, where past windows need only 2 SSTables.
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 2);
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, to_run_buckets(buckets), min_threshold, max_threshold, now, *state).size() == 2);
 }
 
 SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
@@ -4616,6 +4716,30 @@ void twcs_reshape_after_multi_window_compaction_fn(test_env& env) {
 
 SEASTAR_TEST_CASE(twcs_reshape_after_multi_window_compaction_test) {
     return test_env::do_with_async([](test_env& env) { twcs_reshape_after_multi_window_compaction_fn(env); });
+}
+
+// A window compacted into a single run of many fragments has nothing to reshape, even when the
+// fragments are disjoint and outnumber the reshape threshold. Reshaping it would rewrite the
+// window into a whole sstable.
+SEASTAR_TEST_CASE(twcs_reshape_skips_window_of_single_run_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        const unsigned fragments = s->max_compaction_threshold() + 1;
+        const auto keys = tests::generate_partition_keys(fragments, s);
+        auto run_identifier = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> sstables;
+        for (auto& key : keys) {
+            auto sst = env.make_sstable(s);
+            sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max_timestamp */, key.key(), key.key());
+            sstables::test(sst).set_run_identifier(run_identifier);
+            sstables.push_back(std::move(sst));
+        }
+
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::time_window, {});
+        BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict).sstables.empty());
+        BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::relaxed).sstables.empty());
+    });
 }
 
 SEASTAR_FIXTURE_TEST_CASE(twcs_reshape_with_disjoint_set_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
