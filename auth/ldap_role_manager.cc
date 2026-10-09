@@ -220,6 +220,8 @@ ldap_role_manager::ldap_role_manager(
         , _permissions_update_interval_in_ms(permissions_update_interval_in_ms)
         , _permissions_update_interval_in_ms_observer(std::move(permissions_update_interval_in_ms_observer))
         , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this)))
+        , _reconnect_backoff_min(cfg.ldap_reconnect_backoff_min)
+        , _reconnect_backoff_max(cfg.ldap_reconnect_backoff_max)
         , _cache(cache)
         , _cache_pruner(make_ready_future<>()) {
 }
@@ -299,8 +301,7 @@ future<conn_ptr> ldap_role_manager::connect() {
 
 future<conn_ptr> ldap_role_manager::reconnect() {
     constexpr unsigned max_attempts = 5;
-    using namespace std::literals::chrono_literals;
-    exponential_backoff_retry backoff(1s, 32s);
+    exponential_backoff_retry backoff(_reconnect_backoff_min, _reconnect_backoff_max);
     for (unsigned attempt = 1; ; ++attempt) {
         mylog.trace("reconnect() attempt {} of {}", attempt, max_attempts);
         try {
