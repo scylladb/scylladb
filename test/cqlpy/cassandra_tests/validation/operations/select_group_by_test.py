@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -9,6 +9,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from datetime import datetime, timezone
+from cassandra.util import Date, Time, uuid_from_time
 
 @pytest.mark.xfail(reason="Issue #2060, #13109")
 def testGroupByWithoutPaging(cql, test_keyspace):
@@ -2166,3 +2168,411 @@ def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
             assertRowsNet(execute_with_paging(cql, table, "SELECT DISTINCT a, s, count(a), count(s) FROM %s WHERE a IN (1, 2, 3, 4) LIMIT 2",
                                                pageSize),
                           row(1, 1, 4, 3))
+
+# The following tests check GROUP BY on time ranges, using the floor()
+# function, which Cassandra added in Cassandra 5.0 (CASSANDRA-11871).
+# Reproduces SCYLLADB-5211 (the floor() function and grouping by time ranges)
+
+# Helpers for the values the Java test builds, all in UTC:
+def toTimestamp(s):
+    # s looks like "2016-09-27 16:10:00 UTC". The Python driver returns
+    # timestamps as naive datetime objects in UTC.
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S UTC")
+
+def toTimeUUID(s):
+    return uuid_from_time(datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc))
+
+def toDate(s):
+    return Date(s)
+
+def toTime(s):
+    return Time(s)
+
+compactOptions = ["", " WITH COMPACT STORAGE"]
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimestamTypeAndWithoutPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time timestamp, v int, primary key (pk, time))" + compactOption) as table:
+            # The Java test also checks here that invalid durations or starting
+            # times are rejected; we moved these checks to
+            # testGroupByTimeRangesWithInvalidArguments (see there).
+
+            assertInvalidMessage(cql, table, "Group by currently only support groups of columns following their declared order in the PRIMARY KEY",
+                                 "SELECT pk, floor(time, 2h, '2016-09-01'), v FROM %s GROUP BY floor(time, 2h, '2016-09-01')")
+
+            assertInvalidMessage(cql, table, "Only monotonic functions are supported in the GROUP BY clause. Got: system.floor : (timestamp, duration(constant), timestamp) -> timestamp",
+                                 "SELECT pk, floor(time, 2h, time), v FROM %s GROUP BY pk, floor(time, 2h, time)")
+
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:10:00 UTC', 1)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:12:00 UTC', 2)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:14:00 UTC', 3)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:15:00 UTC', 4)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:21:00 UTC', 5)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:22:00 UTC', 6)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:26:00 UTC', 7)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:26:20 UTC', 8)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-09-27 16:26:20 UTC', 10)")
+            execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-09-27 16:30:00 UTC', 11)")
+
+            # Test prepared statement
+            assertRows(execute(cql, table, "SELECT pk, floor(time, 5m, ?), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m, ?)",
+                               toTimestamp("2016-09-27 00:00:00 UTC"),
+                               toTimestamp("2016-09-27 00:00:00 UTC")),
+                       row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                       row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                       row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                       row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                       row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
+                       row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
+
+            for startingTime in ["", ", '2016-09-27 UTC'"]:
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ")"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
+                           row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") LIMIT 2"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") PER PARTITION LIMIT 1"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC"),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC LIMIT 2"),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2))
+
+def insertTimeUUIDRows(cql, table):
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:10:00"), 1)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:12:00"), 2)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:14:00"), 3)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:15:00"), 4)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:21:00"), 5)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:22:00"), 6)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:26:00"), 7)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 1, toTimeUUID("2016-09-27 16:26:20"), 8)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 2, toTimeUUID("2016-09-27 16:26:00"), 10)
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (?, ?, ?)", 2, toTimeUUID("2016-09-27 16:30:00"), 11)
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimeUUIDAndWithoutPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time timeuuid, v int, primary key (pk, time))" + compactOption) as table:
+            # The Java test also checks here that invalid durations or starting
+            # times are rejected; we moved these checks to
+            # testGroupByTimeRangesWithInvalidArguments (see there).
+            insertTimeUUIDRows(cql, table)
+
+            for startingTime in ["", ", '2016-09-27 UTC'"]:
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ")"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
+                           row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
+
+                # The Java test uses the new function name to_timestamp(),
+                # which Scylla doesn't support yet (SCYLLADB-5141). Cassandra
+                # still supports the old name toTimestamp(), so we use it.
+                assertRows(execute(cql, table, "SELECT pk, floor(toTimestamp(time), 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(toTimestamp(time), 5m" + startingTime + ")"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
+                           row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") LIMIT 2"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") PER PARTITION LIMIT 1"),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                           row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC"),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                           row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                           row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC LIMIT 2"),
+                           row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                           row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2))
+
+def insertDateRows(cql, table):
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27', 1)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-28', 2)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-29', 3)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-30', 4)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-10-01', 5)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-10-04', 6)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-10-20', 7)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-11-27', 8)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-11-01', 10)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-11-02', 11)")
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithDateTypeAndWithoutPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time date, v int, primary key (pk, time))" + compactOption) as table:
+            # The Java test also checks here that invalid durations or starting
+            # times are rejected; we moved these checks to
+            # testGroupByTimeRangesWithInvalidArguments (see there).
+            insertDateRows(cql, table)
+
+            for startingTime in ["", ", '2016-06-01'"]:
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ")"),
+                           row(1, toDate("2016-09-01"), 1, 4, 4),
+                           row(1, toDate("2016-10-01"), 5, 7, 3),
+                           row(1, toDate("2016-11-01"), 8, 8, 1),
+                           row(2, toDate("2016-11-01"), 10, 11, 2))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ") LIMIT 2"),
+                           row(1, toDate("2016-09-01"), 1, 4, 4),
+                           row(1, toDate("2016-10-01"), 5, 7, 3))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ") PER PARTITION LIMIT 1"),
+                           row(1, toDate("2016-09-01"), 1, 4, 4),
+                           row(2, toDate("2016-11-01"), 10, 11, 2))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 1mo" + startingTime + ") ORDER BY time DESC"),
+                           row(1, toDate("2016-11-01"), 8, 8, 1),
+                           row(1, toDate("2016-10-01"), 5, 7, 3),
+                           row(1, toDate("2016-09-01"), 1, 4, 4))
+
+                assertRows(execute(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 1mo" + startingTime + ") ORDER BY time DESC LIMIT 2"),
+                           row(1, toDate("2016-11-01"), 8, 8, 1),
+                           row(1, toDate("2016-10-01"), 5, 7, 3))
+
+def insertDateTimeRows(cql, table):
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:10:00', 1)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:12:00', 2)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:14:00', 3)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:15:00', 4)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:21:00', 5)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:22:00', 6)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:26:00', 7)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-27', '16:26:20', 8)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-28', '16:26:20', 9)")
+    execute(cql, table, "INSERT INTO %s (pk, date, time, v) VALUES (1, '2016-09-28', '16:26:30', 10)")
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimeTypeAndWithoutPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, date date, time time, v int, primary key (pk, date, time))" + compactOption) as table:
+            # The Java test also checks here that invalid durations or starting
+            # times are rejected; we moved these checks to
+            # testGroupByTimeRangesWithInvalidArguments (see there).
+            insertDateTimeRows(cql, table)
+
+            assertInvalidMessage(cql, table, "Functions are only supported on the last element of the GROUP BY clause",
+                                 "SELECT pk, floor(date, 1w), time, min(v), max(v), count(v) FROM %s GROUP BY pk, floor(date, 1w), time")
+
+            assertRows(execute(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, 5m)"),
+                       row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3),
+                       row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1),
+                       row(1, toDate("2016-09-27"), toTime("16:20:00"), 5, 6, 2),
+                       row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2),
+                       row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2))
+
+            assertRows(execute(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, 5m) LIMIT 2"),
+                       row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3),
+                       row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1))
+
+            assertRows(execute(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, date, floor(time, 5m) ORDER BY date DESC, time DESC"),
+                       row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2),
+                       row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2),
+                       row(1, toDate("2016-09-27"), toTime("16:20:00"), 5, 6, 2),
+                       row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1),
+                       row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3))
+
+            assertRows(execute(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, date, floor(time, 5m) ORDER BY date DESC, time DESC LIMIT 2"),
+                       row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2),
+                       row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2))
+
+def insertTimestampRows(cql, table):
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:10:00 UTC', 1)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:12:00 UTC', 2)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:14:00 UTC', 3)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:15:00 UTC', 4)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:21:00 UTC', 5)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:22:00 UTC', 6)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:26:00 UTC', 7)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (1, '2016-09-27 16:26:20 UTC', 8)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-09-27 16:26:20 UTC', 10)")
+    execute(cql, table, "INSERT INTO %s (pk, time, v) VALUES (2, '2016-09-27 16:30:00 UTC', 11)")
+
+# The rows that the paging tests on timestamp and timeuuid columns expect -
+# they are the same for both types.
+def assertTimeRangesWithPaging(cql, table, pageSize, startingTime):
+    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ")", pageSize),
+                  row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                  row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                  row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                  row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                  row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
+                  row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
+
+    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") LIMIT 2", pageSize),
+                  row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                  row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1))
+
+    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m" + startingTime + ") PER PARTITION LIMIT 1", pageSize),
+                  row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
+                  row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1))
+
+    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC", pageSize),
+                  row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                  row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2),
+                  row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),
+                  row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3))
+
+    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 5m" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 5m" + startingTime + ") ORDER BY time DESC LIMIT 2", pageSize),
+                  row(1, toTimestamp("2016-09-27 16:25:00 UTC"), 7, 8, 2),
+                  row(1, toTimestamp("2016-09-27 16:20:00 UTC"), 5, 6, 2))
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimestampTypeAndPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time timestamp, v int, primary key (pk, time))" + compactOption) as table:
+            insertTimestampRows(cql, table)
+
+            for pageSize in range(1, 10):
+                for startingTime in ["", ", '2016-09-27 UTC'"]:
+                    assertTimeRangesWithPaging(cql, table, pageSize, startingTime)
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimeUUIDAndPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time timeuuid, v int, primary key (pk, time))" + compactOption) as table:
+            insertTimeUUIDRows(cql, table)
+
+            for pageSize in range(1, 10):
+                for startingTime in ["", ", '2016-09-27 UTC'"]:
+                    assertTimeRangesWithPaging(cql, table, pageSize, startingTime)
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithDateTypeAndPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, time date, v int, primary key (pk, time))" + compactOption) as table:
+            insertDateRows(cql, table)
+
+            for pageSize in range(1, 10):
+                for startingTime in ["", ", '2016-06-01'"]:
+                    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ")", pageSize),
+                                  row(1, toDate("2016-09-01"), 1, 4, 4),
+                                  row(1, toDate("2016-10-01"), 5, 7, 3),
+                                  row(1, toDate("2016-11-01"), 8, 8, 1),
+                                  row(2, toDate("2016-11-01"), 10, 11, 2))
+
+                    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ") LIMIT 2", pageSize),
+                                  row(1, toDate("2016-09-01"), 1, 4, 4),
+                                  row(1, toDate("2016-10-01"), 5, 7, 3))
+
+                    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo" + startingTime + ") PER PARTITION LIMIT 1", pageSize),
+                                  row(1, toDate("2016-09-01"), 1, 4, 4),
+                                  row(2, toDate("2016-11-01"), 10, 11, 2))
+
+                    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 1mo" + startingTime + ") ORDER BY time DESC", pageSize),
+                                  row(1, toDate("2016-11-01"), 8, 8, 1),
+                                  row(1, toDate("2016-10-01"), 5, 7, 3),
+                                  row(1, toDate("2016-09-01"), 1, 4, 4))
+
+                    assertRowsNet(execute_with_paging(cql, table, "SELECT pk, floor(time, 1mo" + startingTime + "), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, floor(time, 1mo" + startingTime + ") ORDER BY time DESC LIMIT 2", pageSize),
+                                  row(1, toDate("2016-11-01"), 8, 8, 1),
+                                  row(1, toDate("2016-10-01"), 5, 7, 3))
+
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithTimeTypeAndPaging(cql, test_keyspace, compact_storage):
+    for compactOption in compactOptions:
+        with create_table(cql, test_keyspace, "(pk int, date date, time time, v int, primary key (pk, date, time))" + compactOption) as table:
+            insertDateTimeRows(cql, table)
+
+            for pageSize in range(1, 10):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, 5m)", pageSize),
+                              row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3),
+                              row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1),
+                              row(1, toDate("2016-09-27"), toTime("16:20:00"), 5, 6, 2),
+                              row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2),
+                              row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2))
+
+                assertRowsNet(execute_with_paging(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, 5m) LIMIT 2", pageSize),
+                              row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3),
+                              row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1))
+
+                assertRowsNet(execute_with_paging(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, date, floor(time, 5m) ORDER BY date DESC, time DESC", pageSize),
+                              row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2),
+                              row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2),
+                              row(1, toDate("2016-09-27"), toTime("16:20:00"), 5, 6, 2),
+                              row(1, toDate("2016-09-27"), toTime("16:15:00"), 4, 4, 1),
+                              row(1, toDate("2016-09-27"), toTime("16:10:00"), 1, 3, 3))
+
+                assertRowsNet(execute_with_paging(cql, table, "SELECT pk, date, floor(time, 5m), min(v), max(v), count(v) FROM %s WHERE pk = 1 GROUP BY pk, date, floor(time, 5m) ORDER BY date DESC, time DESC LIMIT 2", pageSize),
+                              row(1, toDate("2016-09-28"), toTime("16:25:00"), 9, 10, 2),
+                              row(1, toDate("2016-09-27"), toTime("16:25:00"), 7, 8, 2))
+
+# The checks, from the four testGroupByTimeRanges*WithoutPaging tests, that
+# floor() in a GROUP BY rejects invalid durations and starting times. Over
+# the network, Cassandra fails these requests with a ReadFailure - the
+# InvalidRequestException is thrown while reading, on the replica - instead
+# of an InvalidRequest error (the Java test doesn't notice this, because
+# CQLTester executes the requests internally) - see CASSANDRA-21739. So this
+# test is marked cassandra_bug.
+@pytest.mark.xfail(reason="SCYLLADB-5211")
+def testGroupByTimeRangesWithInvalidArguments(cql, test_keyspace, cassandra_bug):
+    for type in ["timestamp", "timeuuid"]:
+        with create_table(cql, test_keyspace, "(pk int, time " + type + ", v int, primary key (pk, time))") as table:
+            if type == "timestamp":
+                insertTimestampRows(cql, table)
+            else:
+                insertTimeUUIDRows(cql, table)
+            for startingTime in ["", ", '2016-09-27 UTC'"]:
+                # Checks with duration lower than precisions
+                assertInvalidMessage(cql, table, "The floor cannot be computed for the 10us duration as precision is below 1 millisecond",
+                                     "SELECT pk, floor(time, 10us" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 10us" + startingTime + ")")
+
+                # Checks with a negative duration
+                assertInvalidMessage(cql, table, "Negative durations are not supported by the floor function",
+                                     "SELECT pk, floor(time, 10us" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, -5m" + startingTime + ")")
+
+            # Checks with start time is greater than the timestamp
+            assertInvalidMessage(cql, table, "The floor function starting time is greater than the provided time",
+                                 "SELECT pk, floor(time, 5m, '2016-10-27'), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 5m, '2016-10-27')")
+
+    with create_table(cql, test_keyspace, "(pk int, time date, v int, primary key (pk, time))") as table:
+        insertDateRows(cql, table)
+        for startingTime in ["", ", '2016-06-01'"]:
+            # Checks with duration lower than precisions
+            assertInvalidMessage(cql, table, "The floor on date values cannot be computed for the 1h duration as precision is below 1 day",
+                                 "SELECT pk, floor(time, 1h" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1h" + startingTime + ")")
+
+            # Checks with a negative duration
+            assertInvalidMessage(cql, table, "Negative durations are not supported by the floor function",
+                                 "SELECT pk, floor(time, -1mo" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, -1mo" + startingTime + ")")
+
+        # Checks with start time is greater than the timestamp
+        assertInvalidMessage(cql, table, "The floor function starting time is greater than the provided time",
+                             "SELECT pk, floor(time, 1mo, '2017-01-01'), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(time, 1mo, '2017-01-01')")
+
+    with create_table(cql, test_keyspace, "(pk int, date date, time time, v int, primary key (pk, date, time))") as table:
+        insertDateTimeRows(cql, table)
+        # Checks with duration greater than dayprecisions
+        assertInvalidMessage(cql, table, "For time values, the floor can only be computed for durations smaller that a day",
+                             "SELECT pk, date, floor(time, 10d), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, 10d)")
+
+        # Checks with a negative duration
+        assertInvalidMessage(cql, table, "Negative durations are not supported by the floor function",
+                             "SELECT pk, date, floor(time, -10m), min(v), max(v), count(v) FROM %s GROUP BY pk, date, floor(time, -10m)")
