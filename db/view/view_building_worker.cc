@@ -391,8 +391,13 @@ future<> view_building_worker::run_view_building_state_observer() {
             co_await clear_started_staging_tasks();
             _as.check();
 
+            auto seen_version = _vb_state_machine.version;
             read_apply_mutex_holder.return_all();
-            co_await _vb_state_machine.event.wait();
+            // Wait with a predicate, so a state change applied while this fiber
+            // is not waiting on `event` is not lost.
+            co_await _vb_state_machine.event.when([&] {
+                return _as.abort_requested() || _vb_state_machine.version != seen_version;
+            });
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
         } catch (...) {
