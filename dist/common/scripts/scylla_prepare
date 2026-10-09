@@ -132,7 +132,8 @@ def create_perftune_conf(cfg):
 
 def verify_cpu():
     if platform.machine() == 'x86_64':
-        needed_flags = set(['sse4_2', 'pclmulqdq'])
+        # x86-64-v3 (configure.py's default_target_arch()) plus PCLMUL; abm is LZCNT.
+        needed_flags = set(['sse4_2', 'pclmulqdq', 'avx', 'avx2', 'bmi1', 'bmi2', 'f16c', 'fma', 'abm', 'movbe', 'xsave'])
         for line in open('/proc/cpuinfo'):
             if line.startswith('flags'):
                 actual_flags = set(line.split()[2:])
@@ -141,6 +142,17 @@ def verify_cpu():
                     print(f"ERROR: You will not be able to run Scylla on this machine because its CPU lacks the following features: {' '.join(missing_flags)}")
                     print('\nIf this is a virtual machine, please update its CPU feature configuration or upgrade to a newer hypervisor.')
                     sys.exit(1)
+    elif platform.machine() == 'aarch64':
+        # armv8.2-a+crc+crypto+rcpc+dotprod (configure.py's default_target_arch()).
+        needed_flags = set(['atomics', 'lrcpc', 'asimddp', 'crc32', 'aes', 'pmull', 'sha2'])
+        for line in open('/proc/cpuinfo'):
+            if line.startswith('Features'):
+                missing_flags = needed_flags - set(line.split()[2:])
+                if missing_flags:
+                    print(f"ERROR: You will not be able to run Scylla on this machine because its CPU lacks the following features: {' '.join(sorted(missing_flags))}")
+                    print('\nScylla requires an ARMv8.2-A CPU (Neoverse N1 or later, e.g. AWS Graviton2+).')
+                    sys.exit(1)
+                break
 
 if __name__ == '__main__':
     verify_cpu()

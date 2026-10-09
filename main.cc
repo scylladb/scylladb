@@ -85,6 +85,9 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#endif
 #include "tracing/tracing.hh"
 #include "audit/audit.hh"
 #include <seastar/core/prometheus.hh>
@@ -486,15 +489,31 @@ adjust_and_verify_rlimit(bool developer_mode) {
     }
 }
 
-static bool cpu_sanity() {
-#if defined(__x86_64__) || defined(__i386__)
-    if (!__builtin_cpu_supports("sse4.2") || !__builtin_cpu_supports("pclmul")) {
-        std::cerr << "Scylla requires a processor with SSE 4.2 and PCLMUL support\n";
-        return false;
+// Runs from .preinit_array, before library initializers that already need the -march
+// baseline (e.g. seastar's malloc), so it must be built for the base ISA and use only syscalls.
+#ifdef __x86_64__
+[[gnu::target("arch=x86-64")]]
+#endif
+static void cpu_sanity() {
+#ifdef __x86_64__
+    // Must match the -march baseline in configure.py's default_target_arch().
+    __builtin_cpu_init();
+    if (!__builtin_cpu_supports("x86-64-v3") || !__builtin_cpu_supports("pclmul")) {
+        static constexpr std::string_view msg = "Scylla requires a processor with x86-64-v3 (AVX2) and PCLMUL support\n";
+        (void)!::write(STDERR_FILENO, msg.data(), msg.size());
+        _exit(71);
+    }
+#elif defined(__aarch64__)
+    // Must match the -march baseline in configure.py's default_target_arch().
+    constexpr unsigned long needed = HWCAP_ATOMICS | HWCAP_LRCPC | HWCAP_ASIMDDP | HWCAP_CRC32 | HWCAP_AES | HWCAP_PMULL | HWCAP_SHA2;
+    if ((getauxval(AT_HWCAP) & needed) != needed) {
+        static constexpr std::string_view msg = "Scylla requires an ARMv8.2-A processor with LSE atomics, RCpc, dot product, CRC32 and crypto (Neoverse N1 or later)\n";
+        (void)!::write(STDERR_FILENO, msg.data(), msg.size());
+        _exit(71);
     }
 #endif
-    return true;
 }
+[[gnu::used, gnu::section(".preinit_array")]] static void (*cpu_sanity_preinit)() = cpu_sanity;
 
 static void tcp_syncookies_sanity() {
     try {
@@ -2902,11 +2921,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 }
 
 int main(int ac, char** av) {
-    // early check to avoid triggering
-    if (!cpu_sanity()) {
-        _exit(71);
-    }
-
     std::string exec_name;
     if (ac >= 2) {
         exec_name = av[1];
