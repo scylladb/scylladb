@@ -1720,6 +1720,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , restrict_future_timestamp(this, "restrict_future_timestamp",liveness::LiveUpdate, value_status::Used, true, "Controls whether to detect and forbid unreasonable USING TIMESTAMP, more than 3 days into the future.")
     , ignore_truncation_record(this, "unsafe_ignore_truncation_record", value_status::Used, false,
         "Ignore truncation record stored in system tables as if tables were never truncated.")
+    , unsafe_ignore_commitlog_manifest(this, "unsafe_ignore_commitlog_manifest", value_status::Used, false,
+        "Start even when the commitlog manifest is missing, incomplete, or lists segments that are not on disk. "
+        "The data in missing segments is lost. A node serving strongly consistent tables may have acknowledged "
+        "writes it no longer holds; replace the node instead of starting it with this option. "
+        "Remove the option after the first start.")
     , force_schema_commit_log(this, "force_schema_commit_log", value_status::Deprecated, false,
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
     , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 0, "Time for which information about finished task started internally stays in memory.")

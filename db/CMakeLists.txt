@@ -15,6 +15,7 @@ target_sources(db
     commitlog/commitlog.cc
     commitlog/commitlog_replayer.cc
     commitlog/commitlog_entry.cc
+    commitlog/commitlog_manifest.cc
     commitlog/raft_commitlog_replay_buffer.cc
     data_listeners.cc
     functions/function.cc

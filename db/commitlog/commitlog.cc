@@ -53,6 +53,7 @@
 #include "utils/log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
+#include "commitlog_manifest.hh"
 
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
@@ -110,6 +111,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.extensions = &cfg.extensions();
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = false;
+    c.ignore_manifest_errors = cfg.unsafe_ignore_commitlog_manifest();
 
     if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
@@ -132,11 +134,12 @@ db::commitlog::descriptor::descriptor(replay_position p, const std::string& fnam
 const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPARATOR);
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
+const std::string db::commitlog::descriptor::RECYCLED_PREFIX("Recycled-");
 
 static const boost::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
 // Matches filenames like "CommitLog-4-12345.log" or "CommitLog-4-12345.variant.log"
 // Groups: (1) prefix e.g. "CommitLog-", (2) version, (3) segment id, (4) optional tag e.g. "variant"
-static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR +
+static const boost::regex filename_match("(?:" + db::commitlog::descriptor::RECYCLED_PREFIX + ")?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR +
                                          ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?(?:\\.([a-zA-Z]+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
 db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
@@ -339,6 +342,10 @@ public:
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::vector<std::pair<named_file, dispose_mode>> _files_to_dispose;
 
+    // Used only with cfg.use_manifest. init() sets _manifest_verification on shard 0.
+    commitlog_manifest _manifest;
+    commitlog_manifest::verify_result _manifest_verification;
+
     void account_memory_usage(size_t size) noexcept {
         _request_controller.consume(size);
     }
@@ -457,6 +464,8 @@ public:
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment();
     future<sseg_ptr> allocate_segment_ex(descriptor, named_file, open_flags);
+    future<sseg_ptr> add_to_manifest(sseg_ptr);
+    future<> drop_old_manifest_generations();
 
     sstring filename(const descriptor& d) const {
         return cfg.commit_log_location + "/" + d.filename();
@@ -1973,6 +1982,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     // than default_size at the end of the allocation, that allows for every valid mutation to
     // always be admitted for processing.
     , _request_controller(max_request_controller_units(), request_controller_timeout_exception_factory{})
+    , _manifest(cfg.commit_log_location, cfg.fname_prefix, this_shard_id())
     , _reserve_segments(1)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
@@ -2104,6 +2114,11 @@ gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_typ
 
 future<> db::commitlog::segment_manager::init() {
     auto descs = co_await list_descriptors(cfg.commit_log_location);
+
+    if (cfg.use_manifest && this_shard_id() == 0) {
+        auto on_disk = descs | std::views::transform([] (const descriptor& d) { return d.filename(); }) | std::ranges::to<std::vector>();
+        _manifest_verification = co_await commitlog_manifest::verify(cfg.commit_log_location, cfg.fname_prefix, std::move(on_disk), cfg.ignore_manifest_errors);
+    }
 
     SCYLLA_ASSERT(_reserve_segments.empty()); // _segments_to_replay must not pick them up
     segment_id_type id = *cfg.base_segment_id;
@@ -2481,7 +2496,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             // out-of-order files. (Sort does not help).
             clogger.debug("Using recycled segment file {} -> {} ({} MB)", f.name(), dst, f.known_size()/(1024*1024));
             co_await f.rename(dst);
-            co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags);
+            co_return co_await add_to_manifest(co_await allocate_segment_ex(std::move(d), std::move(f), flags));
         }
 
         if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
@@ -2502,8 +2517,46 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         }
 
         named_file f(dst);
-        co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags|open_flags::create);
+        auto s = co_await allocate_segment_ex(std::move(d), std::move(f), flags|open_flags::create);
+        if (cfg.use_manifest) {
+            // A new file's directory entry is durable only after the directory is
+            // synced; list the name only after that, or a crash would leave a listed
+            // name without a file. The recycled path above syncs in rename().
+            co_await commit_io_check([&] { return sync_directory(cfg.commit_log_location); });
+        }
+        co_return co_await add_to_manifest(std::move(s));
     }
+}
+
+// Listed before the segment can hold data, so a listed file that is absent
+// at startup was removed outside the commitlog. On a failed add() the frame
+// drops s and ~segment queues the file for disposal, as on an allocate_segment_ex() failure.
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::add_to_manifest(sseg_ptr s) {
+    if (cfg.use_manifest) {
+        co_await _manifest.add(s->_desc.filename());
+    }
+    co_return s;
+}
+
+future<> db::commitlog::segment_manager::drop_old_manifest_generations() {
+    auto& gens = _manifest_verification.old_generations;
+    if (gens.empty()) {
+        co_return;
+    }
+    // Without a new generation, dropping the old ones would leave no manifest at all.
+    if (!_manifest.enabled()) {
+        on_internal_error(clogger, fmt::format("Commitlog manifest generations {} in {} dropped before a new generation was enabled", gens, cfg.commit_log_location));
+    }
+    // An unsealed generation is not checked for completeness on the next start.
+    if (!_manifest.sealed()) {
+        on_internal_error(clogger, fmt::format("Commitlog manifest generations {} in {} dropped before generation {} was sealed", gens, cfg.commit_log_location, _manifest.generation()));
+    }
+    if (std::ranges::find(gens, _manifest.generation()) != gens.end()) {
+        on_internal_error(clogger, fmt::format("Commitlog manifest generation {} in {} is in use and cannot be dropped", _manifest.generation(), cfg.commit_log_location));
+    }
+    co_await commitlog_manifest::drop_generations(cfg.commit_log_location, cfg.fname_prefix, gens);
+    clogger.info("Dropped old commitlog manifest generations {} in {}", gens, cfg.commit_log_location);
+    gens.clear();
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
@@ -2888,6 +2941,26 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 
     co_await std::move(pending_deletes);
 
+    if (cfg.use_manifest) {
+        std::vector<sstring> names;
+        for (auto& [f, mode] : ftd) {
+            if (mode != dispose_mode::Keep) {
+                names.push_back(std::filesystem::path(f.name()).filename().native());
+            }
+        }
+        try {
+            co_await _manifest.remove(std::move(names));
+        } catch (...) {
+            // Unlinking files the manifest still lists would make the next start refuse.
+            // Keep them queued; the next pass retries. A disposal pass never fails its caller.
+            clogger.error("Could not update commitlog manifest, keeping {} queued files for the next pass: {:t}", ftd.size(), std::current_exception());
+            std::move(_files_to_dispose.begin(), _files_to_dispose.end(), std::back_inserter(ftd));
+            _files_to_dispose = std::move(ftd);
+            deleting_done.set_value();
+            co_return;
+        }
+    }
+
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
@@ -2917,7 +2990,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             auto next_usage = usage - size;
 
             if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
-                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                descriptor d(next_id(), descriptor::RECYCLED_PREFIX + cfg.fname_prefix);
                 auto dst = this->filename(d);
 
                 clogger.debug("Recycling segment file {} -> {}", f.name(), dst);
@@ -4056,6 +4129,37 @@ future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_desc
 
 future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors(const sstring& dir) const {
     return _segment_manager->list_descriptors(dir);
+}
+
+bool db::commitlog::manifest_found_on_startup() const {
+    return _segment_manager->_manifest_verification.found;
+}
+
+bool db::commitlog::has_old_manifest_generations() const {
+    return !_segment_manager->_manifest_verification.old_generations.empty();
+}
+
+uint64_t db::commitlog::next_manifest_generation() const {
+    return _segment_manager->_manifest_verification.next_generation;
+}
+
+future<> db::commitlog::enable_manifest(uint64_t generation) {
+    if (!active_config().use_manifest) {
+        on_internal_error(clogger, "enable_manifest() called on a commitlog without use_manifest");
+    }
+    // Reusing a generation found on startup would overwrite its shard files.
+    if (generation < next_manifest_generation()) {
+        on_internal_error(clogger, fmt::format("Commitlog manifest generation {} in {} is not above the generations found on startup, next is {}", generation, active_config().commit_log_location, next_manifest_generation()));
+    }
+    return _segment_manager->_manifest.enable(generation);
+}
+
+future<> db::commitlog::seal_manifest(unsigned shard_count) {
+    return _segment_manager->_manifest.seal(shard_count);
+}
+
+future<> db::commitlog::drop_old_manifest_generations() {
+    return _segment_manager->drop_old_manifest_generations();
 }
 
 future<std::vector<sstring>> db::commitlog::list_existing_segments() const {
