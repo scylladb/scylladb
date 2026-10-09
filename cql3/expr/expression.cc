@@ -33,6 +33,7 @@
 #include "types/user.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -748,7 +749,11 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                                 out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
-                                if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
+                                if (is_count_rows_call(fc)) {
+                                    // count(<constant>) counts every row, like countRows(), and is named
+                                    // like it: Cassandra parses count(1) as countRows().
+                                    out = fmt::format_to(out, "count");
+                                } else if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
                                     auto cast_type = fn_name.substr(6);
                                     out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | std::views::transform(to_printer), ", "),
                                          cast_type);
@@ -2129,6 +2134,19 @@ size_t count_if(const expression& e, const noncopyable_function<bool (const bina
         return false;
     });
     return ret;
+}
+
+bool
+is_count_rows_call(const function_call& fc) {
+    auto& func = std::get<shared_ptr<cql3::functions::function>>(fc.func);
+    if (func->name() == functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME)) {
+        return true;
+    }
+    if (func->name() != functions::function_name::native_function("count") || fc.args.size() != 1) {
+        return false;
+    }
+    auto* c = as_if<constant>(&fc.args[0]);
+    return c && !c->is_null();
 }
 
 data_type
