@@ -284,11 +284,15 @@ def generate_compdb(compdb, ninja, buildfile, modes):
             except FileExistsError:
                 # if there is already a valid compile_commands.json link in the
                 # source root, we are done. if it's a stale link, update it.
+                # concurrent configure.py runs may race on the stale link
                 if os.path.islink(compdb):
-                    current_target = os.readlink(compdb)
-                    if not os.path.exists(current_target):
-                        os.unlink(compdb)
-                        os.symlink(compdb_target, compdb)
+                    try:
+                        current_target = os.readlink(compdb)
+                        if not os.path.exists(current_target):
+                            os.unlink(compdb)
+                            os.symlink(compdb_target, compdb)
+                    except (FileNotFoundError, FileExistsError):
+                        pass
             return
 
 

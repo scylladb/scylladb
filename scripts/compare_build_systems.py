@@ -862,6 +862,7 @@ def run_configure_py(repo_root, modes, tmpdir, quiet=False):
     Uses --out and --build-dir so the user's build tree is never touched.
     Returns the path to the generated build.ninja, or None on failure.
     """
+    tmpdir.mkdir(parents=True, exist_ok=True)
     ninja_file = tmpdir / "build.ninja"
     build_dir = tmpdir / "conf-build"
     mode_args = []
@@ -1343,7 +1344,7 @@ def _format_mode_details(details, quiet=False):
     return lines
 
 
-def _configure_and_compare(repo_root, mode, conf_parsed, tmpdir, verbose):
+def _configure_and_compare(repo_root, mode, conf_future, tmpdir, verbose):
     """Configure cmake and compare a single mode.
 
     Runs quietly — intended for parallel execution.
@@ -1353,6 +1354,9 @@ def _configure_and_compare(repo_root, mode, conf_parsed, tmpdir, verbose):
     if cmake_ninja is None:
         return None, "cmake configuration failed"
     cmake_parsed = parse_ninja(cmake_ninja)
+    conf_parsed = conf_future.result()
+    if conf_parsed is None:
+        return None, "configure.py failed"
     return compare_mode(
         mode, repo_root, conf_parsed=conf_parsed,
         cmake_parsed=cmake_parsed, verbose=verbose, quiet=True)
@@ -1421,6 +1425,12 @@ mode mapping:
     return args
 
 
+def _configure_py_and_parse(repo_root, mode, tmpdir):
+    """configure.py for one mode in its own subdir; parsed ninja or None."""
+    ninja = run_configure_py(repo_root, [mode], tmpdir / f"conf-{mode}", quiet=True)
+    return parse_ninja(ninja) if ninja else None
+
+
 def main():
     args = parse_args()
     repo_root = args.source_dir or find_repo_root()
@@ -1434,19 +1444,18 @@ def main():
 
     # Everything runs in a temporary directory so we never touch the
     # user's build tree.
-    with tempfile.TemporaryDirectory(prefix="scylla-cmp-") as tmpdir_str:
+    # conf_pool exits first, so workers finish before the tmpdir is removed.
+    with tempfile.TemporaryDirectory(prefix="scylla-cmp-") as tmpdir_str, \
+            concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(modes)) as conf_pool:
         tmpdir = Path(tmpdir_str)
 
-        # ── 1. Run configure.py (all modes at once) ──────────────
-        if not quiet:
-            print("\n─── configure.py ───")
-        conf_ninja = run_configure_py(repo_root, modes, tmpdir, quiet)
-        if conf_ninja is None:
-            return 2
-
-        if not quiet:
-            print("\nParsing configure.py build.ninja...")
-        conf_parsed = parse_ninja(conf_ninja)
+        # ── 1. Run configure.py per mode, in the background ──────
+        # Per-mode runs in parallel beat one all-modes run (~5x) and overlap cmake.
+        conf_futures = {
+            m: conf_pool.submit(_configure_py_and_parse, repo_root, m, tmpdir)
+            for m in modes
+        }
 
         # results: mode → (ok, details)
         results = {}
@@ -1463,6 +1472,9 @@ def main():
             if cmake_ninja is None:
                 return 2
             cmake_parsed = parse_ninja(cmake_ninja)
+            conf_parsed = conf_futures[canary].result()
+            if conf_parsed is None:
+                return 2
 
             cmake_mode = MODE_TO_CMAKE[canary]
             if not quiet:
@@ -1494,7 +1506,7 @@ def main():
                     futures = {
                         executor.submit(
                             _configure_and_compare, repo_root, m,
-                            conf_parsed, tmpdir, args.verbose): m
+                            conf_futures[m], tmpdir, args.verbose): m
                         for m in remaining
                     }
                     for future in concurrent.futures.as_completed(futures):
@@ -1516,6 +1528,9 @@ def main():
             if cmake_ninja is None:
                 return 2
             cmake_parsed = parse_ninja(cmake_ninja)
+            conf_parsed = conf_futures[mode].result()
+            if conf_parsed is None:
+                return 2
 
             cmake_mode = MODE_TO_CMAKE[mode]
             if not quiet:
