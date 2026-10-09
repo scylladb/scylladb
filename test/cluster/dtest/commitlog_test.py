@@ -394,8 +394,8 @@ class TestCommitLog(Tester):
         commitlog_total_space_in_mb,
     ):
         """
-        `commitlog_reuse_segments` is enabled by default, reusing commitlog
-        segments without deleting and recreating will improve the performance.
+        Commitlog segment reuse is always enabled, so segments are recycled
+        rather than deleted and recreated.
         `commitlog_segment_size_in_mb` is the size limit of single commitlog.
 
         The space usage of commitlog is limited by `commitlog_total_space_in_mb`,
@@ -430,7 +430,7 @@ class TestCommitLog(Tester):
         # at this point. We want something that is within reachable range
         commitlog_disk_usage_threshold = int(total_space_limit / 2)
 
-        opts = {"commitlog_segment_size_in_mb": commitlog_segment_size_in_mb, "commitlog_total_space_in_mb": commitlog_total_space_in_mb, "commitlog_reuse_segments": True, "commitlog_use_hard_size_limit": True}
+        opts = {"commitlog_segment_size_in_mb": commitlog_segment_size_in_mb, "commitlog_total_space_in_mb": commitlog_total_space_in_mb}
 
         if total_space_limit != -1:
             opts.update({"commitlog_flush_threshold_in_mb": commitlog_disk_usage_threshold})
@@ -509,7 +509,7 @@ class TestCommitLog(Tester):
         logger.debug(f"Final commitlog size: [{self._get_commitlog_path()}] {dir_size}M")
 
         # set commitlog config back to default
-        node1.set_configuration_options(values={"commitlog_segment_size_in_mb": 32, "commitlog_total_space_in_mb": -1, "commitlog_reuse_segments": True, "commitlog_use_hard_size_limit": True})
+        node1.set_configuration_options(values={"commitlog_segment_size_in_mb": 32, "commitlog_total_space_in_mb": -1})
         logger.debug("Restart node1 to enable default commitlog configure")
         node1.start(wait_for_binary_proto=True)
         session = self.patient_cql_connection(node1)

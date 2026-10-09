@@ -938,7 +938,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_sync(this, "commitlog_sync", value_status::Used, "periodic",
         "The method that Scylla uses to acknowledge writes in milliseconds:\n"
         "* periodic: Used with commitlog_sync_period_in_ms (Default: 10000 - 10 seconds ) to control how often the commit log is synchronized to disk. Periodic syncs are acknowledged immediately.\n"
-        "* batch: Used with commitlog_sync_batch_window_in_ms (Default: disabled ``**``) to control how long Scylla waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"
+        "* batch: Writes are not acknowledged until fsynced to disk. A sync starts as soon as the previous one completes; concurrent writers share one sync.\n"
         "\n"
         "Related information: Durability")
     , commitlog_segment_size_in_mb(this, "commitlog_segment_size_in_mb", value_status::Used, 64,
@@ -953,8 +953,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_sync_period_in_ms(this, "commitlog_sync_period_in_ms", value_status::Used, 10000,
         "Controls how long the system waits for other writes before performing a sync in ``periodic`` mode.")
     /* Note: does not exist on the listing page other than in above comment, wtf? */
-    , commitlog_sync_batch_window_in_ms(this, "commitlog_sync_batch_window_in_ms", value_status::Used, 10000,
-        "Controls how long the system waits for other writes before performing a sync in ``batch`` mode.")
+    , commitlog_sync_batch_window_in_ms(this, "commitlog_sync_batch_window_in_ms", value_status::Unused, 10000,
+        "Ignored. Batch mode syncs as soon as the previous sync completes; concurrent writers share one sync.")
     , commitlog_max_data_lifetime_in_seconds(this, "commitlog_max_data_lifetime_in_seconds", liveness::LiveUpdate, value_status::Used, 24*60*60,
         "Controls how long data remains in commit log before the system tries to evict it to sstable, regardless of usage pressure. (0 disables)")
     , commitlog_total_space_in_mb(this, "commitlog_total_space_in_mb", value_status::Used, -1,
@@ -962,14 +962,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "Related information: Configuring memtable throughput")
     /* Note: Unused. Retained for upgrade compat. Deprecate and remove in a cycle or two. */
-    , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Unused, true,
-        "Whether or not to reuse commitlog segments when finished instead of deleting them. Can improve commitlog latency on some file systems.\n")
+    , commitlog_reuse_segments(this, "commitlog_reuse_segments", value_status::Deprecated, true,
+        "Ignored; commitlog segment recycling is always enabled.")
     , commitlog_flush_threshold_in_mb(this, "commitlog_flush_threshold_in_mb", value_status::Used, -1,
         "Threshold for commitlog disk usage. When used disk space goes above this value, Scylla initiates flushes of memtables to disk for the oldest commitlog segments, removing those log segments. Adjusting this affects disk usage vs. write latency. Default is (approximately) commitlog_total_space_in_mb - <num shards>*commitlog_segment_size_in_mb.")
     , commitlog_use_o_dsync(this, "commitlog_use_o_dsync", value_status::Used, true,
         "Whether or not to use O_DSYNC mode for commitlog segments IO. Can improve commitlog latency on some file systems.\n")
     , commitlog_use_hard_size_limit(this, "commitlog_use_hard_size_limit", value_status::Deprecated, true,
-        "Whether or not to use a hard size limit for commitlog disk usage. Default is true. Enabling this can cause latency spikes, whereas disabling this can lead to occasional disk usage peaks.\n")
+        "Ignored; the commitlog disk limit is always enforced for the data commitlog.")
     , commitlog_use_fragmented_entries(this, "commitlog_use_fragmented_entries", value_status::Used, true,
         "Whether or not to allow commitlog entries to fragment across segments, allowing for larger entry sizes.\n")
     /**
