@@ -11,7 +11,7 @@ import time
 from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
 from cassandra.query import BatchStatement, BatchType
-from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla
+from .util import new_test_table, new_function, new_aggregate, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla, cql_session
 from contextlib import contextmanager
 from test.pylib.skip_types import skip_env
 
@@ -1482,3 +1482,71 @@ def test_filter_granted_permissions_by_resource_type_functions(cql, test_keyspac
                 assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
         finally:
             cql.execute(f"DROP AGGREGATE IF EXISTS {test_keyspace}.{agg_name}")
+
+# Tests for the HASHED PASSWORD option of roles and users, which Cassandra
+# added in Cassandra 4.1. Scylla supports it only in CREATE ROLE, and even
+# there doesn't validate the hash (SCYLLADB-5229). The hashes below are
+# bcrypt hashes (the format which Cassandra requires, and Scylla supports)
+# of the password "super_secret_thing".
+hashed_password = "$2a$04$PoiUnv/9OZ5nYjlN087uIe5KLMV6yJfDkgKAAHO0pRVTEvB3UQU/i"
+
+# Check that we can log in as the given user with the password
+# "super_secret_thing".
+def check_login(cql, user):
+    endpoint = cql.hosts[0].endpoint
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=(cql.cluster.ssl_context is not None), username=user, password="super_secret_thing") as session:
+        session.execute("SELECT key FROM system.local")
+
+def test_create_role_with_hashed_password_login(cql):
+    role = unique_name()
+    cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = '{hashed_password}'")
+    try:
+        check_login(cql, role)
+    finally:
+        cql.execute(f"DROP ROLE {role}")
+
+# Reproduces SCYLLADB-5229: ALTER ROLE with HASHED PASSWORD fails with an
+# internal server error.
+@pytest.mark.xfail(reason="SCYLLADB-5229")
+def test_alter_role_with_hashed_password(cql):
+    role = unique_name()
+    # The role is created without a password, so that the ALTER ROLE below
+    # sets its first password - Cassandra limits how often a role's
+    # password may be changed.
+    cql.execute(f"CREATE ROLE {role} WITH LOGIN = true")
+    try:
+        cql.execute(f"ALTER ROLE {role} WITH HASHED PASSWORD = '{hashed_password}'")
+        check_login(cql, role)
+    finally:
+        cql.execute(f"DROP ROLE {role}")
+
+# Reproduces SCYLLADB-5229: CREATE USER and ALTER USER don't support
+# HASHED PASSWORD.
+@pytest.mark.xfail(reason="SCYLLADB-5229")
+def test_create_and_alter_user_with_hashed_password(cql):
+    user1 = unique_name()
+    cql.execute(f"CREATE USER {user1} WITH HASHED PASSWORD '{hashed_password}'")
+    try:
+        check_login(cql, user1)
+    finally:
+        cql.execute(f"DROP USER {user1}")
+    # As above, the user is created without a password so that ALTER USER
+    # sets its first password.
+    user2 = unique_name()
+    cql.execute(f"CREATE USER {user2}")
+    try:
+        cql.execute(f"ALTER USER {user2} WITH HASHED PASSWORD '{hashed_password}'")
+        check_login(cql, user2)
+    finally:
+        cql.execute(f"DROP USER {user2}")
+
+# Reproduces SCYLLADB-5229: a HASHED PASSWORD which isn't a valid hash is
+# accepted, so the role can never log in. Cassandra rejects it.
+@pytest.mark.xfail(reason="SCYLLADB-5229")
+def test_create_role_with_invalid_hashed_password(cql):
+    role = unique_name()
+    try:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
+    finally:
+        cql.execute(f"DROP ROLE IF EXISTS {role}")
