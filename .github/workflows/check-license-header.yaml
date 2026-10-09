@@ -22,11 +22,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Get changed files
         id: changed-files
         run: |
+          # fetch-depth: 1 above only gives us HEAD. Fetch just the base commit so
+          # the diff below can resolve it, without cloning the whole history of
+          # this repository.
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
           # Get list of added files comparing with base branch
           echo "files=$(git diff --name-only --diff-filter=A ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
