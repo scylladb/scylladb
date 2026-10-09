@@ -487,6 +487,17 @@ enum class row_extended_flags : uint8_t {
         has_shadowable_deletion_scylla = 0x80,
 };
 
+// Position of a row (bound_kind_m::clustering) or an RT marker.
+static position_in_partition_view position_of(const clustering_key_prefix& ck, bound_kind_m kind) {
+    if (kind == bound_kind_m::clustering) {
+        return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), ck);
+    }
+    if (kind == bound_kind_m::incl_start || kind == bound_kind_m::excl_end_incl_start) {
+        return position_in_partition_view::before_key(ck);
+    }
+    return position_in_partition_view::after_all_prefixed(ck);
+}
+
 // A range tombstone marker (RT marker) represents a bound of a range tombstone
 // in a SSTables 3.x ('m') data file.
 // RT markers can be of two types called "bounds" and "boundaries" in Origin nomenclature.
@@ -503,10 +514,7 @@ struct rt_marker {
     std::optional<tombstone> boundary_tomb; // only engaged for rt_marker of a boundary type
 
     position_in_partition_view position() const {
-        if (kind == bound_kind_m::incl_start || kind == bound_kind_m::excl_end_incl_start) {
-            return position_in_partition_view::before_key(clustering);
-        }
-        return position_in_partition_view::after_all_prefixed(clustering);
+        return position_of(clustering, kind);
     }
 
     // We need this one to uniformly write rows and RT markers inside write_clustered().
@@ -560,6 +568,9 @@ private:
     std::unique_ptr<file_writer> _hashes_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
+    // Positions within a partition are weakly monotonic, so only its first
+    // clustering position can lower the min. Reset in consume_new_partition().
+    bool _partition_min_checked = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
     // as written to the data file
     // Used for writing promoted index
@@ -802,6 +813,13 @@ private:
         ++_c_stats.range_tombstones_count;
     }
 
+    void maybe_update_partition_min(position_in_partition_view pos) {
+        if (!_partition_min_checked) {
+            _collector.update_min(pos);
+            _partition_min_checked = true;
+        }
+    }
+
     // Clustered is a term used to denote an entity that has a clustering key prefix
     // and constitutes an entry of a partition.
     // Both clustered_rows and rt_markers are instances of Clustered
@@ -815,7 +833,7 @@ private:
         maybe_set_pi_first_clustering(info, preceding_range_tombstone);
         uint64_t pos = _data_writer->offset();
         write_clustered(clustered, pos - _prev_row_start);
-        _pi_write_m.last_clustering = info;
+        _pi_write_m.last_clustering = std::move(info);
         _prev_row_start = pos;
         maybe_add_pi_block();
     }
@@ -1121,6 +1139,8 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _tombstone_written = false;
     _static_row_written = false;
+
+    _partition_min_checked = false;
 }
 
 void writer::consume(tombstone t) {
@@ -1135,8 +1155,11 @@ void writer::consume(tombstone t) {
     _tombstone_written = true;
 
     if (t) {
-        _collector.update_min_max_components(position_in_partition_view::before_all_clustered_rows());
-        _collector.update_min_max_components(position_in_partition_view::after_all_clustered_rows());
+        // The tombstone covers the whole clustered region; feed the sentinels to the
+        // collector directly - nothing in this partition can improve on them.
+        _collector.update_min(position_in_partition_view::before_all_clustered_rows());
+        _collector.update_max(position_in_partition_view::after_all_clustered_rows());
+        _partition_min_checked = true;
     }
 }
 
@@ -1568,7 +1591,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    _collector.update_min_max_components(clustered_row.position());
+    maybe_update_partition_min(clustered_row.position());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
@@ -1697,7 +1720,7 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_marker_body(_tmp_bufs);
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
-    _collector.update_min_max_components(marker.position());
+    maybe_update_partition_min(marker.position());
 
     collect_range_tombstone_stats();
 }
@@ -1782,6 +1805,12 @@ stop_iteration writer::consume_end_of_partition() {
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
     maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.range_tombstones_count, _c_stats.dead_rows_count);
+
+    // Only the partition's last clustering position can raise the max; the promoted
+    // index already holds an owning copy of it.
+    if (const auto& last = _pi_write_m.last_clustering) {
+        _collector.update_max(position_of(last->clustering, last->kind));
+    }
 
     // update is about merging column_stats with the data being stored by collector.
     _collector.update(std::move(_c_stats));
