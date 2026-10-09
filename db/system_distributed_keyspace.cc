@@ -273,6 +273,71 @@ schema_ptr snapshot_remote_locations() {
     return schema;
 }
 
+// Note: this table has no default TTL on purpose - it will be set by the writer using cql WITH TTL syntax.
+schema_ptr alternator_export_to_s3_exports() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, std::make_optional(id))
+                // The ARN of this export, as returned to the user in ExportDescription.ExportArn
+                .with_column("export_arn", utf8_type, column_kind::partition_key)
+                // The idempotency token of the ExportTableToPointInTime request which created this export
+                // (the one the user supplied, or the one generated for them). The row keyed by it in
+                // alternator_export_to_s3_client_tokens points back to this export.
+                .with_column("client_token", utf8_type)
+                // The ExportTableToPointInTime request which created this export, as JSON. Kept because
+                // DescribeExport echoes the request's parameters back to the user.
+                .with_column("request", utf8_type)
+                // Key of the export's manifest object in the target bucket, set once the export completes
+                // (ExportDescription.ExportManifest)
+                .with_column("export_manifest", utf8_type)
+                // Name of the state of the export state machine
+                .with_column("export_status", utf8_type)
+                // Why the export failed; set only when export_status is FAILED
+                .with_column("failure_code", utf8_type)
+                .with_column("failure_message", utf8_type)
+                // Number of items exported, set once the export completes
+                .with_column("item_count", long_type)
+                // The identifier generated for this export: it forms both the part of export_arn which
+                // follows "/export/" and the AWSDynamoDB/<export id>/ prefix of the objects written to S3.
+                // Unlike client_token, it is never chosen by the user.
+                .with_column("export_id_token", utf8_type)
+                // When the export request was accepted
+                .with_column("accepted_at", timestamp_type)
+                // When the export reached a terminal state (COMPLETED or FAILED)
+                .with_column("completed_at", timestamp_type)
+                // Host ID of the node which drives this export
+                .with_column("node_id", utf8_type)
+                .set_comment("Alternator export to S3 export metadata")
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr alternator_export_to_s3_client_tokens() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, std::make_optional(id))
+                // The idempotency token of an ExportTableToPointInTime request: a repeated request
+                // with the same token must return the export which the first one created, instead
+                // of starting a new one
+                .with_column("client_token", utf8_type, column_kind::partition_key)
+                // ARN of that export - the key into alternator_export_to_s3_exports
+                .with_column("export_arn", utf8_type)
+                // The request this token was used with, as JSON. Needed because repeating a token
+                // with a different request is an error (IdempotentParameterMismatch), so the two
+                // requests have to be compared.
+                .with_column("request", utf8_type)
+                // Host ID of the node which accepted that request
+                .with_column("node_id", utf8_type)
+                .set_comment("Alternator export to S3 client token idempotency")
+                .set_default_time_to_live(std::chrono::hours(8))
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -296,6 +361,8 @@ static std::vector<schema_ptr> ensured_tables() {
         snapshot_nodes(),
         snapshot_sstables(),
         snapshot_remote_locations(),
+        alternator_export_to_s3_exports(),
+        alternator_export_to_s3_client_tokens(),
     };
 }
 
@@ -307,7 +374,9 @@ std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
         snapshot_tables(),
         snapshot_tablets(),
         snapshot_nodes(),
-        snapshot_sstables()
+        snapshot_sstables(),
+        alternator_export_to_s3_exports(),
+        alternator_export_to_s3_client_tokens(),
     };
 }
 
