@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -173,9 +173,10 @@ def testFromJsonFct(cql, test_keyspace):
                 "durationval duration)") as table:
             # fromJson() can only be used when the receiver type is known
             # Cassandra and Scylla print different error messages - Cassandra
-            # says "fromJson() cannot be used in the selection clause", Scylla
+            # says "fromjson() cannot be used in the selection clause of a
+            # SELECT statement" (older versions said "fromJson()"), Scylla
             # "fromJson() can only be called if receiver type is known".
-            assert_invalid_message(cql, table, "fromJson()", "SELECT fromJson(asciival) FROM %s", 0, 0)
+            assert_invalid_message_re(cql, table, "(?i)fromjson\\(\\)", "SELECT fromJson(textval) FROM %s", 0, 0)
 
             # FIXME: the following tests need *Java* as a UDF language, while
             # Scylla uses Lua, so I didn't translate them.
@@ -440,15 +441,20 @@ def testFromJsonFct(cql, test_keyspace):
 
             # ================ timestamp ================
             execute(cql, table, "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "123123123123")
-            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.fromtimestamp(123123123123/1e3, timezone.utc)])
+            # The Python driver returns timestamps as naive datetime objects
+            # in UTC.
+            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.fromtimestamp(123123123123/1e3, timezone.utc).replace(tzinfo=None)])
 
             execute(cql, table, "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "\"2014-01-01\"")
-            # The following comparison is a big mess in Python because of
-            # timezone issues. We need the datetime() object to have a UTC
-            # timezone, but not to indicate that it does otherwise the
-            # result will not compare equal. The following weird conversion
-            # appears to do the right thing...
-            assert_rows(execute(cql, table, "SELECT k, timestampval FROM %s WHERE k = ?", 0), [0, datetime.fromtimestamp(datetime(2014, 1, 1, 0, 0, 0).timestamp(), timezone.utc)])
+            # A timestamp without a timezone is parsed in the server's
+            # timezone, which the Java test assumes is the test's local
+            # timezone. That isn't true when the server runs in a docker
+            # container (in UTC), so we accept midnight in either UTC or the
+            # local timezone. The Python driver returns timestamps as naive
+            # datetime objects in UTC.
+            assert execute(cql, table, "SELECT timestampval FROM %s WHERE k = ?", 0).one().timestampval in [
+                datetime(2014, 1, 1),
+                datetime.fromtimestamp(datetime(2014, 1, 1).timestamp(), timezone.utc).replace(tzinfo=None)]
             assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, timestampval) VALUES (?, fromJson(?))", 0, "123.456")
             assert_invalid_throw(cql, table, FunctionFailure,
@@ -717,17 +723,10 @@ def testToJsonFct(cql, test_keyspace):
                 "tupleval frozen<tuple<int, ascii, uuid>>," +
                 "udtval frozen<" + type_name + ">," +
                 "durationval duration)") as table:
-            # toJson() can only be used in selections
-            # The error message is slightly different in Cassandra and in
-            # Scylla. It is "toJson() may only be used within the selection
-            # clause" in Cassandra, "toJson() is only valid in SELECT clause"
-            # in Scylla.
-            assert_invalid_message(cql, table, "clause",
-                "INSERT INTO %s (k, asciival) VALUES (?, toJson(?))", 0, 0)
-            assert_invalid_message(cql, table, "clause",
-                "UPDATE %s SET asciival = toJson(?) WHERE k = ?", 0, 0)
-            assert_invalid_message(cql, table, "clause",
-                "DELETE FROM %s WHERE k = fromJson(toJson(?))", 0)
+            # The Java test checks here that toJson() can be used out of the
+            # selection clause. We moved these checks to a separate test,
+            # testToJsonFctOutOfSelectionClause, so they run on Scylla even
+            # though this test is marked xfail.
 
             # ================ ascii ================
             execute(cql, table, "INSERT INTO %s (k, asciival) VALUES (?, ?)", 0, "ascii text")
@@ -933,6 +932,30 @@ def testToJsonFct(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, toJson(durationval) FROM %s WHERE k = ?", 0), [0, "\"1y1mo2d10h5m\""])
 
 # Reproduces issue #8077
+# The beginning of the Java testToJsonFct, moved to a separate test (see
+# the comment there).
+def testToJsonFctOutOfSelectionClause(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, textval text)") as table:
+        # toJson() can be used out of the selection clause (with literals)
+        execute(cql, table, "INSERT INTO %s (k, textval) VALUES (?, toJson(1234))", 0)
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0), row("1234"))
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE textval = toJson(1234) ALLOW FILTERING"), row("1234"))
+        execute(cql, table, "UPDATE %s SET textval = toJson(-1234) WHERE k = ?", 0)
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0), row("-1234"))
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE textval = toJson(-1234) ALLOW FILTERING"), row("-1234"))
+        execute(cql, table, "DELETE FROM %s WHERE k = fromJson(toJson(0))")
+        assert_empty(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0))
+
+        # toJson() can be used out of the selection clause (with markers)
+        execute(cql, table, "INSERT INTO %s (k, textval) VALUES (?, toJson((int) ?))", 0, 123123)
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0), row("123123"))
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE textval = toJson((int) ?) ALLOW FILTERING", 123123), row("123123"))
+        execute(cql, table, "UPDATE %s SET textval = toJson((int) ?) WHERE k = ?", -123123, 0)
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0), row("-123123"))
+        assert_rows(execute(cql, table, "SELECT textval FROM %s WHERE textval = toJson((int) ?) ALLOW FILTERING", -123123), row("-123123"))
+        execute(cql, table, "DELETE FROM %s WHERE k = fromJson(toJson((int) ?))", 0)
+        assert_empty(execute(cql, table, "SELECT textval FROM %s WHERE k = ?", 0))
+
 def testJsonWithGroupBy(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         # tests SELECT JSON statements
@@ -1343,3 +1366,10 @@ def testDurationJsonRoundtrip(cql, test_keyspace):
         execute(cql, table, "DELETE FROM %s WHERE pk = 1")
         execute(cql, table, "INSERT INTO %s JSON '"+json+"'")
         assert execute(cql, table, "SELECT JSON * FROM %s WHERE pk = 1").one()[0] == json
+
+def testJsonInsertWithNullPrimaryKey(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, col ascii)") as table:
+        # Scylla's message is "Missing mandatory PRIMARY KEY part pk", Cassandra
+        # 5's is "Invalid null value in condition for column pk".
+        assert_invalid_message_re(cql, table, "Invalid null value (in condition )?for column pk|Missing mandatory PRIMARY KEY part pk",
+                               "INSERT INTO %s JSON '{\"col\": \"bar\"}'")
