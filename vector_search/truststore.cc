@@ -25,6 +25,14 @@ seastar::future<seastar::shared_ptr<seastar::tls::certificate_credentials>> trus
         if (this_shard_id() == 0) {
             _credentials = co_await builder.build_reloadable_certificate_credentials(
                     [this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                        // A reload can fire while we are being shut down, and there
+                        // is nothing left to reload into then. Holding the gate keeps
+                        // this instance and its peers on the other shards alive for
+                        // the duration of the reload - stop() waits for the gate.
+                        if (_gate.is_closed()) {
+                            co_return;
+                        }
+                        auto holder = _gate.hold();
                         if (ep) {
                             _logger.warn("Exception while reloading truststore {}: {}", files, ep);
                         } else {
