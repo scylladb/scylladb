@@ -23,10 +23,12 @@ class repair_hash;
 class repair_row {
     std::optional<frozen_mutation_fragment> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
-    std::optional<repair_sync_boundary> _boundary;
-    std::optional<repair_hash> _hash;
-    is_dirty_on_master _dirty_on_master;
     lw_shared_ptr<mutation_fragment> _mf;
+    repair_hash _hash;
+    // The boundary's partition key is _dk_with_hash->dk; not copied per row.
+    std::optional<position_in_partition> _position;
+    bool _has_hash = false;
+    is_dirty_on_master _dirty_on_master;
 public:
     repair_row() = default;
     repair_row(std::optional<frozen_mutation_fragment> fm,
@@ -37,10 +39,11 @@ public:
             lw_shared_ptr<mutation_fragment> mf = {})
             : _fm(std::move(fm))
             , _dk_with_hash(std::move(dk_with_hash))
-            , _boundary(pos ? std::optional<repair_sync_boundary>(repair_sync_boundary{_dk_with_hash->dk, std::move(*pos)}) : std::nullopt)
-            , _hash(std::move(hash))
-            , _dirty_on_master(dirty_on_master)
             , _mf(std::move(mf))
+            , _hash(hash.value_or(repair_hash()))
+            , _position(std::move(pos))
+            , _has_hash(hash.has_value())
+            , _dirty_on_master(dirty_on_master)
     { }
     lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr() { return _mf; }
     mutation_fragment& get_mutation_fragment() {
@@ -72,25 +75,25 @@ public:
             throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
         }
         auto size = sizeof(repair_row) + _fm->representation().size();
-        if (_boundary) {
-            size += _boundary->pk.external_memory_usage() + _boundary->position.external_memory_usage();
+        if (_position) {
+            size += _position->external_memory_usage();
         }
         if (_mf) {
             size += _mf->memory_usage();
         }
         return size;
     }
-    const repair_sync_boundary& boundary() const {
-        if (!_boundary) {
+    const position_in_partition& position() const {
+        if (!_position) {
             throw std::runtime_error("empty repair_sync_boundary");
         }
-        return *_boundary;
+        return *_position;
     }
     const repair_hash& hash() const {
-        if (!_hash) {
+        if (!_has_hash) {
             throw std::runtime_error("empty hash");
         }
-        return *_hash;
+        return _hash;
     }
     is_dirty_on_master dirty_on_master() const {
         return _dirty_on_master;
@@ -101,8 +104,8 @@ public:
             _fm.reset();
         }
         _dk_with_hash = {};
-        _boundary.reset();
-        _hash.reset();
+        _position.reset();
+        _has_hash = false;
         _mf = {};
     }
 };

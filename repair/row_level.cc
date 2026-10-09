@@ -1184,7 +1184,7 @@ private:
         }
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
-        rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
+        rlogger.trace("Reading: r.boundary={{ {}, {} }}, r.hash={}", r.get_dk_with_hash()->dk, r.position(), r.hash());
         auto sz = r.size();
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += sz;
@@ -1398,7 +1398,8 @@ private:
         size_t row_buf_bytes = co_await row_buf_size();
         std::optional<repair_sync_boundary> sb_max;
         if (!_row_buf.empty()) {
-            sb_max = _row_buf.back().boundary();
+            const auto& last = _row_buf.back();
+            sb_max = repair_sync_boundary{last.get_dk_with_hash()->dk, last.position()};
         }
         rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                       new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
@@ -1406,7 +1407,8 @@ private:
     }
 
     future<> move_row_buf_to_working_row_buf() {
-        if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
+        const auto& last = _row_buf.back();
+        if (_cmp(last.get_dk_with_hash()->dk, last.position(), _current_sync_boundary->pk, _current_sync_boundary->position) <= 0) {
             // Fast path
             _working_row_buf.swap(_row_buf);
             co_return;
@@ -1420,7 +1422,7 @@ private:
             // _current_sync_boundary], _row_buf contains rows within
             // (_current_sync_boundary, ...]
             repair_row& r = *it;
-            if (_cmp(r.boundary(), *_current_sync_boundary) <= 0) {
+            if (_cmp(r.get_dk_with_hash()->dk, r.position(), _current_sync_boundary->pk, _current_sync_boundary->position) <= 0) {
                 break;
             }
             _working_row_buf.push_front(std::move(r));
@@ -1532,8 +1534,9 @@ private:
             // Both row_diff and _working_row_buf and are ordered, merging
             // two sored list to make sure the combination of row_diff
             // and _working_row_buf are ordered.
-            utils::merge_to_gently(_working_row_buf, row_diff,
-                 [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
+            utils::merge_to_gently(_working_row_buf, row_diff, [this](const repair_row& x, const repair_row& y) {
+                return _cmp(x.get_dk_with_hash()->dk, x.position(), y.get_dk_with_hash()->dk, y.position()) < 0;
+            });
             for (auto& r : row_diff) {
                 thread::maybe_yield();
                 _working_row_buf_combined_hash.add(r.hash());
