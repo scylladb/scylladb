@@ -68,4 +68,29 @@ public:
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override;
 };
 
+// The ICS backlog of a subset of a compaction group's sstables, e.g. a time window or level 0,
+// for the strategies that compact such a subset with ICS. Unlike incremental_backlog_tracker,
+// it keeps the sstables of the subset itself, as they're replaced, and recalculates their
+// contribution to the backlog lazily, on the first backlog() after a change.
+class incremental_subset_backlog {
+    std::unordered_set<sstables::shared_sstable> _sstables;
+    mutable bool _dirty = true;
+    mutable incremental_backlog_tracker::backlog_calculation_result _contribution;
+public:
+    void add(sstables::shared_sstable sst) {
+        _sstables.insert(std::move(sst));
+        _dirty = true;
+    }
+    void remove(const sstables::shared_sstable& sst) {
+        _dirty |= _sstables.erase(sst) > 0;
+    }
+    bool empty() const noexcept {
+        return _sstables.empty();
+    }
+    // The backlog of the subset, given the compactions in progress, whose compacted parts are
+    // taken off the runs of the subset they read from.
+    double backlog(int min_threshold, const incremental_compaction_strategy_options& options,
+            const compaction_backlog_tracker::ongoing_compactions& oc) const;
+};
+
 }

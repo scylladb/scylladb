@@ -104,6 +104,16 @@ double incremental_backlog_tracker::backlog_of(const backlog_calculation_result&
     return b > 0 ? b : 0;
 }
 
+double incremental_subset_backlog::backlog(int min_threshold, const incremental_compaction_strategy_options& options,
+        const compaction_backlog_tracker::ongoing_compactions& oc) const {
+    if (_dirty) {
+        auto runs = incremental_compaction_strategy::sstables_to_runs(_sstables | std::ranges::to<std::vector>());
+        _contribution = incremental_backlog_tracker::calculate_runs_backlog_contribution(runs, min_threshold, options);
+        _dirty = false;
+    }
+    return incremental_backlog_tracker::backlog_of(_contribution, oc);
+}
+
 void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
     // Defer backlog contribution recalculation to the next backlog() call,
     // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).

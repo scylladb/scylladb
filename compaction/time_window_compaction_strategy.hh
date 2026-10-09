@@ -12,7 +12,6 @@
 
 #include "compaction_strategy_impl.hh"
 #include "incremental_compaction_strategy.hh"
-#include "size_tiered_compaction_strategy.hh"
 #include "mutation/timestamp.hh"
 #include "sstables/shared_sstable.hh"
 
@@ -76,8 +75,6 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     // these options, and the per-window compactions write runs of _fragment_size fragments.
     incremental_compaction_strategy_options _ics_options;
     uint64_t _fragment_size;
-    // FIXME: only for the per-window backlog, which is still size-tiered.
-    size_tiered_compaction_strategy_options _stcs_options;
 public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
     // To prevent an explosion in the number of sstables we cap it.

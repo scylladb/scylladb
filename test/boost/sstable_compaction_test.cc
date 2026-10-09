@@ -4958,6 +4958,34 @@ SEASTAR_FIXTURE_TEST_CASE(twcs_single_key_reader_through_compound_set_test_gcs,
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// TWCS compacts each window with ICS, so the backlog of a window is that of its runs: a
+// window compacted into a single run of many fragments has nothing left to compact, while
+// the same data as separate runs of a similar size does.
+SEASTAR_TEST_CASE(twcs_backlog_counts_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        static constexpr uint64_t fragment_size = 1UL*1024UL*1024UL*1024UL;
+        auto schema = table_for_tests::make_default_schema();
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto stop_cf = defer([&] noexcept { cf.stop().get(); });
+
+        auto backlog = [&] (bool single_run) {
+            auto tracker = compaction::make_compaction_strategy(compaction::compaction_strategy_type::time_window, {}).make_backlog_tracker();
+            auto keys = tests::generate_partition_keys(schema->min_compaction_threshold(), schema, local_shard_only::yes);
+            auto run_identifier = sstables::run_id::create_random_id();
+            for (auto& key : keys) {
+                auto sst = sstable_for_overlapping_test(env, schema, key.key(), key.key());
+                sstables::test(sst).set_data_file_size(fragment_size);
+                sstables::test(sst).set_run_identifier(single_run ? run_identifier : sstables::run_id::create_random_id());
+                tracker.replace_sstables({}, {std::move(sst)});
+            }
+            return tracker.backlog(cf.as_compaction_backlog_source());
+        };
+
+        BOOST_REQUIRE_EQUAL(backlog(true), 0);
+        BOOST_REQUIRE_GT(backlog(false), 0);
+    });
+}
+
 void basic_ics_controller_correctness_fn(test_env& env) {
     static constexpr uint64_t default_fragment_size = 1UL*1024UL*1024UL*1024UL;
 
