@@ -311,7 +311,7 @@ BURST = 0.05               # bookings grow by at most this share of the CPUs a s
 PSI_CPU_LIMIT = 25.0       # tests' CPU "some avg10" % above which admission pauses, target shrinks
 PSI_MEM_LIMIT = 5.0        # machine memory "some avg10" % above which admission pauses
 TARGET_KP = 0.006          # the CPU target moves this share of the CPUs per point of pressure off the limit...
-TARGET_KI = 0.0006         # ...and, integrated, this share per point and second it stays off
+TARGET_KI = 0.00015        # ...and, integrated, this share per point and second it stays off
 DEPTH = 1                  # tests a worker may hold queued behind the one it runs
 SHORT_SECONDS = 1.0        # tests expected to take less may also hold one more (see _depth)
 JOIN_SETUP_FRACTION = 0.1  # a long module is shared only if its setup is at most this much of a test
@@ -2092,6 +2092,15 @@ class DynamicScheduling:
         stall time: avg10's tail after a burst held a controller that
         cut hard and grew back slowly down for a minute, but the
         integral grows back by itself.
+
+        The integral is slow next to the delay between a target and the
+        pressure it causes: new tests are heaviest in their first
+        seconds, and a debug run's pressure followed a raised target
+        about 25 seconds later.  Integrating over ten seconds, the
+        target overshot before the pressure answered and swung both
+        ways every minute or two; over forty, against a model of that
+        delay, it swings half as much and gets a surge back under the
+        limit sooner.
 
         CPU pressure of the tests' own cgroup tree when available: on a
         pinned or shared machine the system-wide file also counts stalls
