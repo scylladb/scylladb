@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -29,12 +29,14 @@ def testNowToUUIDCompatibility(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, now())")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=0 AND b < now()"))) == 1
 
+# Cassandra's test uses the new function names to_unix_timestamp() and
+# to_timestamp(), which Scylla doesn't support yet (SCYLLADB-5141). Cassandra
+# still supports the old names toUnixTimestamp() and toTimestamp(), so we
+# use those, to keep testing the rest of this test on Scylla.
 def testDateCompatibility(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b timestamp, c bigint, d varint, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (0, toUnixTimestamp(now()), toTimestamp(now()), toTimestamp(now()))")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=0 AND b <= toUnixTimestamp(now())"))) == 1
-        execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, unixTimestampOf(now()), dateOf(now()), dateOf(now()))")
-        assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=1 AND b <= toUnixTimestamp(now())"))) == 1
 
 @pytest.mark.skip_bug(
     link="https://github.com/scylladb/scylladb/issues/9300",
