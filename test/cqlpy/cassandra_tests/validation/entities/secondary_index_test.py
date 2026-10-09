@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -46,6 +46,7 @@
 from ...porting import *
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID
+from ....test_materialized_view_old import clock
 
 # Test creating and dropping an index with the specified name.
 # @param indexName         the index name
@@ -114,6 +115,25 @@ def testCreateAndDropIndexWithQuotedIdentifier(cql, table1):
 def testCreateAndDropIndexWithCamelCaseIdentifier(cql, table1):
     dotestCreateAndDropIndex(cql, table1, "CamelCase", False)
     dotestCreateAndDropIndex(cql, table1, "CamelCase2", True)
+
+# The Java test also checks, using Cassandra's internal APIs, that the index
+# is a CassandraIndex - Cassandra's "legacy" secondary index, which the
+# USING 'legacy_local_table' clause chooses. We just check that the index
+# can be created this way and used.
+# Reproduces #9859 (Scylla doesn't accept USING 'legacy_local_table')
+@pytest.mark.xfail(reason="#9859")
+def testshouldCreateCassandraIndexExplicitly(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(userid uuid PRIMARY KEY, firstname text, lastname text, age int)") as table:
+        execute(cql, table, "CREATE INDEX byAge ON %s(age) USING 'legacy_local_table'")
+
+        id1 = UUID("550e8400-e29b-41d4-a716-446655440000")
+        execute(cql, table, "INSERT INTO %s (userid, firstname, lastname, age) VALUES (?, 'Frodo', 'Baggins', 32)", id1)
+        assert_empty(execute(cql, table, "SELECT firstname FROM %s WHERE userid = ? AND age = 33", id1))
+
+# The Java test shouldCreateCassandraIndexWhenNotDefault was not translated:
+# it is the same as shouldCreateCassandraIndexExplicitly, after changing
+# Cassandra's default secondary-index implementation through its internal
+# APIs, which we can't do through CQL.
 
 # Check that you can query for an indexed column even with a key EQ clause,
 # migrated from cql_tests.py:TestCQL.static_cf_test()
@@ -627,16 +647,19 @@ def testPrepareStatementsWithLIKEClauses(cql, test_keyspace):
 
         # LIKE is not supported on indexes of non-literal values
         # this is rejected before binding, so the value isn't available in the error message
-        assert_invalid_message(cql, table, "LIKE restriction is only supported on properly indexed columns. v3 LIKE ? is not valid",
+        # Cassandra 6's error message is the generic one, asking for ALLOW
+        # FILTERING, while Cassandra 5's is "LIKE restriction is only
+        # supported on properly indexed columns. v3 LIKE ? is not valid".
+        assert_invalid_message_re(cql, table, "ALLOW FILTERING|LIKE restriction is only supported on properly indexed columns",
                              "SELECT * FROM %s WHERE v3 LIKE ?",
                              "%abc")
-        assert_invalid_message(cql, table, "LIKE restriction is only supported on properly indexed columns. v3 LIKE ? is not valid",
+        assert_invalid_message_re(cql, table, "ALLOW FILTERING|LIKE restriction is only supported on properly indexed columns",
                              "SELECT * FROM %s WHERE v3 LIKE ?",
                              "%abc%")
-        assert_invalid_message(cql, table, "LIKE restriction is only supported on properly indexed columns. v3 LIKE ? is not valid",
+        assert_invalid_message_re(cql, table, "ALLOW FILTERING|LIKE restriction is only supported on properly indexed columns",
                              "SELECT * FROM %s WHERE v3 LIKE ?",
                              "%abc%")
-        assert_invalid_message(cql, table, "LIKE restriction is only supported on properly indexed columns. v3 LIKE ? is not valid",
+        assert_invalid_message_re(cql, table, "ALLOW FILTERING|LIKE restriction is only supported on properly indexed columns",
                              "SELECT * FROM %s WHERE v3 LIKE ?",
                              "abc")
 
@@ -697,6 +720,9 @@ def testIndexesOnNonStaticColumnsWhereSchemaIncludesStaticColumns(cql, test_keys
 # restriction) and #8711 (Finding or filtering with an empty string with
 # a secondary index seems to be broken).
 @pytest.mark.xfail(reason="issues #4244, #8711")
+# Cassandra's test now uses the new function name text_as_blob(), which
+# Scylla doesn't support yet (SCYLLADB-5141). Cassandra still supports the
+# old name textAsBlob(), so we use it, to keep testing this test on Scylla.
 def testWithEmptyRestrictionValueAndSecondaryIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, PRIMARY KEY ((pk), c))") as table:
         execute(cql, table, "CREATE INDEX ON %s(c)")
@@ -1002,7 +1028,9 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s (k, v) VALUES (?, ?)", 1, {udt1})
 
             assert_invalid_message_re(cql, table, "Cannot create (secondary )?index on keys of column v with non-map type", "CREATE INDEX ON %s (keys(v))")
-            assert_invalid_message(cql, table, "full() indexes can only be created on frozen collections", "CREATE INDEX ON %s (full(v))")
+            # Cassandra's message is now "full() non-SAI indexes can only be
+            # created on frozen collections".
+            assert_invalid_message_re(cql, table, r"full\(\) (non-SAI )?indexes can only be created on frozen collections", "CREATE INDEX ON %s (full(v))")
             index_name = unique_name()
             # Reproduces #8745:
             execute(cql, table, f"CREATE INDEX {index_name} ON %s (values(v))")
@@ -1040,39 +1068,133 @@ def testIndexOnNonFrozenUDT(cql, test_keyspace):
             assert_invalid(cql, table, "CREATE INDEX ON %s (values(v))")
             assert_invalid(cql, table, "CREATE INDEX ON %s (full(v))")
 
-# TODO: The following tests unfortunately take 1-2 second each. It would
-# have been nice to provide a REST API to move the server's clock forward -
-# like we do in C++ unit tests. Alternatively, could we have a sub-second
-# TTL feature?
-def testIndexOnPartitionKeyInsertExpiringColumn(cql, test_keyspace):
+# The following tests wait for a TTL to expire. The Java tests sleep, but we
+# use the "clock" fixture, which on Scylla moves the server's clock forward
+# instantly (and on Cassandra, really sleeps).
+@pytest.mark.parametrize("flushBeforeUpdate", [False, True])
+def testIndexOnPartitionKeyInsertExpiringColumn(cql, test_keyspace, clock, flushBeforeUpdate):
     with create_table(cql, test_keyspace, f"(k1 int, k2 int, a int, b int, PRIMARY KEY ((k1, k2)))") as table:
-        execute(cql, table, "CREATE INDEX on %s(k1)")
+        execute(cql, table, "CREATE INDEX ON %s(k1)")
         execute(cql, table, "INSERT INTO %s (k1, k2, a, b) VALUES (1, 2, 3, 4)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), [1, 2, 3, 4])
+
+        if flushBeforeUpdate:
+            flush(cql, table)
+
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE k1 = 1 AND k2 = 2")
-        time.sleep(1.1)
+        clock.jump(2)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), [1, 2, 3, None])
 
-def testIndexOnClusteringKeyInsertExpiringColumn(cql, test_keyspace):
+def testIndexOnPartitionKeyOverridingExpiredRow(cql, test_keyspace, clock):
+    with create_table(cql, test_keyspace, "(k1 int, k2 int, v int, PRIMARY KEY ((k1, k2)))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(k1)")
+
+        execute(cql, table, "UPDATE %s USING TTL 1 SET v = 3 WHERE k1 = 1 AND k2 = 2")
+        clock.jump(2)
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"))
+
+        execute(cql, table, "UPDATE %s SET v = 3 WHERE k1 = 1 AND k2 = 2")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), row(1, 2, 3))
+
+def testIndexOnPartitionKeyOverridingDeletedRow(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k1 int, k2 int, c int, v int, PRIMARY KEY ((k1, k2), c))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(k1)")
+
+        execute(cql, table, "INSERT INTO %s(k1, k2, c, v) VALUES (1, 2, 3, 4)")
+        execute(cql, table, "DELETE FROM %s WHERE k1 = 1 AND k2 = 2 AND c = 3")
+        execute(cql, table, "UPDATE %s SET v = 4 WHERE k1 = 1 AND k2 = 2 AND c = 3")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1 AND k2 = 2 AND c = 3"), row(1, 2, 3, 4))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = 1"), row(1, 2, 3, 4))
+
+@pytest.mark.parametrize("flushBeforeUpdate", [False, True])
+def testIndexOnClusteringKeyInsertExpiringColumn(cql, test_keyspace, clock, flushBeforeUpdate):
     with create_table(cql, test_keyspace, f"(pk int, ck int, a int, b int, PRIMARY KEY (pk, ck))") as table:
-        execute(cql, table, "CREATE INDEX on %s(ck)")
+        execute(cql, table, "CREATE INDEX ON %s(ck)")
         execute(cql, table, "INSERT INTO %s (pk, ck, a, b) VALUES (1, 2, 3, 4)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), [1, 2, 3, 4])
+
+        if flushBeforeUpdate:
+            flush(cql, table)
+
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.1)
+        clock.jump(2)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), [1, 2, 3, None])
 
-def testIndexOnRegularColumnInsertExpiringColumn(cql, test_keyspace):
+def testIndexOnClusteringKeyOverridingExpiredRow(cql, test_keyspace, clock):
+    with create_table(cql, test_keyspace, "(pk int, ck int, v int, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(ck)")
+
+        execute(cql, table, "UPDATE %s USING TTL 1 SET v = 3 WHERE pk = 1 AND ck = 2")
+        clock.jump(2)
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"))
+
+        execute(cql, table, "UPDATE %s SET v = 3 WHERE pk = 1 AND ck = 2")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), row(1, 2, 3))
+
+def testIndexOnClusteringKeyOverridingDeletedRow(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, v int, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(ck)")
+
+        execute(cql, table, "INSERT INTO %s(pk, ck, v) VALUES (1, 2, 3)")
+        execute(cql, table, "DELETE FROM %s WHERE pk = 1 AND ck = 2")
+        execute(cql, table, "UPDATE %s SET v = 3 WHERE pk = 1 AND ck = 2")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk = 1 AND ck = 2"), row(1, 2, 3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE ck = 2"), row(1, 2, 3))
+
+def testFullIndexOnClusteringColumn(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int,ck frozen<list<int>>,value int,PRIMARY KEY(pk, ck)) WITH CLUSTERING ORDER BY (ck DESC)") as table:
+        execute(cql, table, "CREATE INDEX ON %s(FULL(ck));")
+        execute(cql, table, "INSERT INTO %s (pk,ck,value) VALUES (1,[1,2,3],4)")
+        # The Java test writes "%S", which Java's String.format() replaces
+        # by the table's name in uppercase. CQL folds unquoted names to
+        # lowercase, so this is the same table.
+        assert_rows(cql.execute(f"SELECT pk FROM {table.upper()} WHERE CK=[1,2,3]"), row(1))
+
+@pytest.mark.parametrize("flushBeforeUpdate", [False, True])
+def testIndexOnRegularColumnInsertExpiringColumn(cql, test_keyspace, clock, flushBeforeUpdate):
     with create_table(cql, test_keyspace, f"(pk int, ck int, a int, b int, PRIMARY KEY (pk, ck))") as table:
-        execute(cql, table, "CREATE INDEX on %s(a)")
+        execute(cql, table, "CREATE INDEX ON %s(a)")
         execute(cql, table, "INSERT INTO %s (pk, ck, a, b) VALUES (1, 2, 3, 4)")
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 3"), [1, 2, 3, 4])
 
+        if flushBeforeUpdate:
+            flush(cql, table)
+
         execute(cql, table, "UPDATE %s USING TTL 1 SET b = 10 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.1)
+        clock.jump(2)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 3"), [1, 2, 3, None])
 
+        if flushBeforeUpdate:
+            flush(cql, table)
+
         execute(cql, table, "UPDATE %s USING TTL 1 SET a = 5 WHERE pk = 1 AND ck = 2")
-        time.sleep(1.1)
+        clock.jump(2)
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a = 3"))
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE a = 5"))
+
+def testIndexOnRegularColumnOverridingExpiredRow(cql, test_keyspace, clock):
+    with create_table(cql, test_keyspace, "(pk int, ck int, v int, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(v)")
+
+        execute(cql, table, "UPDATE %s USING TTL 1 SET v = 3 WHERE pk = 1 AND ck = 2")
+        clock.jump(2)
+
+        assert_empty(execute(cql, table, "SELECT * FROM %s WHERE v = 3"))
+
+        execute(cql, table, "UPDATE %s SET v = 3 WHERE pk = 1 AND ck = 2")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v = 3"), row(1, 2, 3))
+
+def testIndexOnRegularColumnOverridingDeletedRow(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, v int, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(v)")
+
+        execute(cql, table, "INSERT INTO %s(pk, ck, v) VALUES (1, 2, 3)")
+        execute(cql, table, "DELETE FROM %s WHERE pk=1 AND ck=2")
+        execute(cql, table, "UPDATE %s SET v=3 WHERE pk=1 AND ck=2")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk=1 AND ck=2"), row(1, 2, 3))
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE v=3"), row(1, 2, 3))
