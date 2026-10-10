@@ -34,8 +34,10 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_timeout_in_seconds``) can be
+set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or ``NODE``
+scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -161,3 +163,11 @@ Available options
      - boolean
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Enable automatic repair for tablet-based tables. Default: ``false``.
+   * - ``repair_hints_batchlog_flush_timeout_in_seconds``
+     - integer
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode first asks every node to flush
+       its hints and replay its batchlog, and gives up on a node that has not finished within this
+       many seconds. Raise it when nodes accumulate hints faster than they can replay them within
+       the default, for example after a node stayed down for a long time. Default: ``300``, in
+       effect once every node runs a version that knows the option.

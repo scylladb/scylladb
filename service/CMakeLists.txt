@@ -3,6 +3,7 @@ target_sources(service
   PRIVATE
     client_state.cc
     client_routes.cc
+    hints_batchlog_flusher.cc
     mapreduce_service.cc
     migration_manager.cc
     misc_services.cc

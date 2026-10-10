@@ -795,3 +795,31 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+CLUSTER_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_clusters"
+KEYSPACE_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = %s"
+TABLE_CONFIGS_QUERY = "SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = %s AND table_name = %s"
+
+
+async def wait_for_config_map_value(cql, host, query: str, params: list[str], config_name: str, expected_value: str | None) -> None:
+    async def configs_map_value_equal():
+        rows = await cql.run_async(query, params, host=host)
+        configs = (rows[0].configs if rows else None) or {}
+        value = configs.get(config_name)
+        if value == expected_value:
+            return True
+        logger.info("Observed config map value for %s: %s on host=%s expected=%s", config_name, value, host, expected_value)
+        return None
+
+    # 120s to match the schema-agreement waits of the cluster config tests:
+    # debug and sanitize builds propagate schema-backed config much more
+    # slowly than dev builds.
+    await wait_for(configs_map_value_equal, deadline=time.time() + 120)
+
+
+async def wait_for_config_map_value_on_hosts(cql, hosts, query: str, params: list[str], config_name: str, expected_value: str | None) -> None:
+    await asyncio.gather(*[
+        wait_for_config_map_value(cql, host, query, params, config_name, expected_value)
+        for host in hosts
+    ])

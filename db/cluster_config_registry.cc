@@ -63,6 +63,13 @@ constexpr std::array registry_options = {
         .min_version = version::v0,
         .default_value = false,
     },
+    option{
+        .name = "repair_hints_batchlog_flush_timeout_in_seconds",
+        .description = "How long the hints and batchlog flush that precedes a repair of a table whose tombstone_gc is set to repair mode waits for each node to flush its hints and replay its batchlog before giving up. Raise it when nodes accumulate hints faster than they can replay them within the default, for example after a node stayed down for a long time",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v1,
+        .default_value = int64_t(300),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -227,10 +234,14 @@ bool is_table_oriented(const option& opt) {
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {
-    if (features.cluster_config_registry_v0) {
-        return version::v0;
+    // v0 brings the schema tables every epoch stores into, so a later epoch counts only on top of it.
+    if (!features.cluster_config_registry_v0) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    if (features.cluster_config_registry_v1) {
+        return version::v1;
+    }
+    return version::v0;
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
