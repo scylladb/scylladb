@@ -421,7 +421,7 @@ static future<> run_global_major_compaction(sharded<replica::database>& db, flus
     seastar::condition_variable cv;
     current_task_type current_task;
     std::vector<keyspace_tasks_info> keyspace_tasks;
-    flush_mode keyspace_fm = flushed_all_tables ? flush_mode::skip : fm;
+    flush_mode keyspace_fm = flushed_all_tables ? flush_mode::already_flushed : fm;
     compaction_turn turn{cv, current_task};
     auto& module = db.local().get_compaction_manager().get_task_manager_module();
     for (auto& [ks, table_infos] : tables_by_keyspace) {
@@ -473,7 +473,7 @@ static future<> run_major_keyspace_compaction(sharded<replica::database>& db, st
         flushed_all_tables = co_await maybe_flush_commitlog(db, consider_only_existing_data);
     }
 
-    flush_mode shard_fm = flushed_all_tables ? flush_mode::skip : fm;
+    flush_mode shard_fm = flushed_all_tables ? flush_mode::already_flushed : fm;
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
         auto& module = local_db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.start_shard_major_compaction(local_db, keyspace, *tables, shard_fm, consider_only_existing_data, task_info);
@@ -539,6 +539,9 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_major_com
 
 static future<> run_table_major_compaction(replica::database& db, std::string keyspace, lw_shared_ptr<table_info> ti, compaction_turn& turn, flush_mode fm, bool consider_only_existing_data, tasks::task_info task_info) {
     co_await wait_for_your_turn(turn.cv, turn.current_task, task_info.get_id());
+    // already_flushed only says that the database-wide flush is done; this table is still
+    // flushed here, right before its compaction, so that the compaction's input set is as
+    // complete as it is on any other path.
     replica::table::do_flush do_flush(fm != flush_mode::skip);
     co_await run_on_table("force_keyspace_compaction", db, keyspace, *ti, [task_info, do_flush, consider_only_existing_data] (replica::table& t) {
         return t.compact_all_sstables(task_info, do_flush, consider_only_existing_data);
@@ -1182,6 +1185,9 @@ auto fmt::formatter<compaction::flush_mode>::format(compaction::flush_mode fm, f
     using enum compaction::flush_mode;
     case skip:
         name = "skip";
+        break;
+    case already_flushed:
+        name = "already_flushed";
         break;
     case compacted_tables:
         name = "compacted_tables";

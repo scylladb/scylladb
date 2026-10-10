@@ -135,7 +135,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
     if (shared_gc_state) {
-        _tombstone_gc_snapshot.emplace(shared_gc_state->snapshot());
+        _tombstone_gc_snapshot.emplace(tombstone_gc_state(*shared_gc_state).with_commitlog_check_disabled().snapshot());
     }
     logalloc::region::listen(this);
 }
