@@ -96,6 +96,15 @@ void insert_statement::add_key_value(const column_definition& def, expr::express
     _key_values.emplace_back(&def, std::move(value));
 }
 
+size_t insert_statement::external_memory_usage() const {
+    size_t s = modification_statement::external_memory_usage();
+    s += _key_values.capacity() * sizeof(decltype(_key_values)::value_type);
+    for (const auto& kv : _key_values) {
+        s += kv.second.external_memory_usage();
+    }
+    return s;
+}
+
 bool insert_statement::names(const column_definition& def) const {
     return std::ranges::any_of(_key_values, [&def] (const auto& kv) { return kv.first == &def; });
 }

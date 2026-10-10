@@ -107,6 +107,11 @@ public:
         _mask |= with._mask;
     }
 
+    // Heap memory used by the bitset's backing block array.
+    size_t external_memory_usage() const {
+        return _mask.num_blocks() * sizeof(bitset::block_type);
+    }
+
 private:
     bitset _mask;
 };

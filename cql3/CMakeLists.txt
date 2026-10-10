@@ -29,6 +29,7 @@ add_library(cql3 STATIC)
 target_sources(cql3
   PRIVATE
     attributes.cc
+    cql_statement.cc
     cf_name.cc
     cql3_type.cc
     description.cc
