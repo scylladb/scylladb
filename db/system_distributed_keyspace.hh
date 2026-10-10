@@ -25,6 +25,7 @@
 
 namespace cql3 {
 class query_processor;
+class untyped_result_set;
 }
 
 namespace cdc {
@@ -82,6 +83,10 @@ public:
     /* This table is used by the backup and restore code to store snapshot
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
+
+    /* Alternator export to S3 metadata tables. */
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORTS = "alternator_export_to_s3_exports";
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
 
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
