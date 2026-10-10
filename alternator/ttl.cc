@@ -242,13 +242,14 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 }
 
 // expire_item() expires an item - i.e., deletes it as appropriate for
-// expiration - with CL=QUORUM and (FIXME!) in a way Alternator Streams
-// understands it is an expiration event - not a user-initiated deletion.
+// expiration - with the given CL and in a way Alternator Streams understands
+// it is an expiration event - not a user-initiated deletion.
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
                             const std::vector<managed_bytes_opt>& row,
                             schema_ptr schema,
-                            api::timestamp_type ts) {
+                            api::timestamp_type ts,
+                            db::consistency_level cl) {
     // Prepare the row key to delete
     // NOTICE: the order of columns is guaranteed by the fact that selection::wildcard
     // is used, which indicates that columns appear in the order defined by
@@ -293,7 +294,7 @@ static future<> expire_item(service::storage_proxy& proxy,
     utils::chunked_vector<mutation> mutations;
     mutations.push_back(std::move(m));
     return proxy.mutate(std::move(mutations),
-        db::consistency_level::LOCAL_QUORUM,
+        cl,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
         db::allow_per_partition_rate_limit::no,
@@ -503,11 +504,44 @@ public:
     }
 };
 
+// The consistency level used by the expiration scanner for both reading
+// and deleting: LOCAL_QUORUM for NetworkTopologyStrategy tables and QUORUM
+// for other strategies - except that when the DC or the cluster has fewer
+// token owners than a quorum would need, LOCAL_ONE or ONE is used instead.
+//
+// For NetworkTopologyStrategy, if the local DC has only a single token-owning
+// replica, a quorum may be impossible to achieve. In that case that single
+// replica holds all the data, so LOCAL_ONE gives the same guarantees as
+// LOCAL_QUORUM would on a table with RF=1.
+//
+// For other strategies (e.g., the SimpleStrategy used by the
+// system_distributed keyspace) the replicas of a range may all live in
+// remote DCs, so a DC-local consistency level can be unachievable no matter
+// how many nodes the local DC has. We use QUORUM over all token-owning
+// replicas instead, just as the CDC tables in that keyspace do, accepting a
+// cross-DC round trip in this background scan. As with those tables, a single
+// token-owning replica in the whole cluster means ONE is enough.
+static db::consistency_level expiration_consistency_level(const locator::token_metadata& tm,
+        const locator::abstract_replication_strategy& rs) {
+    if (rs.get_type() != locator::replication_strategy_type::network_topology) {
+        return tm.count_normal_token_owners() > 1
+            ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    }
+    const auto& local_dc = tm.get_topology().get_datacenter();
+    const auto dc_token_owners = tm.get_datacenter_token_owners();
+    const auto it = dc_token_owners.find(local_dc);
+    if (it != dc_token_owners.end() && it->second.size() == 1) {
+        return db::consistency_level::LOCAL_ONE;
+    }
+    return db::consistency_level::LOCAL_QUORUM;
+}
+
 // Precomputed information needed to perform a scan on partition ranges
 struct scan_ranges_context {
     schema_ptr s;
     bytes column_name;
     std::optional<std::string> member;
+    db::consistency_level cl;
 
     service::client_state internal_client_state;
     ::shared_ptr<cql3::selection::selection> selection;
@@ -519,6 +553,8 @@ struct scan_ranges_context {
         : s(s)
         , column_name(column_name)
         , member(member)
+        , cl(expiration_consistency_level(*proxy.get_token_metadata_ptr(),
+                s->table().get_effective_replication_map()->get_replication_strategy()))
         , internal_client_state(service::client_state::internal_tag())
     {
         // FIXME: don't read the entire items - read only parts of it.
@@ -545,7 +581,6 @@ struct scan_ranges_context {
         // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
         // DCs or only once for each range? If the latter, we need to change the CLs in the
         // scanner and deleter.
-        db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
         query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
         query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     }
@@ -679,7 +714,7 @@ static future<> scan_table_ranges(
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 auto ts = api::new_timestamp();
-                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
+                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts, scan_ctx.cl);
             }
         }
         // FIXME: once in a while, persist p->state(), so on reboot
