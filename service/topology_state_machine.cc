@@ -213,6 +213,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::finalize_migration, "finalize_migration"},
     {global_topology_request::quiesce, "quiesce"},
     {global_topology_request::restore_tablets, "restore_tablets"},
+    {global_topology_request::prepare_migration, "prepare_migration"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
