@@ -271,10 +271,11 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
             }
         }
         ~hold_state() {
+            // Given back on the exception path too: the commit is all-or-nothing, so
+            // the state always describes exactly what the call did, and the caller
+            // resumes from there. Dropping it rewound the source to position zero.
             _state->adjust_lease();
-            if (!std::uncaught_exceptions()) {
-                _src._state = std::move(_state);
-            }
+            _src._state = std::move(_state);
         }
         operator state&() const {
             return *_state;
@@ -419,6 +420,7 @@ public:
                 _bucket, seastar::http::internal::url_encode(_object_name), _generation);
         auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
         size_t result = 0;
+        bool whole_object = false;
         co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
                 [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != seastar::http::reply::status_type::ok
@@ -426,18 +428,59 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    // send_with_retry() re-runs this handler on every attempt, so the
+                    // count has to start over. Carrying it across would place the
+                    // retried range at dst + result, i.e. the right bytes at the
+                    // wrong offset. Assigning whole_object rather than or-ing it
+                    // resets it the same way.
+                    result = 0;
+                    whole_object = rep._status == seastar::http::reply::status_type::ok;
+                    utils::get_local_injector().inject("gcp_client_whole_object_reply", [&whole_object] {
+                        whole_object = true;
+                    });
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
                         auto n = std::min(buf.size(), len - result);
                         std::copy_n(buf.get(), n, dst + result);
                         result += n;
-                        _impl->count_read_bytes(n);
                     }
+                    // Inside the handler, because send_with_retry() has already
+                    // reported the attempt as a success by the time it returns.
+                    bool ended_early = utils::http::body_ended_early(rep);
+                    utils::get_local_injector().inject("gcp_client_truncated_body", [&ended_early] {
+                        ended_early = true;
+                    });
+                    if (ended_early) {
+                        utils::http::throw_body_ended_early(fmt::format("Body of {}:{} ended early: got {} of the {} bytes it declared",
+                                _bucket, _object_name, result, rep.content_length));
+                    }
+                    // Only once the attempt is known to have delivered its range, so a
+                    // truncated attempt does not bill its partial bytes and leave the
+                    // retry to bill the range again.
+                    _impl->count_read_bytes(result);
                 },
                 httpclient::method_type::GET,
                 rest::key_values({{ RANGE, range }}),
                 _as);
+        // 200 means the reply carried the whole object rather than the range, so
+        // the copy above took its first to_read bytes - the right count from the
+        // wrong offset, which the length check below cannot see. GCS documents
+        // that it ignores Range in some circumstances. A request that already
+        // covers the whole object is answered this way legitimately, and gets the
+        // same bytes either way.
+        if (whole_object && (pos != 0 || to_read != _size)) {
+            throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {}"
+                , _bucket, _object_name, to_read, pos
+            ));
+        }
+        // A truncated body was already retried in the handler, so a short answer
+        // here is a reply that described a shorter range than the one asked for.
+        if (result != to_read) {
+            throw storage_io_error(EIO, fmt::format("Short read of object {}:{}: asked for {} bytes at offset {}, got {}"
+                , _bucket, _object_name, to_read, pos, result
+            ));
+        }
         co_return result;
     }
 
@@ -1076,6 +1119,8 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
             );
             auto range = fmt::format("bytes={}-{}", s.position, s.position+to_read-1); // inclusive range
 
+            size_t got = 0;
+
             co_await _impl->send_with_retry(path
                 , GCP_OBJECT_SCOPE_READ_ONLY
                 , ""s
@@ -1084,13 +1129,52 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = s.position;
+                    // send_with_retry() re-runs this handler on every attempt, so an
+                    // attempt has to describe only itself and must not leave anything
+                    // of its own behind. Read the range whole and commit it below;
+                    // appending as the bytes arrive would replay the range and
+                    // advance the position twice.
+                    got = 0;
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
+                    for (auto& buf : bufs) {
+                        got += buf.size();
+                    }
+                    // A body that ends early is a transport fault and the range is
+                    // still there to be fetched, so raise it here where the retry
+                    // strategy still gets a say.
+                    bool ended_early = utils::http::body_ended_early(rep);
+                    utils::get_local_injector().inject("gcp_source_truncated_body", [&ended_early] {
+                        ended_early = true;
+                    });
+                    if (ended_early) {
+                        utils::http::throw_body_ended_early(fmt::format("Body of {}:{} ended early: got {} of the {} bytes it declared at offset {}",
+                                _bucket, _object_name, got, rep.content_length, s.position));
+                    }
+                    // Counted here, between the two checks. The attempt above is
+                    // retried, so counting it would bill the same logical range twice;
+                    // the one below is not, and those bytes did arrive over the wire on
+                    // a response the server completed.
+                    _impl->count_read_bytes(got);
+                    // to_read never runs past the end of the object, so a satisfiable
+                    // range that came back whole came back complete. Anything else is a
+                    // reply describing a different range than the one asked for. Raise it
+                    // before committing anything: storage_io_error is not a system_error,
+                    // so the strategy classifies it as non-retryable and stops at once,
+                    // and a commit first would leave the caller a resumable state holding
+                    // bytes from an offset it never asked for.
+                    if (got != to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, got, to_read, s.position, _size));
+                    }
+                    auto old = s.position;
                     for (auto&& buf : bufs) {
-                        s.position += buf.size();
-                        _impl->count_read_bytes(buf.size());
+                        // deque's push is strongly exception safe, so either the
+                        // state takes the bytes and the position moves, or neither
+                        // happens.
+                        auto n = buf.size();
                         s.buffers.emplace_back(std::move(buf));
+                        s.position += n;
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
                 }
@@ -1101,7 +1185,16 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
     }
 
-    co_return s.get(limit);
+    auto res = s.get(limit);
+    // An empty buffer is how a data source says end of stream, and a caller cannot
+    // tell that from a short object. Only say it when the object has actually
+    // ended: SCYLLADB-2962 is the same mistake one wrapper further up, and its
+    // rule is to check that we are at the indicated end before answering this way.
+    if (res.empty() && limit != 0 && s.position < _size) {
+        throw storage_io_error(EIO, fmt::format("Premature end of stream for {}:{} at {} of {} bytes",
+                _bucket, _object_name, s.position, _size));
+    }
+    co_return res;
 }
 
 future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit) {

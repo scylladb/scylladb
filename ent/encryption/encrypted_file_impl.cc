@@ -236,6 +236,7 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
             if (m != symmetric_key::mode::decrypt) {
                 throw std::invalid_argument("Output data not aligned");
             }
+            auto decoded = off + align_down(rem, b);
             _key->transform_unpadded(m, i + off, align_down(rem, b), o + off, iv.data());
             // #22236 - ensure we don't wrap numbers here.
             // If reading past actual end of file (_file_length), we can be decoding
@@ -248,7 +249,14 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
             // If caller now ignores this and just reads 4096 (or more)
             // bytes at next block (4096), we read 15 bytes and decode.
             // But would be past _file_length -> ensure we return zero here.
-            return std::max(l, pos) - pos;
+            //
+            // Clamp to what we actually decoded as well. A partial block means
+            // the end of the data only if the buffer we were handed reaches it,
+            // which a local file guarantees and an object storage read does not:
+            // its read_dma returns whatever the response body carried. Reporting
+            // the distance to end of data for a buffer that stopped short would
+            // hand the caller bytes this read never wrote.
+            return std::min(decoded, std::max(l, pos) - pos);
         }
         _key->transform_unpadded(m, i + off, block_size, o + off, iv.data());
     }
@@ -314,7 +322,20 @@ future<size_t> encrypted_file_impl::read_dma(uint64_t pos, std::vector<iovec> io
         return f.then([this, pos, iov = std::move(iov)](size_t len) mutable {
             size_t off = 0;
             for (auto& i : iov) {
-                off += transform(pos + off, i.iov_base, i.iov_len, i.iov_base, mode::decrypt);
+                if (off >= len) {
+                    break;
+                }
+                auto n = transform(pos + off, i.iov_base, std::min(i.iov_len, len - off), i.iov_base, mode::decrypt);
+                off += n;
+                // Stop once a block has been left partly consumed. That is the end of
+                // the data, or a read that stopped short, or an iovec that is not a
+                // whole number of blocks - in every case there is no further block to
+                // decode, and transform() requires a block-aligned position, which
+                // off no longer is. Unlike write_dma() this path never asserted the
+                // iovec lengths, so the last case reaches us from callers.
+                if (n < i.iov_len || !is_aligned(off, block_size)) {
+                    break;
+                }
             }
             return off;
         });
