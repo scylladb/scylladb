@@ -5,7 +5,7 @@
 #
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, alter_auto_rf_keyspaces
 from collections import defaultdict
 import pytest
 import logging
@@ -28,7 +28,9 @@ async def test_balance_empty_tablets(manager: ScyllaClusterManager):
         'tablet_load_stats_refresh_interval_in_seconds': 1,
         # The test overrides disk capacity but the disk usage remains real leading the disk_space_monitor
         # to announce 100% disk utilization and active OoS prevention mechanisms.
-        'error_injections_at_startup': ['suppress_disk_space_threshold_checks'],
+        'error_injections_at_startup': ['suppress_disk_space_threshold_checks',
+        # Disable auto-rf changes to avoid re-creating the replicas which we remove with ALTER KEYSPACE
+                                        'skip_auto_rf_change'],
     }
 
     cfg_small = cfg | { 'data_file_capacity': 50 * GB }
@@ -40,17 +42,22 @@ async def test_balance_empty_tablets(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft_topology=debug',
     ]
 
-    servers = [await manager.server_add(config=cfg_large, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'r1'})]
-    large_host_id = await manager.get_host_id(servers[0].server_id)
+    servers = await manager.servers_add(2, config=cfg_large, cmdline=cmdline, property_file=[
+                {'dc': 'dc1', 'rack': 'rack1'},
+                {'dc': 'dc1', 'rack': 'rack2'}])
+    large_host_id = await manager.get_host_id(servers[-1].server_id)
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 16}") as ks:
+    # Move system keyspaces to rack1 to not interfere with the balancing of the user tables
+    await alter_auto_rf_keyspaces(cql, "{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack2']} AND tablets = {'initial': 16}") as ks:
         for table in ('t1', 't2', 't3'):
             await cql.run_async(f'CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, val text);')
 
-        servers.append(await manager.server_add(config=cfg_small, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'r1'}))
-        small_host_id = await manager.get_host_id(servers[1].server_id)
+        servers.append(await manager.server_add(config=cfg_small, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack2'}))
+        small_host_id = await manager.get_host_id(servers[-1].server_id)
         logger.debug(f'Large node: {large_host_id}')
         logger.debug(f'Small node: {small_host_id}')
 
@@ -58,14 +65,17 @@ async def test_balance_empty_tablets(manager: ScyllaClusterManager):
         s0_mark = await s0_log.mark()
         await s0_log.wait_for('Refreshed table load stats for all DC', from_mark=s0_mark)
 
-        await manager.api.quiesce_topology(servers[0].ip_addr)
+        # Loop quiesce_topology to avoid flakyness until #29767 is merged
+        for i in range(5):
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+            await asyncio.sleep(0.2)
 
         # Ensure all nodes see the same data in system.tablets
         await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
 
         replicas_per_node = defaultdict(int)
         tablets_per_shard = {}
-        for row in await cql.run_async('SELECT * FROM system.tablets'):
+        for row in await cql.run_async('SELECT keyspace_name, table_id, replicas FROM system.tablets'):
             if row.keyspace_name == ks:
                 table_id = row.table_id
                 for r in row.replicas:

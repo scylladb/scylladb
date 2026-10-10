@@ -113,6 +113,7 @@ public:
     topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
+    topology_mutation_builder& set_needs_auto_rf_change(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id>& values);
     topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
@@ -126,6 +127,7 @@ public:
     topology_mutation_builder& add_new_committed_cdc_generation(const cdc::generation_id& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
+    topology_mutation_builder& del_needs_auto_rf_change();
     topology_mutation_builder& del_global_topology_request();
     topology_mutation_builder& del_global_topology_request_id();
     topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
@@ -143,10 +145,17 @@ public:
             const std::vector<utils::UUID>& ids);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
     topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
+    // Removes every id in `ids` from paused_rf_change_requests in a single overwrite.
+    // Several overwrites of one set at the same write timestamp merge into their union,
+    // so callers un-pausing more than one request in a pass must use this.
+    topology_mutation_builder& resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids);
     topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
     topology_mutation_builder& finish_rf_change_migrations(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& start_restore_request(const utils::UUID& req_id);
-    topology_mutation_builder& finish_restore_request(const std::unordered_set<utils::UUID>& current, const utils::UUID& req_id);
+    // Removes every id in `req_ids` from ongoing_restore_requests in a single overwrite.
+    // Several overwrites of one set at the same write timestamp merge into their union,
+    // so callers finishing more than one request in a pass must use this.
+    topology_mutation_builder& finish_restore_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

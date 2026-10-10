@@ -119,7 +119,7 @@ expand_to_racks(const locator::token_metadata& tm,
     return dc_racks;
 }
 
-static locator::replication_strategy_config_options prepare_options(
+locator::replication_strategy_config_options prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
         bool rf_rack_valid_keyspaces,

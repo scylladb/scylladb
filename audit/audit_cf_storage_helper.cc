@@ -15,6 +15,8 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "timeout_config.hh"
+#include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 namespace audit {
@@ -54,7 +56,8 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "username,"
                        "error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        KEYSPACE_NAME, TABLE_NAME))
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
+    , _client_state(service::client_state::internal_tag{}, updateable_timeout_config(qp.db().get_config()).current_values())
+    , _dummy_query_state(_client_state, empty_service_permit())
 {
 }
 
@@ -107,9 +110,8 @@ future<> audit_cf_storage_helper::start(const db::config &cfg) {
         if (ks = _qp.db().try_find_keyspace(KEYSPACE_NAME); !ks) {
             // releasing, because table_helper::setup_keyspace creates a raft guard of its own
             service::release_guard(std::move(group0_guard));
-            co_return co_await table_helper::setup_keyspace(_qp, _mm, KEYSPACE_NAME,
-                                                            "org.apache.cassandra.locator.NetworkTopologyStrategy",
-                                                            "3", _dummy_query_state, {&_table});
+            co_return co_await table_helper::setup_auto_rf_keyspace(_qp, _mm, KEYSPACE_NAME,
+                    "org.apache.cassandra.locator.NetworkTopologyStrategy", RF_GOAL_PER_DC, _dummy_query_state, {&_table});
         } else if (ks->metadata()->strategy_name() == "org.apache.cassandra.locator.SimpleStrategy") {
             // We want to migrate the old (pre-Scylla 6.0) SimpleStrategy to a newer one.
             // The migrate_audit_table() function will do nothing if it races with another strategy change:

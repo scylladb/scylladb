@@ -249,6 +249,12 @@ struct topology {
     // hence the need for this field.
     std::unordered_set<raft::server_id> excluded_tablet_nodes;
 
+    // Set while the auto-RF reconciler has a change to make, and kept set while that
+    // change runs; tablet load balancing yields to it. Cleared whenever the
+    // reconciler has nothing to schedule, including while it is backed off or
+    // deferred.
+    bool needs_auto_rf_change = false;
+
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one

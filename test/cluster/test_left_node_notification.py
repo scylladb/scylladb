@@ -8,7 +8,7 @@ import pytest
 import asyncio
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import check_token_ring_and_group0_consistency
+from test.cluster.util import check_token_ring_and_group0_consistency, alter_auto_rf_keyspaces
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +30,11 @@ async def test_left_node_notification(manager: ScyllaClusterManager) -> None:
     dc2_node = await manager.server_add(cmdline=["--logger-log-level", "storage_service=debug"],
                                         property_file={"dc": "dc2", "rack": "r1"})
 
-    # When table audit is enabled, Scylla creates the "audit" keyspace with
-    # NetworkTopologyStrategy and RF=3 in dc1 only. To avoid decommission failures due to
-    # "zero replica after the removal" or "can not find new node in local dc" errors when
-    # removing dc1 nodes, we alter the audit keyspace to have replicas only in dc2.
-    # Only alter if the audit keyspace exists (it might not exist if audit is disabled).
+    # The system keyspaces start out in dc1 only. Move them to dc2 so that removing the
+    # dc1 nodes does not fail with "zero replica after the removal" or "can not find new
+    # node in local dc".
     cql = manager.get_cql()
-    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
-    if result:
-        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc2': 1}")
+    await alter_auto_rf_keyspaces(cql, "{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 1}")
 
     # Ensure ring and group0 are consistent before operations
     await check_token_ring_and_group0_consistency(manager)

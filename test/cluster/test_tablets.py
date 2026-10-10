@@ -924,7 +924,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -997,7 +997,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1148,7 +1148,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1228,7 +1228,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -2493,6 +2493,8 @@ async def check_tablet_rebuild_with_repair(manager: ScyllaClusterManager, fail: 
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_id(ks, "test")
+
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
@@ -2516,7 +2518,7 @@ async def check_tablet_rebuild_with_repair(manager: ScyllaClusterManager, fail: 
         # keyspace, hence force=True.
         await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
 
-        assert sum([len(await log.grep(rf'.*Will set tablet .* stage to rebuild_repair.*')) for log in logs]) == 1
+        assert sum([len(await log.grep(rf'.*Will set tablet {table_id}:\d+ stage to rebuild_repair.*')) for log in logs]) == 1
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")
@@ -2672,7 +2674,20 @@ async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
     log = await manager.server_open_log(server.server_id)
     cql = manager.get_cql()
 
+    mark = await log.mark()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        # Creating the keyspace woke the coordinator: it re-evaluates the racks
+        # eligible for the auto-RF system keyspaces on every keyspace change. Let
+        # it finish that pass and go back to sleep before arming the injection
+        # below. Armed while the coordinator is still awake, the injection catches
+        # it on its way to sleep right now, before the second node has sent its
+        # join request, and the join then stalls behind the injection's message
+        # wait until it times out and takes the node down.
+        async def coordinator_asleep():
+            lines = await log.grep(r"topology coordinator fiber (has nothing to do\. Sleeping\.|got an event)", from_mark=mark)
+            return True if lines and "Sleeping" in lines[-1][0] else None
+        await wait_for(coordinator_asleep, time.time() + 60)
+
         # Block coordinator right before going to sleep
         # We use node bootstrap as an operation which is going to be trapped on exit, but it's arbitrary.
         mark = await log.mark()

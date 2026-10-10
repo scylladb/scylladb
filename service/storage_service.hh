@@ -937,6 +937,20 @@ private:
 
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
+    // A removal which only the auto-RF keyspaces make RF-rack-invalid is retried for
+    // a bounded time while auto-RF has a change pending: those keyspaces give a rack
+    // up shortly after the operator drops it from theirs. The state of one retry loop.
+    struct auto_rf_removal_wait {
+        // Set on the first rejection, so that the time the first group0 guard took
+        // to acquire does not count against the grace or the deadline.
+        std::optional<lowres_clock::time_point> deadline;
+        lowres_clock::time_point grace_until;
+        bool waited = false;
+    };
+    // Called after a removal was found RF-rack-invalid. Releases the guard, sleeps a
+    // little and returns true if the caller should validate again, false if the
+    // rejection stands.
+    future<bool> auto_rf_may_still_fix_removal(group0_guard guard, auto_rf_removal_wait& wait, locator::host_id host_id);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);

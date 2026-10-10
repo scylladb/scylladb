@@ -30,6 +30,7 @@ from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
+from test.cluster.util import wait_for_auto_rf_settled
 from test.cqlpy import nodetool
 import statistics
 
@@ -600,6 +601,10 @@ async def create_cluster(topology, manager, logger, object_storage=None, extra_c
         host_ids[s.server_id] = host_id
         logger.info(f'Created node {s.ip_addr} in {s.datacenter}.{s.rack}')
 
+    # Wait for auto-RF to complete before tests start restoring
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+
     return servers,host_ids
 
 async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primary_replica_only, prefix, object_storage):
@@ -873,6 +878,35 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
 async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes):
     '''Check that tablet-aware restore works for multiple tables backed up from multiple nodes and datacenters'''
     await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
+
+
+@pytest.mark.parametrize("topology", [topo(rf = 2, nodes = 2, racks = 2, dcs = 1)])
+async def test_restore_tablets_completions_do_not_collide(build_mode: str, manager: ScyllaClusterManager,
+                                                          s3_storage, topology):
+    '''Restoring several tables at once must leave ongoing_restore_requests empty.
+
+    Completions landing in the same balancer pass used to overwrite the set one at a time,
+    and several overwrites at one write timestamp merge as their union, so no removal
+    stuck: the plan never emptied and quiescing the topology never converged.
+    test_set_removals_in_one_batch_need_a_single_overwrite covers that mechanism
+    deterministically; this is only the end-to-end check that a real multi-table restore
+    leaves nothing behind, so it is kept deliberately light: two nodes and three tables.
+    CI runs a new test many times in parallel and the restores are serialised on the
+    coordinator, so an eight-node, eight-table variant exceeded the REST client's 300 s
+    wait_task() timeout under that load with no coordinator stall behind it.
+
+    The invariant is in the topology coordinator and has nothing to do with the storage
+    backend, so this runs on s3 only.
+    '''
+    await do_test_restore_tablets(build_mode, manager, s3_storage, topology, 3, 2)
+
+    cql = manager.get_cql()
+    rows = await cql.run_async(
+        "SELECT ongoing_restore_requests FROM system.topology WHERE key = 'topology'")
+    leftover = rows[0].ongoing_restore_requests if rows else None
+    assert not leftover, (
+        f"{len(leftover)} restore request(s) still listed in ongoing_restore_requests after every "
+        f"restore finished, so their removal did not stick: {leftover}")
 
 
 async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False):

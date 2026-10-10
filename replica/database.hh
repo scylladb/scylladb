@@ -2359,7 +2359,9 @@ public:
     // Preconditions:
     // * The provided locator::topology instance (from the passed locator::token_metadata_ptr)
     //   must contain a complete list of racks and data centers in the cluster.
-    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
+    // Keyspaces named in `ignored_keyspaces` do not count towards the verdict.
+    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation,
+            const std::unordered_set<sstring>& ignored_keyspaces = {}) const;
 
     // Verify that all tablet keyspaces have a rack list configured.
     //

@@ -18,7 +18,7 @@ import logging
 import time
 from typing import Callable
 
-from test.cluster.util import get_topology_coordinator
+from test.cluster.util import get_topology_coordinator, alter_auto_rf_keyspaces
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 from test.cluster.util import new_test_keyspace, wait_for
 
@@ -74,17 +74,27 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ScyllaClusterMa
     the pairing would be shifted during replace.
     """
 
-    cmdline = ["--smp=1"]
-    config = {"failure_detector_timeout_in_ms": 5000}
-    servers = await manager.servers_add(4, cmdline=cmdline, 
-                                        config=config,
-                                        property_file=[{"dc": "dc1", "rack": "r1"},
-                                                       {"dc": "dc1", "rack": "r1"},
-                                                       {"dc": "dc1", "rack": "r2"},
-                                                       {"dc": "dc1", "rack": "r2"}])
+    cmdline = ["--smp=1", "--logger-log-level", "load_balancer=debug"]
+    config = {"failure_detector_timeout_in_ms": 5000,
+                # Disable auto-rf changes to avoid re-creating the replicas which we remove with ALTER KEYSPACE
+                "error_injections_at_startup": ["skip_auto_rf_change"]}
+    servers = [ await manager.server_add(cmdline=cmdline, config=config, property_file={"dc": "dc1", "rack": "r1"}) ]
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+
+    # Alter the system keyspaces so that they don't interfere
+    # with the load balancer's initial tablet allocation
+    await alter_auto_rf_keyspaces(cql, "{'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}")
+
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+
+    servers.extend(await manager.servers_add(4, cmdline=cmdline, config=config,
+                                            property_file=[ {"dc": "dc1", "rack": "r2"},
+                                                            {"dc": "dc1", "rack": "r2"},
+                                                            {"dc": "dc1", "rack": "r3"},
+                                                            {"dc": "dc1", "rack": "r3"}]))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
 

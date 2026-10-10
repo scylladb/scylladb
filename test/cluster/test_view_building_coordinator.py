@@ -623,9 +623,18 @@ async def test_concurrent_tablet_migrations(manager: ScyllaClusterManager):
         {'dc': 'dc2', 'rack': 'rack3'},
     ]
 
+    # The test relies on the tablet load balancer having to spread the tablets of
+    # the test table over all six nodes once it is unpaused. The tablets of the
+    # auto-RF system keyspaces would dominate the per-node load (six tables with
+    # four tablets each versus two tablets of the test table), so the balancer
+    # would consider the cluster balanced without touching the test table. Keep
+    # the system keyspaces on vnodes to make the load depend on the test table
+    # only.
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+
     servers = []
     for property_file in rack_property_files:
-        servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
+        servers.append(await manager.server_add(property_file=property_file, config=config, cmdline=cmdline_loggers))
 
     await manager.servers_see_each_other(servers)
     await manager.disable_tablet_balancing()
@@ -645,7 +654,7 @@ async def test_concurrent_tablet_migrations(manager: ScyllaClusterManager):
 
         # Add one more node to each rack. Load balancing is disabled so new nodes should not get new tablets.
         for property_file in rack_property_files:
-            servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
+            servers.append(await manager.server_add(property_file=property_file, config=config, cmdline=cmdline_loggers))
         assert len(await get_nodes_which_are_tablet_replicas()) == 3
 
         await manager.enable_tablet_balancing()

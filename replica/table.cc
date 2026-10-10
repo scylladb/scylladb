@@ -3846,8 +3846,8 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
         } catch (...) {
             tlogger.error("Failed to merge compaction groups for table {}.{}", schema()->ks_name(), schema()->cf_name());
         }
-        utils::get_local_injector().inject("replica_merge_completion_wait", [] () {
-            tlogger.info("Merge completion fiber finished, about to sleep");
+        utils::get_local_injector().inject("replica_merge_completion_wait", [this] () {
+            tlogger.info("Merge completion fiber finished for table {}.{}, about to sleep", schema()->ks_name(), schema()->cf_name());
         });
         _pending_merge_fiber_work.reset();
         co_await _merge_completion_event.wait();

@@ -35,7 +35,12 @@ class TestSetSmp(Tester):
         cluster.stop()
 
         # set_smp to a different value and restart without jvm_args
-        target_smp = 1 if default_smp != 1 else 2
+
+        # We can only increase the number of shards because system keyspaces audit and system_traces
+        # are tablet based and if we reduce the number of shards, we will get an error:
+        #   Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled
+        #   tables is not yet supported
+        target_smp = default_smp + 1
         node1.set_smp(target_smp)
         mark = node1.mark_log()
         cluster.start(wait_for_binary_proto=True)

@@ -8,6 +8,7 @@
  */
 
 #include "service/client_routes.hh"
+#include <seastar/core/sleep.hh>
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "mutation/mutation.hh"
@@ -121,17 +122,26 @@ seastar::future<> service::client_routes_service::delete_client_routes(std::vect
 
 template <typename Func>
 seastar::future<> service::client_routes_service::with_retry(Func func) const {
-    int retries = 10;
+    // The topology coordinator commits group0 entries continuously while tablets are
+    // being migrated (dozens per second on a small cluster), so back-to-back retries
+    // can lose the race every time. Back off a little more on each conflict.
+    int retries = 20;
+    unsigned backoff_ms = 5;
     while (true) {
+        bool conflict = false;
         try {
             co_await func();
         } catch (const ::service::group0_concurrent_modification&) {
             crlogger.warn("Failed to set client routes due to guard conflict, retries={}", retries);
-            if (retries--) {
-                continue;
+            if (!retries--) {
+                throw;
             }
-            throw;
+            conflict = true;
         }
-        break;
+        if (!conflict) {
+            break;
+        }
+        co_await seastar::sleep(std::chrono::milliseconds(backoff_ms));
+        backoff_ms = std::min(backoff_ms * 2, 200u);
     }
 }

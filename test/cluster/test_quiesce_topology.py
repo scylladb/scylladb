@@ -20,6 +20,8 @@ from test.cluster.util import new_test_keyspace, get_topology_coordinator
 import pytest
 import asyncio
 import logging
+import math
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,21 @@ QUIESCE_DEBUG_CMDLINE = [
     '--logger-log-level', 'storage_service=debug',
 ]
 
+async def verify_tablets_are_balanced(cql, num_nodes):
+    # Verify balance; we need to take into account the tablets in the
+    # auto-rf enabled system keyspaces and not only the user table created by the test
+    tablet_cnt = 0
+    hosts = defaultdict(int)
+    for row in await cql.run_async(f"SELECT * FROM system.tablets"):
+        assert len(row.replicas) == 1, f'We expect only tables with RF==1, but got {len(row.replicas)} replicas for table {row.keyspace_name}.{row.table_name}'
+        tablet_cnt += 1
+        hosts[row.replicas[0][0]] += 1
+
+    assert len(hosts) == num_nodes, f"Expected tablets on all {num_nodes} nodes, got them on {len(hosts)}: {dict(hosts)}"
+    min_tablets = tablet_cnt // num_nodes
+    max_tablets = math.ceil(tablet_cnt / num_nodes)
+    for host_id, count in hosts.items():
+        assert min_tablets <= count <= max_tablets, f"Node {host_id} has {count} tablets, expected {min_tablets} or {max_tablets}"
 
 @pytest.mark.asyncio
 async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
@@ -62,12 +79,7 @@ async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
         await manager.enable_tablet_balancing()
         await manager.api.quiesce_topology(servers[0].ip_addr)
 
-        # Verify balance: 16 tablets / 3 nodes = 5 or 6 per node
-        replicas = await get_replica_count_by_host(manager, servers[0], ks, 't')
-        logger.info(f"Replica distribution after quiesce: {replicas}")
-        assert len(replicas) == 3, f"Expected tablets on all 3 nodes, got: {replicas}"
-        for host_id, count in replicas.items():
-            assert 5 <= count <= 6, f"Node {host_id} has {count} tablets, expected 5 or 6"
+        await verify_tablets_are_balanced(cql, 3)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -99,7 +111,10 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterMana
         await log.wait_for("Refreshed table load stats for all DC", timeout=30)
 
         # Enable the refresh pause injection on the leader
-        await manager.api.enable_injection(leader.ip_addr, "refresh_tablet_load_stats_pause", one_shot=True)
+        # We need to set one_shot to False because the balancer will issue split decisions for tables
+        # in the auto-rf enabled system keyspaces, and that will trigger several load_stats refreshes.
+        # So, we need to stop all load stats refreshes, not just the one triggered by quiesce_topology.
+        await manager.api.enable_injection(leader.ip_addr, "refresh_tablet_load_stats_pause", one_shot=False)
 
         # Start quiesce — it should trigger a fresh refresh which will block on the injection
         await manager.enable_tablet_balancing()
@@ -178,12 +193,7 @@ async def test_quiesce_retries_until_balance_plan_is_empty(manager: ScyllaCluste
         matches = await log.grep("topology not idle", from_mark=mark)
         assert matches, "Expected quiesce to retry after observing a non-empty plan"
 
-        # Verify balance: all 4 nodes should have exactly 8 tablets each
-        replicas = await get_replica_count_by_host(manager, servers[0], ks, 't')
-        logger.info(f"Replica distribution after quiesce: {replicas}")
-        assert len(replicas) == 4, f"Expected tablets on all 4 nodes, got: {replicas}"
-        for host_id, count in replicas.items():
-            assert count == 8, f"Node {host_id} has {count} tablets, expected 8"
+        await verify_tablets_are_balanced(cql, 4)
 
         # Second quiesce should not trigger any work
         mark = await log.mark()

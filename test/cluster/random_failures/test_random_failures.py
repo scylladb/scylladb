@@ -65,7 +65,16 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 async def four_nodes_cluster(manager: ScyllaClusterManager) -> None:
     LOGGER.info("Booting initial 4-node cluster.")
 
-    servers = await manager.servers_add(4, property_file=[
+    # The test stops or kills the topology coordinator while a node joins. With the
+    # auto-RF system keyspaces on tablets the balancer is still spreading their tablets
+    # when that happens, and the tablet migration in flight needs a global token metadata
+    # barrier which requires every node to be up (see the FIXME in
+    # topology_coordinator::global_tablet_token_metadata_barrier()). The new coordinator
+    # then retries the barrier against the stopped node once a second and never gets to
+    # the join. This test is about node operations under failures, not about tablets,
+    # so keep the system keyspaces on vnodes like test_coordinator_queue_management does.
+    config = {"error_injections_at_startup": ["auto_rf_keyspaces_use_vnodes"]}
+    servers = await manager.servers_add(4, config=config, property_file=[
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack3"},

@@ -5,7 +5,8 @@
 #
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace, FeatureConfig
+from test.cluster.util import new_test_keyspace, FeatureConfig, \
+    quiesce_and_disable_tablet_balancing
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.rest_client import read_barrier
 
@@ -112,7 +113,7 @@ async def test_counter_ids_reuse_in_single_rack(manager: ScyllaClusterManager, s
         {'dc': 'dc1', 'rack': 'rack1'}
     ])
     cql, hosts = await manager.get_ready_cql(servers)
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     keyspace_opts = storage_config.get_keyspace_opts(
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}")
