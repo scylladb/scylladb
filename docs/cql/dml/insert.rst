@@ -54,6 +54,7 @@ is not unlikely. If it happens, i.e. two ``INSERTS`` have the same
 timestamp, a conflict resolution algorithm determines which of the inserted cells prevails (see :ref:`update ordering <update-ordering>`).
 
 Please refer to the :ref:`update parameters <update-parameters>` section for more information on the :token:`update_parameter`.
+For timestamps that are not related to real time, see :ref:`synthetic write timestamps <synthetic-timestamps>`.
 
 .. code-block:: cql
 

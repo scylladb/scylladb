@@ -46,7 +46,8 @@ Note that:
   particular operation ordering, you must specify per-operation timestamps.
 - A LOGGED batch to a single partition will be converted to an UNLOGGED batch as an optimization.
 
-``BATCH`` supports the ``TIMESTAMP`` option with the same semantics as the TIMESTAMP parameter in ``UPDATE`` statement.
+``BATCH`` supports the ``TIMESTAMP`` option with the same semantics as the TIMESTAMP parameter in ``UPDATE`` statement
+(see also :ref:`synthetic write timestamps <synthetic-timestamps>`).
 For more information on the :token:`update_parameter` refer to the :ref:`UPDATE <update-parameters>` section.
 
 .. _unlogged-batches:

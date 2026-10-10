@@ -1299,10 +1299,11 @@ The ``ALTER TABLE`` statement can:
   of expiration-time column you must first disable per-row TTL and then
   re-enable it using the chosen column.
 
-.. warning:: Dropping a column assumes that the timestamps used for the value of this column are "real" timestamp in
-   microseconds. Using "real" timestamps in microseconds is the default is and is **strongly** recommended, but as
-   ScyllaDB allows the client to provide any timestamp on any table, it is theoretically possible to use another
-   convention. Please be aware that if you do so, dropping a column will not work correctly.
+.. warning:: Dropping a column without ``USING TIMESTAMP`` assumes that the timestamps used for the value of this column
+   are "real" timestamps in microseconds. Using "real" timestamps in microseconds is the default and is **strongly**
+   recommended, but as ScyllaDB allows the client to provide any timestamp on any table, it is possible to use another
+   convention. If you do so, drop columns with ``USING TIMESTAMP`` (see below and
+   :ref:`synthetic write timestamps <synthetic-timestamps>`).
 
 .. warning:: Once a column is dropped, it is allowed to re-add a column with the same name as the dropped one
    **unless** the type of the dropped column was a (non-frozen) column (due to an internal technical limitation).
