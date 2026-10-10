@@ -154,7 +154,11 @@ def run_cassandra_cmd(pid, dir):
             # parameters (like similarity_function) unless this flag is
             # set.  Our tests exercise those options for Cassandra SAI
             # compatibility, so we need it enabled.
-                        ' -Dcassandra.sai.vector.allow_custom_parameters=true',
+                        ' -Dcassandra.sai.vector.allow_custom_parameters=true'
+            # Cassandra 5.0 doesn't allow changing a role's password more
+            # than once every 5 seconds. Tests which create a role and
+            # immediately change its password need this limit disabled.
+                        ' -Dcassandra.role_password_update_min_interval_in_ms=0',
           }
     # By default, Cassandra's startup script runs "java". We can override this
     # choice with the JAVA_HOME environment variable based on the Java we

@@ -2,7 +2,6 @@ import pytest
 from contextlib import ExitStack
 import re
 from .util import unique_name, config_value_context, new_test_keyspace, ScyllaMetrics
-from .conftest import has_tablets
 from cassandra.protocol import ConfigurationException
 
 # Tests for the replication_strategy_{warn,fail}_list guardrail. Because
@@ -39,8 +38,10 @@ def ks_opts(strategy, rf, dc=None, tablets=True):
 
 
 def get_replication_strategy_ks_opts(strategy: str, rf: int, dc=None) -> str:
-    # If tablets syntax is not supported (e.g. in cassandra) we don't add it to the ks options
-    return ks_opts(strategy, rf, dc=dc, tablets=has_tablets and strategy == 'NetworkTopologyStrategy')
+    # Tablets only support NetworkTopologyStrategy, so disable them for other
+    # strategies. Scylla accepts this syntax also when it doesn't use tablets
+    # (and all tests in this file are Scylla-only).
+    return ks_opts(strategy, rf, dc=dc, tablets=strategy == 'NetworkTopologyStrategy')
 
 
 def create_ks_and_assert_warnings_and_errors(cql, ks_opts, metric_name=None,

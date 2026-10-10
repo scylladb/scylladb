@@ -24,9 +24,15 @@ SCYLLA_ANN_UNDEFINED_COLUMN_MESSAGE = "Unrecognized name bad_col"
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector does not support filtering"
 CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires all restricted column(s) to be indexed"
-TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
+SCYLLA_TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
+CASSANDRA_TOPK_AGGREGATION_ERROR = "Top-K queries can not be run with aggregation"
 TOPK_LIMIT_ERROR = "queries must have a limit specified"
 VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
+
+# Tests which create a vector index use the skip_on_scylla_vnodes fixture:
+# Scylla requires a vector index's base table to use tablets - its vector
+# search is not supported on vnodes (see docs/dev/vector_search.md). Cassandra
+# doesn't have tablets, and supports vector indexes without them.
 
 def test_cannot_create_empty_vector_column(cql, test_keyspace):
         assert_invalid_message(
@@ -64,7 +70,7 @@ def test_cannot_query_empty_vector_column(cql, test_keyspace):
 #         .hasMessage("Invalid vector literal for val of type vector<float, 3>; expected 3 elements, but given 2");
 #     }
 
-def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
+def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(val) USING '{custom_index}'")
@@ -80,7 +86,7 @@ def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
             "SELECT * FROM %s ORDER BY val ANN OF [2.5, 3.5] LIMIT 5"
         )
 
-def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
+def test_multi_vector_orderings_not_allowed(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(pk int, str_val text, val1 vector<float, 3>, val2 vector<float, 3>, PRIMARY KEY(pk))") as table:
 
         # Scylla doesnt support custom indexes on text columns so we use a regular index.
@@ -94,7 +100,7 @@ def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
             "SELECT * FROM %s ORDER BY val1 ANN OF [2.5, 3.5, 4.5], val2 ANN OF [2.1, 3.2, 4.0] LIMIT 2"
         )
 
-def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace):
+def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(pk int, val vector<float, 3>, PRIMARY KEY(pk))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE INDEX c_index ON %s(val) USING '{custom_index}'")
@@ -102,7 +108,7 @@ def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace):
         assert_invalid_message(cql, table, "Descending ANN ordering is not supported",
                                "SELECT val FROM %s where val=[1.2, 1.2, 1.2] ORDER BY val ann of [2.5, 3.5, 4.5] DESC LIMIT 2")
 
-def test_vector_ordering_is_not_allowed_with_clustering_ordering(cql, test_keyspace):
+def test_vector_ordering_is_not_allowed_with_clustering_ordering(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
@@ -129,7 +135,7 @@ def test_invalid_column_name_with_ann(cql, test_keyspace):
             "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
         )
 
-def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
+def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
@@ -162,7 +168,7 @@ def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
 #         assertThatThrownBy(() -> execute("SELECT * FROM %s ORDER BY value ann of [0.0, 0.0] LIMIT 2")).isInstanceOf(InvalidRequestException.class);
 #     }
 
-def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
+def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
@@ -199,7 +205,7 @@ def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
 #         assertEquals(1, result.size());
 #     }
 
-def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
+def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>, c int)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function' : 'euclidean'}}")
@@ -210,11 +216,11 @@ def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)")
 
         assert_invalid_message(
-            cql, table, TOPK_AGGREGATION_ERROR,
+            cql, table, SCYLLA_TOPK_AGGREGATION_ERROR if is_scylla(cql) else CASSANDRA_TOPK_AGGREGATION_ERROR,
             "SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"
         )
 
-def test_multiple_vector_columns_in_query_fail_correctly(cql, test_keyspace):
+def test_multiple_vector_columns_in_query_fail_correctly(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v1 vector<float, 1>, v2 vector<float, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v1) USING '{custom_index}' WITH OPTIONS = {{'similarity_function' : 'euclidean'}}")
@@ -293,7 +299,7 @@ def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_ke
             "SELECT * FROM %s WHERE token(pk1, pk2) = token(1, 1) AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace):
+def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(k int, c int, v vector<float, 1>, PRIMARY KEY(k, c))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function' : 'euclidean'}}")
@@ -307,7 +313,7 @@ def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace):
             "SELECT * FROM %s ORDER BY v ANN OF [2] PER PARTITION LIMIT 1 LIMIT 3"
         )
 
-def test_cannot_create_index_on_non_float_vector(cql, test_keyspace):
+def test_cannot_create_index_on_non_float_vector(cql, test_keyspace, skip_on_scylla_vnodes):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<int, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         assert_invalid_message(

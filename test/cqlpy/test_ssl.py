@@ -18,6 +18,7 @@ import time
 
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
+from .util import clients_table
 
 
 # This function normalizes the SSL cipher suite name (a string),
@@ -70,7 +71,7 @@ def test_tls_versions(cql):
 # a regression test for #9216
 def test_system_clients_stores_tls_info(cql):
     if not cql.cluster.ssl_context:
-        table_result = cql.execute(f"SELECT * FROM system.clients")
+        table_result = cql.execute(f"SELECT * FROM {clients_table(cql)}")
         for row in table_result:
             assert not row.ssl_enabled
             assert row.ssl_protocol is None
@@ -87,7 +88,7 @@ def test_system_clients_stores_tls_info(cql):
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             deadline = time.time() + 10  # 10 seconds timeout
             while time.time() < deadline:
-                rows = session.execute(f"SELECT * FROM system.clients")
+                rows = session.execute(f"SELECT * FROM {clients_table(cql)}")
                 if rows and all(
                     row.ssl_enabled
                     and row.ssl_protocol == 'TLS1.2'

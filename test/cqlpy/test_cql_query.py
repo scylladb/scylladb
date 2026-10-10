@@ -22,7 +22,7 @@ from cassandra import ConsistencyLevel, InvalidRequest, ReadFailure, Unauthorize
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
-from cassandra.protocol import ConfigurationException, RESULT_KIND_SCHEMA_CHANGE, ResultMessage, ServerError, SyntaxException
+from cassandra.protocol import ConfigurationException, RESULT_KIND_SCHEMA_CHANGE, ResultMessage, SyntaxException
 from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
@@ -592,7 +592,7 @@ def test_drop_table_with_si_and_mv(cql, this_dc):
         cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
         cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
         cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
-        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT a, c FROM {tbl} WHERE c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, a)")
         # dropping a table with materialized views is prohibited
         with pytest.raises(InvalidRequest):
             cql.execute(f"DROP TABLE {tbl}")
@@ -603,7 +603,7 @@ def test_drop_table_with_si_and_mv(cql, this_dc):
         cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
         cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
         cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
-        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT a, c FROM {tbl} WHERE c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, a)")
         # dropping whole keyspace with MV and SI is fine too
         cql.execute(f"DROP KEYSPACE {ks}")
     finally:
@@ -625,6 +625,10 @@ def raw_utf8_serialization(monkeypatch):
 # first byte of a UTF-8 sequence - wrapped so it can be bound using the
 # raw_utf8_serialization fixture.
 bad_utf8_string = b'\xad'.decode('utf-8', errors='surrogateescape')
+# The error message on invalid UTF-8: Scylla prints "Validation failed -
+# non-UTF8 character in a UTF8 string", Cassandra prints "String didn't
+# validate.". See also test_validation.py.
+bad_utf8_error = re.compile('validat', re.IGNORECASE)
 
 def test_list_elements_validation(cql, test_keyspace, raw_utf8_serialization):
     with new_test_table(cql, test_keyspace, "a int, b list<date>, PRIMARY KEY (a)") as tbl:
@@ -633,7 +637,7 @@ def test_list_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
     with new_test_table(cql, test_keyspace, "a int, b list<text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, [bad_utf8_string]])
         cql.execute(stmt, [1, ["proper utf8 string"]])
 
@@ -645,7 +649,7 @@ def test_set_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, {{'2015-05-03'}})")
     with new_test_table(cql, test_keyspace, "a int, b set<text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, {bad_utf8_string}])
         cql.execute(stmt, [1, {"proper utf8 string"}])
 
@@ -653,8 +657,8 @@ def test_set_elements_validation(cql, test_keyspace, raw_utf8_serialization):
 def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
     with new_test_table(cql, test_keyspace, "a int, b map<date, date>, PRIMARY KEY (a)") as tbl:
         def test_inline(value, should_throw):
-            cql1 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'10-10-2010' : '{value}'}})"
-            cql2 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'{value}' : '10-10-2010'}})"
+            cql1 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'2010-10-10' : '{value}'}})"
+            cql2 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'{value}' : '2010-10-10'}})"
             if should_throw:
                 with pytest.raises(InvalidRequest):
                     cql.execute(cql1)
@@ -670,7 +674,7 @@ def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         def test_bind(value, should_throw):
             for m in [{value: "foo"}, {"foo": value}]:
                 if should_throw:
-                    with pytest.raises(InvalidRequest, match='UTF8'):
+                    with pytest.raises(InvalidRequest, match=bad_utf8_error):
                         cql.execute(stmt, [1, m])
                 else:
                     cql.execute(stmt, [1, m])
@@ -685,12 +689,16 @@ def test_in_clause_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"SELECT r1 FROM {tbl} WHERE (c1,r1) IN ((1, '2015-05-03')) ALLOW FILTERING")
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1, r1)") as tbl2:
         stmt = cql.prepare(f"SELECT r1 FROM {tbl2} WHERE (c1,r1) IN ? ALLOW FILTERING")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [[(2, bad_utf8_string)]])
         cql.execute(stmt, [[(2, "proper utf8 string")]])
 
 
-def test_in_clause_cartesian_product_limits(cql, test_keyspace):
+# This test is Scylla-only because it checks Scylla's default limits on the
+# size of the cartesian product of IN restrictions. Cassandra has a similar
+# guardrail (in_select_cartesian_product_fail_threshold), but it is disabled
+# by default.
+def test_in_clause_cartesian_product_limits(cql, test_keyspace, scylla_only):
     # These limits are the defaults of max_partition_key_restrictions_per_query
     # and max_clustering_key_restrictions_per_query (100). Scylla reports
     # exceeding them as a generic server error (the C++ test just expects
@@ -736,7 +744,7 @@ def test_tuple_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, (1, '2015-05-03'))")
     with new_test_table(cql, test_keyspace, "a int, b tuple<int, text>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, (2, bad_utf8_string)])
         cql.execute(stmt, [1, (2, "proper utf8 string")])
 
@@ -748,18 +756,24 @@ def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
     with new_test_table(cql, test_keyspace, "a int, b vector<text, 1>, PRIMARY KEY (a)") as tbl2:
         stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
-        with pytest.raises(InvalidRequest, match='UTF8'):
+        with pytest.raises(InvalidRequest, match=bad_utf8_error):
             cql.execute(stmt, [1, [bad_utf8_string]])
         cql.execute(stmt, [1, ["proper utf8 string"]])
 
 
 # Reproduces #4209
-def test_list_of_tuples_with_bound_var(cql, test_keyspace):
+# Bind variables inside a collection literal (e.g., [(?,9999)]) are a Scylla
+# extension - Cassandra rejects them with "bind variables are not supported
+# inside collection literals".
+def test_list_of_tuples_with_bound_var(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>") as cf:
         cql.prepare(f"update {cf} SET c1 = c1 + [(?,9999)] where pk = 999")
 
 
-def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch):
+# Bind variables inside a collection literal (e.g., [997, ?]) are a Scylla
+# extension - Cassandra rejects them with "bind variables are not supported
+# inside collection literals".
+def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<int>") as list_t, \
          new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 set<int>") as set_t, \
          new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 map<int, int>") as map_t:
@@ -1005,14 +1019,22 @@ def test_range_deletion_scenarios(cql, test_keyspace):
         assert list(cql.execute(f"select * from {cf}")) == [(1, 1, '1')]
 
 
+# Cassandra supports range deletions on COMPACT STORAGE tables, but Scylla
+# doesn't, and rejects them (see also testBatchRangeDelete in
+# cassandra_tests/validation/operations/compact_storage_test.py).
+@pytest.mark.xfail(reason="issue #12471")
 def test_range_deletion_scenarios_with_compact_storage(cql, test_keyspace, compact_storage):
     with new_test_table(cql, test_keyspace, "p int, c int, v text, primary key (p, c)", "with compact storage") as table:
-        for i in range(10):
-            cql.execute(f"insert into {table} (p, c, v) values (1, {i}, 'abc')")
-        # Range deletions are not allowed on compact storage tables
-        for where in ["c <= 3", "c >= 0", "c > 0 and c <= 3", "c >= 0 and c < 3", "c > 0 and c < 3", "c >= 0 and c <= 3"]:
-            with pytest.raises(InvalidRequest):
-                cql.execute(f"delete from {table} where p = 1 and {where}")
+        for where, remaining in [("c <= 3", range(4, 10)),
+                                 ("c >= 2", range(0, 2)),
+                                 ("c > 0 and c <= 3", [0, 4, 5, 6, 7, 8, 9]),
+                                 ("c >= 0 and c < 3", range(3, 10)),
+                                 ("c > 0 and c < 3", [0, 3, 4, 5, 6, 7, 8, 9]),
+                                 ("c >= 1 and c <= 3", [0, 4, 5, 6, 7, 8, 9])]:
+            for i in range(10):
+                cql.execute(f"insert into {table} (p, c, v) values (1, {i}, 'abc')")
+            cql.execute(f"delete from {table} where p = 1 and {where}")
+            assert [r.c for r in cql.execute(f"select c from {table} where p = 1")] == list(remaining)
 
 
 def test_map_insert_update(cql, test_keyspace):
@@ -1112,7 +1134,16 @@ def test_writetime_and_ttl(cql, test_keyspace):
         ts1 = the_timestamp + 1
         cql.execute(f"UPDATE {table} USING TIMESTAMP {ts1} SET fc = {{1}}, c = {{2}} WHERE p1 = 'key1'")
         assert list(cql.execute(f"SELECT writetime(fc) FROM {table}")) == [(ts1,)]
-        # writetime() of a non-frozen collection is not allowed
+
+
+# writetime() of a non-frozen collection is not allowed. Cassandra allows it,
+# but returns an array of timestamps where you can't tell which belongs to
+# which element, which we consider a Cassandra bug - see CASSANDRA-21240 and
+# test_writetime_ttl_whole_collection_forbidden in
+# test_select_collection_element.py.
+def test_writetime_non_frozen_collection(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, c set<int>") as table:
+        cql.execute(f"UPDATE {table} SET c = {{2}} WHERE p1 = 'key1'")
         with pytest.raises(InvalidRequest):
             cql.execute(f"SELECT writetime(c) FROM {table}")
 
@@ -1192,7 +1223,11 @@ def test_vectors_variable_length_elements(cql, test_keyspace):
 # Since durations don't have a well-defined ordering on their semantic value,
 # a number of restrictions exist on their use.
 def test_duration_restrictions(cql, test_keyspace):
-    def validate_request_failure(request, expected_message):
+    # Some of the error messages are different in Cassandra, so
+    # cassandra_message, if given, is the message expected on Cassandra.
+    def validate_request_failure(request, expected_message, cassandra_message=None):
+        if cassandra_message and not is_scylla(cql):
+            expected_message = cassandra_message
         with pytest.raises(InvalidRequest, match=re.escape(expected_message)):
             cql.execute(request)
 
@@ -1208,20 +1243,26 @@ def test_duration_restrictions(cql, test_keyspace):
     # key of a table or a materialized view.
     my_table = f"{test_keyspace}.{unique_name()}"
     validate_request_failure(f"create table {my_table} (direct_key duration PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part direct_key")
+        "duration type is not supported for PRIMARY KEY part direct_key",
+        "duration type is not supported for PRIMARY KEY column 'direct_key'")
     validate_request_failure(f"create table {my_table} (collection_key frozen<list<duration>> PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part collection_key")
+        "duration type is not supported for PRIMARY KEY part collection_key",
+        "duration type is not supported for PRIMARY KEY column 'collection_key'")
     with new_type(cql, test_keyspace, "(span duration)") as my_type0:
         validate_request_failure(f"create table {my_table} (udt_key frozen<{my_type0}> PRIMARY KEY)",
-            "duration type is not supported for PRIMARY KEY part udt_key")
+            "duration type is not supported for PRIMARY KEY part udt_key",
+            "duration type is not supported for PRIMARY KEY column 'udt_key'")
     validate_request_failure(f"create table {my_table} (tuple_key tuple<int, duration, int> PRIMARY KEY)",
-        "duration type is not supported for PRIMARY KEY part tuple_key")
+        "duration type is not supported for PRIMARY KEY part tuple_key",
+        "duration type is not supported for PRIMARY KEY column 'tuple_key'")
     validate_request_failure(f"create table {my_table} (a int, b duration, PRIMARY KEY ((a), b)) WITH CLUSTERING ORDER BY (b DESC)",
-        "duration type is not supported for PRIMARY KEY part b")
+        "duration type is not supported for PRIMARY KEY part b",
+        "duration type is not supported for PRIMARY KEY column 'b'")
     with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, name text, span duration") as my_table0:
         my_mv = f"{test_keyspace}.{unique_name()}"
         validate_request_failure(f"create materialized view {my_mv} as select * from {my_table0} primary key (key, span)",
-            "Cannot use Duration column 'span' in PRIMARY KEY of materialized view")
+            "Cannot use Duration column 'span' in PRIMARY KEY of materialized view",
+            "duration type is not supported for PRIMARY KEY column 'span'")
 
         # Disallow creating secondary indexes on durations.
         validate_request_failure(f"create index {unique_name()} on {my_table0} (span)",
@@ -1233,9 +1274,11 @@ def test_duration_restrictions(cql, test_keyspace):
         # columns (which cannot be `duration`) and that multi-column conditions
         # are not supported in the grammar.
         validate_request_failure(f"select * from {my_table0} where key = 0 and span < 3d",
-            "Duration type is unordered for span")
+            "Duration type is unordered for span",
+            "Slice restrictions are not supported on duration columns")
         validate_request_failure(f"update {my_table0} set name = 'joe' where key = 0 if span >= 5m",
-            "Duration type is unordered for span")
+            "Duration type is unordered for span",
+            "Slice conditions ( >= ) are not supported on durations")
 
 
 def test_select_multiple_ranges(cql, test_keyspace):
@@ -1254,18 +1297,26 @@ def test_validate_keyspace(cql):
         cql.execute(f"create keyspace {keyspace_name} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
     with pytest.raises(SyntaxException):
         cql.execute("create keyspace ks3-1 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
-    # A replication strategy class is not mandatory
-    with new_test_keyspace(cql, "with replication = { 'replication_factor' : 1 }") as ks3:
-        with pytest.raises(SyntaxException):
-            cql.execute(f"create keyspace {ks3} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"create keyspace {unique_name()} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
     with pytest.raises(InvalidRequest, match="not user-modifiable"):
         cql.execute("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
 
 
+# In Scylla, a replication strategy class is not mandatory - it defaults to
+# NetworkTopologyStrategy (see docs/cql/ddl.rst). Cassandra requires it
+# ("Missing replication strategy class"), so this test is Scylla-only.
+def test_keyspace_default_replication_class(cql, scylla_only):
+    with new_test_keyspace(cql, "with replication = { 'replication_factor' : 1 }") as ks:
+        assert cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'").one().replication['class'] == 'org.apache.cassandra.locator.NetworkTopologyStrategy'
+
+
 def test_validate_table(cql, test_keyspace):
-    # Table name too long (schema::NAME_LENGTH is 192)
-    table_name = 't' * 193
-    with pytest.raises(InvalidRequest):
+    # Table name too long. Scylla's limit is 192 characters (schema::NAME_LENGTH)
+    # but Cassandra's is 222 (see also test_name.py), and Cassandra reports
+    # this error as a ConfigurationException.
+    table_name = 't' * ((192 if is_scylla(cql) else 222) + 1)
+    with pytest.raises((InvalidRequest, ConfigurationException)):
         cql.execute(f"create table {test_keyspace}.{table_name} (foo text PRIMARY KEY, bar text)")
     tb = f"{test_keyspace}.{unique_name()}"
     with pytest.raises(InvalidRequest):
@@ -1289,7 +1340,11 @@ def get_sstable_compression(cql, table):
     return cql.execute(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compression
 
 
-def test_table_compression(cql, test_keyspace):
+# This test is Scylla-only: it uses the old "sstable_compression" option name,
+# which current Cassandra no longer supports (it switched to "class", which
+# Scylla doesn't support yet - #8948), checks how Scylla stores the options in
+# system_schema.tables, and reads Scylla's system.config.
+def test_table_compression(cql, test_keyspace, scylla_only):
     # Compression disabled: the compression options map doesn't have a
     # sstable_compression class.
     with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text", "with compression = { }") as tb1:
@@ -1658,7 +1713,15 @@ def test_compact_storage(cql, test_keyspace, compact_storage):
             (1, 3, None, 6),
         ]
     with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, c1 int, c2 int", "with compact storage") as table:
-        cql.execute(f"insert into {table} (p1) values (1)")
+        # In a compact storage table without clustering columns, a row with
+        # just a key and no values can't exist. Scylla silently ignores an
+        # insert of such a row, while Cassandra rejects it (with the odd
+        # message "Some clustering keys are missing: column1", mentioning
+        # Cassandra's hidden clustering column). Either way, nothing is written.
+        try:
+            cql.execute(f"insert into {table} (p1) values (1)")
+        except InvalidRequest:
+            pass
         assert list(cql.execute(f"select * from {table}")) == []
 
 
@@ -1720,23 +1783,34 @@ def test_alter_table(cql, test_keyspace):
         cql.execute(f"insert into {table} (pk1, c1, ck2, r1, r2) values (1, 2, 3, 4, 5)")
         cql.execute(f"alter table {table} with comment = 'This is a comment.'")
         assert cql.execute(f"SELECT comment FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().comment == 'This is a comment.'
-        cql.execute(f"alter table {table} alter r2 type blob")
-        assert list(cql.execute(f"select pk1, c1, ck2, r1, r2 from {table}")) == [(1, 2, 3, 4, struct.pack('>i', 5))]
-        cql.execute(f"insert into {table} (pk1, c1, ck2, r2) values (1, 2, 3, 0x1234567812345678)")
-        blob = bytes.fromhex('1234567812345678')
-        assert list(cql.execute(f"select pk1, c1, ck2, r1, r2 from {table}")) == [(1, 2, 3, 4, blob)]
         cql.execute(f"alter table {table} rename pk1 to p1 and ck2 to c2")
-        assert list(cql.execute(f"select p1, c1, c2, r1, r2 from {table}")) == [(1, 2, 3, 4, blob)]
+        assert list(cql.execute(f"select p1, c1, c2, r1, r2 from {table}")) == [(1, 2, 3, 4, 5)]
         cql.execute(f"alter table {table} add r1_2 int")
         cql.execute(f"insert into {table} (p1, c1, c2, r1_2) values (1, 2, 3, 6)")
-        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, 6, blob)]
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, 6, 5)]
         cql.execute(f"alter table {table} drop r1")
-        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 6, blob)]
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 6, 5)]
         cql.execute(f"alter table {table} add r1 int")
-        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, blob)]
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, 5)]
         cql.execute(f"alter table {table} drop r2")
         cql.execute(f"alter table {table} add r2 int")
         assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, None)]
+
+
+# Scylla supports changing the type of a column to a compatible type, with
+# ALTER TABLE ... ALTER ... TYPE (see docs/cql/ddl.rst). Cassandra removed
+# this feature (CASSANDRA-12443), so this test is Scylla-only.
+def test_alter_table_column_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk1 int, c1 int, ck2 int, r1 int, r2 int, PRIMARY KEY (pk1, c1, ck2)") as table:
+        cql.execute(f"insert into {table} (pk1, c1, ck2, r1, r2) values (1, 2, 3, 4, 5)")
+        cql.execute(f"alter table {table} alter r2 type blob")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, struct.pack('>i', 5))]
+        cql.execute(f"insert into {table} (pk1, c1, ck2, r2) values (1, 2, 3, 0x1234567812345678)")
+        blob = bytes.fromhex('1234567812345678')
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, blob)]
+        cql.execute(f"alter table {table} drop r2")
+        cql.execute(f"alter table {table} add r2 int")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, None)]
 
 
 def test_map_query(cql, test_keyspace):
@@ -1820,10 +1894,12 @@ def test_alter_table_validation(cql, test_keyspace):
         # Non-primary-key columns cannot be renamed
         with pytest.raises(InvalidRequest):
             cql.execute(f"alter table {table} rename r2 to r3")
-        # Column types cannot be altered
-        with pytest.raises(ConfigurationException):
+        # Column types cannot be altered to these incompatible types. Scylla
+        # reports a ConfigurationException, while Cassandra, which doesn't
+        # support altering column types at all, reports an InvalidRequest.
+        with pytest.raises((ConfigurationException, InvalidRequest)):
             cql.execute(f"alter table {table} alter r1 type bigint")
-        with pytest.raises(ConfigurationException):
+        with pytest.raises((ConfigurationException, InvalidRequest)):
             cql.execute(f"alter table {table} alter r2 type map<int, int>")
         cql.execute(f"alter table {table} add r3 map<int, int>")
         cql.execute(f"alter table {table} add r4 set<text>")
@@ -1833,7 +1909,18 @@ def test_alter_table_validation(cql, test_keyspace):
             cql.execute(f"alter table {table} add r3 map<int, text>")
         with pytest.raises(InvalidRequest):
             cql.execute(f"alter table {table} add r4 set<int>")
-        # blob is compatible with any type, so re-adding as blob is allowed
+
+
+# In Scylla, blob is compatible with any type, so a dropped column may be
+# re-added with blob in place of its original type. Cassandra is stricter -
+# it only allows re-adding a dropped column with a serialization-compatible
+# type ("Cannot add a column 'r3' of type map<int, blob>, incompatible with
+# previously dropped column 'r3' of type map<int, int>") - so this test is
+# Scylla-only.
+def test_alter_table_readd_dropped_column_as_blob(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r3 map<int, int>, r4 set<text>, PRIMARY KEY (p1, c1, c2)") as table:
+        cql.execute(f"alter table {table} drop r3")
+        cql.execute(f"alter table {table} drop r4")
         cql.execute(f"alter table {table} add r3 map<int, blob>")
         cql.execute(f"alter table {table} add r4 set<blob>")
 
@@ -2112,6 +2199,9 @@ def test_describe_varchar(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, t text, v varchar") as table:
         ks, tbl = table.split('.')
         rows = list(cql.execute(f"select * from system_schema.columns where keyspace_name = '{ks}' and table_name = '{tbl}'"))
+        # Scylla writes clustering_order in uppercase ("NONE"), Cassandra in
+        # lowercase ("none"). Drivers accept both, so ignore the case.
+        rows = [r._replace(clustering_order=r.clustering_order.upper()) for r in rows]
         assert rows == [
             (ks, tbl, 'id', 'NONE', b'id', 'partition_key', 0, 'int'),
             (ks, tbl, 't', 'NONE', b't', 'regular', -1, 'text'),
@@ -2176,7 +2266,11 @@ def test_rf_expand(cql, this_dc):
         assert_replication_contains(ks, {"class": network_topology, this_dc: "2"})
 
 
-def test_int_sum_overflow(cql, test_keyspace):
+# Scylla reports an error when sum() overflows its result type. Cassandra
+# silently wraps around and returns a wrong sum - a known Cassandra issue
+# which was closed as "Won't Fix" (CASSANDRA-9674). So the following two
+# tests are marked cassandra_bug.
+def test_int_sum_overflow(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "pk text, ck text, val int, primary key(pk, ck)") as table:
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c1', 2147483647)")
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c2', 1)")
@@ -2195,7 +2289,7 @@ def test_int_sum_overflow(cql, test_keyspace):
         assert list(cql.execute(sum_query)) == [(2147483646,)]
 
 
-def test_bigint_sum_overflow(cql, test_keyspace):
+def test_bigint_sum_overflow(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, "pk text, ck text, val bigint, primary key(pk, ck)") as table:
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c1', 9223372036854775807)")
         cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c2', 1)")
@@ -2509,25 +2603,18 @@ def cql_func_require_nofail(cql, table, fct, inp):
 
 
 def cql_func_require_throw(cql, table, exception, fct, inp):
-    query = f"SELECT {fct}({inp}) FROM {table}"
-    if exception is ServerError:
-        # The driver retries a query failing with a server error on the
-        # other hosts, and eventually raises NoHostAvailable wrapping the
-        # server errors.
-        with pytest.raises(NoHostAvailable) as excinfo:
-            cql.execute(query)
-        errors = excinfo.value.errors.values()
-        assert errors and all(isinstance(e, ServerError) for e in errors)
-    else:
-        with pytest.raises(exception):
-            cql.execute(query)
+    with pytest.raises(exception):
+        cql.execute(f"SELECT {fct}({inp}) FROM {table}")
 
 
+# Note that the bigint column "l" holds a number of milliseconds since the
+# epoch - the same time as "t". Functions taking a timestamp also accept a
+# bigint, interpreted this way.
 @pytest.fixture(scope="module")
 def time_uuid_fcts_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int primary key, t timestamp, l bigint, f float, u timeuuid, d date") as table:
         cql.execute(f"INSERT INTO {table} (id, t, l, f, u, d) VALUES "
-                    "(1, 1579072460606, 1579072460606000, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')")
+                    "(1, 1579072460606, 1579072460606, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')")
         cql.execute(f"SELECT * FROM {table}")
         yield table
 
@@ -2553,7 +2640,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp arg
     def require_timestamp(fct):
         nofail(fct, "t")
-        throw(ServerError, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         throw(InvalidRequest, fct, "u")
         throw(InvalidRequest, fct, "d")
@@ -2566,23 +2653,6 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
 
     require_timestamp("mintimeuuid")
     require_timestamp("maxtimeuuid")
-
-    # test timeuuid arg
-    def require_timeuuid(fct):
-        throw(InvalidRequest, fct, "t")
-        throw(InvalidRequest, fct, "l")
-        throw(InvalidRequest, fct, "f")
-        nofail(fct, "u")
-        throw(InvalidRequest, fct, "d")
-
-        throw(InvalidRequest, fct, "currenttime()")
-        throw(InvalidRequest, fct, "currentdate()")
-        nofail(fct, "now()")
-        nofail(fct, "currenttimeuuid()")
-        throw(InvalidRequest, fct, "currenttimestamp()")
-
-    require_timeuuid("dateof")
-    require_timeuuid("unixtimestampof")
 
     # test timeuuid or date arg
     def require_timeuuid_or_date(fct):
@@ -2603,7 +2673,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp or timeuuid arg
     def require_timestamp_or_timeuuid(fct):
         nofail(fct, "t")
-        throw(Exception, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         nofail(fct, "u")
         throw(InvalidRequest, fct, "d")
@@ -2619,7 +2689,7 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
     # test timestamp, timeuuid, or date arg
     def require_timestamp_timeuuid_or_date(fct):
         nofail(fct, "t")
-        throw(ServerError, fct, "l")
+        nofail(fct, "l")
         throw(InvalidRequest, fct, "f")
         nofail(fct, "u")
         nofail(fct, "d")
@@ -2646,14 +2716,75 @@ def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
     def require_timestamp(fct):
         throw(InvalidRequest, fct, "mintimeuuid(t)")
         throw(InvalidRequest, fct, "maxtimeuuid(t)")
-        nofail(fct, "dateof(u)")
-        nofail(fct, "unixtimestampof(u)")
         nofail(fct, "totimestamp(u)")
         throw(InvalidRequest, fct, "todate(u)")
         nofail(fct, "tounixtimestamp(u)")
 
     require_timestamp("mintimeuuid")
     require_timestamp("maxtimeuuid")
+
+    # test timeuuid or date arg
+    def require_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        throw(InvalidRequest, fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        throw(InvalidRequest, fct, "tounixtimestamp(u)")
+
+    require_timeuuid_or_date("totimestamp")
+
+    # test timestamp or timeuuid arg ("todate"): the C++ test had no checks here.
+
+    # test timestamp, timeuuid, or date arg
+    def require_timestamp_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        nofail(fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        nofail(fct, "tounixtimestamp(u)")
+
+    require_timestamp_timeuuid_or_date("tounixtimestamp")
+
+
+# Cassandra 5 removed the deprecated functions dateof() and unixtimestampof()
+# (CASSANDRA-18328), replaced by totimestamp() and tounixtimestamp(). Scylla
+# still supports them, so the following two tests check them, like the above
+# two tests check the other functions, only on Scylla.
+def test_deprecated_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table, scylla_only):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
+
+    # test timeuuid arg
+    def require_timeuuid(fct):
+        throw(InvalidRequest, fct, "t")
+        throw(InvalidRequest, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        throw(InvalidRequest, fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        throw(InvalidRequest, fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        throw(InvalidRequest, fct, "currenttimestamp()")
+
+    require_timeuuid("dateof")
+    require_timeuuid("unixtimestampof")
+
+
+def test_deprecated_time_uuid_fcts_result(cql, time_uuid_fcts_table, scylla_only):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
 
     # test timeuuid arg
     def require_timeuuid(fct):
@@ -2668,31 +2799,13 @@ def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
     require_timeuuid("dateof")
     require_timeuuid("unixtimestampof")
 
-    # test timeuuid or date arg
-    def require_timeuuid_or_date(fct):
-        nofail(fct, "mintimeuuid(t)")
-        nofail(fct, "maxtimeuuid(t)")
-        throw(InvalidRequest, fct, "dateof(u)")
-        throw(InvalidRequest, fct, "unixtimestampof(u)")
-        throw(InvalidRequest, fct, "totimestamp(u)")
-        nofail(fct, "todate(u)")
-        throw(InvalidRequest, fct, "tounixtimestamp(u)")
-
-    require_timeuuid_or_date("totimestamp")
-
-    # test timestamp or timeuuid arg ("todate"): the C++ test had no checks here.
-
-    # test timestamp, timeuuid, or date arg
-    def require_timestamp_timeuuid_or_date(fct):
-        nofail(fct, "mintimeuuid(t)")
-        nofail(fct, "maxtimeuuid(t)")
+    # results of dateof() and unixtimestampof() as arguments of the other
+    # functions
+    for fct in ["mintimeuuid", "maxtimeuuid", "tounixtimestamp"]:
         nofail(fct, "dateof(u)")
         nofail(fct, "unixtimestampof(u)")
-        nofail(fct, "totimestamp(u)")
-        nofail(fct, "todate(u)")
-        nofail(fct, "tounixtimestamp(u)")
-
-    require_timestamp_timeuuid_or_date("tounixtimestamp")
+    throw(InvalidRequest, "totimestamp", "dateof(u)")
+    throw(InvalidRequest, "totimestamp", "unixtimestampof(u)")
 
 
 # Executes a prepared statement with SERIAL serial consistency (and the given
@@ -2710,9 +2823,11 @@ def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
     def test_for_single_type(typ, update_value):
         with new_test_table(cql, test_keyspace, f"k int PRIMARY KEY, test {typ}") as table:
             cql.execute(f"INSERT INTO {table} (k, test) VALUES (0, null)")
-            # a list containing a single null value
+            # a list containing a single null value. When the condition is
+            # true, Cassandra returns just the [applied] column, while
+            # Scylla also returns the old value (docs/kb/lwt-differences.rst).
             execute_prepared_serial(cql, f"UPDATE {table} SET test={update_value} WHERE k=0 IF test IN ?",
-                                    [[None]], [(True, None)])
+                                    [[None]], [(True, None) if is_scylla(cql) else (True,)])
 
     test_for_single_type("double", "1.0")
     test_for_single_type("float", "1.0")
@@ -2720,7 +2835,10 @@ def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
     test_for_single_type("timeuuid", "00000000-0000-1000-0000-000000000000")
 
 
-def test_like_parameter_marker(cql, test_keyspace):
+# Scylla allows the LIKE operator in LWT conditions (IF). Cassandra doesn't -
+# its grammar doesn't allow LIKE in IF conditions, so this test fails on
+# Cassandra with a syntax error.
+def test_like_parameter_marker(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, col text") as table:
         cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (1, 'aaa')")
         cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (2, 'bbb')")
@@ -2741,23 +2859,41 @@ def test_list_parameter_marker(cql, test_keyspace):
 
         query = f"UPDATE {table} SET v=:upd_v WHERE k=1 IF v[:i] in :v"
         execute_prepared_serial(cql, query, [[100, 200, 300], 1, [21, 22, 23]], [(False, [10, 20, 30])])
-        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]], [(True, [10, 20, 30])])
+        # When the condition is true, Cassandra returns just the [applied]
+        # column, while Scylla also returns the old value
+        # (docs/kb/lwt-differences.rst).
+        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]],
+                                [(True, [10, 20, 30]) if is_scylla(cql) else (True,)])
 
 
-def test_select_serial_consistency(cql, test_keyspace):
+@pytest.fixture(scope="module")
+def serial_consistency_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, primary key (a,b)") as table:
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 1)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 2)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 1)")
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 2)")
+        yield table
 
-        def check_fails(query):
-            with pytest.raises(InvalidRequest):
-                execute_prepared_serial(cql, query, [], [], ConsistencyLevel.SERIAL)
-        check_fails(f"select * from {table} allow filtering")
-        check_fails(f"select * from {table} where  b > 0 allow filtering")
-        check_fails(f"select * from {table} where  a in (1, 3)")
-        execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
+
+def test_select_serial_consistency(cql, serial_consistency_table):
+    table = serial_consistency_table
+    execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
+
+
+# Cassandra (checked with Cassandra 5) allows SERIAL reads of multiple
+# partitions - scans and multi-partition IN queries. Scylla only allows SERIAL
+# reads of a single partition, and rejects these reads with "SERIAL/LOCAL_SERIAL
+# consistency may only be requested for one partition at a time".
+@pytest.mark.xfail(reason="Scylla doesn't support SERIAL reads of multiple partitions")
+def test_select_serial_consistency_multi_partition(cql, serial_consistency_table):
+    table = serial_consistency_table
+    execute_prepared_serial(cql, f"select * from {table} allow filtering", [],
+                            [(1, 1), (1, 2), (2, 1), (2, 2)], ConsistencyLevel.SERIAL)
+    execute_prepared_serial(cql, f"select * from {table} where  b > 1 allow filtering", [],
+                            [(1, 2), (2, 2)], ConsistencyLevel.SERIAL)
+    execute_prepared_serial(cql, f"select * from {table} where  a in (1, 3)", [],
+                            [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
 
 
 def test_range_deletions_for_specific_column(cql, test_keyspace):
@@ -2832,6 +2968,12 @@ def test_query_limit(cql, test_keyspace, scylla_only):
                         assert list(cql.execute(select)) == expected_rows
 
 
+# BYPASS CACHE is a Scylla extension. Cassandra doesn't have a row cache
+# (unless enabled per table), so its reads go to the sstables anyway.
+def bypass_cache(cql):
+    return " BYPASS CACHE" if is_scylla(cql) else ""
+
+
 # Reproduces https://github.com/scylladb/scylla/issues/3552
 # when clustering-key filtering is enabled in filter_sstable_for_reader.
 # The C++ test flushed the memtables and cleared the row cache before reading;
@@ -2843,8 +2985,8 @@ def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
                         f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
         flush(cql, table)
-        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+        assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',)]
 
 
 @pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
@@ -2854,8 +2996,8 @@ def test_clustering_filtering_2(cql, test_keyspace, compaction_strategy):
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
         cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('b', 2, 'b2')")
         flush(cql, table)
-        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b2',)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+        assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',), ('b2',)]
 
 
 @pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
@@ -2867,8 +3009,8 @@ def test_clustering_filtering_3(cql, test_keyspace, compaction_strategy):
             flush(cql, table)
             cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('b', 0, 'b0')")
             flush(cql, table)
-            assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
-            assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b0',)]
+            assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING{bypass_cache(cql)}")) == []
+            assert list(cql.execute(f"SELECT v FROM {table}{bypass_cache(cql)}")) == [('a1',), ('b0',)]
 
 
 def test_counter_column_added_into_non_counter_table(cql, test_keyspace):
@@ -3258,7 +3400,6 @@ def execute_with_raw_values(cql, stmt, raw_values):
 def test_null_and_unset_in_collections(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int primary key, l list<int>, s set<int>, m map<int, int>") as table:
         null_msg = "(null|NULL)"
-        unset_msg = "unset"
 
         # Test null when specified inside a collection literal
         # It's impossible to specify unset value this way
@@ -3270,42 +3411,6 @@ def test_null_and_unset_in_collections(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, null:3, 4:5}})")
         with pytest.raises(InvalidRequest, match=null_msg):
             cql.execute(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, 2:null, 4:5}})")
-
-        # Test null and unset when sent as bind marker for collection value
-        insert_list_with_marker = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, [1, ?, 3])")
-        insert_set_with_marker = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, {{1, ?, 3}})")
-        insert_map_with_key_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, ?:3, 4:5}})")
-        insert_map_with_value_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, 2:?, 4:5}})")
-
-        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
-            with pytest.raises(InvalidRequest, match=null_msg):
-                cql.execute(stmt, [None])
-        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
-            with pytest.raises(InvalidRequest, match=unset_msg):
-                cql.execute(stmt, [UNSET_VALUE])
-
-        # Test sending whole collections with null and unset inside as bound value
-        insert_list = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, ?)")
-        insert_set = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, ?)")
-        insert_map = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, ?)")
-
-        list_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
-        set_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
-        map_with_null_key = make_collection_raw_value(3, [make_int(0), make_int(1),
-                                                          None, make_int(3),
-                                                          make_int(4), make_int(5)])
-        map_with_null_value = make_collection_raw_value(3, [make_int(0), make_int(1),
-                                                            make_int(2), None,
-                                                            make_int(4), make_int(5)])
-
-        with pytest.raises(InvalidRequest, match=null_msg):
-            execute_with_raw_values(cql, insert_list, [list_with_null])
-        with pytest.raises(InvalidRequest, match=null_msg):
-            execute_with_raw_values(cql, insert_set, [set_with_null])
-        with pytest.raises(InvalidRequest, match=null_msg):
-            execute_with_raw_values(cql, insert_map, [map_with_null_key])
-        with pytest.raises(InvalidRequest, match=null_msg):
-            execute_with_raw_values(cql, insert_map, [map_with_null_value])
 
         # Update setting to bad collection value
         with pytest.raises(InvalidRequest, match=null_msg):
@@ -3337,6 +3442,29 @@ def test_null_and_unset_in_collections(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match=null_msg):
             cql.execute(f"UPDATE {table} SET m = m + {{0:1, 2:null, 4:5}} WHERE p = 0")
 
+
+
+# Bind markers inside a collection literal (e.g., [1, ?, 3]) are a Scylla
+# extension - Cassandra rejects them with "bind variables are not supported
+# inside collection literals".
+def test_null_and_unset_in_collection_literal_bind_markers(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key, l list<int>, s set<int>, m map<int, int>") as table:
+        null_msg = "(null|NULL)"
+        unset_msg = "unset"
+
+        # Test null and unset when sent as bind marker for collection value
+        insert_list_with_marker = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, [1, ?, 3])")
+        insert_set_with_marker = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, {{1, ?, 3}})")
+        insert_map_with_key_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, ?:3, 4:5}})")
+        insert_map_with_value_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, 2:?, 4:5}})")
+
+        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=null_msg):
+                cql.execute(stmt, [None])
+        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=unset_msg):
+                cql.execute(stmt, [UNSET_VALUE])
+
         # Update adding a collection value with bad bind marker
         add_list_with_marker = cql.prepare(f"UPDATE {table} SET l = l + [1, ?, 2] WHERE p = 0")
         add_set_with_marker = cql.prepare(f"UPDATE {table} SET s = s + {{1, ?, 2}} WHERE p = 0")
@@ -3349,6 +3477,37 @@ def test_null_and_unset_in_collections(cql, test_keyspace):
         for stmt in [add_list_with_marker, add_set_with_marker, add_map_with_key_marker, add_map_with_value_marker]:
             with pytest.raises(InvalidRequest, match=unset_msg):
                 cql.execute(stmt, [UNSET_VALUE])
+
+
+# Cassandra fails a request which binds a whole collection containing a null
+# element with a server error (a NullPointerException), instead of rejecting
+# it with an InvalidRequest as Scylla does - so this is a Cassandra bug.
+def test_null_in_bound_collection(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "p int primary key, l list<int>, s set<int>, m map<int, int>") as table:
+        null_msg = "(null|NULL)"
+
+        # Test sending whole collections with null and unset inside as bound value
+        insert_list = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, ?)")
+        insert_set = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, ?)")
+        insert_map = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, ?)")
+
+        list_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
+        set_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
+        map_with_null_key = make_collection_raw_value(3, [make_int(0), make_int(1),
+                                                          None, make_int(3),
+                                                          make_int(4), make_int(5)])
+        map_with_null_value = make_collection_raw_value(3, [make_int(0), make_int(1),
+                                                            make_int(2), None,
+                                                            make_int(4), make_int(5)])
+
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_list, [list_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_set, [set_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_map, [map_with_null_key])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_map, [map_with_null_value])
 
         # Update adding a collection value with bad bind marker
         add_list = cql.prepare(f"UPDATE {table} SET l = l + ? WHERE p = 0")
@@ -3364,14 +3523,20 @@ def test_null_and_unset_in_collections(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match=null_msg):
             execute_with_raw_values(cql, add_map, [map_with_null_value])
 
-        # List of IN values can contain NULL (which doesn't match anything)
+
+# A list of IN values can contain NULL, which doesn't match anything. This is
+# Scylla's behavior (see also test_null.py::test_primary_key_in_null) - Cassandra
+# rejects it with "Invalid null value in condition".
+def test_null_and_unset_in_in_list(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key") as table:
         assert list(cql.execute(f"SELECT * FROM {table} WHERE p IN (1, null, 2)")) == []
 
         where_in_list_with_marker = cql.prepare(f"SELECT * FROM {table} WHERE p IN (1, ?, 2)")
         assert list(cql.execute(where_in_list_with_marker, [None])) == []
-        with pytest.raises(InvalidRequest, match=unset_msg):
+        with pytest.raises(InvalidRequest, match="unset"):
             cql.execute(where_in_list_with_marker, [UNSET_VALUE])
 
+        list_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
         where_in_list_marker = cql.prepare(f"SELECT * FROM {table} WHERE p IN ?")
         assert list(execute_with_raw_values(cql, where_in_list_marker, [list_with_null])) == []
 

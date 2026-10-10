@@ -725,7 +725,7 @@ def test_mutation_fragments_scan_includes_dead_partitions(cql, test_keyspace, sc
         assert len(res) == 2 # partition start and end fragments
 
 
-def test_virtual_table(cql):
+def test_virtual_table(cql, scylla_only):
     clients = list(cql.execute('SELECT * FROM MUTATION_FRAGMENTS(system.clients)'))
 
     # There should be at least one client -- 'cql'

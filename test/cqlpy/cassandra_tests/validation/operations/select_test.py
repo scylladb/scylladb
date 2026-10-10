@@ -673,7 +673,9 @@ def testFunctionsWithClusteringDesc(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, t timeuuid, PRIMARY KEY (k, t) ) WITH CLUSTERING ORDER BY (t DESC)") as table:
         for i in range(5):
             execute(cql, table, "INSERT INTO %s (k, t) VALUES (?, now())", i)
-        execute(cql, table, "SELECT dateOf(t) FROM %s")
+        # Cassandra 5 removed the deprecated dateOf() (CASSANDRA-18328), and
+        # changed this test to use toTimestamp() instead, so we do too.
+        execute(cql, table, "SELECT toTimestamp(t) FROM %s")
 
 # Migrated from cql_tests.py:TestCQL.select_with_alias_test()
 def testSelectWithAlias(cql, test_keyspace):

@@ -1106,10 +1106,7 @@ def test_storage_proxy_coordinator_metrics(test_table_s, metrics):
 # incremented at the coordinator level. Because they are per-table (filtered
 # by cf=<table_name>), they allow exact-count assertions without interference
 # from concurrent operations on other tables.
-#
-# Note: unlike the coordinator metric, scylla_column_family_read_latency_count
-# IS incremented by Scan, because Scan goes through table::query() on the
-# replica regardless of being a range read at the coordinator level.
+# Scan is checked separately, in test_cf_read_latency_metrics_scan below.
 def test_cf_read_write_latency_metrics(test_table_s, metrics):
     read_count = 'scylla_column_family_read_latency_count'
     write_count = 'scylla_column_family_write_latency_count'
@@ -1124,12 +1121,6 @@ def test_cf_read_write_latency_metrics(test_table_s, metrics):
         test_table_s.query(KeyConditions={
             'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
             ConsistentRead=True)
-    # Unlike scylla_storage_proxy_coordinator_read_latency_count, Scan also
-    # increments scylla_column_family_read_latency_count (via table::query()).
-    # A Scan may be split across multiple shards and generate multiple reads,
-    # so we only check it increases (not by how much), but do filter by cf.
-    with check_increases_metric(metrics, [read_count], cf):
-        test_table_s.scan(ConsistentRead=True, Limit=1)
     with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
         test_table_s.put_item(Item={'p': p})
     with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
@@ -1139,6 +1130,22 @@ def test_cf_read_write_latency_metrics(test_table_s, metrics):
     with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
         with test_table_s.batch_writer() as batch:
             batch.put_item(Item={'p': p})
+
+# Unlike the coordinator metric scylla_storage_proxy_coordinator_read_latency_count,
+# the per-table scylla_column_family_read_latency_count should also be
+# incremented by Scan. A Scan may be split across multiple shards and generate
+# multiple reads, so we only check it increases (not by how much), but do
+# filter by cf.
+# This currently fails for a table using vnodes instead of tablets: its range
+# scans are read on the replica without table::query(), which is where this
+# metric is incremented (SCYLLADB-5105).
+def test_cf_read_latency_metrics_scan(test_table_s, metrics, has_tablets, request):
+    if not has_tablets:
+        request.node.add_marker(pytest.mark.xfail(reason='SCYLLADB-5105: per-table read metrics do not count range scans with vnodes'))
+    read_count = 'scylla_column_family_read_latency_count'
+    cf = {'cf': test_table_s.name}
+    with check_increases_metric(metrics, [read_count], cf):
+        test_table_s.scan(ConsistentRead=True, Limit=1)
 
 # Test that the reads_before_write and write_using_lwt metrics are incremented
 # for Alternator conditional-write operations.

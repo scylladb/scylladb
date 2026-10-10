@@ -159,11 +159,14 @@ def test_limit_must_be_positive(cql, table1):
         cql.execute(stmt, [-1])
 
 # Check that PER PARTITION LIMIT must be strictly positive.
+# Scylla's error message is "PER PARTITION LIMIT must be strictly positive",
+# but Cassandra uses the same message as for LIMIT, "LIMIT must be strictly
+# positive", so we only check for the latter.
 def test_per_partition_limit_must_be_positive(cql, table1):
     stmt = cql.prepare(f'SELECT c from {table1} PER PARTITION LIMIT ?')
-    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT must be strictly positive"):
+    with pytest.raises(InvalidRequest, match="LIMIT must be strictly positive"):
         cql.execute(stmt, [0])
-    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT must be strictly positive"):
+    with pytest.raises(InvalidRequest, match="LIMIT must be strictly positive"):
         cql.execute(stmt, [-1])
 
 # Check that PER PARTITION LIMIT is not allowed with aggregate queries.

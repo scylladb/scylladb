@@ -1220,8 +1220,10 @@ def test_create_mv_with(cql, test_keyspace):
                 pass
         # Check that COMPACT STORAGE is *not* allowed for materialized views
         # (Scylla and Cassandra 3 allow it just for regular tables, but this
-        # isn't tested here).
-        with pytest.raises(InvalidRequest, match="COMPACT STORAGE"):
+        # isn't tested here). Cassandra 4 and above, which doesn't allow
+        # COMPACT STORAGE at all, reports a SyntaxException instead of
+        # InvalidRequest.
+        with pytest.raises((InvalidRequest, SyntaxException), match="COMPACT STORAGE"):
             with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with compact storage") as mv:
                 pass
 
