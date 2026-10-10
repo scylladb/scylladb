@@ -128,7 +128,12 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
 
 future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
     auto task_type = hint.get_task_type();
-    return make_ready_future<tasks::is_abortable>(is_repair_task(task_type));
+    // A migration is aborted by cancelling its transition, which the whole cluster has to
+    // support, so on a cluster which does not the task is not abortable - saying otherwise
+    // advertises an abort which can only fail.  Unlike the transition's stage, the feature is
+    // stable: it never turns off, so checking it here is exact rather than advisory.
+    return make_ready_future<tasks::is_abortable>(is_repair_task(task_type)
+            || (is_migration_task(task_type) && bool(_ss.get_feature_service().tablet_transition_cancel)));
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
@@ -222,10 +227,17 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
-    if (!is_repair_task(task_type)) {
-        on_internal_error(tasks::tmlogger, format("non-abortable task {} of type {} cannot be aborted", id, task_type));
+    if (is_repair_task(task_type)) {
+        co_await _ss.del_repair_tablet_request(table, locator::tablet_task_id{id.uuid()});
+        co_return;
     }
-    co_await _ss.del_repair_tablet_request(table, locator::tablet_task_id{id.uuid()});
+    if (is_migration_task(task_type)) {
+        // Cancelling makes the coordinator roll the migration back.
+        // tablet_id_provided() is true for migration tasks, so the hint carries the tablet.
+        co_await _ss.cancel_tablet_transition(locator::global_tablet_id{table, hint.get_tablet_id()});
+        co_return;
+    }
+    on_internal_error(tasks::tmlogger, format("non-abortable task {} of type {} cannot be aborted", id, task_type));
 }
 
 future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {

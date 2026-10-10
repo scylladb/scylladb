@@ -276,12 +276,19 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks,
-        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry) {
+        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry,
+        std::optional<lowres_clock::time_point> deadline) {
     if (this_shard_id() != 0) {
         on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
     }
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
+        // Checked here too: when the state machine reloads faster than we poll, the branch
+        // below re-polls without waiting, which would otherwise push the effective timeout
+        // arbitrarily past the deadline.
+        if (deadline && lowres_clock::now() >= *deadline) {
+            throw seastar::timed_out_error{};
+        }
         auto c = reload_count;
         auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
         if (done) {
@@ -299,7 +306,15 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
         if (c == reload_count) {
             // wait only if the state was not reloaded while we were preempted
             tsmlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
-            co_await event.when();
+            if (deadline) {
+                try {
+                    co_await event.when(*deadline);
+                } catch (const seastar::condition_variable_timed_out&) {
+                    throw seastar::timed_out_error{};
+                }
+            } else {
+                co_await event.when();
+            }
         }
     }
 
