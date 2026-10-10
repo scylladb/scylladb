@@ -20,7 +20,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig
 
 
 logger = logging.getLogger(__name__)
@@ -902,3 +902,67 @@ async def test_repair_rejects_invalid_ranges_parallelism(manager):
                                                    host=servers[0].ip_addr,
                                                    params={"id": str(sequence_number)})
         assert status == "SUCCESSFUL"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_shutdown_during_repair_follower_write(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """
+    A repair follower seals the sstable it is writing only when its repair_meta
+    is stopped. Stopping the follower while the master is held between sending
+    the rows and stopping the follower makes repair_service::shutdown() seal it.
+    On object storage that needs the sstables registry, so it must happen
+    before the registry is unplugged, or the node aborts (SCYLLADB-4366).
+    """
+    cfg = storage_config.get_cluster_cfg({'hinted_handoff_enabled': False})
+    servers = await manager.servers_add(2, config=cfg, cmdline=['--logger-log-level', 'repair=debug'], property_file=[
+        {'dc': 'dc1', 'rack': 'r1'},
+        {'dc': 'dc1', 'rack': 'r2'}
+    ])
+    await manager.disable_tablet_balancing()
+    cql, _ = await manager.get_ready_cql(servers)
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+
+        # Give each node a row the other lacks, so that whichever node the
+        # repair picks as follower receives rows.
+        for pk, (up, down) in enumerate([(servers[0], servers[1]), (servers[1], servers[0])]):
+            await manager.server_stop_gracefully(down.server_id)
+            cql = await reconnect_driver(manager)
+            [host] = await wait_for_cql_and_get_hosts(cql, [up], time.time() + 60)
+            await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, {pk})",
+                                                consistency_level=ConsistencyLevel.ONE), host=host)
+            await manager.server_start(down.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, 'repair_finish_wait', one_shot=False)
+        response = await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', await_completion=False)
+
+        waits = [asyncio.create_task(log.wait_for(r'Started Row Level Repair \(Follower\)', from_mark=mark, timeout=60))
+                 for log, mark in zip(logs, marks)]
+        done, pending = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        follower_idx = waits.index(done.pop())
+        follower, master = servers[follower_idx], servers[1 - follower_idx]
+        await manager.api.wait_for_injection_enter(master.ip_addr, 'repair_finish_wait')
+
+        await manager.server_stop_gracefully(follower.server_id)
+
+        await manager.api.message_injection(master.ip_addr, 'repair_finish_wait')
+        await manager.api.disable_injection(master.ip_addr, 'repair_finish_wait')
+        await manager.server_start(follower.server_id)
+        status = await manager.api.wait_task(servers[0].ip_addr, response['tablet_task_id'])
+        assert status is not None and status['state'] == 'done', f"repair did not finish successfully: {status}"
+
+        cql = await reconnect_driver(manager)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        for host in hosts:
+            rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {ks}.test",
+                                                       consistency_level=ConsistencyLevel.ONE), host=host)
+            assert sorted((r.pk, r.v) for r in rows) == [(0, 0), (1, 1)]

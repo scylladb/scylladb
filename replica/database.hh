@@ -523,6 +523,10 @@ private:
     mutable row_locker::stats _row_locker_stats;
 
     uint64_t _failed_counter_applies_to_memtable = 0;
+    // Set by database::drain() before the flush. A table on object storage then
+    // rejects writes: one landing after the flush would need the sstables
+    // registry when the table is flushed again at close.
+    bool _drained = false;
 
     template<typename... Args>
     void do_apply(compaction_group& cg, db::rp_handle&&, Args&&... args);
@@ -1337,6 +1341,10 @@ public:
 
     bool is_auto_compaction_disabled_by_user() const {
       return _compaction_disabled_by_user;
+    }
+
+    void mark_drained() noexcept {
+        _drained = true;
     }
 
     utils::phased_barrier::operation write_in_progress() {

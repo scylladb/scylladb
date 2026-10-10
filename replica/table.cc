@@ -5073,6 +5073,10 @@ db::replay_position table::set_low_replay_position_mark() {
 
 template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
+    if (_drained && !get_storage_options().is_local_type()) [[unlikely]] {
+        throw std::runtime_error(fmt::format("{}.{} is on object storage and has been drained, rejecting the write",
+                _schema->ks_name(), _schema->cf_name()));
+    }
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     db::replay_position rp = h;
