@@ -8,7 +8,6 @@ import json
 import math
 import pytest
 import random
-import re
 import statistics
 import yaml
 from collections import defaultdict
@@ -184,81 +183,44 @@ class table_stats:
         return expected_request('GET', f'/column_family/sstables/per_level/{self.table_name}',
                                 response=self.sst_per_level)
 
-    def expected_summary_requests(self, is_scylla):
-        if is_scylla:
-            return [
-                self.hist('write_latency', self.write_latency_hist),
-                self.req('write_latency', self.write_latency),
-                self.hist('read_latency', self.read_latency_hist),
-                self.req('read_latency', self.read_latency),
-                self.req('pending_flushes', self.pending_flushes)]
-        else:
-            return [
-                self.hist('write_latency', self.write_latency_hist),
-                self.hist('read_latency', self.read_latency_hist),
-                self.req('read_latency', self.read_latency),
-                self.req('write_latency', self.write_latency),
-                self.req('pending_flushes', self.pending_flushes)]
+    def expected_summary_requests(self):
+        return [
+            self.hist('write_latency', self.write_latency_hist),
+            self.req('write_latency', self.write_latency),
+            self.hist('read_latency', self.read_latency_hist),
+            self.req('read_latency', self.read_latency),
+            self.req('pending_flushes', self.pending_flushes)]
 
-    def expected_details_requests(self, is_scylla):
-        if is_scylla:
-            return [
-                # scylla only requests for this metric for plain text output
-                self.req('live_ss_table_count', self.live_ss_table_count,
-                         multiple=expected_request.ANY),
-                self.ssttables_per_level(),
-                self.req('live_disk_space_used', self.live_disk_space_used),
-                self.req('total_disk_space_used', self.total_disk_space_used),
-                self.req('snapshots_size', self.snapshots_size),
-                self.req('memtable_off_heap_size', self.memtable_off_heap_size),
-                self.req('bloom_filter_off_heap_memory_used', self.bloom_filter_off_heap_memory_used),
-                self.req('index_summary_off_heap_memory_used', self.index_summary_off_heap_memory_used),
-                self.req('compression_metadata_off_heap_memory_used', self.compression_metadata_off_heap_memory_used),
-                self.req('compression_ratio', self.compression_ratio),
-                self.req('estimated_row_count', self.estimated_row_count),
-                self.req('memtable_columns_count', self.memtable_columns_count),
-                self.req('memtable_live_data_size', self.memtable_live_data_size),
-                self.req('memtable_switch_count', self.memtable_switch_count),
-                self.hist('read_latency', self.read_latency_hist),
-                self.hist('write_latency', self.write_latency_hist),
-                self.req('pending_flushes', self.pending_flushes),
-                self.req('bloom_filter_false_positives', self.bloom_filter_false_positives),
-                self.req('recent_bloom_filter_false_ratio', self.recent_bloom_filter_false_ratio),
-                self.req('bloom_filter_disk_space_used', self.bloom_filter_disk_space_used),
-                self.req('min_row_size', self.min_row_size),
-                self.req('max_row_size', self.max_row_size),
-                self.req('mean_row_size', self.mean_row_size),
-                self.req('live_scanned_histogram', self.live_scanned_histogram),
-                self.req('tombstone_scanned_histogram', self.tombstone_scanned_histogram),
-            ]
-        else:
-            return [
-                self.req('live_ss_table_count', self.live_ss_table_count),
-                self.ssttables_per_level(),
-                self.req('memtable_off_heap_size', self.memtable_off_heap_size),
-                self.req('bloom_filter_off_heap_memory_used', self.bloom_filter_off_heap_memory_used),
-                self.req('index_summary_off_heap_memory_used', self.index_summary_off_heap_memory_used),
-                self.req('compression_metadata_off_heap_memory_used', self.compression_metadata_off_heap_memory_used),
-                self.req('live_disk_space_used', self.live_disk_space_used),
-                self.req('total_disk_space_used', self.total_disk_space_used),
-                self.req('snapshots_size', self.snapshots_size),
-                self.req('compression_ratio', self.compression_ratio),
-                self.req('estimated_row_count', self.estimated_row_count),
-                self.req('memtable_columns_count', self.memtable_columns_count),
-                self.req('memtable_live_data_size', self.memtable_live_data_size),
-                self.req('memtable_switch_count', self.memtable_switch_count),
-                self.hist('read_latency', self.read_latency_hist),
-                self.hist('write_latency', self.write_latency_hist),
-                self.req('pending_flushes', self.pending_flushes),
-                self.req('bloom_filter_false_positives', self.bloom_filter_false_positives),
-                self.req('recent_bloom_filter_false_ratio', self.recent_bloom_filter_false_ratio),
-                self.req('bloom_filter_disk_space_used', self.bloom_filter_disk_space_used),
-                self.req('min_row_size', self.min_row_size),
-                self.req('max_row_size', self.max_row_size),
-                self.req('mean_row_size', self.mean_row_size),
-                self.req('live_scanned_histogram', self.live_scanned_histogram),
-                self.req('tombstone_scanned_histogram', self.tombstone_scanned_histogram),
-            ]
+    def expected_details_requests(self):
+        return [
+            # nodetool only requests for this metric for plain text output
+            self.req('live_ss_table_count', self.live_ss_table_count,
+                     multiple=expected_request.ANY),
+            self.ssttables_per_level(),
+            self.req('live_disk_space_used', self.live_disk_space_used),
+            self.req('total_disk_space_used', self.total_disk_space_used),
+            self.req('snapshots_size', self.snapshots_size),
+            self.req('memtable_off_heap_size', self.memtable_off_heap_size),
+            self.req('bloom_filter_off_heap_memory_used', self.bloom_filter_off_heap_memory_used),
+            self.req('index_summary_off_heap_memory_used', self.index_summary_off_heap_memory_used),
+            self.req('compression_metadata_off_heap_memory_used', self.compression_metadata_off_heap_memory_used),
+            self.req('compression_ratio', self.compression_ratio),
+            self.req('estimated_row_count', self.estimated_row_count),
+            self.req('memtable_columns_count', self.memtable_columns_count),
+            self.req('memtable_live_data_size', self.memtable_live_data_size),
+            self.req('memtable_switch_count', self.memtable_switch_count),
+            self.hist('read_latency', self.read_latency_hist),
+            self.hist('write_latency', self.write_latency_hist),
+            self.req('pending_flushes', self.pending_flushes),
+            self.req('bloom_filter_false_positives', self.bloom_filter_false_positives),
+            self.req('recent_bloom_filter_false_ratio', self.recent_bloom_filter_false_ratio),
+            self.req('bloom_filter_disk_space_used', self.bloom_filter_disk_space_used),
+            self.req('min_row_size', self.min_row_size),
+            self.req('max_row_size', self.max_row_size),
+            self.req('mean_row_size', self.mean_row_size),
+            self.req('live_scanned_histogram', self.live_scanned_histogram),
+            self.req('tombstone_scanned_histogram', self.tombstone_scanned_histogram),
+        ]
 
     def format(self):
         return f'''\
@@ -335,35 +297,23 @@ Dropped Mutations: {self.dropped_mutations}
 
 
 class scientific_notation:
-    # Python and {fmt} prints a float like "1.234E-04",
-    # while Java prints like     "1.23E-4"
-    def __init__(self, value, is_scylla):
+    def __init__(self, value):
         self.value = value
-        self.is_scylla = is_scylla
 
     def __format__(self, _):
-        if self.is_scylla:
-            if math.isnan(self.value):
-                return 'nan'
-            return f'{self.value:.15E}'
-        else:
-            if math.isnan(self.value):
-                return 'NaN'
-            matched = re.match(r'(\d.\d+)E(\+|\-)(\d+)', f'{self.value:.15E}')
-            assert matched
-            m, sign, e = matched.group(1), matched.group(2), int(matched.group(3))
-            return f'{m}E{sign}{e}'
+        if math.isnan(self.value):
+            return 'nan'
+        return f'{self.value:.15E}'
 
 
 class keyspace_stats:
-    def __init__(self, is_scylla):
+    def __init__(self):
         self.tables = []
         self.read_count = 0
         self.total_read_time = 0
         self.write_count = 0
         self.total_write_time = 0
         self.pending_flushes = 0
-        self.is_scylla = is_scylla
 
     def add_table(self, table):
         self.tables.append(table)
@@ -384,7 +334,7 @@ class keyspace_stats:
             v = math.nan
         else:
             v = self.total_read_time / self.read_count / 1000
-        return scientific_notation(v, self.is_scylla)
+        return scientific_notation(v)
 
     @property
     def write_latency(self):
@@ -392,20 +342,16 @@ class keyspace_stats:
             v = math.nan
         else:
             v = self.total_write_time / self.write_count / 1000
-        return scientific_notation(v, self.is_scylla)
+        return scientific_notation(v)
 
-    def to_map(self, is_scylla):
-        m = {
+    def to_map(self):
+        return {
             'read_count': self.read_count,
             'read_latency_ms': self.read_latency.value,
             'write_count': self.write_count,
             'write_latency_ms': self.write_latency.value,
             'pending_flushes': self.pending_flushes,
         }
-        if not is_scylla:
-            # cassandra nodetool has a duplicated item
-            m['read_latency'] = self.read_latency.value
-        return m
 
 
 @pytest.mark.parametrize('command,args,tables_to_print',
@@ -415,9 +361,7 @@ class keyspace_stats:
                              ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1']),
                              ('cfstats', [], ['keyspace1.standard1', 'system.local']),
                          ])
-def test_plain_text_output(request, nodetool, command, args, tables_to_print):
-    is_scylla = request.config.getoption("nodetool") == 'scylla'
-
+def test_plain_text_output(nodetool, command, args, tables_to_print):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
@@ -426,32 +370,23 @@ def test_plain_text_output(request, nodetool, command, args, tables_to_print):
         response=response_from_list(['ks', 'cf', 'type'], tables))]
 
     total_nr_tables = 0
-    keyspaces = defaultdict(lambda: keyspace_stats(is_scylla))
+    keyspaces = defaultdict(keyspace_stats)
     for table in tables:
         total_nr_tables += 1
         stats = table_stats(table.ks, table.cf)
         included = f'{stats.ks}.{stats.cf}' in tables_to_print
         if included:
-            if not is_scylla:
-                # scylla tallies the table stats afterwards
-                expected_requests += stats.expected_summary_requests(is_scylla)
             ks = keyspaces[table.ks]
             ks.add_table(stats)
 
-    if not is_scylla:
-        expected_requests.append(expected_request(
-            'GET', '/storage_service/keyspaces',
-            response=sorted(keyspaces.keys())))
     expected_output = f'''\
 Total number of tables: {total_nr_tables}
 ----------------
 '''
     for ks_name in sorted(keyspaces.keys()):
         keyspace = keyspaces[ks_name]
-        if is_scylla:
-            for table in keyspace.tables:
-                # cassandra nodetool tallies the table stats in the loop above
-                expected_requests += table.expected_summary_requests(is_scylla)
+        for table in keyspace.tables:
+            expected_requests += table.expected_summary_requests()
         expected_output += f'''\
 Keyspace : {ks_name}
 \tRead Count: {keyspace.read_count}
@@ -461,7 +396,7 @@ Keyspace : {ks_name}
 \tPending Flushes: {keyspace.pending_flushes}
 '''
         for table in keyspace.tables:
-            expected_requests.extend(table.expected_details_requests(is_scylla))
+            expected_requests.extend(table.expected_details_requests())
             expected_output += indent(table.format(), '\t\t')
         expected_output += '----------------\n'
 
@@ -471,9 +406,7 @@ Keyspace : {ks_name}
 
 
 @pytest.mark.parametrize('output_format', ['json', 'yaml'])
-def test_output_format(request, nodetool, output_format):
-    is_scylla = request.config.getoption("nodetool") == 'scylla'
-
+def test_output_format(nodetool, output_format):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
@@ -481,31 +414,22 @@ def test_output_format(request, nodetool, output_format):
         multiple=expected_request.MULTIPLE,
         response=response_from_list(['ks', 'cf', 'type'], tables))]
 
-    keyspaces = defaultdict(lambda: keyspace_stats(is_scylla))
+    keyspaces = defaultdict(keyspace_stats)
     for table in tables:
         stats = table_stats(table.ks, table.cf)
-        if not is_scylla:
-            # scylla tallies the table stats afterwards
-            expected_requests += stats.expected_summary_requests(is_scylla)
         keyspaces[table.ks].add_table(stats)
 
-    if not is_scylla:
-        expected_requests.append(expected_request(
-            'GET', '/storage_service/keyspaces',
-            response=sorted(keyspaces.keys())))
     total_nr_tables = sum(len(ks.tables) for ks in keyspaces.values())
     expected_dict = {'total_number_of_tables': total_nr_tables}
     for ks_name in sorted(keyspaces.keys()):
         keyspace = keyspaces[ks_name]
-        if is_scylla:
-            for table in keyspace.tables:
-                # cassandra nodetool tallies the table stats in the loop above
-                expected_requests += table.expected_summary_requests(is_scylla)
-        expected_dict[ks_name] = keyspace.to_map(is_scylla)
+        for table in keyspace.tables:
+            expected_requests += table.expected_summary_requests()
+        expected_dict[ks_name] = keyspace.to_map()
 
         expected_tables = {}
         for table in keyspace.tables:
-            expected_requests.extend(table.expected_details_requests(is_scylla))
+            expected_requests.extend(table.expected_details_requests())
             expected_tables[table.cf] = table.to_map()
         expected_dict[ks_name]['tables'] = expected_tables
 

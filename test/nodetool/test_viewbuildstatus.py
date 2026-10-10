@@ -59,19 +59,6 @@ def id_from_param(param):
     return f"args({args_fmt})-statuses({statuses_fmt})"
 
 
-def format_invalid_argument_error(is_scylla):
-    stdout = ''
-    stderr = ''
-    message = 'viewbuildstatus requires keyspace and view name arguments'
-    if is_scylla:
-        stderr += f'error processing arguments: {message}\n'
-    else:
-        progname = "nodetool"
-        stdout += f"{progname}: {message}\n"
-        stdout += f"See '{progname} help' or '{progname} help <command>'.\n"
-    return stdout, stderr
-
-
 test_params = [
     ([], [], 1),
     (["ks"], [], 1),
@@ -87,7 +74,7 @@ test_params = [
 
 @pytest.mark.parametrize("args,statuses,returncode", [pytest.param(*param, id=id_from_param(param))
                                                       for param in test_params])
-def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
+def test_viewbuildstatus(nodetool, args, statuses, returncode):
     keyspace, view = get_keyspace_view_from_args(args)
     if keyspace is None:
         expected_requests = []
@@ -100,7 +87,6 @@ def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
         expected_output = format_output(keyspace, view, view_status)
 
     if returncode != 0:
-        is_scylla = request.config.getoption("nodetool") == "scylla"
         if all(status == 'SUCCESS' for status in statuses):
             # invalid argument
             with pytest.raises(CalledProcessError) as exc_info:
@@ -108,9 +94,8 @@ def test_viewbuildstatus(request, nodetool, args, statuses, returncode):
                 actual_output = res.stdout
             assert exc_info.type is CalledProcessError
             assert exc_info.value.returncode == 1
-            expected_stdout, expected_stderr = format_invalid_argument_error(is_scylla)
-            assert exc_info.value.stdout == expected_stdout
-            assert expected_stderr in exc_info.value.stderr
+            assert exc_info.value.stdout == ''
+            assert 'error processing arguments: viewbuildstatus requires keyspace and view name arguments\n' in exc_info.value.stderr
         else:
             with pytest.raises(CalledProcessError) as exc_info:
                 res = nodetool("viewbuildstatus", *args, expected_requests=expected_requests)

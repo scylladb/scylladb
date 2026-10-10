@@ -42,8 +42,7 @@ def test_disableautocompaction_none_existent_keyspace(nodetool):
             nodetool,
             ("disableautocompaction", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},
-            ["nodetool: Keyspace [non_existent_ks] does not exist.",
-             "error processing arguments: keyspace non_existent_ks does not exist"])
+            ["error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 def test_enableautocompaction(nodetool):
@@ -81,5 +80,4 @@ def test_enableautocompaction_none_existent_keyspace(nodetool):
             nodetool,
             ("enableautocompaction", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},
-            ["nodetool: Keyspace [non_existent_ks] does not exist.",
-             "error processing arguments: keyspace non_existent_ks does not exist"])
+            ["error processing arguments: keyspace non_existent_ks does not exist"])

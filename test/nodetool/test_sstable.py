@@ -33,7 +33,7 @@ def test_getsstables(nodetool, key_option):
 """)
 
 
-def test_getsstables_unknown_ks(nodetool, scylla_only):
+def test_getsstables_unknown_ks(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("getsstables", "unknown_ks", "tbl", "mykey"),
@@ -49,8 +49,7 @@ def test_getsstables_unknown_tbl(nodetool):
             ("getsstables", "ks", "unknown_tbl", "mykey"),
             {"expected_requests": [expected_request("GET", "/column_family/",
                                                     response=[{"ks": "ks", "cf": "tbl", "type": "ColumnFamilies"}])]},
-            ["error processing arguments: unknown table: unknown_tbl",
-             "ColumnFamilyStore for ks/unknown_tbl not found."]
+            ["error processing arguments: unknown table: unknown_tbl"]
     )
 
 
@@ -134,7 +133,7 @@ ks2_tbl_sstable_info = {
 }
 
 
-def _check_sstableinfo_output(res, info, is_cassandra):
+def _check_sstableinfo_output(res, info):
     lines = res.split('\n')
     i = 0
 
@@ -145,14 +144,11 @@ def _check_sstableinfo_output(res, info, is_cassandra):
         return tuple(part.strip() for part in ln.split(':'))
 
     for entry in info:
-        if "sstables" not in entry and is_cassandra:
-            i += 2
-        else:
-            assert split(lines[i]) == ("keyspace", entry["keyspace"])
-            i += 1
+        assert split(lines[i]) == ("keyspace", entry["keyspace"])
+        i += 1
 
-            assert split(lines[i]) == ("table", entry["table"])
-            i += 1
+        assert split(lines[i]) == ("table", entry["table"])
+        i += 1
 
         if "sstables" in entry:
             assert lines[i] == "sstables :"
@@ -170,9 +166,7 @@ def _check_sstableinfo_output(res, info, is_cassandra):
                 if print_key == "timestamp":
                     parts = split(lines[i])
                     assert parts[0] == print_key
-                    # Java nodetool does a weird reformatting of the date which I see no sense in replicating
-                    if not is_cassandra:
-                        assert ":".join(parts[1:]) == sstable[key]
+                    assert ":".join(parts[1:]) == sstable[key]
                 else:
                     assert split(lines[i]) == (print_key, str(sstable[key]))
                 i += 1
@@ -198,7 +192,7 @@ def _check_sstableinfo_output(res, info, is_cassandra):
                         i += 1
 
 
-def test_sstableinfo(nodetool, request):
+def test_sstableinfo(nodetool):
     info = [ks_tbl_sstable_info, ks_tbl2_sstable_info, ks2_tbl_sstable_info]
     res = nodetool("sstableinfo", expected_requests=[
         expected_request(
@@ -206,10 +200,10 @@ def test_sstableinfo(nodetool, request):
             "/storage_service/sstable_info",
             response=info),
     ])
-    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info)
 
 
-def test_sstableinfo_keyspace(nodetool, request):
+def test_sstableinfo_keyspace(nodetool):
     info = [ks_tbl_sstable_info, ks_tbl2_sstable_info]
     res = nodetool("sstableinfo", "ks", expected_requests=[
         expected_request(
@@ -218,10 +212,10 @@ def test_sstableinfo_keyspace(nodetool, request):
             params={"keyspace": "ks"},
             response=info),
     ])
-    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info)
 
 
-def test_sstableinfo_keyspace_table(nodetool, request):
+def test_sstableinfo_keyspace_table(nodetool):
     info = [ks_tbl_sstable_info]
     res = nodetool("sstableinfo", "ks", "tbl", expected_requests=[
         expected_request(
@@ -230,10 +224,10 @@ def test_sstableinfo_keyspace_table(nodetool, request):
             params={"keyspace": "ks", "cf": "tbl"},
             response=info),
     ])
-    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info)
 
 
-def test_sstableinfo_keyspace_tables(nodetool, request):
+def test_sstableinfo_keyspace_tables(nodetool):
     info = [ks_tbl_sstable_info, ks_tbl2_sstable_info]
     res = nodetool("sstableinfo", "ks", "tbl", "tbl2", expected_requests=[
         expected_request(
@@ -247,4 +241,4 @@ def test_sstableinfo_keyspace_tables(nodetool, request):
             params={"keyspace": "ks", "cf": "tbl2"},
             response=[ks_tbl2_sstable_info]),
     ])
-    _check_sstableinfo_output(res.stdout, info, request.config.getoption("nodetool") == "cassandra")
+    _check_sstableinfo_output(res.stdout, info)
