@@ -47,8 +47,10 @@
 #include "utils/http.hh"
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
+#include "utils/exceptions.hh"
 
 #include <seastar/core/metrics_api.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/testing/test_fixture.hh>
 
 using namespace std::string_view_literals;
@@ -268,6 +270,329 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object, local_gcs_wrappe
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
+}
+
+// A read that fails partway has to leave the source where it was. Before
+// SCYLLADB-4293 the state was discarded on the way out, so the retry started the
+// object again from zero while every layer above kept counting from where it had
+// reached - genuine bytes at the wrong offset, which nothing downstream can see.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_resumes_after_failure, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    // Several ranges, so the injected failure lands mid-object. On the first
+    // range a rewind and a resume are the same thing.
+    constexpr size_t object_size = 24*1024*1024 + 4096;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    auto [expected, total] = stream_from_buffers(std::move(written));
+    auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+
+    // Drain the whole first range before injecting. The source fetches
+    // default_gcp_storage_chunk_size at a time and serves later reads out of that
+    // buffer without going near the network, so a failure injected before it is
+    // exhausted never fires. The constant is file-static in object_storage.cc, so
+    // this 8 MiB is coupled to it by hand: if it changes, change this too, or the
+    // injection is served from a still-full buffer and BOOST_REQUIRE(threw) fails.
+    size_t read = 0;
+    while (read < 8*1024*1024) {
+        auto buf = co_await is.read();
+        BOOST_REQUIRE(!buf.empty());
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+
+    // Fail the next range with an error the client does not retry, so it reaches
+    // us, then carry on reading the same source.
+    utils::get_local_injector().enable("gcp_source_short_range");
+    bool threw = false;
+    try {
+        co_await is.read();
+    } catch (const storage_io_error&) {
+        threw = true;
+    }
+    utils::get_local_injector().disable("gcp_source_short_range");
+    BOOST_REQUIRE(threw);
+
+    // What comes next must be what comes next, not the object over again.
+    while (read < total) {
+        auto buf = co_await is.read();
+        if (buf.empty()) {
+            break;
+        }
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+    BOOST_REQUIRE_EQUAL(read, total);
+
+    co_await is.close();
+    co_await expected.close();
+#else
+    testlog.info("Skipping the resume-after-failure case, it needs SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+}
+
+// make_readable_file() is how the sstable layer opens every component it does
+// not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
+// coverage at all.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    BOOST_REQUIRE_EQUAL(co_await f.size(), object_size);
+
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+
+    // A range running past the end of the object is answered short by design.
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(object_size - 100, buf.get_write(), buf.size()), 100);
+
+    co_await f.close();
+}
+
+// The download source is the path Data and Index reads take on a gs cluster:
+// object_storage_base::make_source() ignores the file it is handed and always
+// builds one of these. Sized to need two ranged GETs, so the short range is not
+// the only one the stream has to get through. Only error injection can produce
+// one -- fake-gcs answers the range it was asked for.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_short_range, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+    testlog.info("Every byte arrives when the ranges are answered whole");
+    co_await compare_object_data(*this, name, std::move(written));
+
+    testlog.info("A range answered short fails the read rather than ending the stream");
+    utils::get_local_injector().enable("gcp_source_short_range");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_source_short_range");
+    });
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (!(co_await is.read()).empty()) {
+        }
+        BOOST_ERROR("a short range should not have produced a complete stream");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("bytes asked for at offset"));
+    }
+}
+
+// A reply declaring more than the range asked for has to be refused before its
+// body is read, so the check has to be tested through what it prevents rather
+// than through the count that follows it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_oversized_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    utils::get_local_injector().enable("gcp_source_oversized_reply");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_source_oversized_reply");
+    });
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (!(co_await is.read()).empty()) {
+        }
+        BOOST_ERROR("an oversized reply should not have produced a complete stream");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential, and would not distinguish this
+        // from the length check that runs after the body has been read.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("declared"));
+    }
+}
+
+// A reply that carried the whole object instead of the range delivers the right
+// number of bytes from offset zero, so the length check cannot see it. Only
+// error injection can produce one -- fake-gcs answers the range it was asked for.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_whole_object_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+
+    testlog.info("A whole-object reply to a strict sub-range must fail");
+    utils::get_local_injector().enable("gcp_client_whole_object_reply");
+    auto disable_whole = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_whole_object_reply");
+    });
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a whole-object reply to a sub-range should not have produced a successful read");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("answered the whole object"));
+    }
+
+    // The same reply to a request that already covers the whole object carries
+    // exactly the bytes that were asked for, so it has to keep working.
+    testlog.info("A whole-object reply to a whole-object request must succeed");
+    auto whole = temporary_buffer<char>::aligned(f.memory_dma_alignment(), object_size);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, whole.get_write(), whole.size()), object_size);
+
+    co_await f.close();
+}
+
+static temporary_buffer<char> flatten(const std::vector<temporary_buffer<char>>& bufs) {
+    temporary_buffer<char> ret(total_size(bufs));
+    size_t off = 0;
+    for (const auto& buf : bufs) {
+        std::copy_n(buf.get(), buf.size(), ret.get_write() + off);
+        off += buf.size();
+    }
+    return ret;
+}
+
+// Names which bytes a read delivered when it should have failed.
+static sstring describe_delivered(const temporary_buffer<char>& object, const char* got, size_t len, uint64_t pos) {
+    if (len <= object.size() && std::equal(got, got + len, object.get())) {
+        return format("the {} bytes at offset 0 instead of those at offset {}", len, pos);
+    }
+    return format("{} bytes that match neither offset 0 nor offset {}", len, pos);
+}
+
+// SCYLLADB-4786: a 206 carrying the right number of bytes from the wrong offset
+// passes every length check, so it has to be refused by the offset its
+// Content-Range names. fake-gcs answers the range it is asked for, so the
+// injection rewrites the Range header on the way out to start at zero, and the
+// client still takes the reply as the range it meant to ask for.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_misplaced_range, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+    std::vector<temporary_buffer<char>> written;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+    auto object = flatten(written);
+
+    auto f = c.make_readable_file(bucket, name);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+
+    utils::get_local_injector().enable("gcp_client_misplaced_range");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_misplaced_range");
+    });
+    try {
+        auto n = co_await f.dma_read(4096, buf.get_write(), buf.size());
+        BOOST_ERROR(format("a read at offset 4096 returned {}", describe_delivered(object, buf.get(), n, 4096)));
+    } catch (const storage_io_error& e) {
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("was answered with"));
+    }
+
+    co_await f.close();
+}
+
+// google-cloud-cpp does not insist on a Content-Range, and neither do the gcp
+// reads: a 206 without one is taken as the range asked for. fake-gcs always
+// sends it, so the injection stands in for a reply without it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_no_content_range, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+    std::vector<temporary_buffer<char>> written;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+    auto object = flatten(written);
+
+    utils::get_local_injector().enable("gcp_client_no_content_range");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_no_content_range");
+    });
+
+    auto f = c.make_readable_file(bucket, name);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(4096, buf.get_write(), buf.size()), 4096);
+    BOOST_REQUIRE(std::equal(buf.get(), buf.get() + buf.size(), object.get() + 4096));
+    co_await f.close();
+
+    auto src = c.create_download_source(bucket, name);
+    auto got = co_await src.get_at(4096, 4096);
+    BOOST_REQUIRE(!got.empty());
+    BOOST_REQUIRE(std::equal(got.get(), got.get() + got.size(), object.get() + 4096));
+    co_await src.close();
+}
+
+// The same reply reached through the download source, which is what Data and
+// Index reads take on a gs cluster. The first range of a source starts at zero,
+// where a misplaced range is indistinguishable from the right one, so the read
+// has to start further in.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_misplaced_range, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+    std::vector<temporary_buffer<char>> written;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+    auto object = flatten(written);
+
+    utils::get_local_injector().enable("gcp_source_misplaced_range");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_source_misplaced_range");
+    });
+    auto src = c.create_download_source(bucket, name);
+    try {
+        auto got = co_await src.get_at(4096, 4096);
+        BOOST_ERROR(format("a read at offset 4096 returned {}", describe_delivered(object, got.get(), got.size(), 4096)));
+    } catch (const storage_io_error& e) {
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("was answered with"));
+    }
+    co_await src.close();
 }
 
 // SCYLLADB-3889: a zero-length object must finalize the resumable upload with
