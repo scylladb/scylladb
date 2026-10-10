@@ -38,6 +38,7 @@
 #include "utils/s3/noop_throttling_controller.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
+#include "utils/hashers.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
@@ -302,6 +303,27 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
     client_put_get_object(make_proxy_client);
 }
 
+void client_get_object_info_etag(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testetagobject");
+
+    static constexpr auto content = "1234567890"sv;
+    testlog.info("Put object {}\n", name);
+    cln->put_object(name, temporary_buffer<char>(content.data(), content.size())).get();
+
+    testlog.info("Get object info\n");
+    s3::object_info info = cln->get_object_info(name).get();
+    // The ETag of an object uploaded in a single PUT is the hex-encoded MD5 of
+    // its content, and the header carries it as a quoted entity-tag. Both the
+    // quotes and the value have to survive the trip through get_object_info().
+    BOOST_REQUIRE_EQUAL(info.etag, format("\"{}\"", to_hex(md5_hasher::calculate(content))));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_get_object_info_etag_s3) {
+    client_get_object_info_etag(make_s3_client);
+}
+
 void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
@@ -440,6 +462,77 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_empty_object_s3) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_empty_object_s3) {
     do_test_client_upload_empty_object(make_s3_client, true);
+}
+
+// Uploads object_size bytes through a jumbo sink and requires the entity tag the
+// sink reports to be non-empty and equal to the one get_object_info() returns.
+void do_test_client_upload_jumbo_sink_etag(const client_maker_function& client_maker, size_t object_size) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testjumboetag{}object", object_size));
+
+    testlog.info("Upload object of {} bytes\n", object_size);
+    auto etag = make_lw_shared<sstring>();
+    auto out = output_stream<char>(cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3, nullptr, etag));
+    auto close = seastar::deferred_close(out);
+
+    const auto content = sstring(object_size, 'x');
+    out.write(content.data(), content.size()).get();
+    out.flush().get();
+    close.close_now();
+
+    testlog.info("Reported etag {}\n", *etag);
+    BOOST_REQUIRE(!etag->empty());
+    BOOST_REQUIRE_EQUAL(*etag, cln->get_object_info(name).get().etag);
+}
+
+// 1000 bytes make the sink complete a multipart upload.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_s3) {
+    do_test_client_upload_jumbo_sink_etag(make_s3_client, 1000);
+}
+
+// 0 bytes make the sink create the object with a single PUT.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_empty_object_s3) {
+    do_test_client_upload_jumbo_sink_etag(make_s3_client, 0);
+}
+
+// Uploads object_size bytes through a plain sink and requires the entity tag the
+// sink reports to be non-empty and equal to the one get_object_info() returns.
+void do_test_client_upload_sink_etag(const client_maker_function& client_maker, size_t object_size) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testetag{}object", object_size));
+
+    testlog.info("Upload object of {} bytes\n", object_size);
+    auto etag = make_lw_shared<sstring>();
+    auto out = output_stream<char>(cln->make_upload_sink(name, s3::object_metadata{}, nullptr, etag));
+    auto close = seastar::deferred_close(out);
+
+    const auto chunk = sstring(1000, 'x');
+    for (size_t written = 0; written < object_size; written += chunk.size()) {
+        out.write(chunk.data(), std::min(chunk.size(), object_size - written)).get();
+    }
+    out.flush().get();
+    close.close_now();
+
+    testlog.info("Reported etag {}\n", *etag);
+    BOOST_REQUIRE(!etag->empty());
+    BOOST_REQUIRE_EQUAL(*etag, cln->get_object_info(name).get().etag);
+}
+
+// 1000 bytes fit in a single part, so the sink creates the object with a plain PUT.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_sink_etag_s3) {
+    do_test_client_upload_sink_etag(make_s3_client, 1000);
+}
+
+// 0 bytes also go out as a plain PUT, of an empty object.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_sink_etag_empty_object_s3) {
+    do_test_client_upload_sink_etag(make_s3_client, 0);
+}
+
+// More than one part's worth of data makes the sink complete a multipart upload.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_sink_etag_multipart_s3) {
+    do_test_client_upload_sink_etag(make_s3_client, s3::minimum_part_size + 1000);
 }
 
 using with_remainder_t = bool_class<class with_remainder_tag>;
