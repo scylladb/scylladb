@@ -126,19 +126,9 @@ class FeatureConfigurations(Enum):
 
 def feature_configs(*configs: FeatureConfigurations):
     """Build pytest.mark.parametrize arguments for the named configurations.
-    The enum name becomes the test id. Logstor configurations are skipped until
-    the logstor compaction controller (https://github.com/scylladb/scylladb/pull/30058) lands.
+    The enum name becomes the test id.
     """
-    logstor_skip = pytest.mark.skip_bug(
-        link="https://scylladb.atlassian.net/browse/SCYLLADB-3093",
-        reason="logstor storage engine is not yet stable; blocked on the logstor compaction "
-               "controller (https://github.com/scylladb/scylladb/pull/30058)",
-    )
-    return [
-        pytest.param(config.value, id=config.name.lower(),
-                     marks=[logstor_skip] if config.name.startswith("LOGSTOR_") else [])
-        for config in configs
-    ]
+    return [pytest.param(config.value, id=config.name.lower()) for config in configs]
 
 
 async def count_rows(cql, feature_config: FeatureConfig, query_template: str, ks: str, table: str, keys, partition_key: str):
