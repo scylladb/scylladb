@@ -594,8 +594,38 @@ compaction_strategy::make_sstable_set(const compaction::compaction_group_view& t
             _compaction_strategy_impl->make_sstable_set(ts));
 }
 
+// The deprecated cold_reads_to_omit option is accepted, and ignored, by the strategies which used
+// to take the STCS options. Tables carrying it from before the upgrade don't go through option
+// validation again, so warn where their strategy is built.
+static void warn_about_deprecated_cold_reads_to_omit(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
+    // Logged on one shard only: every shard builds a strategy per table.
+    if (this_shard_id() != 0 || !options.contains(compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION)) {
+        return;
+    }
+    switch (strategy) {
+    case compaction_strategy_type::size_tiered:
+        compaction_strategy_logger.warn("Ignoring the {} option: it is not supported by {}, which {} is now an alias of.",
+                compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION,
+                compaction_strategy::name(compaction_strategy_type::incremental),
+                compaction_strategy::name(compaction_strategy_type::size_tiered));
+        break;
+    case compaction_strategy_type::time_window:
+    case compaction_strategy_type::leveled:
+        compaction_strategy_logger.warn("Ignoring the {} option of {}: it is not supported by {}, which {} now uses for its size-tiered compactions.",
+                compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION,
+                compaction_strategy::name(strategy),
+                compaction_strategy::name(compaction_strategy_type::incremental),
+                compaction_strategy::name(strategy));
+        break;
+    default:
+        break;
+    }
+}
+
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
     ::shared_ptr<compaction_strategy_impl> impl;
+
+    warn_about_deprecated_cold_reads_to_omit(strategy, options);
 
     switch (strategy) {
     case compaction_strategy_type::null:
@@ -618,13 +648,6 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         // STCS is deprecated. It is kept only as an alias of ICS, which
         // provides the same read and write amplification with a much lower
         // space amplification. See scylladb/scylladb#22306.
-        // Logged on one shard only: every shard builds a strategy per table.
-        if (this_shard_id() == 0 && options.contains(compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION)) {
-            compaction_strategy_logger.warn("Ignoring the {} option: it is not supported by {}, which {} is now an alias of.",
-                    compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION,
-                    compaction_strategy::name(compaction_strategy_type::incremental),
-                    compaction_strategy::name(compaction_strategy_type::size_tiered));
-        }
         [[fallthrough]];
     case compaction_strategy_type::incremental:
         impl = ::make_shared<incremental_compaction_strategy>(options);
