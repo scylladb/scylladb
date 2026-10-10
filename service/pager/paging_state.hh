@@ -51,6 +51,12 @@ private:
     // and it defaults to false.
     bool _partition_row_pending = false;
 
+    // See get_reconciliation_partition_row_limit_exponent() and
+    // get_reconciliation_row_limit_exponent(). Older versions do not write
+    // the fields, and they default to 0.
+    uint8_t _reconciliation_partition_row_limit_exponent = 0;
+    uint8_t _reconciliation_row_limit_exponent = 0;
+
 public:
     // IDL ctor
     paging_state(partition_key pk,
@@ -65,7 +71,9 @@ public:
             bound_weight ck_weight,
             partition_region region,
             std::optional<query_plan> plan,
-            bool partition_row_pending = false);
+            bool partition_row_pending = false,
+            uint8_t reconciliation_partition_row_limit_exponent = 0,
+            uint8_t reconciliation_row_limit_exponent = 0);
 
     paging_state(partition_key pk,
             position_in_partition_view pos,
@@ -75,7 +83,9 @@ public:
             std::optional<db::read_repair_decision> query_read_repair_decision,
             uint64_t rows_fetched_for_last_partition,
             std::optional<query_plan> plan,
-            bool partition_row_pending = false);
+            bool partition_row_pending = false,
+            uint8_t reconciliation_partition_row_limit_exponent = 0,
+            uint8_t reconciliation_row_limit_exponent = 0);
 
     // The row of the new partition is not pending.
     void set_partition_key(partition_key pk) {
@@ -214,6 +224,26 @@ public:
      */
     bool get_partition_row_pending() const {
         return _partition_row_pending;
+    }
+
+    /**
+     * The exponents of the limits which the next page sends to the replicas
+     * in the rounds of a reconciliation: of the per-partition row limit and
+     * of the row limit. Each limit is the query's limit times 2 to the power
+     * of its exponent. Only the reconciliation's mutation reads use them,
+     * and the page still applies the query's limits, so any values give a
+     * correct page. See service::frontier_reconciliation.
+     *
+     * The values come from the client, so the coordinator clamps them.
+     * Only a coordinator with the READ_FRONTIERS cluster feature uses them.
+     * An older coordinator drops them, which resets the limits to the
+     * query's.
+     */
+    uint8_t get_reconciliation_partition_row_limit_exponent() const {
+        return _reconciliation_partition_row_limit_exponent;
+    }
+    uint8_t get_reconciliation_row_limit_exponent() const {
+        return _reconciliation_row_limit_exponent;
     }
 
     static lw_shared_ptr<const paging_state> deserialize(bytes_opt bytes);

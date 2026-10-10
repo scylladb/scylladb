@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <map>
 #include <ranges>
 
@@ -596,6 +597,26 @@ void prepare_mutation_read(query::read_command& cmd, bool empty_replica_mutation
     }
 }
 
+uint64_t reconciliation_partition_row_limit(uint64_t limit, uint8_t exponent) {
+    if (limit == query::partition_max_rows) {
+        return limit;
+    }
+    if (exponent >= std::numeric_limits<uint64_t>::digits || limit > (max_reconciliation_partition_row_limit >> exponent)) {
+        return max_reconciliation_partition_row_limit;
+    }
+    return limit << exponent;
+}
+
+uint64_t reconciliation_row_limit(uint64_t limit, uint8_t exponent, uint64_t cap) {
+    if (limit >= cap) {
+        return limit;
+    }
+    if (exponent >= std::numeric_limits<uint64_t>::digits || limit > (cap >> exponent)) {
+        return cap;
+    }
+    return limit << exponent;
+}
+
 future<mutation_page_resolution> resolve_mutation_page(schema_ptr schema, const query::read_command& original_cmd,
         const query::read_command& cmd, std::vector<mutation_page_reply> replies) {
     const uint64_t original_row_limit = original_cmd.get_row_limit();
@@ -741,19 +762,35 @@ void lower_to_min_position(const schema& s, query::result& result, const foregro
 
 } // namespace detail
 
-frontier_reconciliation::frontier_reconciliation(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd, dht::partition_range range)
+frontier_reconciliation::frontier_reconciliation(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd, dht::partition_range range,
+        reconciliation_limit_exponents exponents, uint64_t row_limit_cap)
     : _schema(std::move(schema))
     , _cmd(std::move(cmd))
     , _range(std::move(range))
     , _round_cmd(make_lw_shared<query::read_command>(*_cmd))
     , _round_range(_range)
+    // The exponents may come from a client's paging state.
+    , _exponents{std::min(exponents.partition_row_limit, max_reconciliation_limit_exponent),
+            std::min(exponents.row_limit, max_reconciliation_limit_exponent)}
+    , _row_limit_cap(row_limit_cap)
     , _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema))
 {
     if (!_cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>()) {
         on_internal_error(rplogger, "frontier_reconciliation: the command does not ask for frontiers");
     }
+    set_round_limits();
     // The feature read_frontiers implies empty_replica_mutation_pages.
     prepare_mutation_read(*_round_cmd, true);
+}
+
+void frontier_reconciliation::set_round_limits() {
+    // With an exponent of 0, the slice stays the client's, so that the
+    // replicas' cached queriers of the data and digest reads match it.
+    if (_exponents.partition_row_limit > 0) {
+        _round_cmd->slice.set_partition_row_limit(
+                reconciliation_partition_row_limit(query::effective_partition_row_limit(_cmd->slice), _exponents.partition_row_limit));
+    }
+    _round_cmd->set_row_limit(reconciliation_row_limit(_cmd->get_row_limit(), _exponents.row_limit, _row_limit_cap));
 }
 
 future<query::result> frontier_reconciliation::convert(size_t count) {
@@ -822,6 +859,13 @@ future<std::optional<accepted_mutation_page>> frontier_reconciliation::add_round
         }
     }
     const std::optional<dht::decorated_key> stop_key = stop ? std::optional(dht::decorate_key(s, stop->partition)) : std::nullopt;
+    // Whether a reply which stopped at the earliest stop reached the round's
+    // row limit there. A replica counts the rows which it sends, including
+    // those which only the round's per-partition limit lets through.
+    const bool stop_at_row_limit = stop && std::ranges::any_of(replies, [&] (const mutation_page_reply& r) {
+        const auto frontier = r.result->frontier();
+        return frontier->stop && full_position::cmp(s, *frontier->stop, *stop) == 0 && r.result->row_count() >= _round_cmd->get_row_limit();
+    });
 
     // Where the merged data of a partition ends: at its skip, or at the stop
     // in the stop's partition. nullopt for a partition after the stop.
@@ -873,43 +917,144 @@ future<std::optional<accepted_mutation_page>> frontier_reconciliation::add_round
         merged.push_back(std::move(m));
     }
 
+    // The live clustering rows of the merged partition before its cut, with
+    // the part of it which earlier rounds reconciled, and the live rows of
+    // that part alone. Only the first partition of a round can have such a
+    // part. `merged` is in ring order, so a lookup takes logarithmic time.
+    const auto live_rows_of = [&] (const dht::decorated_key& dk) -> std::pair<uint64_t, uint64_t> {
+        auto m = std::ranges::lower_bound(merged, dk, [&] (const dht::decorated_key& a, const dht::decorated_key& b) { return a.less_compare(s, b); },
+                &mutation::decorated_key);
+        if (m == merged.end() || !m->decorated_key().equal(s, dk)) {
+            return {0, 0};
+        }
+        if (!_reconciled.empty() && _reconciled.back().decorated_key().equal(s, dk)) {
+            auto whole = _reconciled.back();
+            const auto earlier = live_clustering_row_count(whole, _cmd->timestamp);
+            whole.apply(*m);
+            return {live_clustering_row_count(whole, _cmd->timestamp), earlier};
+        }
+        return {live_clustering_row_count(*m, _cmd->timestamp), 0};
+    };
+    const uint64_t partition_row_limit = query::effective_partition_row_limit(_cmd->slice);
+    // Whether this round produced at least twice the live rows which the
+    // partition still needed to reach the limit. Written so that it cannot
+    // overflow.
+    const auto produced_twice_the_need = [&] (std::pair<uint64_t, uint64_t> rows) {
+        const auto [live_rows, earlier_live_rows] = rows;
+        const uint64_t needed = partition_row_limit - std::min(earlier_live_rows, partition_row_limit);
+        const uint64_t produced = live_rows - std::min(earlier_live_rows, live_rows);
+        return needed <= produced / 2;
+    };
+
     // A skip is incomplete if the merged partition, with the part of it which
     // earlier rounds reconciled, holds fewer live rows than the limit before
     // the skip. The first incomplete skip moves E back to it. A complete skip
     // in the stop's partition decides that partition, and moves E to its
     // end.
+    //
+    // The partitions before E also decide the exponent of the per-partition
+    // limit, see the class comment. `limit_evidence` tells whether one of
+    // them did, and `limit_ample` whether all of them produced at least twice
+    // what they needed.
     std::optional<full_position> end = stop;
-    const uint64_t partition_row_limit = query::effective_partition_row_limit(_cmd->slice);
+    bool limit_evidence = false;
+    bool limit_ample = true;
+    bool end_at_incomplete_skip = false;
+    bool stop_partition_has_skip = false;
     for (const auto& [dk, skip] : skips) {
+        co_await coroutine::maybe_yield();
         auto cut = cut_of(dk);
         if (!cut || pos_cmp(*cut, skip) != 0) {
             // The skip lies after the stop.
             break;
         }
-        auto m = std::ranges::find_if(merged, [&] (const mutation& m) { return m.decorated_key().equal(s, dk); });
-        uint64_t live_rows = 0;
-        if (m != merged.end()) {
-            if (!_reconciled.empty() && _reconciled.back().decorated_key().equal(s, dk)) {
-                auto whole = _reconciled.back();
-                whole.apply(*m);
-                live_rows = live_clustering_row_count(whole, _cmd->timestamp);
-            } else {
-                live_rows = live_clustering_row_count(*m, _cmd->timestamp);
-            }
-        }
-        if (live_rows < partition_row_limit) {
+        limit_evidence = true;
+        const auto rows = live_rows_of(dk);
+        if (rows.first < partition_row_limit) {
             end = full_position(dk.key(), skip);
+            end_at_incomplete_skip = true;
             break;
         }
+        limit_ample = limit_ample && produced_twice_the_need(rows);
         if (stop_key && dk.equal(s, *stop_key)) {
             end = full_position(dk.key(), position_in_partition::for_partition_end());
+            stop_partition_has_skip = true;
             break;
+        }
+    }
+    // A replica stops at the row or memory limit, not at the round's
+    // per-partition limit. So the stop's partition, if it has no skip,
+    // cannot show that the round's per-partition limit is too small. It
+    // shows that the limit can shrink if the partition produced at least
+    // twice what it needed: with a smaller limit, the replicas would have
+    // left the partition earlier and read further. This matters for
+    // DISTINCT, whose replicas count up to the round's per-partition limit
+    // of rows of each partition toward the row limit. Without a client's
+    // per-partition limit, the rounds have none either, and the check would
+    // only copy the part of the partition which earlier rounds reconciled.
+    if (partition_row_limit != query::partition_max_rows && !end_at_incomplete_skip && stop_key && !stop_partition_has_skip
+            && produced_twice_the_need(live_rows_of(*stop_key))) {
+        limit_evidence = true;
+    }
+    if (limit_evidence) {
+        _partition_row_limit_exponent_decided = true;
+        if (end_at_incomplete_skip) {
+            if (_exponents.partition_row_limit < max_reconciliation_limit_exponent
+                    && reconciliation_partition_row_limit(partition_row_limit, _exponents.partition_row_limit) < max_reconciliation_partition_row_limit) {
+                ++_exponents.partition_row_limit;
+            }
+        } else if (limit_ample && _exponents.partition_row_limit > 0) {
+            --_exponents.partition_row_limit;
         }
     }
     const std::optional<dht::decorated_key> end_key = end ? std::optional(dht::decorate_key(s, end->partition)) : std::nullopt;
     const auto after_end = [&] (const dht::decorated_key& dk) {
         return end_key && dk.tri_compare(s, *end_key) > 0;
     };
+
+    // The exponent of the row limit, see the class comment. Unless a reply
+    // reached the row limit, only a shrink can change it, and only if it is
+    // above 0.
+    if (stop_at_row_limit || _exponents.row_limit > 0) {
+        // Like the conversion, count each partition up to the client's
+        // per-partition limit, and a static-only row as a row.
+        const auto page_rows_of = [&] (const mutation& m) {
+            return std::min(partition_row_limit, m.live_row_count(_cmd->timestamp));
+        };
+        const auto* carried = _reconciled.empty() ? nullptr : &_reconciled.back();
+        const uint64_t carried_rows = carried ? page_rows_of(*carried) : 0;
+        const uint64_t row_limit = _cmd->get_row_limit();
+        const uint64_t rows_needed = row_limit - std::min(_converted_rows + carried_rows, row_limit);
+        // The rows before E which this round adds to the page. Counting
+        // stops once they suffice for a shrink.
+        uint64_t rows_added = 0;
+        for (const auto& m : merged) {
+            if (after_end(m.decorated_key()) || rows_added / 2 >= rows_needed) {
+                break;
+            }
+            co_await coroutine::maybe_yield();
+            if (carried && carried->decorated_key().equal(s, m.decorated_key())) {
+                auto whole = *carried;
+                whole.apply(m);
+                rows_added += page_rows_of(whole) - std::min(page_rows_of(whole), carried_rows);
+            } else {
+                rows_added += page_rows_of(m);
+            }
+        }
+        const bool grow = !end_at_incomplete_skip && stop_at_row_limit && rows_added < rows_needed;
+        const bool shrink = rows_added / 2 >= rows_needed;
+        if (rows_needed > 0 && (stop_at_row_limit || shrink)) {
+            _row_limit_exponent_decided = true;
+            if (grow) {
+                if (_exponents.row_limit < max_reconciliation_limit_exponent
+                        && reconciliation_row_limit(row_limit, _exponents.row_limit, _row_limit_cap) < _row_limit_cap) {
+                    ++_exponents.row_limit;
+                }
+            } else if (shrink && _exponents.row_limit > 0) {
+                --_exponents.row_limit;
+            }
+        }
+    }
 
     // Repair diffs, from the data before E. Every target gets an entry for
     // every partition, so that the repair writes count the replies of all
@@ -1035,6 +1180,7 @@ future<std::optional<accepted_mutation_page>> frontier_reconciliation::add_round
             if (ranges) {
                 _round_cmd->slice.set_range(s, end->partition, std::move(*ranges));
             }
+            set_round_limits();
             prepare_mutation_read(*_round_cmd, true);
             // The next round converts the last partition again. Keep only its
             // live data, so that it does not grow with the rounds.

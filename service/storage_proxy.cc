@@ -5169,6 +5169,9 @@ protected:
     lw_shared_ptr<replica::column_family> _cf;
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
+    reconciliation_limit_exponents _reconciliation_exponents;
+    uint64_t _reconciliation_row_limit_cap = query::max_rows;
+    suggested_reconciliation_limit_exponents _suggested_reconciliation_exponents;
 
 private:
     void on_read_resolved() noexcept {
@@ -5206,6 +5209,21 @@ public:
     /// execute()'s future is ready.
     host_id_vector_replica_set used_targets() const {
         return _used_targets;
+    }
+
+    // Sets the exponents of the limits of the reconciliation rounds, and the
+    // largest row limit of a round. Call before execute().
+    void set_reconciliation_limits(reconciliation_limit_exponents exponents, uint64_t row_limit_cap) {
+        _reconciliation_exponents = exponents;
+        _reconciliation_row_limit_cap = row_limit_cap;
+    }
+
+    // The exponents which the reconciliation of the page suggests, see
+    // frontier_reconciliation::suggested_limit_exponents(). Both are nullopt
+    // if the page needed no reconciliation. Call only after execute()'s
+    // future is ready.
+    const suggested_reconciliation_limit_exponents& suggested_reconciliation_exponents() const {
+        return _suggested_reconciliation_exponents;
     }
 
 protected:
@@ -5422,6 +5440,7 @@ protected:
                 }
                 auto page = co_await reconciliation->add_round(data_resolver->take_replies());
                 if (page) {
+                    _suggested_reconciliation_exponents = reconciliation->suggested_limit_exponents();
                     accept_reconciled_page(std::move(*page), std::move(exec));
                 } else {
                     tracing::trace(_trace_state, "The replies do not decide the page, reading another round for read-repair");
@@ -5481,7 +5500,8 @@ protected:
     }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout) {
         if (_read_frontiers) {
-            reconcile_by_frontiers(cl, timeout, make_lw_shared<frontier_reconciliation>(_schema, _cmd, _partition_range));
+            reconcile_by_frontiers(cl, timeout, make_lw_shared<frontier_reconciliation>(_schema, _cmd, _partition_range,
+                    _reconciliation_exponents, _reconciliation_row_limit_cap));
         } else {
             reconcile(cl, timeout, _cmd);
         }
@@ -5899,6 +5919,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         if (!r_read_executor) {
             co_return std::move(r_read_executor).as_failure();
         }
+        r_read_executor.value()->set_reconciliation_limits(query_options.reconciliation_exponents, query_options.reconciliation_row_limit_cap);
 
         exec.emplace_back(r_read_executor.value(), std::move(token_range));
     }
@@ -5907,6 +5928,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     }
 
     replicas_per_token_range used_replicas;
+    // The largest suggestions of the reads.
+    suggested_reconciliation_limit_exponents reconciliation_exponents;
 
     // keeps sp alive for the co-routine lifetime
     auto p = shared_from_this();
@@ -5923,6 +5946,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
                 used_replicas.emplace(std::move(token_range), rex->used_targets() | std::ranges::to<std::vector<locator::host_id>>());
+                reconciliation_exponents.merge(rex->suggested_reconciliation_exponents());
                 auto latency = rex->max_request_latency();
                 if (latency) {
                     rex->get_cf()->add_coordinator_read_latency(*latency);
@@ -5964,6 +5988,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // The executors decide by frontiers if the command asks for them. See
     // do_query().
     qr.rows_decided_before_cursor = cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>();
+    qr.reconciliation_exponents = reconciliation_exponents;
     co_return qr;
 }
 
@@ -6005,8 +6030,12 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
         service_permit permit,
-        node_local_only node_local_only) {
+        node_local_only node_local_only,
+        reconciliation_limit_exponents reconciliation_exponents,
+        uint64_t reconciliation_row_limit_cap) {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
+    // The largest suggestions of the reads, see query_singular().
+    suggested_reconciliation_limit_exponents suggested_reconciliation_exponents;
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     auto p = shared_from_this();
     auto cf = _db.local().find_column_family(schema).shared_from_this();
@@ -6163,6 +6192,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             }
 
             exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf, p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+            exec.back()->set_reconciliation_limits(reconciliation_exponents, reconciliation_row_limit_cap);
             ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
         }
 
@@ -6180,8 +6210,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         }
 
         foreign_ptr<lw_shared_ptr<query::result>> result = std::move(wrapped_result).value();
+        for (auto& e : exec) {
+            suggested_reconciliation_exponents.merge(e->suggested_reconciliation_exponents());
+        }
         result->ensure_counts();
         remaining_row_count -= result->row_count().value();
+        // The cap bounds the rows of the whole page, like the row limit.
+        reconciliation_row_limit_cap -= std::min(reconciliation_row_limit_cap, result->row_count().value());
         remaining_partition_count -= result->partition_count().value();
         results.emplace_back(std::move(result));
         if (ranges_to_vnodes.empty() || !remaining_row_count || !remaining_partition_count) {
@@ -6196,7 +6231,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     used_replicas.emplace(std::move(r), e->used_targets() | std::ranges::to<std::vector<locator::host_id>>());
                 }
             }
-            co_return query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas)};
+            co_return query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas), suggested_reconciliation_exponents};
         } else {
             cmd->set_row_limit(remaining_row_count);
             cmd->partition_limit = remaining_partition_count;
@@ -6250,7 +6285,9 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
             std::move(query_options.permit),
-            query_options.node_local_only);
+            query_options.node_local_only,
+            query_options.reconciliation_exponents,
+            query_options.reconciliation_row_limit_cap);
 
     if (!wrapped_result) {
         co_return bo::failure(std::move(wrapped_result).assume_error());
@@ -6270,6 +6307,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     coordinator_query_result qr(merger.get(), std::move(used_replicas));
     // See query_singular().
     qr.rows_decided_before_cursor = cmd->slice.options.contains<query::partition_slice::option::send_read_frontier>();
+    qr.reconciliation_exponents = query_result.reconciliation_exponents;
     co_return qr;
 }
 

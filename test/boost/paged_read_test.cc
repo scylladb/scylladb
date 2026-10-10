@@ -12,6 +12,7 @@
 
 #undef SEASTAR_TESTING_MAIN
 
+#include <bit>
 #include <cstdlib>
 #include <map>
 
@@ -21,6 +22,7 @@
 
 #include "db/config.hh"
 #include "db/extensions.hh"
+#include "service/read_page_resolution.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/paged_read.hh"
@@ -726,6 +728,110 @@ SEASTAR_THREAD_TEST_CASE(test_witnesses_of_per_partition_limit) {
     });
 }
 
+namespace {
+
+// Partition 1 holds `dead_rows` rows which are live on the replicas
+// `live_on`, and which the replicas `deleted_on` deleted, then 3 rows which
+// are live on `deleted_on`. In each read of the dead rows, a replica of
+// `live_on` reads as many of them as the per-partition limit, and the merge
+// finds them all dead. Partitions 2 to `agreeing_partitions` + 1 follow,
+// with 8 rows on all these replicas, but with a static cell only on
+// `live_on`, so that every page of them is reconciled.
+placed_history rows_dead_on_some_replicas(int32_t dead_rows, replica_set live_on, replica_set deleted_on, int32_t agreeing_partitions) {
+    placed_history h;
+    api::timestamp_type ts = 0;
+    for (int32_t ck = 1; ck <= dead_rows; ++ck) {
+        h.push_back({row_marker_write{1, ck, ++ts}, live_on});
+    }
+    for (int32_t ck = 1; ck <= dead_rows; ++ck) {
+        h.push_back({row_deletion{1, ck, ++ts}, deleted_on});
+    }
+    for (int32_t ck = dead_rows + 1; ck <= dead_rows + 3; ++ck) {
+        h.push_back({row_marker_write{1, ck, ++ts}, deleted_on});
+    }
+    for (int32_t pk = 2; pk <= agreeing_partitions + 1; ++pk) {
+        for (int32_t ck = 1; ck <= 8; ++ck) {
+            h.push_back({row_marker_write{pk, ck, ++ts}, live_on | deleted_on});
+        }
+        h.push_back({static_cell_write{pk, pk, ++ts}, live_on});
+    }
+    return h;
+}
+
+// The pages of `o`, and the reconciliation rounds after the first one of
+// each read.
+size_t cost_of(const outcome& o) {
+    // Every round after the first one traces its range.
+    return o.pages.size() + count_trace_lines(o, ": range ");
+}
+
+// Reads rows_dead_on_some_replicas() with every query of `queries` and every
+// page size of `page_sizes`, and checks every run. A run may cost more than
+// the same read of replicas which agree, see cost_of(), but not much more:
+// - ⌈dead_rows / page size⌉ pages. The replicas count the dead rows which
+//   they hold live toward the row limit, and the reconciliation grows the
+//   row limit only up to the page size;
+// - 2 ⌈log2 dead_rows⌉, because each round or page doubles the limits of
+//   the reconciliation, and a forged exponent of 0 may reset them once;
+// - the larger forged exponent, because each page with evidence halves each
+//   limit only once;
+// - and a little more for the reads around the dead rows.
+// Without the growth of the limits, the dead rows cost one round or page
+// for each row of the per-partition limit or of the query's limit.
+void check_rows_dead_on_some_replicas(harness& hs, int32_t dead_rows, replica_set live_on, replica_set deleted_on, int32_t agreeing_partitions,
+        const std::vector<select_query>& queries, read_options opts, std::initializer_list<int32_t> page_sizes) {
+    const auto h = rows_dead_on_some_replicas(dead_rows, live_on, deleted_on, agreeing_partitions);
+    const auto agreeing = on_replicas(complete_history(h), replica_set((1u << opts.replica_count) - 1));
+    for (const auto& q : queries) {
+        for (auto page_size : page_sizes) {
+            opts.page_size = page_size;
+            const read_case c{h, q, opts};
+            const auto o = run_and_check(hs, c);
+            const auto baseline = run_and_check(hs, read_case{agreeing, q, opts});
+            const auto forged = opts.forged_limit_exponents.value_or(service::reconciliation_limit_exponents{});
+            const size_t allowance = (page_size ? (dead_rows + page_size - 1) / page_size : 0) + 2 * std::bit_width(uint32_t(dead_rows - 1))
+                    + std::min(std::max(forged.partition_row_limit, forged.row_limit), service::max_reconciliation_limit_exponent) + 4;
+            if (cost_of(o) > cost_of(baseline) + allowance) {
+                BOOST_ERROR(fmt::format("{}\ncosts {} pages and rounds, but replicas which agree cost {}, and the allowance is {}",
+                        describe(c), cost_of(o), cost_of(baseline), allowance));
+            }
+        }
+    }
+}
+
+} // anonymous namespace
+
+// Rows of one partition are live on one replica and dead on the other. Each
+// scenario reads only with the queries and page sizes which show the bug
+// which it checks for. The other queries and the options add only model
+// checks, which test_general covers. The scenarios share one environment,
+// because starting an environment costs more than reading a scenario.
+SEASTAR_THREAD_TEST_CASE(test_rows_dead_on_one_replica) {
+    const auto distinct = select_query{.distinct = true, .select_v1 = false, .select_v2 = false};
+    // One schedule, without the querier cache and forged exponents.
+    const auto opts = read_options{.replica_count = 2, .schedule_seed = 1};
+    with_harness([&] (harness& hs) {
+        // Without the growth of the limits, the reads of many dead rows
+        // exceed the allowance. DISTINCT and PER PARTITION LIMIT 1 show a
+        // missing growth of the per-partition limit, and LIMIT 3 a missing
+        // growth of the row limit. With a page size of 1, the allowance
+        // covers a page for each dead row, so such a page size would not
+        // show it. With fewer than 64 dead rows, the extra rounds of LIMIT 3
+        // stay within the allowance.
+        check_rows_dead_on_some_replicas(hs, 128, 0b01, 0b10, 2, {distinct, select_query{.per_partition_limit = 1}, select_query{.limit = 3}}, opts,
+                {0, 3});
+
+        // Many partitions, on which the replicas disagree, follow the dead
+        // rows. A DISTINCT replica counts up to the per-partition limit of
+        // rows of each partition toward the row limit. So after the dead
+        // rows grew the limit, the pages must shrink it, or each of them
+        // returns fewer partitions. With fewer than 32 partitions, or with a
+        // page size of 2, the pages which a missing shrink adds barely exceed
+        // the allowance, or stay within it.
+        check_rows_dead_on_some_replicas(hs, 16, 0b01, 0b10, 32, {distinct}, opts, {4});
+    });
+}
+
 // Without native_reverse_queries, a replica converts a reversed read from the
 // legacy format with partition_slice_builder, which must keep the
 // per-partition limit. Otherwise the replica returns both rows of partition 1.
@@ -791,6 +897,13 @@ read_options random_options(read_options opts) {
     opts.read_frontiers = opts.native_reverse_queries && tests::random::get_int(0, 3) != 0;
     opts.querier_cache = tests::random::get_bool();
     opts.apply_repairs = !opts.querier_cache && tests::random::get_bool();
+    // 0 resets an exponent which the first page grew, like an older
+    // coordinator, which drops it. The others are small exponents, and one
+    // which the reconciliation clamps.
+    if (tests::random::get_int(0, 3) == 0) {
+        constexpr std::array<uint8_t, 5> choices{0, 1, 2, 4, 255};
+        opts.forged_limit_exponents = service::reconciliation_limit_exponents{choices[tests::random::get_int(0, 4)], choices[tests::random::get_int(0, 4)]};
+    }
     opts.schedule_seed = tests::random::get_int<uint32_t>();
     return opts;
 }
@@ -799,9 +912,10 @@ read_options random_options(read_options opts) {
 
 // The general test. It draws random histories on random replicas. It reads
 // each history with ten random queries and random options: page sizes, byte
-// and tombstone limits, cluster features, a querier cache, repairs and a
-// schedule of the coordinator. It uses every feature of the harness. It
-// checks each run under the contract of its options, see contract_of():
+// and tombstone limits, cluster features, a querier cache, repairs, a forged
+// paging state and a schedule of the coordinator. It uses every feature of
+// the harness. It checks each run under the contract of its options, see
+// contract_of():
 // without read_frontiers, the coordinator runs the pre-READ_FRONTIERS code,
 // whose defects stay.
 //

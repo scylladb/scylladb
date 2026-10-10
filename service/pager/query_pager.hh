@@ -16,6 +16,7 @@
 #include "service/query_state.hh"
 #include "exceptions/coordinator_result.hh"
 #include "service/cas_shard.hh"
+#include "service/reconciliation_limit_exponents.hh"
 
 namespace service {
 
@@ -87,6 +88,9 @@ protected:
     uint64_t _rows_fetched_for_last_partition = 0;
     // See paging_state::get_partition_row_pending().
     bool _partition_row_pending = false;
+    // See paging_state::get_reconciliation_partition_row_limit_exponent()
+    // and get_reconciliation_row_limit_exponent().
+    reconciliation_limit_exponents _reconciliation_exponents;
     // Whether the query itself asks for static content of partitions
     // without rows. A page which continues a pending partition asks for it
     // too.

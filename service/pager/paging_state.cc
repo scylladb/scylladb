@@ -30,7 +30,9 @@ service::pager::paging_state::paging_state(partition_key pk,
         bound_weight ck_weight,
         partition_region region,
         std::optional<query_plan> plan,
-        bool partition_row_pending)
+        bool partition_row_pending,
+        uint8_t reconciliation_partition_row_limit_exponent,
+        uint8_t reconciliation_row_limit_exponent)
     : _partition_key(std::move(pk))
     , _clustering_key(std::move(ck))
     , _remaining_low_bits(rem_low_bits)
@@ -44,6 +46,8 @@ service::pager::paging_state::paging_state(partition_key pk,
     , _region(region)
     , _query_plan(std::move(plan))
     , _partition_row_pending(partition_row_pending)
+    , _reconciliation_partition_row_limit_exponent(reconciliation_partition_row_limit_exponent)
+    , _reconciliation_row_limit_exponent(reconciliation_row_limit_exponent)
 { }
 
 service::pager::paging_state::paging_state(partition_key pk,
@@ -54,14 +58,18 @@ service::pager::paging_state::paging_state(partition_key pk,
         std::optional<db::read_repair_decision> query_read_repair_decision,
         uint64_t rows_fetched_for_last_partition,
         std::optional<query_plan> plan,
-        bool partition_row_pending)
+        bool partition_row_pending,
+        uint8_t reconciliation_partition_row_limit_exponent,
+        uint8_t reconciliation_row_limit_exponent)
     : paging_state(std::move(pk), pos.has_key() ? std::optional(pos.key()) : std::nullopt, static_cast<uint32_t>(rem), query_uuid, std::move(last_replicas), query_read_repair_decision,
             static_cast<uint32_t>(rows_fetched_for_last_partition), static_cast<uint32_t>(rem >> 32),
             static_cast<uint32_t>(rows_fetched_for_last_partition >> 32),
             pos.get_bound_weight(),
             pos.region(),
             std::move(plan),
-            partition_row_pending)
+            partition_row_pending,
+            reconciliation_partition_row_limit_exponent,
+            reconciliation_row_limit_exponent)
 { }
 
 lw_shared_ptr<const service::pager::paging_state> service::pager::paging_state::deserialize(

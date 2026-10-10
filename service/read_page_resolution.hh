@@ -23,6 +23,7 @@
 #include "locator/host_id.hh"
 #include "mutation_query.hh"
 #include "query/query-result.hh"
+#include "service/reconciliation_limit_exponents.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 
@@ -350,6 +351,28 @@ void prepare_mutation_read(query::read_command& cmd, bool empty_replica_mutation
 future<mutation_page_resolution> resolve_mutation_page(schema_ptr schema, const query::read_command& original_cmd,
         const query::read_command& cmd, std::vector<mutation_page_reply> replies);
 
+// The largest useful exponent of a reconciliation's limits, see
+// reconciliation_partition_row_limit() and reconciliation_row_limit(). With
+// it, each limit saturates for every client limit of at least 1.
+constexpr uint8_t max_reconciliation_limit_exponent = 64;
+
+// The largest per-partition row limit of a reconciliation round. It is below
+// query::partition_max_rows, which means no limit, and which a DISTINCT
+// slice takes as a limit of 1.
+constexpr uint64_t max_reconciliation_partition_row_limit = query::partition_max_rows - 1;
+
+// The per-partition row limit which a reconciliation round sends to the
+// replicas: the client's limit `limit` (see
+// query::effective_partition_row_limit()) times 2 to the power `exponent`,
+// saturated at max_reconciliation_partition_row_limit. Without a client's
+// limit, the round has no limit either.
+uint64_t reconciliation_partition_row_limit(uint64_t limit, uint8_t exponent);
+
+// The row limit which a reconciliation round sends to the replicas: the
+// client's limit `limit` times 2 to the power `exponent`, saturated at
+// `cap`, but never below `limit`.
+uint64_t reconciliation_row_limit(uint64_t limit, uint8_t exponent, uint64_t cap);
+
 // Reconciles a page in rounds which follow the frontiers of the replies. Use
 // it only if the read_frontiers cluster feature is enabled, so that every
 // mutation reply has a frontier. See query::read_frontier.
@@ -374,6 +397,47 @@ future<mutation_page_resolution> resolve_mutation_page(schema_ptr schema, const 
 // - short at E, if the command allows short reads.
 // Otherwise another round reads from E, with the client's limits.
 //
+// The rounds send a per-partition row limit X to the replicas, which may be
+// larger than the client's limit L: X = L * 2^k, see
+// reconciliation_partition_row_limit(). A replica leaves a partition after X
+// of its own live rows, but the merge can find those rows dead. Then E moves
+// back to the replica's skip, and the other replicas read again what they
+// read past it. With X = L, each such round or page would move E by only L
+// rows. The conversion applies the client's limit, so X changes only how far
+// the replicas read, never which rows the page returns. After each round, k
+// changes:
+// - if E is at an incomplete skip, k grows by 1, so that a partition whose
+//   live rows on one replica are dead on another takes logarithmically many
+//   rounds, not linearly many;
+// - otherwise, if every partition with a skip before E produced in this round
+//   at least twice the live rows which it still needed to reach L, k shrinks
+//   by 1, but not below 0. The gap between the two rules keeps X from
+//   alternating between two values;
+// - otherwise, k stays.
+// A round without a skip before E tells nothing about X, and k stays. The
+// stop's partition, if it has no skip, also counts if it produced twice what
+// it needed, because replicas count rows up to X toward the row limit.
+//
+// The row limit has the same problem, and the same solution with its own
+// exponent j. A replica stops after R of its own live rows, where R is the
+// client's row limit, and the merge can find those rows dead. So the rounds
+// send R * 2^j, see reconciliation_row_limit(), but at most the cap which
+// the caller gives, usually the page size. The rows which the per-partition
+// limit adds also count toward the replicas' row limit, so j also grows
+// when they fill it. After each round, j changes:
+// - if E is at the earliest stop, a reply which stopped there reached its
+//   row limit, and the rows which this round adds to the page are fewer than
+//   the page still needs, j grows by 1, unless the limit is at its cap;
+// - otherwise, if this round adds at least twice the rows which the page
+//   still needs, j shrinks by 1, but not below 0;
+// - otherwise, if a reply which stopped at E reached its row limit, j stays.
+// Otherwise the round tells nothing about the row limit, and j stays. The
+// rows which a round adds count each partition up to L, like the conversion.
+//
+// The pager carries both exponents from page to page, see
+// service::pager::paging_state::get_reconciliation_partition_row_limit_exponent()
+// and get_reconciliation_row_limit_exponent().
+//
 // Every round moves E forward, because every replica reads at least one
 // fragment after the start of its page.
 //
@@ -390,6 +454,13 @@ class frontier_reconciliation {
     dht::partition_range _round_range;
     // The common frontier of the previous round, where this round starts.
     std::optional<full_position> _round_start;
+    // The exponents of the limits of the next round, and whether a round so
+    // far told something about each.
+    reconciliation_limit_exponents _exponents;
+    bool _partition_row_limit_exponent_decided = false;
+    bool _row_limit_exponent_decided = false;
+    // The largest row limit of a round, see reconciliation_row_limit().
+    uint64_t _row_limit_cap;
     // The reconciled data which is not converted yet, in ring order. It uses
     // the query schema. Between rounds, it holds at most the last partition.
     utils::chunked_vector<mutation> _reconciled;
@@ -409,13 +480,18 @@ class frontier_reconciliation {
     void keep(query::result result);
     // The page of all conversions so far, without a cursor.
     query::result converted_page();
+    // Sets the limits of `_round_cmd` from the client's command and the
+    // exponents.
+    void set_round_limits();
 public:
     // Reconciles the page of `range` which the client's command `cmd` asks
     // for. `cmd` must ask for frontiers, see
     // query::partition_slice::option::send_read_frontier. For reversed
     // queries, `schema` is the reversed schema, and the replies are in native
-    // reversed format.
-    frontier_reconciliation(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd, dht::partition_range range);
+    // reversed format. The first round's limits have the exponents
+    // `exponents`, and no round's row limit exceeds `row_limit_cap`.
+    frontier_reconciliation(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd, dht::partition_range range,
+            reconciliation_limit_exponents exponents = {}, uint64_t row_limit_cap = query::max_rows);
 
     // The command and the range which the next round sends to the replicas.
     // The command's options are set with prepare_mutation_read().
@@ -430,6 +506,15 @@ public:
     // replies of all rounds so far decide it. Otherwise returns nullopt, and
     // round_command() and round_range() describe the next round.
     future<std::optional<accepted_mutation_page>> add_round(std::vector<mutation_page_reply> replies);
+
+    // The exponents of the limits which the rounds so far suggest for the
+    // next round or page.
+    suggested_reconciliation_limit_exponents suggested_limit_exponents() const {
+        return {
+            _partition_row_limit_exponent_decided ? std::optional(_exponents.partition_row_limit) : std::nullopt,
+            _row_limit_exponent_decided ? std::optional(_exponents.row_limit) : std::nullopt,
+        };
+    }
 };
 
 } // namespace service
