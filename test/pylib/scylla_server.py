@@ -362,6 +362,7 @@ class ScyllaServer:
         self._per_server_cmdline_options: List[str] = []
         self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
+        self.paused = False
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.log_savepoint = 0
@@ -898,6 +899,7 @@ class ScyllaServer:
         if self.log_file is None or self.log_file.closed:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
+        self.paused = False
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
@@ -1031,14 +1033,16 @@ class ScyllaServer:
             self.shutdown_control_connection()
             return
 
-        # Dump the profile if exists and supported by the API.
-        try:
-            api = ScyllaRESTAPIClient()
-            await api.dump_llvm_profile(self.ip_addr)
-        except:
-            # since it is not part of the test functionality, allow
-            # this step to fail unconditionally.
-            pass
+        # Dump the profile if exists and supported by the API. A paused server
+        # can't answer, so the request would only block until it times out.
+        if not self.paused:
+            try:
+                api = ScyllaRESTAPIClient()
+                await api.dump_llvm_profile(self.ip_addr)
+            except:
+                # since it is not part of the test functionality, allow
+                # this step to fail unconditionally.
+                pass
         self.shutdown_control_connection()
 
         if cmd.returncode is not None:
@@ -1096,13 +1100,17 @@ class ScyllaServer:
 
     def pause(self) -> None:
         """Pause a running server."""
+        assert not self.paused
         if self.cmd:
             self.cmd.send_signal(signal.SIGSTOP)
+            self.paused = True
 
     def unpause(self) -> None:
         """Unpause a paused server."""
+        assert self.paused
         if self.cmd:
             self.cmd.send_signal(signal.SIGCONT)
+        self.paused = False
 
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
