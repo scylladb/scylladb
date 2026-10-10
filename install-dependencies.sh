@@ -115,6 +115,7 @@ fedora_packages=(
     curl
     rust
     cargo
+    conan
     rapidxml-devel
     rust-std-static-wasm32-wasip1
     wabt
