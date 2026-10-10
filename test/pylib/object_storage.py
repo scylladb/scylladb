@@ -366,7 +366,7 @@ class GSServerImpl(GSFront):
     def _image_args(self, host, port):
         # pylint: disable=unused-argument
         # note: need to set 'public-host' to the IP we connect to, to make XML (s3) API work for listing
-        return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
+        return ["-scheme", "http", "-backend", "memory", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
 
     async def start(self):
         self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", self.log_dir,

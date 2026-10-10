@@ -66,7 +66,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
             return tp::service_parse_state::cont;
         }
         , {} 
-        , { "-scheme", "http", "-log-level", "debug", "--port", "4443", "-public-host", "127.0.0.1" } // image args
+        , { "-scheme", "http", "-backend", "memory", "-log-level", "debug", "--port", "4443", "-public-host", "127.0.0.1" } // image args
         , 4443
     );
 }
