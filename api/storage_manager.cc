@@ -94,10 +94,8 @@ rest_object_storage_sstables(sharded<sstables::storage_manager>& sstm, std::uniq
     // remote round trips - listing its references and reading its TOC
     // attributes - so reporting a bucket that holds many sstables is slow.
     //
-    // Making this loop concurrent on this shard is not the fix: the endpoint
-    // client splits object_storage_connections_per_shard across the scheduling
-    // groups that use it, in proportion to their shares, and this handler has
-    // no scheduling group of its own, so it would compete for the default
+    // Making this loop concurrent on this shard is not the fix: this handler
+    // has no scheduling group of its own, so it would compete for the default
     // group's connections with normal object-storage work.  The API should run
     // in the maintenance scheduling group instead, and the traversal should be
     // spread across shards rather than made concurrent within one.

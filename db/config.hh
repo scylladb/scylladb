@@ -633,6 +633,7 @@ public:
     const db::extensions& extensions() const;
 
     named_value<std::vector<object_storage_endpoint_param>> object_storage_endpoints;
+    named_value<std::unordered_map<sstring, unsigned>> object_storage_connections;
     named_value<unsigned> object_storage_connections_per_shard;
     named_value<double> object_storage_clients_memory_fraction;
 
@@ -791,5 +792,6 @@ extern template struct utils::config_file::named_value<std::vector<enum_option<d
 extern template struct utils::config_file::named_value<std::vector<db::error_injection_at_startup>>;
 extern template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 extern template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
+extern template struct utils::config_file::named_value<std::unordered_map<sstring, unsigned>>;
 extern template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
 extern template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;
