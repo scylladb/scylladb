@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import re
 
 import pytest
 
@@ -99,3 +100,40 @@ async def test_size_tiered_layout_across_restart(manager: ScyllaClusterManager, 
             assert reshaped, "expected an off-strategy layout to be reshaped on restart"
             assert after != before, \
                 f"expected the reshape to replace the off-strategy SSTables: {before}"
+
+
+async def test_cold_reads_to_omit_warning_on_boot(manager: ScyllaClusterManager):
+    """
+    cold_reads_to_omit is an option of the deprecated SizeTieredCompactionStrategy,
+    which TimeWindowCompactionStrategy and LeveledCompactionStrategy took too, for
+    their size-tiered compactions. All three now compact with
+    IncrementalCompactionStrategy, which doesn't support it, so they accept it, and
+    ignore it. A table carrying it from before an upgrade never goes through option
+    validation again, so the warning about it is logged when its compaction strategy
+    is built, e.g. on boot.
+    """
+    server = await manager.server_add()
+    cql = manager.get_cql()
+    strategies = ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy", "LeveledCompactionStrategy"]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        for i, strategy in enumerate(strategies):
+            await cql.run_async(f"CREATE TABLE {ks}.t{i} (pk int PRIMARY KEY, v int) "
+                                f"WITH compaction = {{'class': '{strategy}', 'cold_reads_to_omit': '0.5'}}")
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.server_restart(server.server_id)
+        await manager.driver_connect(server=server)
+
+        warnings = {
+            "SizeTieredCompactionStrategy": "Ignoring the cold_reads_to_omit option: it is not supported by "
+                                            "IncrementalCompactionStrategy, which SizeTieredCompactionStrategy is now an alias of",
+            "TimeWindowCompactionStrategy": "Ignoring the cold_reads_to_omit option of TimeWindowCompactionStrategy: it is not supported by "
+                                            "IncrementalCompactionStrategy, which TimeWindowCompactionStrategy now uses for its size-tiered compactions",
+            "LeveledCompactionStrategy": "Ignoring the cold_reads_to_omit option of LeveledCompactionStrategy: it is not supported by "
+                                         "IncrementalCompactionStrategy, which LeveledCompactionStrategy now uses for its size-tiered compactions",
+        }
+        for strategy in strategies:
+            assert await log.grep(re.escape(warnings[strategy]), from_mark=mark), \
+                f"expected a warning about the ignored cold_reads_to_omit option of {strategy} on boot"
