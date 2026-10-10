@@ -252,6 +252,14 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(token);
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
+    if (utils::get_local_injector().is_enabled("hinted_handoff_fail_hint_send")) {
+        return utils::get_local_injector().inject("hinted_handoff_fail_hint_send",
+                utils::wait_for_message(5min)).then([] {
+            return make_exception_future<>(
+                    std::runtime_error("Sending a hint failed due to: hinted_handoff_fail_hint_send"));
+        });
+    }
+
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -509,10 +517,15 @@ bool hint_sender::send_one_file(const sstring& fname) {
             };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
-        manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
-                _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
-        ++this->shard_stats().corrupted_files;
+        if (!_current_segment_corrupted) {
+            _current_segment_corrupted = true;
+            manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
+                    _ep_key, fname, ex.what(), _last_not_complete_rp);
+            ++this->shard_stats().corrupted_files;
+        } else {
+            manager_logger.debug("hint_sender[{}]:send_one_file: Processed a corrupted segment {} again: {}. "
+                    "Last not complete position={}", _ep_key, fname, ex.what(), _last_not_complete_rp);
+        }
     } catch  (const canceled_draining_exception&) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
     } catch (...) {
@@ -552,10 +565,18 @@ bool hint_sender::send_one_file(const sstring& fname) {
         return p->delete_segments({ fname });
     }).get();
 
+    if (_current_segment_corrupted) {
+        manager_logger.info("hint_sender[{}]:send_one_file: Corrupted segment {} has been deleted",
+                _ep_key, fname);
+    } else {
+        manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
+    }
+
+    _current_segment_corrupted = false;
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
-    manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
+
     return true;
 }
 
