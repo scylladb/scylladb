@@ -49,6 +49,9 @@ protected:
     create_function_statement_base(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types,
             bool or_replace, bool if_not_exists);
 
+    // Throws if the keyspace of the function being created doesn't exist.
+    void validate_keyspace_exists(query_processor& qp) const;
+
 public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 };
