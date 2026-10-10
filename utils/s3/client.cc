@@ -1010,7 +1010,7 @@ protected:
     future<> put_empty_object() {
         s3l.trace("PUT empty object {}", _object_name);
         _object_produced = true;
-        return _client->put_object(_object_name, temporary_buffer<char>(), _metadata);
+        return _client->put_object(_object_name, temporary_buffer<char>(), _metadata, _as);
     }
 
     multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
@@ -1309,6 +1309,13 @@ future<> client::multipart_upload::finalize_upload() {
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
+    // Part uploads run in the background and only log their failures, so a part
+    // cancelled via _as leaves its ETag slot empty. Report the cancellation
+    // itself, not the hole it left in the list below.
+    if (_as != nullptr && _as->abort_requested()) {
+        co_await coroutine::return_exception_ptr(_as->abort_requested_exception_ptr());
+    }
+
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
         co_await coroutine::return_exception(std::runtime_error("Failed to parse ETag list. Aborting multipart upload."));
@@ -1339,7 +1346,7 @@ future<> client::multipart_upload::finalize_upload() {
         }
         // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
         // this point it is ok since we are not interested in parsing this particular response
-    }, http::reply::status_type::ok);
+    }, http::reply::status_type::ok, _as);
     _upload_id = ""; // now upload_started() returns false
 }
 
@@ -1392,7 +1399,7 @@ public:
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
                 _object_produced = true;
-                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata));
+                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata), _as);
             }
 
             if (_bufs.size() != 0) {
@@ -1472,7 +1479,7 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag);
+            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
             co_await upload_part(std::exchange(_current, std::move(next)));
             s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
         }
@@ -1482,7 +1489,7 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag))
+        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
