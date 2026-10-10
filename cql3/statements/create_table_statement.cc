@@ -83,6 +83,12 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     utils::chunked_vector<mutation> m;
     bool created = true;
+    cql3::cql_warnings_vec warnings;
+
+    if (auto warning = check_deprecated_compaction_strategy(_properties->get_compaction_strategy_class(),
+                qp.db().get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+        warnings.emplace_back(std::move(*warning));
+    }
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
@@ -101,7 +107,6 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     //
     // A removal (value == nullopt) is meaningless on CREATE - the table is new, so there is
     // nothing stored to remove - hence only assignments are recorded.
-    std::vector<sstring> warnings;
     if (created && _properties && _properties->has_table_config_properties(qp.db().features())) {
         auto configs = _properties->get_config_updates(qp.db().features());
         std::erase_if(configs, [] (const auto& update) { return !update.second.has_value(); });
