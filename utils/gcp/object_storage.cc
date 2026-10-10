@@ -426,6 +426,19 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    auto status = rep._status;
+                    utils::get_local_injector().inject("gcp_client_whole_object_reply", [&status] {
+                        status = seastar::http::reply::status_type::ok;
+                    });
+                    // 200 means the reply carries the whole object rather than the
+                    // range, and copying its first to_read bytes would give the right
+                    // count from the wrong offset. A request that already covers the
+                    // whole object is answered this way legitimately.
+                    if (status == seastar::http::reply::status_type::ok && (pos != 0 || to_read != _size)) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {}"
+                            , _bucket, _object_name, to_read, pos
+                        ));
+                    }
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
@@ -1084,9 +1097,48 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = s.position;
+                    auto status = rep._status;
+                    utils::get_local_injector().inject("gcp_source_whole_object_reply", [&status] {
+                        status = status_type::ok;
+                    });
+                    // Before reading, because read_entire_stream() below accumulates
+                    // whatever arrives into the shared buffers, past the memory lease
+                    // taken for to_read. 200 means the reply carries the whole object,
+                    // which for a Data file is gigabytes, starting at offset zero rather
+                    // than at s.position. A request that already covers the whole
+                    // object is answered this way legitimately.
+                    if (status == status_type::ok && (s.position != 0 || to_read != _size)) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, to_read, s.position, _size));
+                    }
+                    // send_with_retry() re-runs this handler on every attempt.
+                    // Nothing is appended before read_entire_stream() returns, so an
+                    // attempt that fails leaves the shared state as it found it.
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
+                    auto got = std::accumulate(bufs.cbegin(), bufs.cend(), 0ul, [](size_t init, auto& buf) {
+                        return init + buf.size();
+                    });
+                    utils::get_local_injector().inject("gcp_source_short_range", [&got] {
+                        // Drop a byte once the range has been read whole, standing in
+                        // for a reply that described a shorter range than the one asked
+                        // for. That is not a truncation and not retryable, so it has to
+                        // reach the check below.
+                        got -= got > 0 ? 1 : 0;
+                    });
+                    // Before the buffers are committed, so a reply this rejects leaves
+                    // the shared state untouched whatever the caller does next.
+                    // to_read never runs past the end of the object, so a satisfiable
+                    // range that came back whole came back complete. Anything else
+                    // means the reply described a different range than the one asked
+                    // for, which is not something a retry can fix, and nothing says
+                    // where its bytes start. An empty one would also read as end of
+                    // stream.
+                    if (got != to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, got, to_read, s.position, _size));
+                    }
+                    auto old = s.position;
                     for (auto&& buf : bufs) {
                         s.position += buf.size();
                         _impl->count_read_bytes(buf.size());
