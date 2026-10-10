@@ -38,6 +38,13 @@ public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
     static void validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
     static void validate_options_for_strategy_type(const std::map<sstring, sstring>& options, compaction_strategy_type type);
+
+    // An option of the deprecated STCS, also taken by TWCS and LCS for their size-tiered
+    // compactions, which ICS - now used for those, and STCS being its alias - doesn't have.
+    // It is still accepted, and ignored, so that a schema dumped from an older version can be
+    // replayed as-is. Its value is still validated: a bad one is a typo worth reporting.
+    static constexpr auto DEPRECATED_COLD_READS_TO_OMIT_OPTION = "cold_reads_to_omit";
+    static void validate_deprecated_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 protected:
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
     compaction_strategy_impl() = default;

@@ -40,7 +40,6 @@
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"
 #include "compaction/incremental_backlog_tracker.hh"
-#include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -163,8 +162,21 @@ public:
     }
 
     future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction::compaction_group_view& t) const override {
-        auto main_set = co_await t.main_sstable_set();
-        co_return main_set->all_sstable_runs();
+        if (!_candidates_opt) {
+            auto main_set = co_await t.main_sstable_set();
+            co_return main_set->all_sstable_runs();
+        }
+        std::unordered_map<sstables::run_id, lw_shared_ptr<sstables::sstable_run>> runs;
+        for (const auto& sst : *_candidates_opt) {
+            auto& run = runs[sst->run_identifier()];
+            if (!run) {
+                run = make_lw_shared<sstables::sstable_run>();
+            }
+            BOOST_REQUIRE(run->insert(sst));
+        }
+        co_return runs | std::views::values | std::views::transform([] (auto& run) {
+            return sstables::frozen_sstable_run(std::move(run));
+        }) | std::ranges::to<std::vector>();
     }
 };
 
@@ -427,10 +439,13 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
         };
 
         if (strategy == compaction::compaction_strategy_type::size_tiered) {
-            // Calling function that will return a list of sstables to compact based on size-tiered strategy.
+            // Calling function that will return a list of sstables to compact based on size-tiered compaction,
+            // as done by ICS, which STCS is an alias of.
             int min_threshold = cf->schema()->min_compaction_threshold();
             int max_threshold = cf->schema()->max_compaction_threshold();
-            auto sstables_to_compact = compaction::size_tiered_compaction_strategy::most_interesting_bucket(sstables, min_threshold, max_threshold);
+            auto sstables_to_compact = compaction::incremental_compaction_strategy::runs_to_sstables(
+                    compaction::incremental_compaction_strategy::most_interesting_bucket(compaction::incremental_compaction_strategy::sstables_to_runs(sstables),
+                    min_threshold, max_threshold, compaction::incremental_compaction_strategy_options()));
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables.size());
             (void)compact_sstables(env, compaction::compaction_descriptor(std::move(sstables_to_compact)), cf, new_sstable).get();
@@ -442,8 +457,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
                 BOOST_REQUIRE(sst->data_size() >= min_sstable_size);
                 candidates.push_back(sst);
             }
-            compaction::size_tiered_compaction_strategy_options stcs_options;
-            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+            compaction::incremental_compaction_strategy_options ics_options;
+            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -843,8 +858,8 @@ void leveled_01_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst1, sst2) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
@@ -906,8 +921,8 @@ void leveled_02_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst2, sst3) == false);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
@@ -970,8 +985,8 @@ void leveled_03_fn(test_env& env) {
 
     auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
@@ -1037,8 +1052,8 @@ void leveled_04_fn(test_env& env) {
     BOOST_REQUIRE(sstable_overlaps(cf, sst2, sst4) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 1);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     BOOST_REQUIRE(manifest.get_level_size(2) == 1);
@@ -1117,8 +1132,8 @@ void leveled_06_fn(test_env& env) {
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 0);
     BOOST_REQUIRE(manifest.get_level_size(1) == 1);
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
@@ -1146,6 +1161,41 @@ SEASTAR_FIXTURE_TEST_CASE(leveled_06_gcs, gcs_fixture, *tests::check_run_test_de
     return test_env::do_with_async([](test_env& env) { leveled_06_fn(env); }, test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// LCS size-tiers L0 with ICS while L0 isn't worth promoting yet, and those compactions write
+// runs of fragments into L0, so L0 is bucketed by runs: the fragments of a single run aren't
+// similar-sized sstables to compact together.
+SEASTAR_TEST_CASE(leveled_size_tiers_l0_by_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto schema = table_for_tests::make_default_schema();
+        // L0 holds less than an sstable's worth of data, so it's not worth promoting.
+        const int max_sstable_size_in_mb = 1000;
+
+        auto l0_candidates = [&] (bool single_run) {
+            auto cf = env.make_table_for_tests(schema);
+            auto stop_cf = deferred_stop(cf);
+            auto keys = tests::generate_partition_keys(schema->min_compaction_threshold(), schema);
+            auto run_id = sstables::run_id::create_random_id();
+            for (auto& key : keys) {
+                auto sst = env.make_sstable(schema);
+                sstables::test(sst).set_values_for_leveled_strategy(1024*1024, 0, 0, key.key(), key.key());
+                sstables::test(sst).set_run_identifier(single_run ? run_id : sstables::run_id::create_random_id());
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            auto candidates = get_candidates_for_leveled_strategy(*cf);
+            compaction::incremental_compaction_strategy_options ics_options;
+            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
+            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+            return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+        };
+
+        BOOST_REQUIRE(l0_candidates(true).sstables.empty());
+        auto desc = l0_candidates(false);
+        BOOST_REQUIRE_EQUAL(desc.sstables.size(), size_t(schema->min_compaction_threshold()));
+        BOOST_REQUIRE_EQUAL(desc.level, 0);
+    });
+}
+
 void leveled_07_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);
@@ -1156,8 +1206,8 @@ void leveled_07_fn(test_env& env) {
         add_sstable_for_leveled_test(env, cf, 1024*1024, /*level*/0, key.key(), key.key(), i /* max timestamp */);
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1198,8 +1248,8 @@ SEASTAR_TEST_CASE(leveled_fan_out_cache) {
             add_sstable_for_leveled_test(env, cf, level2_size, /*level*/2, keys[0].key(), keys[1].key());
 
             auto candidates = get_candidates_for_leveled_strategy(*cf);
-            compaction::size_tiered_compaction_strategy_options stcs_options;
-            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            compaction::incremental_compaction_strategy_options ics_options;
+            compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1240,8 +1290,8 @@ void leveled_invariant_fix_fn(test_env& env) {
     expected.insert(add_sstable_for_leveled_test(env, cf, sstable_max_size, 1, keys[1].key(), max_key.key()));
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, ics_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
 
@@ -1294,10 +1344,10 @@ void leveled_stcs_on_L0_fn(test_env& env) {
 
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
+    compaction::incremental_compaction_strategy_options ics_options;
 
     {
-        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
+        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, ics_options);
         BOOST_REQUIRE(!manifest.worth_promoting_L0_candidates(manifest.get_level(0)));
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
@@ -1309,7 +1359,7 @@ void leveled_stcs_on_L0_fn(test_env& env) {
     }
     {
         candidates.resize(2);
-        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
+        compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, ics_options);
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
         BOOST_REQUIRE(candidate.sstables.empty());
@@ -1349,11 +1399,11 @@ SEASTAR_TEST_CASE(leveled_estimated_tasks_L0_promotion) {
 
         std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
         std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
-        compaction::size_tiered_compaction_strategy_options stcs_options;
+        compaction::incremental_compaction_strategy_options ics_options;
 
         auto check = [&] (bool expect_compaction) {
             auto candidates = get_candidates_for_leveled_strategy(*cf);
-            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
             auto estimated_tasks = compaction::leveled_manifest::get_estimated_tasks(compaction::leveled_manifest::get_levels(candidates), max_sstable_size_in_bytes);
             if (expect_compaction) {
@@ -1489,8 +1539,8 @@ void overlapping_starved_sstables_fn(test_env& env) {
     compaction_counter[3] = compaction::leveled_manifest::NO_COMPACTION_LIMIT+1;
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+    compaction::incremental_compaction_strategy_options ics_options;
+    compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, ics_options);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -2369,6 +2419,57 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_correctness_fn(env); });
 }
 
+// TWCS compacts each window with ICS, so a past window that was compacted into a single run
+// holds possibly many fragments of it. That window is done, and must not be picked for the
+// per-window major again because it holds more than one sstable, only once it holds more than
+// one run.
+SEASTAR_TEST_CASE(time_window_strategy_counts_runs_in_past_window_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        using namespace std::chrono;
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "time_window_strategy")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
+        auto s = builder.build();
+
+        auto now = api::timestamp_clock::now().time_since_epoch().count();
+        auto past = now - duration_cast<microseconds>(hours(2)).count();
+        auto make_sstable = [&] (int key) {
+            mutation m(s, partition_key::from_exploded(*s, {to_bytes(format("key{}", key))}));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), past);
+            return make_sstable_containing(env.make_sstable(s), {std::move(m)}).get();
+        };
+
+        auto window = compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), past);
+        auto run_id = sstables::run_id::create_random_id();
+        std::map<api::timestamp_type, std::vector<shared_sstable>> buckets;
+        for (int key = 0; key < 3; key++) {
+            auto sst = make_sstable(key);
+            sstables::test(sst).set_run_identifier(run_id);
+            buckets[window].push_back(std::move(sst));
+        }
+
+        std::map<sstring, sstring> options;
+        compaction::time_window_compaction_strategy twcs(options);
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto control = make_strategy_control_for_test(false);
+        auto state = cf.as_compaction_group_view().get_compaction_strategy_state().get<compaction::time_window_compaction_strategy_state_ptr>();
+        auto now_window = compaction::time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now);
+
+        // The past window still needs its major compaction, but holds a single run already.
+        state->recent_active_windows.insert(window);
+        auto selected = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32, now_window, *state);
+        BOOST_REQUIRE(selected.empty());
+
+        // An sstable of another run lands in the window, e.g. from repair: it now needs compacting.
+        buckets[window].push_back(make_sstable(3));
+        state->recent_active_windows.insert(window);
+        selected = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32, now_window, *state);
+        BOOST_REQUIRE_EQUAL(selected.size(), 4);
+    });
+}
+
 SEASTAR_TEST_CASE(time_window_strategy_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
         *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_correctness_fn(env); },
@@ -2591,6 +2692,30 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_s3_test, *boost::unit_test::p
 SEASTAR_FIXTURE_TEST_CASE(size_tiered_beyond_max_threshold_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { size_tiered_beyond_max_threshold_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
+// SizeTieredCompactionStrategy is deprecated and is merely an alias of
+// IncrementalCompactionStrategy. The class name is still kept in the schema and
+// reported back as-is, but the table is compacted by ICS, and it takes the ICS
+// options rather than the STCS ones. For the CQL side of this - a warning on
+// CREATE TABLE and a rejection on ALTER TABLE - see
+// test/cqlpy/test_compaction_strategy_validation.py.
+SEASTAR_THREAD_TEST_CASE(size_tiered_is_alias_of_incremental) {
+    auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, {});
+    BOOST_REQUIRE(cs.type() == compaction::compaction_strategy_type::incremental);
+
+    auto validate = [] (std::map<sstring, sstring> options) {
+        compaction::compaction_strategy_impl::validate_options_for_strategy_type(options, compaction::compaction_strategy_type::size_tiered);
+    };
+    // An ICS-only option is accepted under the STCS name.
+    BOOST_REQUIRE_NO_THROW(validate({{"space_amplification_goal", "1.5"}}));
+    // So is the one STCS option ICS doesn't have, which is ignored, so that a
+    // schema dumped from an older version can still be replayed as-is. Its value
+    // is still validated, though, so that a bad one is still reported.
+    BOOST_REQUIRE_NO_THROW(validate({{"cold_reads_to_omit", "0.5"}}));
+    BOOST_REQUIRE_THROW(validate({{"cold_reads_to_omit", "3.5"}}), exceptions::configuration_exception);
+    // An option neither of them has is still rejected.
+    BOOST_REQUIRE_THROW(validate({{"no_such_option", "0.5"}}), exceptions::configuration_exception);
 }
 
 void sstable_expired_data_ratio(test_env& env) {
@@ -4870,6 +4995,34 @@ SEASTAR_FIXTURE_TEST_CASE(twcs_single_key_reader_through_compound_set_test_gcs,
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// TWCS compacts each window with ICS, so the backlog of a window is that of its runs: a
+// window compacted into a single run of many fragments has nothing left to compact, while
+// the same data as separate runs of a similar size does.
+SEASTAR_TEST_CASE(twcs_backlog_counts_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        static constexpr uint64_t fragment_size = 1UL*1024UL*1024UL*1024UL;
+        auto schema = table_for_tests::make_default_schema();
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto stop_cf = defer([&] noexcept { cf.stop().get(); });
+
+        auto backlog = [&] (bool single_run) {
+            auto tracker = compaction::make_compaction_strategy(compaction::compaction_strategy_type::time_window, {}).make_backlog_tracker();
+            auto keys = tests::generate_partition_keys(schema->min_compaction_threshold(), schema, local_shard_only::yes);
+            auto run_identifier = sstables::run_id::create_random_id();
+            for (auto& key : keys) {
+                auto sst = sstable_for_overlapping_test(env, schema, key.key(), key.key());
+                sstables::test(sst).set_data_file_size(fragment_size);
+                sstables::test(sst).set_run_identifier(single_run ? run_identifier : sstables::run_id::create_random_id());
+                tracker.replace_sstables({}, {std::move(sst)});
+            }
+            return tracker.backlog(cf.as_compaction_backlog_source());
+        };
+
+        BOOST_REQUIRE_EQUAL(backlog(true), 0);
+        BOOST_REQUIRE_GT(backlog(false), 0);
+    });
+}
+
 void basic_ics_controller_correctness_fn(test_env& env) {
     static constexpr uint64_t default_fragment_size = 1UL*1024UL*1024UL*1024UL;
 
@@ -4904,12 +5057,11 @@ void basic_ics_controller_correctness_fn(test_env& env) {
     };
 
     compaction::incremental_compaction_strategy_options ics_options;
-    auto ics_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), default_fragment_size);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    auto stcs_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::size_tiered_backlog_tracker>(stcs_options)), std::numeric_limits<size_t>::max());
+    auto fragmented_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), default_fragment_size);
+    auto whole_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), std::numeric_limits<size_t>::max());
 
-    // don't expect ics and stcs to yield different backlogs for the same workload.
-    BOOST_CHECK_CLOSE(ics_backlog, stcs_backlog, 0.0001);
+    // don't expect the backlog to depend on whether runs are written as fragments or as whole sstables.
+    BOOST_CHECK_CLOSE(fragmented_backlog, whole_backlog, 0.0001);
 }
 
 SEASTAR_TEST_CASE(basic_ics_controller_correctness_test) {
@@ -4927,18 +5079,9 @@ SEASTAR_FIXTURE_TEST_CASE(basic_ics_controller_correctness_gcs_test, gcs_fixture
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-namespace {
-// The size-tiered tracker accounts for the sstables handed to replace_sstables(), so its
-// backlog() never looks at the source.
-struct dummy_backlog_source : public compaction::compaction_backlog_source {
-    schema_ptr _s;
-    const schema_ptr& schema() const noexcept override { return _s; }
-    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
-};
-}
-
-// Backlog must be the same whether sstables are added one at a time or all at once.
-SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
+// Backlog must be the same whether sstables are added one at a time, recalculating it in
+// between, or all at once.
+SEASTAR_TEST_CASE(incremental_subset_backlog_deferred_matches_bulk) {
     return test_env::do_with_async([](test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), "tests", "backlog_deferred_vs_bulk")
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -4954,22 +5097,32 @@ SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
             ssts.push_back(sst);
         }
 
-        compaction::size_tiered_compaction_strategy_options stcs_options;
+        compaction::incremental_compaction_strategy_options ics_options;
+        auto min_threshold = s->min_compaction_threshold();
 
-        compaction::size_tiered_backlog_tracker deferred(stcs_options);
+        compaction::incremental_subset_backlog deferred;
         for (auto& sst : ssts) {
-            deferred.replace_sstables({}, {sst});
+            deferred.add(sst);
+            (void)deferred.backlog(min_threshold, ics_options, {});
         }
 
-        compaction::size_tiered_backlog_tracker bulk(stcs_options);
-        bulk.replace_sstables({}, ssts);
+        compaction::incremental_subset_backlog bulk;
+        for (auto& sst : ssts) {
+            bulk.add(sst);
+        }
 
-        dummy_backlog_source src;
-        BOOST_CHECK_CLOSE(deferred.backlog(src, {}, {}), bulk.backlog(src, {}, {}), 0.0001);
+        BOOST_CHECK_CLOSE(deferred.backlog(min_threshold, ics_options, {}), bulk.backlog(min_threshold, ics_options, {}), 0.0001);
     });
 }
 
 namespace {
+// A backlog source for trackers whose backlog() doesn't look at it.
+struct dummy_backlog_source : public compaction::compaction_backlog_source {
+    schema_ptr _s;
+    const schema_ptr& schema() const noexcept override { return _s; }
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
+};
+
 // Test double whose backlog() always throws.
 struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tracker::impl {
     std::shared_ptr<int> calls;
@@ -7117,23 +7270,19 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
             std::map<sstring, sstring> options = {
                 { "min_sstable_age", std::to_string(min_sstable_age.count()) },
             };
-            return std::pair<compaction::size_tiered_compaction_strategy_options,
-                             compaction::incremental_compaction_strategy_options>(options, options);
+            return compaction::incremental_compaction_strategy_options(options);
         };
 
         auto expect_buckets = [&] (unsigned expected_bucket_count, db_clock::time_point write_time, std::chrono::seconds min_sstable_age) {
             sstables::test(tiny_sst).set_data_file_write_time(write_time);
             sstables::test(medium_sst).set_data_file_write_time(write_time);
 
-            auto [stcs_options, ics_options] = make_options(min_sstable_age);
+            auto ics_options = make_options(min_sstable_age);
 
             // SSTables of 1M and 40M, both smaller than min_sstable_size (50M), must end up
             // in the same tier only if they were not written within the last min_sstable_age.
             // Otherwise, they must stay in distinct tiers so that similarly sized sstables are
             // compacted together.
-            auto stcs_buckets = compaction::size_tiered_compaction_strategy::get_buckets({ tiny_sst, medium_sst }, stcs_options);
-            BOOST_REQUIRE_EQUAL(stcs_buckets.size(), expected_bucket_count);
-
             std::vector<sstables::frozen_sstable_run> runs = {
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(tiny_sst)),
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(medium_sst)),

@@ -374,7 +374,7 @@ def test_create_vector_index_with_view_properties(cql, test_keyspace, scylla_onl
 def test_prepared_create_index_options_validated_on_every_execute(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
         create = cql.prepare(f"CREATE INDEX {unique_name()} ON {table}(v)"
-                             " WITH compaction = {'class': 'SizeTieredCompactionStrategy'} AND min_index_interval = 0")
+                             " WITH compaction = {'class': 'IncrementalCompactionStrategy'} AND min_index_interval = 0")
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):
                 cql.execute(create)

@@ -11,10 +11,11 @@
 
 namespace compaction {
 
-incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
+incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const backlog_calculation_result& contribution,
+        const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) {
     inflight_component in;
     for (auto& crp : ongoing_compactions) {
-        if (!_sstable_runs_contributing_backlog.contains(crp.first->run_identifier())) {
+        if (!contribution.sstable_runs_contributing_backlog.contains(crp.first->run_identifier())) {
             continue;
         }
         // Ci is left untaxed on purpose: the fixed cost belongs to the sstable existing,
@@ -30,25 +31,27 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
 
 incremental_backlog_tracker::backlog_calculation_result
 incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options) {
-    auto threshold = src.schema()->min_compaction_threshold();
-    int64_t total_bytes = 0;
-    int64_t total_backlog_bytes = 0;
-    float sstables_backlog_contribution = 0.0f;
-    std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog = {};
+    return calculate_runs_backlog_contribution(src.sstables_for_backlog()->all_sstable_runs(), src.schema()->min_compaction_threshold(), options);
+}
+
+incremental_backlog_tracker::backlog_calculation_result
+incremental_backlog_tracker::calculate_runs_backlog_contribution(const std::vector<sstables::frozen_sstable_run>& runs, int min_threshold,
+        const incremental_compaction_strategy_options& options) {
+    backlog_calculation_result result;
 
     // Only runs eligible for compaction are accounted for, e.g. the ones still waiting
     // for view building are left out.
     std::vector<sstables::frozen_sstable_run> all;
-    for (auto& run : src.sstables_for_backlog()->all_sstable_runs()) {
+    for (auto& run : runs) {
         if (is_eligible_for_compaction(run)) {
-            total_bytes += run->data_size();
+            result.total_bytes += run->data_size();
             all.push_back(run);
         }
     }
 
     if (!all.empty()) {
       for (auto& bucket : incremental_compaction_strategy::get_buckets(all, options)) {
-        if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
+        if (!incremental_compaction_strategy::is_bucket_interesting(bucket, min_threshold)) {
             continue;
         }
         for (const sstables::frozen_sstable_run& run_ptr : bucket) {
@@ -58,53 +61,57 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
                 // Si is taxed with the fixed cost of every sstable in the run, where it
                 // weighs the work, but not inside the log. See sstable_backlog_fixed_cost.
                 auto size = effective_backlog_size(data_size, run.all().size());
-                total_backlog_bytes += size;
-                sstables_backlog_contribution += size * log4(data_size);
-                sstable_runs_contributing_backlog.insert((*run.all().begin())->run_identifier());
+                result.total_backlog_bytes += size;
+                result.sstables_backlog_contribution += size * log4(data_size);
+                result.sstable_runs_contributing_backlog.insert((*run.all().begin())->run_identifier());
             }
         }
       }
     }
-    return backlog_calculation_result{
-        .total_bytes = total_bytes,
-        .total_backlog_bytes = total_backlog_bytes,
-        .sstables_backlog_contribution = sstables_backlog_contribution,
-        .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
-    };
+    return result;
 }
 
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
 
 double incremental_backlog_tracker::backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     if (_backlog_dirty) {
-        auto result = calculate_sstables_backlog_contribution(src, _options);
-        _total_bytes = result.total_bytes;
-        _total_backlog_bytes = result.total_backlog_bytes;
-        _sstables_backlog_contribution = result.sstables_backlog_contribution;
-        _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
+        _contribution = calculate_sstables_backlog_contribution(src, _options);
         _backlog_dirty = false;
     }
+    return backlog_of(_contribution, oc);
+}
 
-    inflight_component compacted = compacted_backlog(oc);
+double incremental_backlog_tracker::backlog_of(const backlog_calculation_result& contribution, const compaction_backlog_tracker::ongoing_compactions& oc) {
+    inflight_component compacted = compacted_backlog(contribution, oc);
 
     // Bail out if effective backlog is zero
-    if (_total_backlog_bytes <= compacted.total_bytes) {
+    if (contribution.total_backlog_bytes <= compacted.total_bytes) {
         return 0;
     }
 
     // Formula for each SSTable is (Si - Ci) * log(T / Si)
     // Which can be rewritten as: ((Si - Ci) * log(T)) - ((Si - Ci) * log(Si))
     //
-    // For the meaning of each variable, please refer to the doc in size_tiered_backlog_tracker.hh
+    // For the meaning of each variable, please refer to the doc in incremental_backlog_tracker.hh
 
     // Sum of (Si - Ci) for all SSTables contributing backlog
-    auto effective_backlog_bytes = _total_backlog_bytes - compacted.total_bytes;
+    auto effective_backlog_bytes = contribution.total_backlog_bytes - compacted.total_bytes;
 
     // Sum of (Si - Ci) * log (Si) for all SSTables contributing backlog
-    auto sstables_contribution = _sstables_backlog_contribution - compacted.contribution;
+    auto sstables_contribution = contribution.sstables_backlog_contribution - compacted.contribution;
     // This is subtracting ((Si - Ci) * log (Si)) from ((Si - Ci) * log(T)), yielding the final backlog
-    auto b = (effective_backlog_bytes * log4(_total_bytes)) - sstables_contribution;
+    auto b = (effective_backlog_bytes * log4(contribution.total_bytes)) - sstables_contribution;
     return b > 0 ? b : 0;
+}
+
+double incremental_subset_backlog::backlog(int min_threshold, const incremental_compaction_strategy_options& options,
+        const compaction_backlog_tracker::ongoing_compactions& oc) const {
+    if (_dirty) {
+        auto runs = incremental_compaction_strategy::sstables_to_runs(_sstables | std::ranges::to<std::vector>());
+        _contribution = incremental_backlog_tracker::calculate_runs_backlog_contribution(runs, min_threshold, options);
+        _dirty = false;
+    }
+    return incremental_backlog_tracker::backlog_of(_contribution, oc);
 }
 
 void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {

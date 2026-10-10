@@ -757,6 +757,13 @@ maintenance_socket: workdir
 # Guardrail to enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.
 # enable_create_table_with_compact_storage: false
 #
+# Guardrail to allow the deprecated SizeTieredCompactionStrategy to be named
+# when creating or altering a table or a materialized view. It is an alias of
+# IncrementalCompactionStrategy, which the table is compacted with either way,
+# so naming it returns a CQL warning. When disabled, naming it is an error.
+# This option will default to false in a future version.
+# allow_deprecated_size_tiered_compaction_strategy: true
+#
 # Guardrails to limit usage of selected consistency levels for writes.
 # Adding a warning to a CQL query response can significantly increase network
 # traffic and decrease overall throughput.

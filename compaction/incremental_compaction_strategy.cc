@@ -145,12 +145,10 @@ void incremental_compaction_strategy_options::validate(const std::map<sstring, s
         throw exceptions::configuration_exception(fmt::format("{} value ({}) is less than or equal to the {} "
             "value ({})", BUCKET_HIGH_KEY, bucket_high, BUCKET_LOW_KEY, bucket_low));
     }
-    validate_fragment_size(options, unchecked_options);
-    validate_space_amplification_goal(options, unchecked_options);
     compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
-uint64_t incremental_compaction_strategy::avg_size(std::vector<sstables::frozen_sstable_run>& runs) const {
+uint64_t incremental_compaction_strategy::avg_size(std::vector<sstables::frozen_sstable_run>& runs) {
     uint64_t n = 0;
 
     if (runs.empty()) {
@@ -386,7 +384,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         // Don't try SAG if there's an ongoing compaction, because if largest tier is being compacted,
         // SA would be calculated incorrectly, which may result in an unneeded cross-tier compaction.
 
-        auto find_two_largest_tiers = [this] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
+        auto find_two_largest_tiers = [] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
             // avg_size() is O(bucket.size()); cache it per bucket instead of recomputing it on every comparison.
             std::vector<std::pair<uint64_t, size_bucket_t>> sized_buckets;
             sized_buckets.reserve(buckets.size());
@@ -434,15 +432,26 @@ incremental_compaction_strategy::get_major_compaction_job(compaction_group_view&
 future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(compaction_group_view& t) const {
     size_t min_threshold = t.schema()->min_compaction_threshold();
     size_t max_threshold = t.schema()->max_compaction_threshold();
-    int64_t n = 0;
 
     auto main_set = co_await t.main_sstable_set();
-    for (auto& bucket : get_buckets(main_set->all_sstable_runs())) {
+    co_return estimated_pending_compactions(main_set->all_sstable_runs(), min_threshold, max_threshold, _options);
+}
+
+int64_t incremental_compaction_strategy::estimated_pending_compactions(const std::vector<sstables::frozen_sstable_run>& runs,
+        size_t min_threshold, size_t max_threshold, const incremental_compaction_strategy_options& options) {
+    int64_t n = 0;
+    for (auto& bucket : get_buckets(runs, options)) {
         if (bucket.size() >= min_threshold) {
             n += (bucket.size() + max_threshold - 1) / max_threshold;
         }
     }
-    co_return n;
+    return n;
+}
+
+std::vector<sstables::frozen_sstable_run>
+incremental_compaction_strategy::most_interesting_bucket(const std::vector<sstables::frozen_sstable_run>& runs,
+        size_t min_threshold, size_t max_threshold, const incremental_compaction_strategy_options& options) {
+    return most_interesting_bucket(get_buckets(runs, options), min_threshold, max_threshold);
 }
 
 std::vector<sstables::shared_sstable>
@@ -546,9 +555,22 @@ incremental_compaction_strategy::incremental_compaction_strategy(const std::map<
     : compaction_strategy_impl(options)
     , _options(options)
 {
-    auto fragment_size_in_mb = validate_fragment_size(options);
-    _fragment_size = fragment_size_in_mb*1024*1024;
+    _fragment_size = parse_fragment_size(options);
     _space_amplification_goal = validate_space_amplification_goal(options);
+}
+
+incremental_compaction_strategy::incremental_compaction_strategy(incremental_compaction_strategy_options options, uint64_t fragment_size)
+    : _options(std::move(options))
+    , _fragment_size(fragment_size)
+{
+}
+
+uint64_t incremental_compaction_strategy::parse_fragment_size(const std::map<sstring, sstring>& options) {
+    return uint64_t(validate_fragment_size(options)) * 1024 * 1024;
+}
+
+void incremental_compaction_strategy::validate_fragment_size_option(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_fragment_size(options, unchecked_options);
 }
 
 // options is a map of compaction strategy options and their values.
@@ -556,6 +578,8 @@ incremental_compaction_strategy::incremental_compaction_strategy(const std::map<
 // This helps making sure that only allowed options are being set.
 void incremental_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     incremental_compaction_strategy_options::validate(options, unchecked_options);
+    validate_fragment_size_option(options, unchecked_options);
+    validate_space_amplification_goal(options, unchecked_options);
 }
 
 }
