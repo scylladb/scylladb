@@ -150,6 +150,13 @@ user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database d
     new_names.push_back(_field_name->name());
     std::vector<data_type> new_types(to_update->field_types());
     auto&& add_type = _field_type->prepare(db, keyspace()).get_type();
+    // The same checks as create_type_statement::validate()
+    if (add_type->is_counter()) {
+        throw exceptions::invalid_request_exception("A user type cannot contain counters");
+    }
+    if (add_type->is_user_type() && add_type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception("A user type cannot contain non-frozen user type fields");
+    }
     if (add_type->references_user_type(to_update->_keyspace, to_update->_name)) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference",
                     *_field_name, *_field_type, _name.to_cql_string()));

@@ -131,7 +131,6 @@ def testInvalidUDTStatements(cql, test_keyspace):
 # testInvalidUDTStatements keeps running on Scylla.
 # Reproduces SCYLLADB-5209 (ALTER TYPE and ALTER TABLE ADD don't check the
 # new field's or column's type like CREATE TYPE and CREATE TABLE do)
-@pytest.mark.xfail(reason="SCYLLADB-5209")
 def testInvalidUDTStatementsAlter(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as myType, \
          create_type(cql, test_keyspace, "(a int)") as ut1:
@@ -675,7 +674,6 @@ def testCreateTypeWithUndesiredFieldType(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5209 (ALTER TYPE ADD doesn't check the new field's type
 # like CREATE TYPE does)
-@pytest.mark.xfail(reason="SCYLLADB-5209")
 def testAlterTypeWithUndesiredFieldType(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as typeName:
         assert_invalid_message(cql, test_keyspace, "A user type cannot contain counters", "ALTER TYPE " + typeName + " ADD f counter")

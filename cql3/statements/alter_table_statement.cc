@@ -11,6 +11,7 @@
 #include "cdc/log.hh"
 #include "index/external_index.hh"
 #include "types/types.hh"
+#include "types/user.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
@@ -209,6 +210,15 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
                 && !type->is_compatible_with(*i->second.type)) {
             throw exceptions::invalid_request_exception(fmt::format("Cannot add a collection with the name {} "
                 "because a collection with the same name and a different type has already been used in the past", column_name));
+        }
+    }
+    // The same check as in create_table_statement: A non-frozen UDT can't
+    // contain non-frozen collections.
+    if (type->is_user_type() && type->is_multi_cell()) {
+        for (auto&& inner : static_cast<const user_type_impl&>(*type).all_types()) {
+            if (inner->is_multi_cell()) {
+                throw exceptions::invalid_request_exception(format("Non-frozen UDTs with nested non-frozen collections are not supported for column {}", column_name));
+            }
         }
     }
     if (type->is_counter() && !schema.is_counter()) {
