@@ -19,7 +19,6 @@ from ....util import is_scylla
 # (CASSANDRA-19950), so the test is marked new_to_cassandra_6.
 # Reproduces SCYLLADB-5210 (server error std::bad_cast, for a restriction on an
 # element of a frozen collection clustering column with descending order)
-@pytest.mark.xfail(reason="SCYLLADB-5210")
 def testInvalidMapEntryPredicate(cql, test_keyspace, new_to_cassandra_6):
     with create_table(cql, test_keyspace, "(pk int, ck frozen<map<int, int>>, v int, PRIMARY KEY(pk, ck)) WITH CLUSTERING ORDER BY (ck DESC)") as table:
         # Cassandra 6 says "Map-entry predicates", Cassandra 5 and Scylla say
