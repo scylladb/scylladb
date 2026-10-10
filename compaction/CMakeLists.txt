@@ -7,7 +7,6 @@ target_sources(compaction
     incremental_backlog_tracker.cc
     incremental_compaction_strategy.cc
     leveled_compaction_strategy.cc
-    size_tiered_compaction_strategy.cc
     task_manager_module.cc
     time_window_compaction_strategy.cc)
 target_include_directories(compaction
