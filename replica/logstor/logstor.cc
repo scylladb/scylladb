@@ -14,6 +14,7 @@
 #include "readers/from_mutations.hh"
 #include "readers/forwardable.hh"
 #include "keys/keys.hh"
+#include "mutation/frozen_mutation.hh"
 #include "replica/logstor/key_utils.hh"
 #include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_manager.hh"
@@ -57,25 +58,6 @@ key_hash compute_key_hash(managed_bytes_view key) {
 
 primary_index_key::primary_index_key(const dht::decorated_key& dk)
     : primary_index_key(dk.token(), compute_key_hash(dk.key())) {
-}
-
-static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
-    const auto& partition = m.partition();
-
-    for (const auto& row_entry : partition.clustered_rows()) {
-        if (row_entry.dummy()) {
-            continue;
-        }
-        if (!row_entry.row().marker().is_missing()) {
-            return row_entry.row().marker().timestamp();
-        }
-    }
-
-    if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
-        return partition_tombstone.timestamp;
-    }
-
-    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
 }
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
@@ -152,23 +134,40 @@ std::unique_ptr<primary_index> logstor::make_primary_index(bool cache_enabled) {
     return std::make_unique<primary_index>(_segment_manager, cache_enabled ? &_cache_tracker : nullptr);
 }
 
-future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
+future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) noexcept {
+    try {
+        return do_write(*m.schema(), m.decorated_key(), record_timestamp(m), encode_record_value(m),
+                std::move(target), timeout);
+    } catch (...) {
+        return current_exception_as_future();
+    }
+}
+
+future<> logstor::write(const frozen_mutation& m, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept {
+    try {
+        check_schema_version(m.schema_version(), s);
+        return do_write(s, m.decorated_key(s), record_timestamp(m), encode_record_value(m, s),
+                std::move(target), timeout);
+    } catch (...) {
+        return current_exception_as_future();
+    }
+}
+
+future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestamp_type ts, record_value value,
+        write_target target, db::timeout_clock::time_point timeout) {
     auto gate_holder = _async_gate.hold();
 
     auto& cg = *target.cg;
-    primary_index_key key(m.decorated_key());
-    table_id table = m.schema()->id();
+    primary_index_key key(dk);
     auto& index = cg.logstor_index();
-
-    const auto ts = extract_logstor_record_timestamp(m);
 
     log_record record {
         .header = {
-            .key = m.decorated_key(),
+            .key = std::move(dk),
             .timestamp = ts,
-            .table = table,
+            .table = s.id(),
         },
-        .value = encode_record_value(m),
+        .value = std::move(value),
     };
 
     auto writer = log_record_writer(std::move(record));
