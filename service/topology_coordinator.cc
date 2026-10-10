@@ -2461,6 +2461,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");
                         _exit(1);
                     });
+                    if (utils::get_local_injector().enter("write_both_read_new_tablet_wait")) {
+                        break;
+                    }
 
                     if (action_failed(tablet_state.barriers[trinfo.stage])
                             || (is_strong_consistency && action_failed(tablet_state.config_sync[trinfo.stage]))) {
