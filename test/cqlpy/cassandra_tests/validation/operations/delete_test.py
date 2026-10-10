@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of Cassandra 4.1.1 (commit 8d91b469afd3fcafef7ef85c10c8acc11703ba2d)
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....test_materialized_view_old import clock
 import random
 
 # Test for cassandra 8558
@@ -947,7 +948,12 @@ def testDeleteWithSecondaryIndices(cql, test_keyspace, forceFlush):
         assertInvalid(cql, table,
                              "DELETE FROM %s WHERE values CONTAINS ?", 3)
 
-def testDeleteWithOnlyPK(cql, test_keyspace):
+# The Java test sleeps 0.5, 0.5 and 1 seconds, to let gc_grace_seconds=1
+# pass so the compaction purges the tombstones. To make the test fast on
+# Scylla, we jump the server's clock instead (on Cassandra, clock.jump()
+# really sleeps). The clock can only jump by whole seconds, so the two
+# half-second sleeps became one-second jumps.
+def testDeleteWithOnlyPK(cql, test_keyspace, clock):
     with create_table(cql, test_keyspace, "(k int, v int, primary key (k, v)) WITH gc_grace_seconds=1") as table:
         # This is a regression test for CASSANDRA-11102
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 1, 2)
@@ -955,18 +961,18 @@ def testDeleteWithOnlyPK(cql, test_keyspace):
         execute(cql, table, "DELETE FROM %s WHERE k = ? AND v = ?", 1, 2)
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 2, 3)
 
-        time.sleep(0.5)
+        clock.jump(1)
 
         execute(cql, table, "DELETE FROM %s WHERE k = ? AND v = ?", 2, 3)
         execute(cql, table, "INSERT INTO %s(k, v) VALUES (?, ?)", 1, 2)
 
-        time.sleep(0.5)
+        clock.jump(1)
 
         flush(cql, table)
 
         assertRows(execute(cql, table, "SELECT * FROM %s"), row(1, 2))
 
-        time.sleep(1.0)
+        clock.jump(1)
         compact(cql, table)
 
         assertRows(execute(cql, table, "SELECT * FROM %s"), row(1, 2))
@@ -1009,6 +1015,11 @@ def testDeleteAndReverseQueries(cql, test_keyspace):
             row(9), row(8), row(1), row(0)
         )
 
+# Cassandra's tests testDeleteWithEmptyRestrictionValue and
+# testDeleteWithMultipleClusteringColumnsAndEmptyRestrictionValue now use the
+# new function name text_as_blob(), which Scylla doesn't support yet
+# (SCYLLADB-5141). Cassandra still supports the old name textAsBlob(), so we
+# use it, to keep testing these tests on Scylla.
 def testDeleteWithEmptyRestrictionValue(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, primary key (pk, c))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", b"foo123", b"", b"1")
@@ -1283,3 +1294,229 @@ def testStaticColumnDeletionWithMultipleStaticColumnsAndRegularColumns(cql, test
         assertRows(execute(cql, table, "SELECT s1 FROM %s WHERE pk=1"), row(null))
         assertRows(execute(cql, table, "SELECT DISTINCT s1, s2 FROM %s WHERE pk=1"), row(null, 1))
         assertRows(execute(cql, table, "SELECT DISTINCT s1 FROM %s WHERE pk=1"), row(null))
+
+# Cassandra 6 added the BETWEEN operator, and added BETWEEN steps to several
+# of the above tests. To keep those tests running on Scylla and on older
+# Cassandra, which don't support BETWEEN, we left them as they were before
+# these steps were added. The following tests contain the new BETWEEN steps,
+# each together with the steps preceding it in the Java test that it needs.
+# They are skipped on older Cassandra (new_to_cassandra_6).
+
+# The BETWEEN steps of testDeleteRange
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+@pytest.mark.parametrize("flushData", [False, True])
+@pytest.mark.parametrize("flushTombstone", [False, True])
+def testDeleteRangeWithBetween(cql, test_keyspace, flushData, flushTombstone, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, primary key (a, b))") as table:
+
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 1, 1, 1)
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 2, 1, 2)
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 2, 2, 3)
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 2, 3, 4)
+        if flushData:
+            flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE a = ? AND b >= ?", 2, 3)
+        if flushTombstone:
+            flush(cql, table)
+
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT * FROM %s"),
+                                row(1, 1, 1),
+                                row(2, 1, 2),
+                                row(2, 2, 3))
+
+        execute(cql, table, "DELETE FROM %s WHERE a = ? AND b BETWEEN ? AND ?", 2, 2, 2)
+        if flushTombstone:
+            flush(cql, table)
+
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT * FROM %s"),
+                                row(1, 1, 1),
+                                row(2, 1, 2))
+
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND b = ?", 2, 1),
+                   row(2, 1, 2))
+        assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND b = ?", 2, 2))
+        assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE a = ? AND b = ?", 2, 3))
+
+# The BETWEEN step of testDeleteWithNoClusteringColumns
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testDeleteWithNoClusteringColumnsWithBetween(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(partitionKey int PRIMARY KEY, value int)") as table:
+        assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key (unless you use the token() function",
+                             "DELETE FROM %s WHERE partitionKey BETWEEN ? AND ?", 0, 3)
+
+# The BETWEEN steps of testDeleteWithIntermediateRangeAndOneClusteringColumn
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testDeleteWithIntermediateRangeAndOneClusteringColumnWithBetween(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c text, primary key (a, b))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 1, '1')")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 3, '3')")
+        execute(cql, table, "DELETE FROM %s where a=1 and b >= 2 and b <= 3")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 3, '3')")
+        execute(cql, table, "DELETE FROM %s where a=1 and b BETWEEN 2 AND 3")
+        execute(cql, table, "INSERT INTO %s (a, b, c) VALUES(1, 2, '2')")
+        flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s where a=1 and b >= 2 and b <= 3")
+        flush(cql, table)
+
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ?", 1),
+                   row(1, 1, "1"))
+
+# The BETWEEN step of testDeleteWithRangeAndOneClusteringColumn, on partition
+# 3 - with only this partition, and the preceding steps on it.
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+@pytest.mark.parametrize("forceFlush", [False, True])
+def testDeleteWithRangeAndOneClusteringColumnWithBetween(cql, test_keyspace, forceFlush, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(partitionKey int, clustering int, value int, primary key (partitionKey, clustering))") as table:
+        for clustering1 in range(5):
+            execute(cql, table, "INSERT INTO %s (partitionKey, clustering, value) VALUES (?, ?, ?)",
+                    3, clustering1, 15 + clustering1)
+        if forceFlush:
+            flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering) > (?)", 3, 2)
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering) < (?)", 3, 1)
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering) >= (?) AND (clustering) <= (?)", 3, 0, 1)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ?", 3),
+                   row(3, 2, 17))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering) BETWEEN (?) AND (?)", 3, 0, 1)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ?", 3),
+                   row(3, 2, 17))
+
+# The BETWEEN steps of testDeleteWithRangeAndTwoClusteringColumns, on the
+# partitions and clustering_1 values they work on - with only these rows,
+# and the preceding steps on them.
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+@pytest.mark.parametrize("forceFlush", [False, True])
+def testDeleteWithRangeAndTwoClusteringColumnsWithBetween(cql, test_keyspace, forceFlush, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, clustering_2 int, value int, primary key (partitionKey, clustering_1, clustering_2))") as table:
+        for partitionKey, clustering1 in [(0, 2), (0, 3), (2, 3)]:
+            for clustering2 in range(5):
+                execute(cql, table, "INSERT INTO %s (partitionKey, clustering_1, clustering_2, value) VALUES (?, ?, ?, ?)",
+                        partitionKey, clustering1, clustering2, partitionKey * 25 + clustering1 * 5 + clustering2)
+        if forceFlush:
+            flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND  clustering_1 = ? AND clustering_2 > ? ", 0, 2, 2)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ? AND  clustering_1 = ?", 0, 2),
+                   row(0, 2, 0, 10),
+                   row(0, 2, 1, 11),
+                   row(0, 2, 2, 12))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND  clustering_1 = ? AND clustering_2 BETWEEN ? AND ? ", 0, 2, 2, 5)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ? AND  clustering_1 = ?", 0, 2),
+                   row(0, 2, 0, 10),
+                   row(0, 2, 1, 11))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND  clustering_1 = ? AND clustering_2 > ? AND clustering_2 < ? ",
+                0, 3, 1, 4)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ? AND  clustering_1 = ?", 0, 3),
+                   row(0, 3, 0, 15),
+                   row(0, 3, 1, 16),
+                   row(0, 3, 4, 19))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND  clustering_1 = ? AND clustering_2 BETWEEN ? AND ? ",
+                0, 3, 2, 4)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ? AND  clustering_1 = ?", 0, 3),
+                   row(0, 3, 0, 15),
+                   row(0, 3, 1, 16))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering_1, clustering_2) > (?, ?)", 2, 3, 3)
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering_1, clustering_2) < (?, ?)", 2, 3, 1)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ?", 2),
+                   row(2, 3, 1, 66),
+                   row(2, 3, 2, 67),
+                   row(2, 3, 3, 68))
+
+        execute(cql, table, "DELETE FROM %s WHERE partitionKey = ? AND (clustering_1, clustering_2) BETWEEN (?, ?) AND (?, ?)", 2, 3, 3, 4, 4)
+        if forceFlush:
+            flush(cql, table)
+        assertRows(execute(cql, table, "SELECT * FROM %s WHERE partitionKey = ?", 2),
+                   row(2, 3, 1, 66),
+                   row(2, 3, 2, 67))
+
+# The BETWEEN steps of testDeleteAndReverseQueries
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testDeleteAndReverseQueriesWithBetween(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(k text, i int, PRIMARY KEY (k, i))") as table:
+        for i in range(10):
+            execute(cql, table, "INSERT INTO %s(k, i) values (?, ?)", "a", i)
+
+        flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE k = ? AND i >= ? AND i <= ?", "a", 2, 5)
+
+        assertRows(execute(cql, table, "SELECT i FROM %s WHERE k = ? ORDER BY i DESC", "a"),
+                   row(9), row(8), row(7), row(6), row(1), row(0))
+
+        flush(cql, table)
+
+        execute(cql, table, "DELETE FROM %s WHERE k = ? AND i BETWEEN ? AND ?", "a", 2, 7)
+
+        assertRows(execute(cql, table, "SELECT i FROM %s WHERE k = ? ORDER BY i DESC", "a"),
+                   row(9), row(8), row(1), row(0))
+
+        flush(cql, table)
+
+        assertRows(execute(cql, table, "SELECT i FROM %s WHERE k = ? ORDER BY i DESC", "a"),
+                   row(9), row(8), row(1), row(0))
+
+# The BETWEEN step of testReverseQueryWithRangeTombstoneOnMultipleBlocks
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testReverseQueryWithRangeTombstoneOnMultipleBlocksWithBetween(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(k text, i int, v text, PRIMARY KEY (k, i))") as table:
+        longText = 'a' * 1200
+
+        for i in range(10):
+            execute(cql, table, "INSERT INTO %s(k, i, v) VALUES (?, ?, ?) USING TIMESTAMP 3", "a", i*2, longText)
+
+        execute(cql, table, "DELETE FROM %s USING TIMESTAMP 1 WHERE k = ? AND i >= ? AND i <= ?", "a", 14, 16)
+
+        execute(cql, table, "DELETE FROM %s USING TIMESTAMP 1 WHERE k = ? AND i BETWEEN ? AND ?", "a", 12, 13)
+
+        flush(cql, table)
+
+        execute(cql, table, "INSERT INTO %s(k, i, v) VALUES (?, ?, ?) USING TIMESTAMP 0", "a", 3, longText)
+        execute(cql, table, "INSERT INTO %s(k, i, v) VALUES (?, ?, ?) USING TIMESTAMP 3", "a", 11, longText)
+        execute(cql, table, "INSERT INTO %s(k, i, v) VALUES (?, ?, ?) USING TIMESTAMP 0", "a", 15, longText)
+        execute(cql, table, "INSERT INTO %s(k, i, v) VALUES (?, ?, ?) USING TIMESTAMP 0", "a", 17, longText)
+
+        flush(cql, table)
+
+        assertRows(execute(cql, table, "SELECT i FROM %s WHERE k = ? ORDER BY i DESC", "a"),
+                   row(18),
+                   row(17),
+                   row(16),
+                   row(14),
+                   row(12),
+                   row(11),
+                   row(10),
+                   row(8),
+                   row(6),
+                   row(4),
+                   row(3),
+                   row(2),
+                   row(0))

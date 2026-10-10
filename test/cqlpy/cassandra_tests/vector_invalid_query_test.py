@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit bb66561142788270ab450c02de836b3952ed37b4
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -9,7 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from ..util import is_scylla
+from ..util import is_scylla, wait_for_vector_index
 
 ANN_LIMIT_ERROR = "Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than %s. LIMIT was %s"
 # ANN() is an ordinary function as far as preparation is concerned - the vector search claims the
@@ -24,7 +24,8 @@ SCYLLA_ANN_UNDEFINED_COLUMN_MESSAGE = "Unrecognized name bad_col"
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector does not support filtering"
 CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires all restricted column(s) to be indexed"
-TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
+# Cassandra says "can not be run with aggregation", Scylla says "cannot".
+TOPK_AGGREGATION_ERROR = "can ?not be run with aggregation"
 TOPK_LIMIT_ERROR = "queries must have a limit specified"
 VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
 
@@ -209,7 +210,7 @@ def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (3, [2], 100)")
         execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)")
 
-        assert_invalid_message(
+        assert_invalid_message_re(
             cql, table, TOPK_AGGREGATION_ERROR,
             "SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"
         )
@@ -242,12 +243,16 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-# This test is skipped because although Scylla does support vector indexes,
-# this test framework doesn't run the vector store, so the request will fail
-# with "Vector Store is disabled" and not the error message that the test
-# expects to see.
-@pytest.mark.skip_env(reason="Vector store is disabled in this test framework")
-def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
+# This test needs a vector store: without it, Scylla fails the request with
+# "Vector Store is disabled" and not the error message that the test expects
+# to see. test/cqlpy/run runs a vector store with the "--vs" option.
+# Reproduces VECTOR-987: the vector store rejects the query with a misleading
+# error, "Global ANN query is not supported when only a local vector index
+# is available", instead of an error saying that the restricted column is
+# not a filtering column of the vector index. When this is fixed,
+# SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE above may need to change.
+@pytest.mark.xfail(reason="VECTOR-987")
+def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace, needs_vector_store):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
     )
@@ -258,6 +263,8 @@ def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_ke
     ) as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': 'euclidean'}}")
+        keyspace, table_name = table.split('.')
+        wait_for_vector_index(cql, keyspace, table_name + '_v_idx')
 
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)")
         execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)")

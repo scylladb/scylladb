@@ -3441,3 +3441,34 @@ def test_paxos_table_described_in_comment(scylla_only, cql, test_keyspace):
         assert paxos_table_desc.startswith(PAXOS_STATE_TABLE_DESC_PREFIX)
         assert paxos_table_desc.endswith(PAXOS_STATE_TABLE_DESC_SUFFIX)
         assert f'CREATE TABLE {test_keyspace}."{table.split('.')[1]}$paxos"' in paxos_table_desc
+
+# The rows returned by DESCRIBE have the columns keyspace_name, type, name
+# and create_statement. For a materialized view, Cassandra's "type" is
+# "materialized_view". Scylla's is "view", which the scylla_only tests
+# test_describe_underlying_mv_of_index and
+# test_describe_underlying_mv_of_unnamed_index above also expect.
+# Reproduces SCYLLADB-5191 (DESCRIBE's type of a view, and names of
+# functions, differ from Cassandra's).
+@pytest.mark.xfail(reason="SCYLLADB-5191")
+def test_desc_view_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        with new_materialized_view(cql, table, "*", "v, p", "v IS NOT NULL AND p IS NOT NULL") as mv:
+            result = cql.execute(f"DESCRIBE MATERIALIZED VIEW {mv}").one()
+            assert result.type == "materialized_view"
+
+# In the rows returned by DESCRIBE for a function or an aggregate, Cassandra
+# includes the argument types in the "name" column, e.g., "f(int, ascii)",
+# so the rows of different overloads of a function can be told apart.
+# Reproduces SCYLLADB-5191 (DESCRIBE's type of a view, and names of
+# functions, differ from Cassandra's).
+@pytest.mark.xfail(reason="SCYLLADB-5191")
+def test_desc_function_name_with_argument_types(cql, test_keyspace):
+    if is_scylla(cql):
+        body = "LANGUAGE lua AS 'return \"hello\"'"
+    else:
+        body = "LANGUAGE java AS 'return \"hello\";'"
+    with new_function(cql, test_keyspace, f"(i int, a ascii) RETURNS NULL ON NULL INPUT RETURNS text {body}", args="int, ascii") as fn:
+        result = cql.execute(f"DESCRIBE FUNCTION {test_keyspace}.{fn}").one()
+        assert result.name == f"{fn}(int, ascii)"
+        results = [r for r in cql.execute("DESCRIBE FUNCTIONS") if r.keyspace_name == test_keyspace]
+        assert [r.name for r in results] == [f"{fn}(int, ascii)"]

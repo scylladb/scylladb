@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -40,6 +40,10 @@ def testSelectOrderBy(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT c FROM %s WHERE a=? ORDER BY b DESC", 0),
                        [2], [1], [0])
 
+# Cassandra's tests now use the new function names blob_as_int() and
+# int_as_blob(), which Scylla doesn't support yet (SCYLLADB-5141). Cassandra
+# still supports the old names blobAsInt() and intAsBlob(), so we use those,
+# to keep testing the rest of these tests on Scylla.
 def testFunctionSelectionOrderSingleClustering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", 0, 0, 0)

@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -23,6 +23,74 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from cassandra.query import BoundStatement
+from cassandra.util import Duration
+import struct
+
+def testInsertZeroDuration(cql, test_keyspace):
+    expectedDuration = Duration(0, 0, 0)
+    with create_table(cql, test_keyspace, "(a INT PRIMARY KEY, b DURATION);") as table:
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, P0Y)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (2, P0M)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (3, P0W)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (4, P0D)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (5, P0Y0M0D)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (6, PT0H)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (7, PT0M)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (8, PT0S)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (9, PT0H0M0S)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (10, P0YT0H)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (11, P0MT0M)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (12, P0DT0S)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (13, P0M0DT0H0S)")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (14, P0Y0M0DT0H0M0S)")
+        # The Python driver's Duration objects aren't hashable, so we can't
+        # use assertRowsIgnoringOrder(), and sort the rows ourselves.
+        assertRows(sorted(execute(cql, table, "SELECT * FROM %s"), key=lambda r: r.a),
+                                row(1, expectedDuration),
+                                row(2, expectedDuration),
+                                row(3, expectedDuration),
+                                row(4, expectedDuration),
+                                row(5, expectedDuration),
+                                row(6, expectedDuration),
+                                row(7, expectedDuration),
+                                row(8, expectedDuration),
+                                row(9, expectedDuration),
+                                row(10, expectedDuration),
+                                row(11, expectedDuration),
+                                row(12, expectedDuration),
+                                row(13, expectedDuration),
+                                row(14, expectedDuration))
+
+# The end of the Java testInsertZeroDuration checks that a bare "P", without
+# any designator, is not a valid duration literal. We split it into a
+# separate test, so that the rest of testInsertZeroDuration keeps running on
+# Scylla. The Java test calls assertInvalid() with the expected error message
+# as its first argument, but assertInvalid()'s first argument is the query -
+# so the Java test runs the error message as a query, which of course fails,
+# and never runs the INSERT it meant to check. We check what the test
+# evidently intended: that this INSERT is a syntax error. Cassandra 5's
+# message is "no viable alternative at input ')' (... b) VALUES (15, [P]))",
+# Cassandra 6's is "rule insertValue failed predicate: {isParsingTxn}?", so
+# we don't check the message.
+# Reproduces SCYLLADB-5200 (Scylla accepts a bare P as a zero duration).
+@pytest.mark.xfail(reason="SCYLLADB-5200")
+def testInsertZeroDurationWithoutDesignator(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a INT PRIMARY KEY, b DURATION);") as table:
+        assertInvalidThrow(cql, table, SyntaxException, "INSERT INTO %s (a, b) VALUES (15, P)")
+
+# Reproduces #12243 (Scylla rejects a null TTL) and SCYLLADB-5208 (an empty
+# TTL causes a server error).
+@pytest.mark.xfail(reason="#12243, SCYLLADB-5208")
+def testEmptyTTL(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
+        execute(cql, table, "INSERT INTO %s (k, v) VALUES (0, 0) USING TTL ?", None)
+        # The Python driver can't send an empty value for an int bind
+        # variable, so we send the raw serialized values ourselves.
+        bound = BoundStatement(cql.prepare(f"INSERT INTO {table} (k, v) VALUES (1, 1) USING TTL ?"))
+        bound.values = [b'']
+        cql.execute(bound)
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT k, v, ttl(v) FROM %s"), row(1, 1, None), row(0, 0, None))
 
 def testInsertWithUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s text, i int)") as table:
@@ -44,9 +112,13 @@ def testInsertWithUnset(cql, test_keyspace):
         #assertInvalidMessage(cql, table, "Invalid unset value for column k", "UPDATE %s SET i = 0 WHERE k = ?", unset())
         #assertInvalidMessage(cql, table, "Invalid unset value for column k", "DELETE FROM %s WHERE k = ?", unset())
         # Scylla and Cassandra have slightly different messages here. Cassandra
-        # has "Invalid unset value for argument in call to function blobasint"
-        # Scylla has "Invalid null or unset value for argument to
-        # system.blobasint : (blob) -> int"
+        # has "Invalid unset value for argument in call to function
+        # blob_as_int", Scylla has "Invalid null or unset value for argument
+        # to system.blobasint : (blob) -> int".
+        # Cassandra's test now uses the new function name blob_as_int(),
+        # which Scylla doesn't support yet (SCYLLADB-5141). Cassandra still
+        # supports the old name blobAsInt(), so we use it, to keep testing
+        # this on Scylla.
         assertInvalidMessageRE(cql, table, "unset", "SELECT * FROM %s WHERE k = blobAsInt(?)", unset())
 
 # Both Scylla and Cassandra define MAX_TTL or max_ttl with the same formula,
@@ -146,14 +218,14 @@ def testInsertWithAStaticColumn(cql, test_keyspace, forceFlush):
         if forceFlush:
             flush(cql, table)
 
-        assertRows(execute(cql, table, "SELECT * FROM %s"),
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT * FROM %s"),
                    row(1, null, null, "B", null),
                    row(0, 0, 0, "A", null))
 
         execute(cql, table, "INSERT INTO %s (partitionKey, clustering_1, clustering_2, value) VALUES (1, 0, 0, 0)")
         if forceFlush:
             flush(cql, table)
-        assertRows(execute(cql, table, "SELECT * FROM %s"),
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT * FROM %s"),
                    row(1, 0, 0, "B", 0),
                    row(0, 0, 0, "A", null))
 
@@ -205,3 +277,44 @@ def testCKInsertWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(a text, b text, PRIMARY KEY (a, b))") as table:
         assertInvalidThrow(cql, table, InvalidRequest,
                            "INSERT INTO %s (a, b) VALUES ('foo', ?)", 'x'*TOO_BIG)
+
+# The following three tests insert a collection with an empty (zero-length)
+# element. The Python driver can't serialize such a collection, so we
+# serialize it ourselves: a 4-byte count of elements (for a map, of
+# key-value pairs), followed by each element (for a map, each key and value)
+# as a 4-byte length and its bytes.
+# Cassandra 5 fails these tests - it was fixed in Cassandra 6 by
+# CASSANDRA-20667, which also added these tests - so we skip them on older
+# Cassandra (new_to_cassandra_6).
+def serialize_collection(count, elements):
+    return struct.pack('>i', count) + b''.join(struct.pack('>i', len(e)) + e for e in elements)
+
+def insertRaw(cql, table, value):
+    bound = BoundStatement(cql.prepare(f"INSERT INTO {table}(pk, v1, v2) VALUES (?, ?, ?)"))
+    bound.values = [struct.pack('>i', 0), value, value]
+    cql.execute(bound)
+
+def testMapEmptyValueMeaningless(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int primary key, v1 map<int, int>, v2 frozen<map<int, int>>)") as table:
+        # A map with one entry, whose key and value are both empty
+        insertRaw(cql, table, serialize_collection(1, [b'', b'']))
+
+        expected = {None: None}
+        assertRows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, expected, expected))
+
+def testListEmptyValueMeaningless(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int primary key, v1 list<int>, v2 frozen<list<int>>)") as table:
+        insertRaw(cql, table, serialize_collection(1, [b'']))
+
+        expected = [None]
+        assertRows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, expected, expected))
+
+def testSetEmptyValueMeaningless(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int primary key, v1 set<int>, v2 frozen<set<int>>)") as table:
+        insertRaw(cql, table, serialize_collection(1, [b'']))
+
+        expected = {None}
+        assertRows(execute(cql, table, "SELECT * FROM %s"),
+                   row(0, expected, expected))

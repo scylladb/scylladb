@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 8d91b469afd3fcafef7ef85c10c8acc11703ba2d
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -18,7 +18,7 @@ def testInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b text, c double)") as table:
         assertInvalidMessage(cql, table, "cannot be cast to", "SELECT CAST(a AS boolean) FROM %s")
 
-def testNumericCastsInSelectionClause(cql, test_keyspace, cassandra_bug):
+def testNumericCastsInSelectionClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a tinyint primary key, b smallint, c int, d bigint, e float, f double, g decimal, h varint, i int)") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e, f, g, h) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 1, 2, 3, 4, 5.2, 6.3, Decimal("6.3"), 4)
@@ -97,13 +97,6 @@ def testNumericCastsInSelectionClause(cql, test_keyspace, cassandra_bug):
                 "CAST(i AS double) FROM %s"),
                    row(1.0, 2.0, 3.0, 4.0, c_float(5.2).value, 6.3, 6.3, 4.0, None))
 
-        # Cassandra has a bug here (CASSANDRA-18647), so this test was modified
-        # from the original and fails on Cassandra and marked cassandra_bug:
-        # When the "float" (32-bit) number 5.2 is converted to "decimal",
-        # Cassandra wrongly expands it to double and becomes 5.199999809265137,
-        # and only then converted to decimal with all those silly extra digits.
-        # Scylla, correctly, only keeps the relevant digits for the original
-        # float - 5.2.
         assertRows(execute(cql, table, "SELECT CAST(a AS decimal), " +
                 "CAST(b AS decimal), " +
                 "CAST(c AS decimal), " +
@@ -117,8 +110,6 @@ def testNumericCastsInSelectionClause(cql, test_keyspace, cassandra_bug):
                        Decimal("2"),
                        Decimal("3"),
                        Decimal("4"),
-                       # this fails in Cassandra. In Cassandra, we get
-                       # Decimal(str(c_float(5.2).value))
                        Decimal("5.2"),
                        Decimal("6.3"),
                        Decimal("6.3"),
@@ -260,6 +251,10 @@ def testCounterCastsInSelectionClause(cql, test_keyspace):
                 "CAST(b AS text) FROM %s"),
                    row(2, 2, 2, 2, 2.0, 2.0, Decimal("2"), "2", "2"))
 
+# Cassandra's message names the function system.cast_as_int, older versions
+# of Cassandra (and maybe Scylla, when #14522 is fixed) system.castAsInt.
+CAST_AS_INT_AMBIGUOUS = "Ambiguous call to function system.(cast_as_int|castAsInt)"
+
 # Verifies that the {@code CAST} function can be used in the values of {@code INSERT INTO} statements.
 @pytest.mark.xfail(reason="issue #14522")
 def testCastsInInsertIntoValues(cql, test_keyspace):
@@ -277,7 +272,7 @@ def testCastsInInsertIntoValues(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT v FROM %s"), row(3))
 
         # Cast of placeholder without type hint
-        assertInvalidMessage(cql, table, "Ambiguous call to function system.castAsInt",
+        assertInvalidMessageRE(cql, table, CAST_AS_INT_AMBIGUOUS,
                                     "INSERT INTO %s (k, v) VALUES (1, CAST(? AS int))", 3.4)
 
         # Type hint of cast
@@ -312,7 +307,7 @@ def testCastsInUpdateValues(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT v FROM %s"), row(3))
 
         # Cast of placeholder without type hint
-        assertInvalidMessage(cql, table, "Ambiguous call to function system.castAsInt",
+        assertInvalidMessageRE(cql, table, CAST_AS_INT_AMBIGUOUS,
                                     "UPDATE %s SET v = CAST(? AS int) WHERE k = 1", 3.4)
 
         # Type hint of cast
@@ -350,7 +345,7 @@ def testCastsInUpdateWhereClause(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT v FROM %s WHERE k = ?", 3), row(3))
 
         # Cast of placeholder without type hint
-        assertInvalidMessage(cql, table, "Ambiguous call to function system.castAsInt",
+        assertInvalidMessageRE(cql, table, CAST_AS_INT_AMBIGUOUS,
                                     "UPDATE %s SET v = ? WHERE k = CAST(? AS int)", 3, 3.4)
 
         # Type hint of cast
@@ -385,7 +380,7 @@ def testCastsInSelectWhereClause(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT k FROM %s WHERE k = CAST((float) ? AS int)", 3.4), row(3))
 
         # Cast of placeholder without type hint
-        assertInvalidMessage(cql, table, "Ambiguous call to function system.castAsInt",
+        assertInvalidMessageRE(cql, table, CAST_AS_INT_AMBIGUOUS,
                                     "SELECT k FROM %s WHERE k = CAST(? AS int)", 3.4)
 
         # Type hint of cast
@@ -420,7 +415,7 @@ def testCastsInDeleteWhereClause(cql, test_keyspace):
         assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE k = ?", 3))
 
         # Cast of placeholder without type hint
-        assertInvalidMessage(cql, table, "Ambiguous call to function system.castAsInt",
+        assertInvalidMessageRE(cql, table, CAST_AS_INT_AMBIGUOUS,
                                     "DELETE FROM %s WHERE k = CAST(? AS int)", 3.4)
 
         # Type hint of cast

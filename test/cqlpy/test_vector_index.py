@@ -17,7 +17,8 @@
 
 import pytest
 import json
-from .util import new_test_table, is_scylla, unique_name, config_value_context
+import random
+from .util import new_test_table, is_scylla, unique_name, config_value_context, wait_for_vector_index
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 supported_filtering_types = [
@@ -1114,3 +1115,62 @@ def test_vector_index_option_rescoring_validation(cql, test_keyspace, scylla_onl
         for rescoring in ['invalid_value', '0', '1', ' true', 'false ']:
             with pytest.raises(InvalidRequest, match="Invalid value in option 'rescoring' for vector index"):
                 cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'rescoring': '{rescoring}'}}")
+
+# Reproduces VECTOR-1048: after a table is dropped and re-created with the
+# same name, the vector store may check the new table's vector index against
+# the dropped table's schema, which it still has cached. If the old schema
+# isn't supported by the vector store - here, it has a vector clustering key
+# (VECTOR-687) - the new index is skipped, and never retried, so it is never
+# served. This test needs a vector store (test/cqlpy/run --vs), and
+# deliberately re-creates a table with the same name.
+# The bug depends on a race inside the vector store - whether its driver
+# refreshes the cached schema before the vector store looks at the new
+# index - which the test cannot control, so the test doesn't always fail
+# (it failed in 4 of 5 runs). So the xfail is not strict.
+@pytest.mark.xfail(reason="VECTOR-1048", strict=False)
+def test_vector_index_on_recreated_table(cql, test_keyspace, skip_on_scylla_vnodes, needs_vector_store):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (pk int, ck vector<float, 2>, PRIMARY KEY (pk, ck))")
+    try:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(ck) USING 'sai'")
+        # Wait until the vector store has seen the first table: It lists all
+        # indexes whenever the schema changes, so once it serves an index
+        # created after ours, it has also seen ours.
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v vector<float, 2>") as other_table:
+            cql.execute(f"CREATE CUSTOM INDEX ON {other_table}(v) USING 'sai'")
+            wait_for_vector_index(cql, test_keyspace, other_table.split('.')[1] + '_v_idx')
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+    cql.execute(f"CREATE TABLE {table} (pk int, ck int, v vector<float, 2>, PRIMARY KEY (pk, ck))")
+    try:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, 2, [1.0, 2.0])")
+        wait_for_vector_index(cql, test_keyspace, table.split('.')[1] + '_v_idx', 1)
+        assert list(cql.execute(f"SELECT pk, ck FROM {table} ORDER BY v ANN OF [1.0, 2.0] LIMIT 1")) == [(1, 2)]
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+
+# Reproduces VECTOR-1051: An ANN search restricted to one partition, with
+# ALLOW FILTERING, on a global vector index, may silently miss the
+# partition's rows - even return no rows at all for a partition which has
+# a row. The vector store applies the restriction as a filter during the
+# approximate graph search, which may end before it finds the few vectors
+# which pass such a selective filter. In this test, each of 500 partitions
+# has one row, and searching each partition should find its row. This test
+# needs a vector store (test/cqlpy/run --vs).
+# Each search misses with only a small probability, so the test doesn't
+# always fail (it failed in 7 of 8 runs), and the xfail is not strict.
+@pytest.mark.xfail(reason="VECTOR-1051", strict=False)
+def test_vector_search_restricted_to_partition(cql, test_keyspace, skip_on_scylla_vnodes, needs_vector_store):
+    rand = random.Random(1)
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v vector<float, 50>") as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+        n = 500
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        for pk in range(n):
+            cql.execute(insert, [pk, [rand.uniform(-1, 1) for _ in range(50)]])
+        wait_for_vector_index(cql, test_keyspace, table.split('.')[1] + '_v_idx', n)
+        search = cql.prepare(f"SELECT pk FROM {table} WHERE pk = ? ORDER BY v ANN OF ? LIMIT 10 ALLOW FILTERING")
+        missed = [pk for pk in range(n)
+                  if list(cql.execute(search, [pk, [rand.uniform(-1, 1) for _ in range(50)]])) != [(pk,)]]
+        assert not missed, f"{len(missed)} of {n} searches missed their partition's row"

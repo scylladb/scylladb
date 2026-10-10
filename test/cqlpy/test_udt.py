@@ -84,7 +84,8 @@ def test_writetime_field_on_wrong_type(cql, test_keyspace):
 # difference from Cassandra, we mark this test as xfail. In the future we
 # can consider if Cassandra's support for field timestamps in frozen UDTs
 # but not tuples is a mistake, and replace the xfail by cassandra_bug.
-@pytest.mark.xfail(reason="Cassandra allows WRITETIME on fields of frozen UDTs, but Scylla does not")
+# Reproduces SCYLLADB-5167 (WRITETIME and TTL of a field of a frozen UDT).
+@pytest.mark.xfail(reason="SCYLLADB-5167")
 def test_writetime_field_on_frozen_udt(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(a int, b int)') as typ:
         schema = f'p int PRIMARY KEY, x frozen<{typ}>'
@@ -96,7 +97,9 @@ def test_writetime_field_on_frozen_udt(cql, test_keyspace):
             # only valid for non-frozen UDT columns". Cassandra allows this.
             assert list(cql.execute(f'SELECT WRITETIME(x.a) FROM {table} WHERE p={p}')) == [(timestamp,)]
 
-@pytest.mark.xfail(reason="Cassandra allows TTL on fields of frozen UDTs, but Scylla does not")
+# Like test_writetime_field_on_frozen_udt, but for TTL.
+# Reproduces SCYLLADB-5167 (WRITETIME and TTL of a field of a frozen UDT).
+@pytest.mark.xfail(reason="SCYLLADB-5167")
 def test_ttl_field_on_frozen_udt(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(a int, b int)') as typ:
         schema = f'p int PRIMARY KEY, x frozen<{typ}>'
@@ -148,3 +151,15 @@ def test_ttl_frozen_udt(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table}(p, x) VALUES ({p}, {{a: 1, b: 2}}) USING TTL {ttl}")
             [(t,)] = cql.execute(f"SELECT TTL(x) FROM {table} WHERE p={p}")
             assert t is not None and t <= ttl and t > ttl - 100
+# Both Scylla and Cassandra refuse to ALTER TYPE ... ADD a field to a UDT
+# used in a partition key (CASSANDRA-15933, tested in cassandra_tests/'s
+# AlterTest.testAlterTypeUsedInPartitionKey). Scylla also refuses to rename
+# a field of such a UDT, while Cassandra allows it - renaming a field
+# doesn't change the serialized partition key. So this test is Scylla-only.
+# It replaces dtest's udtencoding_test.py::test_udt_change_in_partition_key
+# (see SCYLLADB-1929).
+def test_alter_type_rename_used_in_partition_key(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(v1 int)') as typ:
+        with new_test_table(cql, test_keyspace, f'pk frozen<{typ}>, val int, PRIMARY KEY(pk)') as table:
+            with pytest.raises(InvalidRequest, match=table.split('.')[1]):
+                cql.execute(f'ALTER TYPE {typ} RENAME v1 TO v1_renamed')

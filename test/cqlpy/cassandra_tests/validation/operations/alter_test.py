@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -25,14 +25,35 @@
 from ...porting import *
 from cassandra.protocol import ConfigurationException
 
-def testDropColumnAsPreparedStatement(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:
-        prepared = cql.prepare(f"ALTER TABLE {table} DROP value")
-        cql.execute(f"INSERT INTO {table} (key, value) VALUES (1, 1)")
-        assert_rows(cql.execute(f"SELECT * FROM {table}"), [1, 1])
-        cql.execute(prepared)
-        cql.execute(f"ALTER TABLE {table} ADD value int")
-        assert_rows(cql.execute(f"SELECT * FROM {table}"), [1, None])
+# Reproduces #24305 (Scylla allows re-adding a dropped column with an
+# incompatible type)
+@pytest.mark.xfail(reason="#24305")
+def testNonFrozenCollectionsAreIncompatibleWithBlob(cql, test_keyspace):
+    collectionTypes = ["map<int, int>", "set<int>", "list<int>"]
+
+    for type in collectionTypes:
+        with create_table(cql, test_keyspace, "(a int, b " + type + ", PRIMARY KEY (a));") as table:
+            execute(cql, table, "ALTER TABLE %s DROP b;")
+            assert_invalid_message(cql, table, "Cannot add a column 'b' of type blob, incompatible with previously dropped column 'b' of type " + type,
+                                   "ALTER TABLE %s ADD b blob;")
+
+    for type in collectionTypes:
+        with create_table(cql, test_keyspace, "(a int, b blob, PRIMARY KEY (a));") as table:
+            execute(cql, table, "ALTER TABLE %s DROP b;")
+            assert_invalid_message(cql, table, "Cannot add a column 'b' of type " + type + ", incompatible with previously dropped column 'b' of type blob",
+                                   "ALTER TABLE %s ADD b " + type + ";")
+
+# Reproduces #24305 (Scylla allows re-adding a dropped column with an
+# incompatible type)
+@pytest.mark.xfail(reason="#24305")
+def testFrozenCollectionsAreNotCompatibleWithBlob(cql, test_keyspace):
+    collectionTypes = ["frozen<map<int, int>>", "frozen<set<int>>", "frozen<list<int>>"]
+
+    for type in collectionTypes:
+        with create_table(cql, test_keyspace, "(a int, b " + type + ", PRIMARY KEY (a));") as table:
+            execute(cql, table, "ALTER TABLE %s DROP b;")
+            assert_invalid_message(cql, table, "Cannot add a column 'b' of type blob, incompatible with previously dropped column 'b' of type " + type,
+                                   "ALTER TABLE %s ADD b blob;")
 
 def testAddList(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id text PRIMARY KEY, content text)") as table:
@@ -147,6 +168,30 @@ def testDropMultipleWithTimestamp(cql, test_keyspace):
                [1, 4, 4, 4, 4],
                [1, 100, 100, 100, 100])
 
+# The Java test also creates a multi-column custom index, using Cassandra's
+# test-only StubIndex class, on columns v1 and v2, and checks that they
+# can't be dropped either. We can't create such an index, so we only check
+# the regular index.
+def testDropColumnWithIndex(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v1 int, v2 int, v3 int, v4 int, PRIMARY KEY (k, c))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(v3)")
+
+        # Scylla's message is "Cannot drop column v3 from base table ...:
+        # materialized view ... needs this column".
+        assert_invalid_message_re(cql, table, "Cannot drop column v3 (because it has dependent secondary indexes|from base table .*: materialized view .* needs this column)",
+                                  "ALTER TABLE %s DROP (v3)")
+
+# The Java test also creates a multi-column custom index, using Cassandra's
+# test-only StubIndex class, on columns c1 and c2, and checks that they
+# can't be renamed either. We can't create such an index, so we only check
+# the regular index.
+def testRenameColumnWithIndex(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c1 int, c2 int, c3 int, v int, PRIMARY KEY (k, c1, c2, c3))") as table:
+        execute(cql, table, "CREATE INDEX ON %s(c3)")
+
+        assert_invalid_message_re(cql, table, "Can(no|')t rename column c3 because it has dependent secondary indexes",
+                               "ALTER TABLE %s RENAME c3 to v99")
+
 def testChangeStrategyWithUnquotedAgrument(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id text PRIMARY KEY)") as table:
         assert_invalid_syntax(cql, table,
@@ -208,23 +253,14 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 # framework because it doesn't create more than one DC - which these
 # two tests try to test.
 
-# Test {@link ConfigurationException} thrown on alter keyspace to no DC
-# option in replication configuration.
-# Reproduces CASSANDRA-12681 and Scylla #10036
-def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc, has_tablets):
-    if has_tablets:
-        extra_opts = " AND TABLETS = {'enabled': false}"
-    else:
-        extra_opts = ""
-    # Create keyspaces
-    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }" + extra_opts) as abc:
-        with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }" + extra_opts) as xyz:
-            # Try to alter the created keyspace without any option
-            assert_invalid_throw(cql, xyz, ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'SimpleStrategy' }")
-            assert_invalid_throw(cql, abc, ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy' }")
-            # Make sure that the alter works as expected
-            execute(cql, abc, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
-            execute(cql, xyz, "ALTER KEYSPACE %s WITH replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
+# Cassandra removed the test testAlterKeyspaceWithNoOptionThrowsConfigurationException,
+# which checked that ALTER KEYSPACE without replication options is rejected:
+# Cassandra now accepts it, keeping the keyspace's replication factor (the
+# new testDefaultRF checks this, but wasn't translated because it changes
+# Cassandra's default_keyspace_rf configuration through internal APIs, and
+# needs a second data center). Scylla still deliberately rejects it (#10036),
+# so this check moved to Scylla's own test_keyspace.py,
+# test_alter_keyspace_nts_no_options.
 
 # Test {@link ConfigurationException} thrown when altering a keyspace to
 # invalid DC option in replication configuration.
@@ -265,12 +301,56 @@ def testDowngradeToCompact(cql, test_keyspace):
         execute(cql, table, "alter table %s drop v")
         execute(cql, table, "alter table %s add v1 int")
 
+# Reproduces #24305 (Scylla allows re-adding a dropped column with an
+# incompatible type)
+@pytest.mark.xfail(reason="#24305")
+def testInvalidDroppingAndAddingOfCollections(cql, test_keyspace):
+    for typePair in [["list<int>", "list<varint>"],
+                     ["set<int>", "set<varint>"],
+                     ["map<int, int>", "map<varint, varint>"],
+                     ["list<int>", "frozen<list<varint>>"],
+                     ["set<int>", "frozen<set<varint>>"],
+                     ["map<int, int>", "frozen<map<varint, varint>>"]]:
+        with create_table(cql, test_keyspace, "(k int, c int, v " + typePair[0] + ", PRIMARY KEY (k, c))") as table:
+            execute(cql, table, "alter table %s drop v")
+            assert_invalid_message(cql, table, "Cannot add a column 'v' of type "
+                                   + typePair[1] + ", incompatible with previously dropped column 'v' of type " + typePair[0],
+                                   "alter table %s add v " + typePair[1])
+
+# Reproduces #24305 (Scylla allows re-adding a dropped column with an
+# incompatible type)
+@pytest.mark.xfail(reason="#24305")
+def testDropFixedAddVariable(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
+        execute(cql, table, "alter table %s drop v")
+        with pytest.raises(InvalidRequest):
+            execute(cql, table, "alter table %s add v varint")
+
+# Reproduces #24305 (Scylla allows re-adding a dropped column with an
+# incompatible type)
+@pytest.mark.xfail(reason="#24305")
+def testDropSimpleAddComplex(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v set<text>, PRIMARY KEY (k, c))") as table:
+        execute(cql, table, "alter table %s drop v")
+        with pytest.raises(InvalidRequest):
+            execute(cql, table, "alter table %s add v blob")
+
+def testrenameToEmptyTest(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c1 int, v int, PRIMARY KEY (k, c1))") as table:
+        with pytest.raises(SyntaxException):
+            execute(cql, table, "ALTER TABLE %s RENAME c1 TO \"\"")
+
 # tests CASSANDRA-9565
 def testDoubleWith(cql, test_keyspace):
     stmts = [ "ALTER KEYSPACE WITH WITH DURABLE_WRITES = true",
               f"ALTER KEYSPACE {test_keyspace} WITH WITH DURABLE_WRITES = true" ]
     for stmt in stmts:
         assert_invalid_throw(cql, test_keyspace, SyntaxException, stmt)
+
+# The Java test testAlterTableWithMemtable was not translated: Scylla does
+# not support CEP-11 (pluggable memtable implementations), and the test also
+# checks Cassandra's internal memtable classes. See also CreateTest's
+# testCreateTableWithMemtable.
 
 @pytest.mark.xfail(reason="Issue #8948")
 def testAlterTableWithCompression(cql, test_keyspace):
@@ -311,10 +391,6 @@ def testAlterTableWithCompression(cql, test_keyspace):
 
         assert_invalid_throw_message(cql, table, "If the 'enabled' option is set to false no other options must be specified", ConfigurationException, "ALTER TABLE %s WITH compression = { 'enabled' : 'false', 'class' : 'SnappyCompressor'};")
 
-        assert_invalid_throw_message(cql, table, "The 'sstable_compression' option must not be used if the compression algorithm is already specified by the 'class' option", ConfigurationException, "ALTER TABLE %s WITH compression = { 'sstable_compression' : 'SnappyCompressor', 'class' : 'SnappyCompressor'};")
-
-        assert_invalid_throw_message(cql, table, "The 'chunk_length_kb' option must not be used if the chunk length is already specified by the 'chunk_length_in_kb' option", ConfigurationException, "ALTER TABLE %s WITH compression = { 'class' : 'SnappyCompressor', 'chunk_length_kb' : 32 , 'chunk_length_in_kb' : 32 };")
-
         assert_invalid_throw_message(cql, table, "Invalid negative min_compress_ratio", ConfigurationException, "ALTER TABLE %s WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : -1 };")
 
         assert_invalid_throw_message(cql, table, "min_compress_ratio can either be 0 or greater than or equal to 1", ConfigurationException, "ALTER TABLE %s WITH compression = { 'class' : 'SnappyCompressor', 'min_compress_ratio' : 0.5 };")
@@ -353,12 +429,120 @@ def testAlterTypeUsedInPartitionKey(cql, test_keyspace):
             # frozen UDT used directly in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type1}>, val int, PRIMARY KEY(pk))") as table1:
                 assert_invalid_message(cql, type1, table1, "ALTER TYPE %s ADD v2 int;")
-                # Covers dtest cql_types_test.py::test_udt_change_in_partition_key
-                # ALTER TYPE RENAME must also be rejected on PK UDTs
-                assert_invalid_message(cql, type1, table1, "ALTER TYPE %s RENAME v1 TO v1_renamed;")
             # frozen UDT used in a frozen UDT used in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type2}>, val int, PRIMARY KEY(pk))") as table2:
                 assert_invalid_message(cql, type1, table2, "ALTER TYPE %s ADD v2 int;")
             # frozen UDT used in a frozen collection used in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<list<frozen<{type1}>>>, val int, PRIMARY KEY(pk))") as table3:
                 assert_invalid_message(cql, type1, table3, "ALTER TYPE %s ADD v2 int;")
+
+# The Java test disables DROP COMPACT STORAGE through Cassandra's internal
+# configuration APIs. We can't do that, but it is already disabled by
+# default (in Cassandra, the "drop_compact_storage_enabled" option).
+def testAlterDropCompactStorageDisabled(cql, test_keyspace, compact_storage):
+    with create_table(cql, test_keyspace, "(k text, i int, PRIMARY KEY (k, i)) WITH COMPACT STORAGE") as table:
+        # Scylla never implemented DROP COMPACT STORAGE (see #3882), so it
+        # rejects this statement with a syntax error.
+        with pytest.raises((InvalidRequest, SyntaxException), match="DROP COMPACT STORAGE is disabled. Enable in cassandra.yaml to use.|Unexpected 'STORAGE'"):
+            execute(cql, table, "ALTER TABLE %s DROP COMPACT STORAGE")
+
+# Test for CASSANDRA-14564
+def testAlterByAddingColumnToCompactTableShouldFail(cql, test_keyspace, compact_storage):
+    with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
+        assert_invalid_message(cql, table, "Cannot add new column to a COMPACT STORAGE table",
+                               "ALTER TABLE %s ADD column1 text")
+
+def testAlterTableWithoutCreateTableOrIfExistsClause(cql, test_keyspace):
+    tbl1 = test_keyspace + "." + unique_name()
+    # Scylla's message is "unconfigured table ...".
+    assert_invalid_message_re(cql, tbl1, f"Table '{tbl1}' doesn't exist|unconfigured table",
+                              "ALTER TABLE %s ADD myCollection list<text>;")
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableWithoutCreateTableWithIfExists(cql, test_keyspace):
+    tbl1 = test_keyspace + "." + unique_name()
+    assert_empty(execute(cql, tbl1, "ALTER TABLE IF EXISTS %s ADD myCollection list<text>;"))
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableWithIfExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)); ") as table:
+        execute(cql, table, "ALTER TABLE IF EXISTS %s ADD myCollection list<text>;")
+        execute(cql, table, "INSERT INTO %s (a, b, myCollection) VALUES (1, 2, ['first element']);")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s;"), row(1, 2, ["first element"]))
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableAddColWithIfNotExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)); ") as table:
+        execute(cql, table, "ALTER TABLE %s ADD IF NOT EXISTS a int;")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 2);")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s;"), row(1, 2))
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableAddExistingColumnWithoutIfExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)); ") as table:
+        assert_invalid_message(cql, table, "Column with name 'a' already exists",
+                               "ALTER TABLE IF EXISTS %s ADD a int")
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableDropNotExistingColWithIfExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)); ") as table:
+        execute(cql, table, "ALTER TABLE %s DROP IF EXISTS myCollection")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 2);")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s;"), row(1, 2))
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableDropExistingColWithIfExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, myCollection list<text>, PRIMARY KEY (a, b)); ") as table:
+        execute(cql, table, "ALTER TABLE %s DROP IF EXISTS myCollection")
+        execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 2);")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s;"), row(1, 2))
+
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterTableRenameExistingColWithIfExists(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(a int, b int, myCollection list<text>, PRIMARY KEY (a, b)); ") as table:
+        execute(cql, table, "ALTER TABLE %s RENAME IF EXISTS a TO y AND b to z")
+        execute(cql, table, "INSERT INTO %s (y, z, myCollection) VALUES (1, 2, ['first element']);")
+        assert_rows(execute(cql, table, "SELECT * FROM %s;"), row(1, 2, ["first element"]))
+
+# Despite its name, the Java test testAlterTypeWithIfExists doesn't use IF
+# EXISTS - it is a copy of testAlterTypeUsedInPartitionKey.
+def testAlterTypeWithIfExists(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(v1 int)") as type1:
+        with create_type(cql, test_keyspace, f"(v1 frozen<{type1}>, v2 frozen<{type1}>)") as type2:
+            # frozen UDT used directly in a partition key
+            with create_table(cql, test_keyspace, f"(pk frozen<{type1}>, val int, PRIMARY KEY(pk))") as table1:
+                # assert that ALTER fails and that the error message contains all the names of the table referencing it
+                assert_invalid_message(cql, type1, table1, "ALTER TYPE %s ADD v2 int;")
+            # frozen UDT used in a frozen UDT used in a partition key
+            with create_table(cql, test_keyspace, f"(pk frozen<{type2}>, val int, PRIMARY KEY(pk))") as table2:
+                assert_invalid_message(cql, type1, table2, "ALTER TYPE %s ADD v2 int;")
+            # frozen UDT used in a frozen collection used in a partition key
+            with create_table(cql, test_keyspace, f"(pk frozen<list<frozen<{type1}>>>, val int, PRIMARY KEY(pk))") as table3:
+                assert_invalid_message(cql, type1, table3, "ALTER TYPE %s ADD v2 int;")
+
+# The Java test uses SimpleStrategy, which Scylla doesn't support with
+# tablets, so we use NetworkTopologyStrategy instead.
+# Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
+@pytest.mark.xfail(reason="SCYLLADB-5144")
+def testAlterKeyspaceWithIfExists(cql, test_keyspace, this_dc):
+    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as ks1:
+        cql.execute("ALTER KEYSPACE IF EXISTS " + ks1 + " WITH durable_writes=true")
+
+        assert_rows_ignoring_order_and_extra(cql.execute("SELECT keyspace_name, durable_writes, replication FROM system_schema.keyspaces"),
+                                             row(ks1, True, {"class": "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc: "1"}))
+
+        # The Java test checks that altering a keyspace "ks1" - which
+        # doesn't exist - without IF EXISTS fails.
+        with pytest.raises(InvalidRequest):
+            cql.execute("ALTER KEYSPACE ks1 WITH replication= { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")

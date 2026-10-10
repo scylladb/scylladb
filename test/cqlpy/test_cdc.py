@@ -448,3 +448,16 @@ def test_create_if_not_exists_with_cdc(scylla_only, cql, test_keyspace):
         cql.execute(create_table_query)
     finally:
         cql.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+# CDC cannot accept a write with a timestamp far in the past (#24430), so it
+# refuses it - and should do this with a clear InvalidRequest error, which
+# explains the problem. With vnodes, it does. But with tablets, the write
+# fails with a generic server error, saying only that no CDC streams were
+# found for the timestamp. Reproduces SCYLLADB-5228.
+@pytest.mark.parametrize("test_keyspace",
+    [pytest.param("tablets", marks=pytest.mark.xfail(reason="SCYLLADB-5228")), "vnodes"],
+    indirect=True)
+def test_cdc_write_with_old_timestamp(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int", "WITH cdc = {'enabled': true}") as table:
+        with pytest.raises(InvalidRequest, match="from the past"):
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 1) USING TIMESTAMP 1")
