@@ -1487,13 +1487,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         continue;
                     }
                     auto& other_ks = _db.find_keyspace(other_ks_name);
-                    if (other_ks.uses_tablets()) {
-                        continue;
-                    }
-                    bool other_ks_has_tablet_map = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
-                        return tmd.has_tablet_map(s->id());
-                    });
-                    if (other_ks_has_tablet_map) {
+                    if (replica::is_keyspace_under_tablets_migration(*other_ks.metadata(), tmd)) {
                         has_other_migrating_ks = true;
                         break;
                     }

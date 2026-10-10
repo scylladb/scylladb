@@ -4515,21 +4515,9 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
         // keyspace. prepare_for_tablets_migration() will fail if
         // intended_storage_mode is already set for any node.
         const auto& tablet_metadata = get_token_metadata().tablets();
-        bool has_any_migrating_table = false;
-        for (const auto& ks : _db.local().get_non_system_keyspaces()) {
-            auto& keyspace = _db.local().find_keyspace(ks);
-            if (!keyspace.uses_tablets()) {
-                for (const auto& schema : keyspace.metadata()->tables()) {
-                    if (tablet_metadata.has_tablet_map(schema->id())) {
-                        has_any_migrating_table = true;
-                        break;
-                    }
-                }
-            }
-            if (has_any_migrating_table) {
-                break;
-            }
-        }
+        bool has_any_migrating_table = std::ranges::any_of(_db.local().get_non_system_keyspaces(), [&] (const sstring& ks_name) {
+            return replica::is_keyspace_under_tablets_migration(*_db.local().find_keyspace(ks_name).metadata(), tablet_metadata);
+        });
         if (!has_any_migrating_table) {
             throw std::runtime_error(::format("Cannot set intended storage mode to {}: no migration is in progress. You need to start a migration first.", mode));
         }
