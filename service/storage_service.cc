@@ -4862,7 +4862,9 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         const auto& tm = get_token_metadata();
         const auto& tablet_metadata = tm.tablets();
 
-        auto tables = ks.metadata()->tables();
+        // Views and CDC log tables have tablet maps of their own and reshard like any
+        // other table.
+        auto tables = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>();
         if (tables.empty()) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
