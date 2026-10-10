@@ -795,3 +795,12 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+def get_commitlog_segment_id(segment_name: str) -> int:
+    """
+    The id of a commitlog segment, taken from its name: <prefix>-<version>-<id>[.<tag>].log.
+    """
+    suffix = segment_name.rsplit("-", 1)[1]
+    prefix = suffix.split(".", 1)[0]
+    return int(prefix)
