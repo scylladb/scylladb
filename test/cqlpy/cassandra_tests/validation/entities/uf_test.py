@@ -731,14 +731,17 @@ def testEmptyString(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT " + fNameICC + "(empty_int) FROM %s"), row(0))
         assert_rows(execute(cql, table, "SELECT " + fNameICN + "(empty_int) FROM %s"), row(None))
 
-# Reproduces SCYLLADB-5165 (function names with '/', '[' or ']' should be
-# rejected)
-@pytest.mark.xfail(reason="SCYLLADB-5165")
+# Reproduces SCYLLADB-5165 (function names with '/' should be rejected)
 def testRejectInvalidFunctionNamesOnCreation(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
         for funcName in ["my/fancy/func", "my_other[fancy]func"]:
-            assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Function name '{funcName}' is invalid",
-                                   f'CREATE OR REPLACE FUNCTION {KEYSPACE_PER_TEST}."{funcName}"(val int) ' +
-                                   "RETURNS NULL ON NULL INPUT " +
-                                   "RETURNS int " +
-                                   java_or_lua(cql, "return val;", "return val"))
+            # Scylla only forbids '/' in function names. Unlike Cassandra, it
+            # deliberately allows '[' and ']', which are safe in its encoding
+            # of a function's auth resource (test_permissions.py's
+            # test_udf_permissions_quoted_names checks such a function).
+            if '/' in funcName or not is_scylla(cql):
+                assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Function name '{funcName}' is invalid",
+                                       f'CREATE OR REPLACE FUNCTION {KEYSPACE_PER_TEST}."{funcName}"(val int) ' +
+                                       "RETURNS NULL ON NULL INPUT " +
+                                       "RETURNS int " +
+                                       java_or_lua(cql, "return val;", "return val"))
