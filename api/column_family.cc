@@ -392,6 +392,9 @@ rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http:
 
         auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
         auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        if (capacity == 0) {
+            throw bad_param_exception("capacity must be positive");
+        }
         auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
@@ -1097,6 +1100,9 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
         auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
         auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        if (capacity == 0) {
+            throw bad_param_exception("capacity must be positive");
+        }
         auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
