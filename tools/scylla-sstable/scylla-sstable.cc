@@ -455,25 +455,34 @@ std::optional<sstring> get_sstable_directory_argument(const bpo::variables_map& 
 // enumerates them: a directory listing for local storage, the sstables registry
 // of the node for a table living in object storage.
 //
-// Only sealed sstables are picked up, and an sstable the node deletes while the
-// scan is running is left out, as the data dir of a running node is a moving
-// target.
+// Only sealed sstables are picked up. An sstable with components missing fails
+// the scan, unless \p ignore_incomplete_sstables, in which case it is left out:
+// the data dir of a running node is a moving target, the node can delete an
+// sstable while the scan is running.
 std::vector<sstables::shared_sstable> load_sstables_of_storage(schema_ptr schema, sstables::sstables_manager& sst_man,
-        lw_shared_ptr<const data_dictionary::storage_options> storage_options) {
+        lw_shared_ptr<const data_dictionary::storage_options> storage_options, bool ignore_incomplete_sstables) {
     sstables::sstable_directory sst_dir(sst_man, schema, &schema->get_sharder(), std::move(storage_options),
             sstables::sstable_state::normal, default_io_error_handler_gen());
     auto flags = sstables::sstable_directory::process_flags::read_only();
-    flags.skip_vanished_sstables = true;
+    flags.skip_vanished_sstables = ignore_incomplete_sstables;
     sst_dir.scan_sstable_dir().get();
-    sst_dir.process_sstable_dir(flags).get();
+    try {
+        sst_dir.process_sstable_dir(flags).get();
+    } catch (...) {
+        if (components_are_missing(std::current_exception())) {
+            throw_with_nested(std::runtime_error("found an sstable with components missing, it might have been deleted"
+                    " while being loaded, pass --ignore-incomplete-sstables to leave such sstables out"));
+        }
+        throw;
+    }
     return std::move(sst_dir.get_unsorted_sstables());
 }
 
 // The sstables of a directory -- typically the table directory of a node.
 std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr schema, sstables::sstables_manager& sst_man,
-        const std::filesystem::path& directory) {
+        const std::filesystem::path& directory, bool ignore_incomplete_sstables) {
     return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
-            data_dictionary::make_local_options(directory)));
+            data_dictionary::make_local_options(directory)), ignore_incomplete_sstables);
 }
 
 } // anonymous namespace
@@ -517,7 +526,8 @@ std::vector<sstables::shared_sstable> load_sstables_of_table(schema_ptr schema, 
     auto unplug_registry = defer([&sst_man] noexcept { sst_man.unplug_sstables_registry(); });
 
     return load_sstables_of_storage(schema, sst_man,
-            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)));
+            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)),
+            app_config.contains("ignore-incomplete-sstables"));
 }
 
 } // namespace tools
@@ -544,11 +554,11 @@ locator::host_id resolve_local_host_id(const bpo::variables_map& app_config, con
 }
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
-        const std::vector<sstring>& sstable_names) {
+        const std::vector<sstring>& sstable_names, bool ignore_incomplete_sstables) {
     std::vector<sstables::shared_sstable> sstables;
     sstables.resize(sstable_names.size());
 
-    parallel_for_each(sstable_names, [schema, &sst_man, &sstm, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
+    parallel_for_each(sstable_names, [schema, &sst_man, &sstm, &sstable_names, &sstables, ignore_incomplete_sstables] (const sstring& sst_name) -> future<> {
         const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
         auto sst_path = std::filesystem::path(sst_name);
 
@@ -644,7 +654,16 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                 sstables::throw_malformed_sstable_exception(ed_result.error());
             }
             ed = std::move(*ed_result);
-            sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+            try {
+                sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+            } catch (const std::filesystem::filesystem_error& e) {
+                // the sstable can be deleted from under us, just like its components can
+                if (ignore_incomplete_sstables && e.code() == std::errc::no_such_file_or_directory) {
+                    sst_log.warn("Skipping SSTable {}, it doesn't exist: {}", sst_name, e.what());
+                    co_return;
+                }
+                throw;
+            }
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
@@ -658,13 +677,15 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
             auto ex = std::current_exception();
-            if (components_are_missing(ex)) {
-                sst_log.warn("Skipping SSTable {}, it was deleted while being loaded: {:t}", sst->get_filename(), ex);
+            const auto incomplete = components_are_missing(ex);
+            if (incomplete && ignore_incomplete_sstables) {
+                sst_log.warn("Skipping SSTable {}, its components are missing: {:t}", sst->get_filename(), ex);
                 co_return;
             }
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
-            auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
+            auto msg = fmt::format("Could not load SSTable: {}{}", sst->get_filename(), incomplete
+                    ? ", its components are missing, pass --ignore-incomplete-sstables to skip it" : "");
             fmt::print(std::cerr, "{}: {:t}\n", msg, ex);
             throw_with_nested(std::runtime_error(msg));
         }
@@ -672,8 +693,12 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         sstables[i] = std::move(sst);
     }).get();
 
-    // the sstables which were deleted while being loaded left a hole behind
+    // the skipped incomplete sstables left a hole behind
     std::erase(sstables, nullptr);
+    if (sstables.empty()) {
+        // say so, instead of the operation reporting that no sstables were specified
+        throw std::runtime_error("all the sstables are incomplete, there is nothing to process");
+    }
 
     return sstables;
 }
@@ -2795,6 +2820,8 @@ const std::vector<operation_option> global_options {
     typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from,"
             " this can be also provided directly with --scylla-data-dir"),
     typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
+    typed_option<>("ignore-incomplete-sstables", "skip sstables which have components missing, instead of failing;"
+            " useful with the sstables of a running node, which can be deleted while being loaded"),
 };
 
 const std::vector<operation_option> global_positional_options{
@@ -3558,7 +3585,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         std::vector<sstables::shared_sstable> sstables;
         if (sstable_directory) {
             try {
-                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory));
+                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory),
+                        app_config.contains("ignore-incomplete-sstables"));
             } catch (...) {
                 fmt::print(std::cerr, "error loading the sstables of {}: {:t}\n",
                         *sstable_directory, std::current_exception());
@@ -3571,7 +3599,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
             try {
-                sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names);
+                sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names,
+                        app_config.contains("ignore-incomplete-sstables"));
             } catch (...) {
                 fmt::print(std::cerr, "error loading sstables: {:t}\n", std::current_exception());
                 return 1;
