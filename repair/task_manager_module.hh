@@ -36,6 +36,8 @@ private:
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
     seastar::condition_variable _done_cond;
+    // Held by run(), so that shutdown can wait for the repairs this node coordinates.
+    seastar::named_gate _running_repairs{"repair::task_manager_module::running_repairs"};
     void start(repair_uniq_id id);
     void done(repair_uniq_id id, bool succeeded);
 public:
@@ -74,6 +76,8 @@ public:
     void abort_repairs_pinning_stale_versions(locator::token_metadata::version_t current_version);
     named_semaphore& range_parallelism_semaphore();
     future<> run(repair_uniq_id id, std::function<void ()> func);
+    // Aborts the module and waits for every run() to finish. Later run() calls fail.
+    future<> abort_and_wait_for_running_repairs();
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress();
     future<bool> is_aborted(const tasks::task_id& uuid, shard_id shard);
