@@ -405,7 +405,7 @@ SEASTAR_TEST_CASE(select_from_external_index_system_tables) {
                 for (const auto& table : external_index_system_tables) {
                     with_user(env, bob, [&env, &table] {
                         BOOST_REQUIRE_EXCEPTION(env.execute_cql(format("SELECT * FROM {}", table)).get(), exceptions::unauthorized_exception,
-                                exception_predicate::message_contains("User bob has none of the permissions (SELECT, TEXT_SEARCH_INDEXING, VECTOR_SEARCH_INDEXING) on"));
+                                exception_predicate::message_contains("User bob has none of the permissions (PATTERN_SEARCH_INDEXING, SELECT, TEXT_SEARCH_INDEXING, VECTOR_SEARCH_INDEXING) on"));
                     });
                 }
 
@@ -422,6 +422,16 @@ SEASTAR_TEST_CASE(select_from_external_index_system_tables) {
                 cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
 
                 // With TEXT_SEARCH_INDEXING permission, bob can also select from these tables
+                for (const auto& table : external_index_system_tables) {
+                    with_user(env, bob, [&env, &table] {
+                        cquery_nofail(env, format("SELECT * FROM {}", table));
+                    });
+                }
+
+                cquery_nofail(env, "REVOKE TEXT_SEARCH_INDEXING ON ALL KEYSPACES FROM bob");
+                cquery_nofail(env, "GRANT PATTERN_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // With PATTERN_SEARCH_INDEXING permission, bob can also select from these tables
                 for (const auto& table : external_index_system_tables) {
                     with_user(env, bob, [&env, &table] {
                         cquery_nofail(env, format("SELECT * FROM {}", table));
@@ -563,5 +573,99 @@ SEASTAR_TEST_CASE(vector_and_text_search_indexing_permissions_are_isolated) {
             enable_tablets(db_config_with_auth()));
 }
 
+
+SEASTAR_TEST_CASE(grant_pattern_search_indexing) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                create_user_if_not_exists(env, bob);
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT PATTERN_SEARCH_INDEXING ON ks.t TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT PATTERN_SEARCH_INDEXING ON KEYSPACE ks TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                cquery_nofail(env, "GRANT PATTERN_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+            },
+            db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(select_from_pattern_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE TABLE ks.t2 (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'pattern_index'");
+                create_user_if_not_exists(env, bob);
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (PATTERN_SEARCH_INDEXING, SELECT) on"));
+                });
+                cquery_nofail(env, "GRANT PATTERN_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t");
+                });
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t2").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has no SELECT permission"));
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+SEASTAR_TEST_CASE(select_from_cdc_log_of_pattern_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'pattern_index'");
+
+                create_user_if_not_exists(env, bob);
+
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t_scylla_cdc_log").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (PATTERN_SEARCH_INDEXING, SELECT) on"));
+                });
+
+                cquery_nofail(env, "GRANT PATTERN_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t_scylla_cdc_log");
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+// PATTERN_SEARCH_INDEXING and TEXT_SEARCH_INDEXING are independent permissions.
+// Neither grants SELECT on a table indexed only with the other index type.
+SEASTAR_TEST_CASE(pattern_and_text_search_indexing_permissions_are_isolated) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.pattern_t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.pattern_t(v) USING 'pattern_index'");
+                cquery_nofail(env, "CREATE TABLE ks.fts_t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.fts_t(v) USING 'fulltext_index'");
+
+                create_user_if_not_exists(env, bob);
+                cquery_nofail(env, "GRANT PATTERN_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.fts_t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (SELECT, TEXT_SEARCH_INDEXING) on"));
+                });
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.pattern_t");
+                });
+
+                cquery_nofail(env, "REVOKE PATTERN_SEARCH_INDEXING ON ALL KEYSPACES FROM bob");
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.pattern_t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (PATTERN_SEARCH_INDEXING, SELECT) on"));
+                });
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.fts_t");
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -14,6 +14,7 @@
 #include "db/config.hh"
 #include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
+#include "index/pattern_index.hh"
 #include "index/vector_index.hh"
 #include "locator/token_metadata_fwd.hh"
 #include "prepared_statement.hh"
@@ -475,6 +476,16 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         auto custom_index = (*custom_index_factory)();
         custom_index->validate(*schema, *_idx_properties, targets, db.features(), db);
         _idx_properties->index_version = custom_index->index_version(*schema);
+
+        // A pattern index changes the results of existing `LIKE` queries on its column.
+        if (dynamic_cast<const secondary_index::pattern_index*>(custom_index.get())) {
+            warnings.emplace_back(format(
+                "Every LIKE on column {} will be served by this pattern index instead of by filtering, even with ALLOW FILTERING. "
+                "Such a query must have the LIKE as its only restriction and a LIMIT of at most 1000, otherwise it fails. "
+                "It is not paged, returns its rows in an unspecified order, and is eventually consistent. "
+                "Dropping the index restores filtered LIKE.",
+                targets[0]->column_name()));
+        }
     }
 
     if (targets.size() > 1) {

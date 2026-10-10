@@ -38,6 +38,8 @@ public:
             const secondary_index::index& index,
             std::unique_ptr<cql3::attributes> attrs);
 
+    [[noreturn]] static void throw_cannot_continue_paged_query(std::string_view index_type_name, std::string_view search_type_name);
+
 protected:
     /// Base-table rows read for the keys an external index returned, together with the command they
     /// were read with. The command's slice is needed to walk the rows.
@@ -77,6 +79,7 @@ private:
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
 
+    virtual std::string_view index_type_name() const = 0;
     virtual std::string_view index_search_type_name() const = 0;
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(

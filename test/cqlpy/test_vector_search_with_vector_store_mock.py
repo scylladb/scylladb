@@ -414,6 +414,7 @@ def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, vector_store_
     schema = "p int primary key, v vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        vector_store_mock.set_next_ann_response(200, json.dumps({"primary_keys": {"p": []}, "similarity_scores": []}))
         cql.execute(
             f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
             trace=True,

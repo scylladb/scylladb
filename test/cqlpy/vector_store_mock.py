@@ -5,8 +5,8 @@
 """Shared vector store mock for CQL Python tests.
 
 Provides VectorStoreMock - a minimal HTTP server for handling the ANN (`/ann`),
-BM25 (`/bm25`) and highlight (`/highlight`) POST requests from a local Scylla
-process.
+BM25 (`/bm25`), highlight (`/highlight`) and pattern (`/like`) POST requests
+from a local Scylla process.
 """
 
 from collections.abc import Callable
@@ -24,12 +24,22 @@ class Request:
 
 @dataclass
 class Response:
+    """The reply names the key columns of the queried table, so the default fits a table keyed ((pk1, pk2), ck1, ck2).
+
+    A test on another table that lets an ANN request happen has to set a reply with its key columns.
+    """
+
     status: int = 200
     body: str = '{"primary_keys":{"pk1":[],"pk2":[],"ck1":[],"ck2":[]},"similarity_scores":[]}'
 
 
 @dataclass
 class BM25Response:
+    """The reply names the key columns of the queried table, so the default, which names none, fits no table.
+
+    A test that lets a BM25 request happen has to set a reply with its table's key columns.
+    """
+
     status: int = 200
     body: str = '{"primary_keys":{},"scores":[]}'
 
@@ -45,16 +55,29 @@ class HighlightResponse:
     body: str = '{"highlights":[]}'
 
 
+@dataclass
+class LikeResponse:
+    """The reply names the key columns of the queried table, so the default, which names none, fits no table.
+
+    A test that lets a pattern request happen has to set a reply with its table's key columns.
+    """
+
+    status: int = 200
+    body: str = '{"primary_keys":{}}'
+
+
 class VectorStoreMock:
     def __init__(self):
         self._ann_requests: list[Request] = []
         self._bm25_requests: list[Request] = []
         self._highlight_requests: list[Request] = []
+        self._like_requests: list[Request] = []
         self._status_requests: list[Request] = []
         self._lock = threading.Lock()
         self._next_ann_response = Response()
         self._next_bm25_response = BM25Response()
         self._next_highlight_response = HighlightResponse()
+        self._next_like_response = LikeResponse()
         self._next_status_response = Response(status=200, body='"SERVING"')
         # Maps "{keyspace}/{index}" -> Response for per-index status queries.
         self._index_status_responses: dict[str, Response] = {}
@@ -81,6 +104,11 @@ class VectorStoreMock:
             return self._highlight_requests.copy()
 
     @property
+    def like_requests(self) -> list[Request]:
+        with self._lock:
+            return self._like_requests.copy()
+
+    @property
     def status_requests(self) -> list[Request]:
         with self._lock:
             return self._status_requests.copy()
@@ -97,6 +125,10 @@ class VectorStoreMock:
         with self._lock:
             self._next_highlight_response = HighlightResponse(status=status, body=body)
 
+    def set_next_like_response(self, status: int, body: str) -> None:
+        with self._lock:
+            self._next_like_response = LikeResponse(status=status, body=body)
+
     def set_next_status_response(self, status: int, body: str) -> None:
         with self._lock:
             self._next_status_response = Response(status=status, body=body)
@@ -111,10 +143,12 @@ class VectorStoreMock:
             self._ann_requests.clear()
             self._bm25_requests.clear()
             self._highlight_requests.clear()
+            self._like_requests.clear()
             self._status_requests.clear()
             self._next_ann_response = Response()
             self._next_bm25_response = BM25Response()
             self._next_highlight_response = HighlightResponse()
+            self._next_like_response = LikeResponse()
             self._next_status_response = Response(status=200, body='"SERVING"')
             self._index_status_responses.clear()
 
@@ -134,6 +168,12 @@ class VectorStoreMock:
         with self._lock:
             self._highlight_requests.append(request)
             response = self._next_highlight_response
+        send_response(response)
+
+    def _handle_like(self, request: Request, send_response: Callable[[LikeResponse], None]) -> None:
+        with self._lock:
+            self._like_requests.append(request)
+            response = self._next_like_response
         send_response(response)
 
     def _handle_status(self, request: Request, send_response: Callable[[Response], None]) -> None:
@@ -171,6 +211,8 @@ class VectorStoreMock:
                     mock._handle_bm25(req, self._send_response)
                 elif self.path.endswith("/highlight"):
                     mock._handle_highlight(req, self._send_response)
+                elif self.path.endswith("/like"):
+                    mock._handle_like(req, self._send_response)
                 else:
                     self.send_response(404)
                     self.end_headers()

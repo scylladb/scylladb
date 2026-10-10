@@ -551,6 +551,56 @@ fragment could be found; the row itself is still returned. See
 For the full list of query constraints and requirements, see
 :doc:`Full-Text Search </features/fulltext-search>`.
 
+.. _pattern-queries:
+
+Indexed LIKE queries (pattern index) :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. note::
+
+   Pattern Search is supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   For more information, see the :doc:`Pattern Search documentation </features/pattern-search>`.
+
+This section covers ``LIKE`` on a column that has a :ref:`pattern index <create-pattern-index-statement>`.
+``LIKE`` as a filter, available in every deployment, is described in :ref:`LIKE Operator <like-operator>`.
+The two use the same pattern syntax but otherwise behave differently, for example in result order,
+paging, consistency and case sensitivity; see
+:ref:`Indexed vs. Filtered LIKE <pattern-search-indexed-vs-filtered>` for a comparison.
+
+On a column that has a pattern index, every ``LIKE`` restriction is served by the index instead of by
+filtering. Such a query does not need ``ALLOW FILTERING``; if it is given, it is ignored and the index
+is still used:
+
+.. code-block::
+
+   pattern_query: SELECT ... FROM `table_name`
+                  :   WHERE `column_name` LIKE `pattern`
+                  :   LIMIT `integer`
+
+Example::
+
+    SELECT id, code FROM parts
+        WHERE code LIKE '%024%'
+        LIMIT 10;
+
+The rules are:
+
+* The pattern uses the :ref:`LIKE <like-operator>` syntax. Which patterns are supported depends on the
+  index node, and a pattern it does not support fails the query with an ``InvalidRequest`` error.
+* A bind marker may stand for the pattern (``LIKE ?``). The pattern must not be null.
+* ``LIMIT`` is mandatory and must not exceed 1000. ``ORDER BY``, ``PER PARTITION LIMIT``, ``GROUP BY``,
+  aggregation and any further ``WHERE`` restriction, including one on the partition key, are not
+  supported.
+* The query is served by the index even with ``ALLOW FILTERING``. When the index node is unavailable
+  or does not support the pattern, the query fails.
+
+.. warning::
+
+   A pattern index changes every ``LIKE`` on its column, from every application, for as long as the
+   index exists: a ``LIKE`` that worked by filtering before the index was created can fail or return
+   different rows afterwards. Dropping the index with :ref:`DROP INDEX <drop-index-statement>` restores
+   filtered ``LIKE``.
+
 .. _limit-clause:
 
 Limiting results
@@ -782,6 +832,13 @@ LIKE Operator
 
 The ``LIKE`` operation on ``SELECT`` statements informs ScyllaDB that you are looking for a pattern match. The expression ‘column LIKE pattern’ yields true only if the entire column value matches the pattern.   
  
+Without an index, ``LIKE`` is a filter: ScyllaDB reads the rows and checks each value against the
+pattern, so the query requires :ref:`ALLOW FILTERING <allow-filtering>`. This section describes that
+filtered ``LIKE``. On a column with a :ref:`pattern index <create-pattern-index-statement>`, ``LIKE``
+is served by the index instead, even with ``ALLOW FILTERING``, and follows different rules; see
+:ref:`Indexed LIKE queries <pattern-queries>` and
+:ref:`Indexed vs. Filtered LIKE <pattern-search-indexed-vs-filtered>`.
+
 The search pattern is a string of characters with two wildcards, as shown:
 
 * ``_`` matches any single character
@@ -793,19 +850,24 @@ The search pattern is a string of characters with two wildcards, as shown:
  
 .. note:: Only string types (ascii, text, and varchar) are valid for matching
 
-Currently, the match is **case sensitive**. The entire column value must match the pattern. 
+A filtered ``LIKE`` is always **case sensitive**. The entire column value must match the pattern.
 For example, consider the search pattern 'M%n' - this will match ``Martin``, but will not match ``Moonbeam`` because the ``m`` at the end isn't matched. In addition, ``moon`` is not matched because ``M`` is not the same as ``m``. Both the pattern and the column value are assumed to be UTF-8 encoded.
  
+To match regardless of letter case, use a pattern index created with ``'case_sensitive': 'false'``.
+
 A query can find all values containing some text fragment by matching to an appropriate ``LIKE`` pattern.
 
 **Differences Between ScyllaDB and Cassandra LIKE Operators**
 
-* In Apache Cassandra, you must create a SASI index to use LIKE. ScyllaDB supports LIKE as a regular filter.
-* Consequently, ScyllaDB LIKE will be less performant than Apache Cassandra LIKE for some workloads.
+* In Apache Cassandra, you must create a SASI index to use LIKE. ScyllaDB supports LIKE as a regular filter,
+  and can also serve it from a :ref:`pattern index <create-pattern-index-statement>`.
+* Consequently, a filtered ScyllaDB LIKE will be less performant than Apache Cassandra LIKE for some workloads.
 * ScyllaDB treats underscore (_) as a wildcard; Cassandra doesn't.
 * ScyllaDB treats percent (%) as a wildcard anywhere in the pattern; Cassandra only at the beginning/end
 * ScyllaDB interprets backslash (\\) as an escape character; Cassandra doesn't.
-* Cassandra allows case-insensitive LIKE; ScyllaDB doesn't (see `#4911 <https://github.com/scylladb/scylla/issues/4911>`_).
+* Cassandra allows case-insensitive LIKE through an option of the SASI index. A filtered ScyllaDB LIKE is always
+  case-sensitive (see `#4911 <https://github.com/scylladb/scylla/issues/4911>`_); case-insensitive matching needs a
+  pattern index created with ``'case_sensitive': 'false'``.
 * ScyllaDB allows empty LIKE pattern; Cassandra doesn't.
 
 **Example A**
