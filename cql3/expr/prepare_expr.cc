@@ -2150,9 +2150,9 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
         },
         [](const subscript& col_val) -> lw_shared_ptr<column_specification> {
             const column_value& sub_col = get_subscripted_column(col_val);
-            if (sub_col.col->type->is_map()) {
+            if (sub_col.col->type->without_reversed().is_map()) {
                 return map_value_spec_of(*sub_col.col->column_specification);
-            } else if (sub_col.col->type->is_set()) {
+            } else if (sub_col.col->type->without_reversed().is_set()) {
                 return set_value_spec_of(*sub_col.col->column_specification);
             } else {
                 return list_value_spec_of(*sub_col.col->column_specification);
