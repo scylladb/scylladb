@@ -217,6 +217,23 @@ def assert_row_count_in_select_less(
     count = len(get_list_res(session, query, consistency_level, timeout=timeout))
     assert count < max_rows_expected, f'Expected a row count < of {max_rows_expected} in query "{query}", but got {count}'
 
+@retrying(num_attempts=1, sleep_time=10)
+def assert_row_count_in_select(  # noqa: PLR0913
+    session,
+    query,
+    num_rows_expected,
+    consistency_level=ConsistencyLevel.ONE,
+    num_attempts=1,
+    timeout=None,
+):
+    """
+    Function to validate the row count are returned by select
+    :param num_attempts: defines how many time try to assert data in case failure. Used in retrying decorator
+    """
+    from  test.cluster.dtest.tools.data import get_list_res
+
+    count = len(get_list_res(session, query, consistency_level, timeout=timeout))
+    assert count == num_rows_expected, f'Expected a row count of {num_rows_expected} in query "{query}", but got {count}'
 
 def assert_length_equal(object_with_length, expected_length):
     """
