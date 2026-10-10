@@ -1857,14 +1857,17 @@ def testSumPrecision(cql, test_keyspace):
 # is enabled (as in our test setup), CREATE AGGREGATE with a non-existent
 # SFUNC or FINALFUNC fails with a NoSuchElementException server error,
 # instead of an InvalidRequest. This is CASSANDRA-21734.
-# Reproduces SCYLLADB-5165 (function names with '/', '[' or ']' should be
-# rejected)
-@pytest.mark.xfail(reason="SCYLLADB-5165")
+# Reproduces SCYLLADB-5165 (function names with '/' should be rejected)
 def testRejectInvalidAggregateNamesOnCreation(cql, cassandra_bug):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
         for funcName in ["my/fancy/aggregate", "my_other[fancy]aggregate"]:
-            assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Aggregate name '{funcName}' is invalid",
-                                   " CREATE AGGREGATE IF NOT EXISTS " + f'{KEYSPACE_PER_TEST}."{funcName}"' + "(text, text)\n" +
-                                   " SFUNC func\n" +
-                                   " STYPE map<text,bigint>\n" +
-                                   " INITCOND { };")
+            # Scylla only forbids '/' in function names. Unlike Cassandra, it
+            # deliberately allows '[' and ']', which are safe in its encoding
+            # of a function's auth resource (test_permissions.py's
+            # test_udf_permissions_quoted_names checks such a function).
+            if '/' in funcName or not is_scylla(cql):
+                assert_invalid_message(cql, KEYSPACE_PER_TEST, f"Aggregate name '{funcName}' is invalid",
+                                       " CREATE AGGREGATE IF NOT EXISTS " + f'{KEYSPACE_PER_TEST}."{funcName}"' + "(text, text)\n" +
+                                       " SFUNC func\n" +
+                                       " STYPE map<text,bigint>\n" +
+                                       " INITCOND { };")
