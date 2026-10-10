@@ -21,6 +21,10 @@ future<> function_statement::check_access(query_processor& qp, const service::cl
 
 future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
     co_await state.has_functions_access(_name.keyspace, auth::permission::CREATE);
+    // Check the keyspace before preparing any type below (and in
+    // create_aggregate_statement::check_access()), which for a user-defined
+    // type in a missing keyspace would fail with a less clear error.
+    validate_keyspace_exists(qp);
     if (_or_replace) {
         create_arg_types(qp);
         sstring encoded_signature = auth::encode_signature(_name.name, _arg_types);
@@ -130,7 +134,14 @@ void create_function_statement_base::validate_name(std::string_view what) const 
     }
 }
 
+void create_function_statement_base::validate_keyspace_exists(query_processor& qp) const {
+    if (!qp.db().has_keyspace(_name.keyspace)) {
+        throw exceptions::invalid_request_exception(fmt::format("Keyspace '{}' doesn't exist", _name.keyspace));
+    }
+}
+
 seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
+    validate_keyspace_exists(qp);
     create_arg_types(qp);
     auto old = functions::instance().find(_name, _arg_types);
     if (!old || _or_replace) {
