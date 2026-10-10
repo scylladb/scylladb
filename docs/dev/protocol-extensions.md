@@ -372,14 +372,20 @@ to support Private Link). This mapping can change dynamically even when no nodes
 added or removed. The driver must adapt to those changes; otherwise connectivity can be
 lost.
 
-The extension is implemented as a new `EVENT` type: `CLIENT_ROUTES_CHANGE`. The event
-body consists of:
+Drivers subscribe to the `CLIENT_ROUTES_CHANGE` event using the protocol's
+normal event subscription mechanism. ScyllaDB sends the event after a route is
+inserted, updated, or deleted. The event body consists of:
+
 - [string] change
 - [string list] connection_ids
 - [string list] host_ids
 
-There is only one change value: `UPDATE_NODES`, which means at least one client route
-was inserted, updated, or deleted.
+The only change value is `UPDATE_NODES`. The `connection_ids` and `host_ids`
+lists identify the affected private connections and nodes. The event does not
+carry the new endpoint values. On receipt, the driver reads the current rows
+for its configured connection IDs, updates the affected node mappings, and
+refreshes its connection pools. Route changes can therefore take effect even
+when cluster topology is unchanged, without restarting the application.
 
 Events already have a subscription mechanism similar to protocol extensions (that is,
 the driver only receives the events it explicitly subscribed to), so no additional
