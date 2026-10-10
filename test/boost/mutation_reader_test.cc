@@ -25,6 +25,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include "test/lib/eventually.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -1947,6 +1948,209 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
             s.schema(), permit, *pr, s.schema()->full_slice());
 
     return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
+}
+
+namespace {
+
+struct tablet_streaming_reader_test_params {
+    // Flush this many of the rows before writing the rest.
+    int flushed_rows = 0;
+    // Evict all inactive reads between partitions.
+    bool evict = false;
+    // Read every other key as its own range, like the many small ranges per
+    // tablet a repair follower reads, instead of a few wide ranges.
+    bool small_ranges = false;
+    // Buffer size of the readers on the tablets' shards.
+    std::optional<size_t> buffer_size;
+};
+
+// A tablet-based table spread over all shards, with rows 0..num_rows.
+struct tablet_streaming_reader_test_table {
+    static constexpr int num_rows = 200;
+    schema_ptr s;
+    // Sorted by token.
+    std::vector<dht::decorated_key> keys;
+
+    tablet_streaming_reader_test_table(cql_test_env& env, int flushed_rows) {
+        env.execute_cql("CREATE KEYSPACE ks_tsr WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'initial': 8}").get();
+        env.execute_cql("CREATE TABLE ks_tsr.t (pk int PRIMARY KEY, v int)").get();
+        s = env.local_db().find_schema("ks_tsr", "t");
+        for (int pk = 0; pk < num_rows; ++pk) {
+            if (pk == flushed_rows) {
+                env.db().invoke_on_all([] (replica::database& db) {
+                    return db.find_column_family("ks_tsr", "t").flush();
+                }).get();
+            }
+            env.execute_cql(format("INSERT INTO ks_tsr.t (pk, v) VALUES ({}, {})", pk, pk)).get();
+        }
+        for (int pk = 0; pk < num_rows; ++pk) {
+            keys.push_back(dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(pk))));
+        }
+        std::ranges::sort(keys, dht::ring_position_less_comparator(*s));
+    }
+
+    const locator::tablet_map& tablets(cql_test_env& env) const {
+        return env.local_db().get_token_metadata().tablets().get_tablet_map(s->id());
+    }
+
+    void require_several_shards(cql_test_env& env, const std::vector<dht::decorated_key>& expected) const {
+        const auto& tmap = tablets(env);
+        std::set<shard_id> shards;
+        for (const auto& dk : expected) {
+            shards.insert(tmap.get_tablet_info(tmap.get_tablet_id(dk.token())).replicas.front().shard);
+        }
+        BOOST_REQUIRE_MESSAGE(shards.size() > 1, "The ranges must span tablets on more than one shard");
+    }
+};
+
+// Reads ranges spanning several tablets with the tablet streaming reader, and
+// checks that exactly the rows in those ranges come back, in token order.
+void test_tablet_streaming_reader(tablet_streaming_reader_test_params params) {
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test with this_smp_shard_count() < 2" << std::endl;
+        return;
+    }
+    do_with_cql_env_thread([params] (cql_test_env& env) -> future<> {
+        tablet_streaming_reader_test_table t(env, params.flushed_rows);
+        auto& s = t.s;
+        auto& keys = t.keys;
+
+        dht::partition_range_vector ranges;
+        std::vector<dht::decorated_key> expected;
+        if (params.small_ranges) {
+            for (int i = 10; i < t.num_rows - 10; i += 2) {
+                ranges.push_back(dht::partition_range::make_singular(keys[i]));
+                expected.push_back(keys[i]);
+            }
+        } else {
+            for (auto [first, last] : {std::pair(10, 50), std::pair(60, 130), std::pair(150, 190)}) {
+                ranges.push_back(dht::partition_range::make({keys[first]}, {keys[last]}));
+                expected.insert(expected.end(), keys.begin() + first, keys.begin() + last + 1);
+            }
+        }
+        t.require_several_shards(env, expected);
+
+        auto reader = make_tablet_streaming_reader(env.db(), s, make_reader_permit(env), ranges, gc_clock::now(), params.buffer_size);
+        auto close_reader = deferred_close(reader);
+        uint64_t evicted = 0;
+        std::vector<dht::decorated_key> read;
+        while (auto m = read_mutation_from_mutation_reader(reader).get()) {
+            read.push_back(m->decorated_key());
+            if (params.evict) {
+                evicted += env.db().map_reduce0([s] (replica::database& db) {
+                    auto& sem = db.find_column_family(s).streaming_read_concurrency_semaphore();
+                    auto inactive = sem.get_stats().inactive_reads;
+                    sem.clear_inactive_reads();
+                    return inactive;
+                }, uint64_t(0), std::plus<uint64_t>()).get();
+            }
+        }
+
+        BOOST_REQUIRE_EQUAL(read.size(), expected.size());
+        for (size_t i = 0; i < read.size(); ++i) {
+            BOOST_REQUIRE_MESSAGE(read[i].equal(*s, expected[i]), fmt::format("Mismatch at position {}: got {}, expected {}", i, read[i], expected[i]));
+        }
+        if (params.evict) {
+            BOOST_REQUIRE_MESSAGE(evicted > 0, "No reader was evicted, the test didn't exercise recreation");
+        }
+        return make_ready_future<>();
+    }).get();
+}
+
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_memtables) {
+    test_tablet_streaming_reader({});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_memtables_and_sstables) {
+    test_tablet_streaming_reader({.flushed_rows = 100});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_eviction) {
+    test_tablet_streaming_reader({.flushed_rows = 100, .evict = true});
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_small_ranges_eviction) {
+    test_tablet_streaming_reader({.flushed_rows = 100, .evict = true, .small_ranges = true});
+}
+
+// With a tiny buffer on the tablets' shards, every fragment is a separate
+// cross-shard copy, and readers are paused, and possibly evicted, in the
+// middle of partitions.
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_small_buffer_eviction) {
+    test_tablet_streaming_reader({.flushed_rows = 100, .evict = true, .buffer_size = 1});
+}
+
+// Skips a partition in the middle of a tablet, and the last partition of a
+// tablet, and checks that reading resumes at the next partition.
+SEASTAR_THREAD_TEST_CASE(test_tablet_streaming_reader_next_partition) {
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
+        return;
+    }
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+        tablet_streaming_reader_test_table t(env, 0);
+        auto& s = t.s;
+        std::vector<dht::decorated_key> expected(t.keys.begin() + 10, t.keys.begin() + 191);
+        dht::partition_range_vector ranges{dht::partition_range::make({expected.front()}, {expected.back()})};
+
+        const auto& tmap = t.tablets(env);
+        auto tablet_of = [&] (size_t i) { return tmap.get_tablet_id(expected[i].token()); };
+        // The last partition of the first tablet that follows another one.
+        size_t boundary = 2;
+        while (boundary + 1 < expected.size() && tablet_of(boundary) == tablet_of(boundary + 1)) {
+            ++boundary;
+        }
+        BOOST_REQUIRE_MESSAGE(boundary + 1 < expected.size(), "The range must span more than one tablet");
+
+        auto reader = make_tablet_streaming_reader(env.db(), s, make_reader_permit(env), ranges, gc_clock::now());
+        auto close_reader = deferred_close(reader);
+        auto skip = [&] (size_t i) {
+            auto mf = reader().get();
+            BOOST_REQUIRE(mf && mf->is_partition_start());
+            BOOST_REQUIRE(mf->as_partition_start().key().equal(*s, expected[i]));
+            reader.next_partition().get();
+        };
+        auto read = [&] (size_t i) {
+            auto m = read_mutation_from_mutation_reader(reader).get();
+            BOOST_REQUIRE_MESSAGE(m && m->decorated_key().equal(*s, expected[i]), fmt::format("Expected partition {}", i));
+        };
+
+        read(0);
+        skip(1);
+        for (size_t i = 2; i < boundary; ++i) {
+            read(i);
+        }
+        skip(boundary);
+        for (size_t i = boundary + 1; i < expected.size(); ++i) {
+            read(i);
+        }
+        BOOST_REQUIRE(!read_mutation_from_mutation_reader(reader).get());
+        return make_ready_future<>();
+    }).get();
+}
+
+// The multishard reader assumes the vnode data layout, so it must refuse
+// tablet-based tables rather than read them wrong.
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_rejects_tablets) {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+        env.execute_cql("CREATE KEYSPACE ks_msr_tablets WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'initial': 8}").get();
+        env.execute_cql("CREATE TABLE ks_msr_tablets.t (pk int PRIMARY KEY, v int)").get();
+        auto& table = env.local_db().find_column_family("ks_msr_tablets", "t");
+        auto s = table.schema();
+        auto factory = [] (schema_ptr s, reader_permit permit, const dht::partition_range&, const query::partition_slice&,
+                tracing::trace_state_ptr, mutation_reader::forwarding) {
+            return make_empty_mutation_reader(std::move(s), std::move(permit));
+        };
+        seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+        BOOST_REQUIRE_THROW(make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                s, table.get_effective_replication_map(), make_reader_permit(env), query::full_partition_range, s->full_slice()),
+                std::runtime_error);
+        return make_ready_future<>();
+    }).get();
 }
 
 // Regression test for #7945
