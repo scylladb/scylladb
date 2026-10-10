@@ -1076,7 +1076,8 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     const keyspace* get_keyspace() const { return _keyspace; }
     void detach_from_keyspace() noexcept { _keyspace = nullptr; }
-    void update_effective_replication_map(locator::effective_replication_map_ptr);
+    void update_effective_replication_map(locator::effective_replication_map_ptr,
+            const locator::tablet_metadata_change_hint* tablet_hint = nullptr);
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
     // Routing info to attach to the response of a single-partition request for `token`
