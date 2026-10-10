@@ -18,6 +18,7 @@
 #include <fmt/core.h>
 
 #include "service/pager/paging_state.hh"
+#include "service/reconciliation_limit_exponents.hh"
 #include "test/lib/read_model.hh"
 
 class cql_test_env;
@@ -170,6 +171,12 @@ struct read_options {
     // because a cached querier keeps reading the contents from before the
     // repair.
     bool apply_repairs = false;
+    // The exponents of the reconciliations' limits which the client puts
+    // into the first paging state that it sends back, instead of the
+    // coordinator's, like a client which forges its paging state. See
+    // service::pager::paging_state::get_reconciliation_row_limit_exponent().
+    // nullopt sends the paging state as it is.
+    std::optional<service::reconciliation_limit_exponents> forged_limit_exponents;
     // Seeds the schedule, which is the set of random choices of the
     // coordinator. For the whole query, the seed chooses:
     // - up to 4 vnode boundaries at which a scan splits;
@@ -238,7 +245,8 @@ struct outcome {
     // mutation adds data which no replica has, the result of a range
     // exceeds the limits of its command, a page which a replica read with a
     // cached querier differs from the page which a fresh querier would read,
-    // or a reply's frontier is wrong. Each property appears once.
+    // a reply's frontier is wrong, or a reconciliation round asks for more
+    // rows than the page may return. Each property appears once.
     std::vector<std::string> coordinator_violations;
 };
 

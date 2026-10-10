@@ -297,9 +297,10 @@ std::string describe(const schema& s, const dht::partition_range& range) {
 // A readable summary of a paging state, for traces and error messages. It
 // omits the query id and the replicas, which the harness does not vary.
 std::string describe(const schema& s, const service::pager::paging_state& state) {
-    return fmt::format("{}, {}, remaining {}, rows fetched for the partition {}{}", describe(s, state.get_partition_key()),
+    return fmt::format("{}, {}, remaining {}, rows fetched for the partition {}{}, limit exponents {}/{}", describe(s, state.get_partition_key()),
             describe(s, state.get_position_in_partition()), state.get_remaining(), state.get_rows_fetched_for_last_partition(),
-            state.get_partition_row_pending() ? ", row of the partition pending" : "");
+            state.get_partition_row_pending() ? ", row of the partition pending" : "", state.get_reconciliation_partition_row_limit_exponent(),
+            state.get_reconciliation_row_limit_exponent());
 }
 
 std::string_view describe(query::short_read sr) {
@@ -319,6 +320,16 @@ std::vector<answer_row> rows_of(::shared_ptr<cql_transport::messages::result_mes
         });
     }
     return rows;
+}
+
+// `state` with the reconciliation limit exponents `exponents`.
+lw_shared_ptr<const service::pager::paging_state> forge_limit_exponents(const service::pager::paging_state& state,
+        service::reconciliation_limit_exponents exponents) {
+    return make_lw_shared<service::pager::paging_state>(state.get_partition_key(), state.get_clustering_key(), state.get_remaining_low_bits(),
+            state.get_query_uuid(), state.get_last_replicas(), state.get_query_read_repair_decision(),
+            state.get_rows_fetched_for_last_partition_low_bits(), state.get_remaining_high_bits(),
+            state.get_rows_fetched_for_last_partition_high_bits(), state.get_clustering_key_weight(), state.get_partition_region(),
+            state.get_query_plan(), state.get_partition_row_pending(), exponents.partition_row_limit, exponents.row_limit);
 }
 
 lw_shared_ptr<const service::pager::paging_state> paging_state_of(const ::shared_ptr<cql_transport::messages::result_message>& msg) {
@@ -367,6 +378,16 @@ class coordinator {
     // cached queriers hold permits of `_semaphore`, so the caches must be
     // destroyed before it.
     std::vector<std::unique_ptr<replica::querier_cache>> _caches;
+    // The exponents of the limits of the reconciliations of the current
+    // query, the largest row limit of their rounds, and the largest
+    // exponents which they suggest, like storage_proxy::query_singular().
+    service::reconciliation_limit_exponents _limit_exponents;
+    uint64_t _row_limit_cap = query::max_rows;
+    service::suggested_reconciliation_limit_exponents _suggested_limit_exponents;
+    // The rows which the current page may still return, from the client's
+    // page size, not from the pager. nullopt for an unpaged read, including
+    // one which the statement does not page because its limit fits a page.
+    std::optional<uint64_t> _page_rows_left;
 
     template <typename... Args>
     void trace(fmt::format_string<Args...> format, Args&&... args) {
@@ -813,8 +834,9 @@ class coordinator {
     foreign_ptr<lw_shared_ptr<query::result>> reconcile_by_frontiers(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd,
             const dht::partition_range& range, const std::vector<size_t>& targets) {
         const auto& s = *query_schema;
-        trace("  reconciling replicas {} by their frontiers", fmt::join(targets, ", "));
-        service::frontier_reconciliation reconciliation(query_schema, cmd, range);
+        trace("  reconciling replicas {} by their frontiers, limit exponents {}/{}, row limit cap {}", fmt::join(targets, ", "),
+                _limit_exponents.partition_row_limit, _limit_exponents.row_limit, _row_limit_cap);
+        service::frontier_reconciliation reconciliation(query_schema, cmd, range, _limit_exponents, _row_limit_cap);
         // The replicas' contents do not change during a reconciliation,
         // because repairs apply only to an accepted page. A round's range,
         // slice and limits decide its replies. So a round which repeats them
@@ -828,7 +850,12 @@ class coordinator {
                 throw std::runtime_error(fmt::format("Reconciliation round {} repeats the range, slice and limits of an earlier round", round));
             }
             if (round > 1) {
-                trace("  round {}: range {}, slice {}", round, describe(s, round_range), round_cmd.slice);
+                trace("  round {}: range {}, row limit {}, slice {}", round, describe(s, round_range), round_cmd.get_row_limit(), round_cmd.slice);
+            }
+            // A round may read more rows than the page needs, but not more
+            // than the page may return.
+            if (_page_rows_left && round_cmd.get_row_limit() > std::max(cmd->get_row_limit(), *_page_rows_left)) {
+                violation("A reconciliation round's row limit exceeds the rows which the page may return");
             }
             std::vector<service::mutation_page_reply> replies;
             for (auto i : targets) {
@@ -843,8 +870,12 @@ class coordinator {
             auto page = reconciliation.add_round(std::move(replies)).get();
             if (page) {
                 const auto repairs = repair(page->repair_diffs);
-                trace("  round {}: accepted {} rows, {}, cursor {}, {} repair mutations", round, page->result.row_count().value_or(0),
-                        describe(page->result.is_short_read()), describe(s, page->result.last_position()), repairs);
+                const auto suggested = reconciliation.suggested_limit_exponents();
+                const auto describe_suggestion = [] (std::optional<uint8_t> e) { return e ? fmt::format("{}", *e) : std::string("none"); };
+                trace("  round {}: accepted {} rows, {}, cursor {}, {} repair mutations, suggested limit exponents {}/{}", round,
+                        page->result.row_count().value_or(0), describe(page->result.is_short_read()), describe(s, page->result.last_position()), repairs,
+                        describe_suggestion(suggested.partition_row_limit), describe_suggestion(suggested.row_limit));
+                _suggested_limit_exponents.merge(suggested);
                 return make_foreign(make_lw_shared<query::result>(std::move(page->result)));
             }
         }
@@ -1027,6 +1058,7 @@ class coordinator {
                 describe(s, result->last_position()));
         service::storage_proxy_coordinator_query_result qr(std::move(result));
         qr.rows_decided_before_cursor = _opts.read_frontiers;
+        qr.reconciliation_exponents = _suggested_limit_exponents;
         return qr;
     }
 
@@ -1115,6 +1147,10 @@ class coordinator {
             auto result = round_merger.get();
             result->ensure_counts();
             remaining_rows -= result->row_count().value();
+            _row_limit_cap -= std::min(_row_limit_cap, result->row_count().value());
+            if (_page_rows_left) {
+                *_page_rows_left -= std::min(*_page_rows_left, result->row_count().value());
+            }
             remaining_partitions -= result->partition_count().value();
             results.push_back(std::move(result));
             if (ranges_to_vnodes.empty() || !remaining_rows || !remaining_partitions) {
@@ -1183,8 +1219,19 @@ public:
         }
     }
 
-    future<query_result> query(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector ranges) {
-        return seastar::async([this, query_schema = std::move(query_schema), cmd = std::move(cmd), ranges = std::move(ranges)] () mutable {
+    // `limit_exponents` and `row_limit_cap` are the exponents of the limits
+    // of the reconciliations and the largest row limit of their rounds, from
+    // storage_proxy_coordinator_query_options.
+    future<query_result> query(schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector ranges,
+            service::reconciliation_limit_exponents limit_exponents, uint64_t row_limit_cap) {
+        return seastar::async([this, query_schema = std::move(query_schema), cmd = std::move(cmd), ranges = std::move(ranges), limit_exponents,
+                row_limit_cap] () mutable {
+            _limit_exponents = limit_exponents;
+            _row_limit_cap = row_limit_cap;
+            _suggested_limit_exponents = {};
+            // The pager allows short reads, and an unpaged read does not.
+            const bool paged = _opts.page_size > 0 && cmd->slice.options.contains<query::partition_slice::option::allow_short_read>();
+            _page_rows_left = paged ? std::optional<uint64_t>(_opts.page_size) : std::nullopt;
             return do_query(std::move(query_schema), std::move(cmd), std::move(ranges));
         });
     }
@@ -1354,12 +1401,13 @@ outcome harness::run(const read_case& c) {
     // them too.
     size_t reads = 0;
     service::pager::query_function query_function = [&coord, &reads, max_pages] (service::storage_proxy&, schema_ptr query_schema,
-            lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& ranges, db::consistency_level, service::storage_proxy_coordinator_query_options,
-            std::optional<service::cas_shard>) {
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& ranges, db::consistency_level,
+            service::storage_proxy_coordinator_query_options query_options, std::optional<service::cas_shard>) {
         if (++reads > max_pages) {
             return make_exception_future<query_result>(std::runtime_error(fmt::format("The statement read more than {} pages internally", max_pages)));
         }
-        return coord.query(std::move(query_schema), std::move(cmd), std::move(ranges));
+        return coord.query(std::move(query_schema), std::move(cmd), std::move(ranges), query_options.reconciliation_exponents,
+                query_options.reconciliation_row_limit_cap);
     };
 
     auto id = _env.prepare(read_model::to_cql(q, _ks, _cf)).get();
@@ -1390,6 +1438,9 @@ outcome harness::run(const read_case& c) {
         if (o.pages.size() == max_pages) {
             o.error = fmt::format("The client stopped after {} pages", max_pages);
             break;
+        }
+        if (state && o.pages.size() == 1 && opts.forged_limit_exponents) {
+            state = forge_limit_exponents(*state, *opts.forged_limit_exponents);
         }
         auto options = std::make_unique<cql3::query_options>(db::consistency_level::ALL, cql3::raw_value_vector_with_unset(),
                 cql3::query_options::specific_options{opts.page_size, state, db::consistency_level::SERIAL, api::new_timestamp(),
@@ -1514,6 +1565,11 @@ read_case harness::shrink(read_case c) {
             candidate.options.tombstone_limit.reset();
             try_candidate(std::move(candidate));
         }
+        if (c.options.forged_limit_exponents) {
+            auto candidate = c;
+            candidate.options.forged_limit_exponents.reset();
+            try_candidate(std::move(candidate));
+        }
         if (c.options.page_size_in_bytes) {
             auto candidate = c;
             candidate.options.page_size_in_bytes.reset();
@@ -1613,6 +1669,10 @@ auto fmt::formatter<tests::paged_read::read_options>::format(const tests::paged_
     }
     if (o.apply_repairs) {
         fields.push_back(".apply_repairs = true");
+    }
+    if (o.forged_limit_exponents) {
+        fields.push_back(fmt::format(".forged_limit_exponents = service::reconciliation_limit_exponents{{{}, {}}}",
+                o.forged_limit_exponents->partition_row_limit, o.forged_limit_exponents->row_limit));
     }
     if (o.schedule_seed) {
         fields.push_back(fmt::format(".schedule_seed = {}", *o.schedule_seed));

@@ -98,6 +98,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
         _query_read_repair_decision = state->get_query_read_repair_decision();
         _rows_fetched_for_last_partition = state->get_rows_fetched_for_last_partition();
         _partition_row_pending = state->get_partition_row_pending();
+        _reconciliation_exponents = {state->get_reconciliation_partition_row_limit_exponent(), state->get_reconciliation_row_limit_exponent()};
     }
 
     _cmd->is_first_page = query::is_first_page(!_query_uuid);
@@ -203,13 +204,16 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
     auto ranges = _ranges;
     auto command = ::make_lw_shared<query::read_command>(*_cmd);
     auto cas_shard = _cas_shard;
+    // The row limit is the page size or the rest of the query's limit. A
+    // reconciliation may grow the latter, but not past the page size.
     return _query_function(
             *_proxy,
             _query_schema,
             std::move(command),
             std::move(ranges),
             _options.get_consistency(),
-            {timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision, _options.get_specific_options().node_local_only},
+            {timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision, _options.get_specific_options().node_local_only,
+                    _reconciliation_exponents, page_size},
             std::move(cas_shard));
 }
 
@@ -222,6 +226,7 @@ future<result<>> query_pager::fetch_page_result(cql3::selection::result_set_buil
     return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
+        _reconciliation_exponents = qr.reconciliation_exponents.applied_to(_reconciliation_exponents);
         return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable -> result<> {
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_query_schema, *_selection),
                           std::move(qr.query_result), qr.rows_decided_before_cursor, page_size, now);
@@ -258,6 +263,7 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
     return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) -> future<result<cql3::result_generator>> {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
+        _reconciliation_exponents = qr.reconciliation_exponents.applied_to(_reconciliation_exponents);
         handle_result(noop_visitor(), qr.query_result, qr.rows_decided_before_cursor, page_size, now);
         return make_ready_future<result<cql3::result_generator>>(cql3::result_generator(_query_schema, std::move(qr.query_result), _cmd, _selection, stats));
     }));
@@ -283,6 +289,7 @@ public:
         return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
+            _reconciliation_exponents = qr.reconciliation_exponents.applied_to(_reconciliation_exponents);
             qr.query_result->ensure_counts();
             _stats.rows_read_total += *qr.query_result->row_count();
             return builder.with_thread_if_needed([&builder, this, query_result = std::move(qr.query_result), decided = qr.rows_decided_before_cursor, page_size, now] () mutable -> result<> {
@@ -342,6 +349,7 @@ public:
         return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
+            _reconciliation_exponents = qr.reconciliation_exponents.applied_to(_reconciliation_exponents);
             qr.query_result->ensure_counts();
             return seastar::async([this, query_result = std::move(qr.query_result), decided = qr.rows_decided_before_cursor, page_size, now] () mutable -> result<> {
                 std::exception_ptr ex;
@@ -499,7 +507,8 @@ void query_pager::handle_result(
 }
 
 lw_shared_ptr<const paging_state> query_pager::state(std::optional<query_plan> plan) const {
-    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition, std::move(plan), _partition_row_pending);
+    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition, std::move(plan), _partition_row_pending,
+            _reconciliation_exponents.partition_row_limit, _reconciliation_exponents.row_limit);
 }
 
 }
