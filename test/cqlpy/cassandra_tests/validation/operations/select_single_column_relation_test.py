@@ -10,6 +10,41 @@
 
 from ...porting import *
 from cassandra.query import UNSET_VALUE
+<<<<<<< HEAD
+||||||| parent of c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
+from ....util import is_scylla
+
+# The Java test is called textInvalidMapEntryPredicate (sic), but pytest only
+# runs functions whose name begins with "test".
+# Cassandra 5 fails this test, with the error "Column ck cannot be used as a
+# map", because of a bug with the descending order fixed in Cassandra 6
+# (CASSANDRA-19950), so the test is marked new_to_cassandra_6.
+# Reproduces SCYLLADB-5210 (server error std::bad_cast, for a restriction on an
+# element of a frozen collection clustering column with descending order)
+@pytest.mark.xfail(reason="SCYLLADB-5210")
+def testInvalidMapEntryPredicate(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int, ck frozen<map<int, int>>, v int, PRIMARY KEY(pk, ck)) WITH CLUSTERING ORDER BY (ck DESC)") as table:
+        # Cassandra 6 says "Map-entry predicates", Cassandra 5 and Scylla say
+        # "Map-entry equality predicates".
+        assert_invalid_message_re(cql, table, "Map-entry (equality )?predicates on frozen map column ck are not supported",
+                             "SELECT * FROM %s WHERE pk=? AND ck[0] = ?", 0, 0)
+=======
+from ....util import is_scylla
+
+# The Java test is called textInvalidMapEntryPredicate (sic), but pytest only
+# runs functions whose name begins with "test".
+# Cassandra 5 fails this test, with the error "Column ck cannot be used as a
+# map", because of a bug with the descending order fixed in Cassandra 6
+# (CASSANDRA-19950), so the test is marked new_to_cassandra_6.
+# Reproduces SCYLLADB-5210 (server error std::bad_cast, for a restriction on an
+# element of a frozen collection clustering column with descending order)
+def testInvalidMapEntryPredicate(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(pk int, ck frozen<map<int, int>>, v int, PRIMARY KEY(pk, ck)) WITH CLUSTERING ORDER BY (ck DESC)") as table:
+        # Cassandra 6 says "Map-entry predicates", Cassandra 5 and Scylla say
+        # "Map-entry equality predicates".
+        assert_invalid_message_re(cql, table, "Map-entry (equality )?predicates on frozen map column ck are not supported",
+                             "SELECT * FROM %s WHERE pk=? AND ck[0] = ?", 0, 0)
+>>>>>>> c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
 
 def testInvalidCollectionEqualityRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:
