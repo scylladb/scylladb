@@ -505,7 +505,6 @@ def testFunctionInSystemKS(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5170 (CREATE FUNCTION in a non-existent keyspace fails
 # with a server error)
-@pytest.mark.xfail(reason="SCYLLADB-5170")
 def testFunctionNonExistingKeyspace(cql):
     assert_invalid_message(cql, "", "Keyspace 'this_ks_does_not_exist' doesn't exist",
                            "CREATE OR REPLACE FUNCTION this_ks_does_not_exist.jnft(val double) " +
@@ -515,7 +514,6 @@ def testFunctionNonExistingKeyspace(cql):
 
 # Reproduces SCYLLADB-5170 (CREATE FUNCTION in a non-existent keyspace fails
 # with a server error)
-@pytest.mark.xfail(reason="SCYLLADB-5170")
 def testFunctionAfterOnDropKeyspace(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST:
         pass

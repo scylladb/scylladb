@@ -8,7 +8,7 @@
 #############################################################################
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from .util import new_test_keyspace, new_test_table, new_type, unique_name, new_function
 
@@ -116,3 +116,20 @@ def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
                     f"CREATE FUNCTION {other_ks}.testfun(v text) "
                     f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
 
+# CREATE FUNCTION and CREATE AGGREGATE in a keyspace that doesn't exist
+# should fail with a clear error saying that the keyspace doesn't exist -
+# also when an argument type, the return type or the aggregate's state type
+# is a user-defined type, which can't be found because its keyspace is
+# missing. For aggregates, Cassandra uses ConfigurationException instead of
+# InvalidRequest, and doesn't quote the keyspace name in the message.
+# Reproduces SCYLLADB-5170.
+def test_create_function_in_missing_keyspace(cql, has_java_udf):
+    ks = unique_name()
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
+    for stmt in [f"CREATE FUNCTION {ks}.f(x int) CALLED ON NULL INPUT RETURNS int {body}",
+                 f"CREATE OR REPLACE FUNCTION {ks}.f(x mytype) CALLED ON NULL INPUT RETURNS int {body}",
+                 f"CREATE FUNCTION {ks}.f(x int) CALLED ON NULL INPUT RETURNS mytype {body}",
+                 f"CREATE AGGREGATE {ks}.a(int) SFUNC f STYPE mytype",
+                 f"CREATE OR REPLACE AGGREGATE {ks}.a(mytype) SFUNC f STYPE int"]:
+        with pytest.raises((InvalidRequest, ConfigurationException), match=f"Keyspace '?{ks}'? doesn't exist"):
+            cql.execute(stmt)
