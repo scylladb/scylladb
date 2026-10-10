@@ -911,10 +911,16 @@ public:
         release_cf_count(cf);
     }
 
+    // only for whitebox testing
+    void zero_sync_time() {
+        _sync_time = clock_type::time_point{};
+    }
+
     bool must_sync() {
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
             return false;
         }
+
         auto now = clock_type::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
@@ -1803,15 +1809,23 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 base_ostream_type buffer_ostream = frag_ostream_type(detail::sector_split_iterator(buffer.begin(), buffer.end(), align, 0), buffer.size_bytes());
                 writer.write(*s, buffer_ostream, i);
             }
-            auto strm = buffer.get_istream();
             size_t off = 0;
             auto id = ++_frag_id_counter;
             sseg_ptr seg_ptr = nullptr;
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            bool force_syncs = utils::get_local_injector().inject_parameter("commitlog_segment_force_oversized_sync", "param").has_value();
+#endif
             while (off < data_size && !failed) {
                 // do this each lap, since we might fill a segment up.
                 if (!s->is_still_allocating()) {
                     co_await s->close();
                     s = co_await get_segment();
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+                    if (force_syncs) {
+                        s->zero_sync_time();
+                    }
+#endif
                 }
                 // bytes not counting overhead
                 auto pos = s->position();
@@ -1848,6 +1862,9 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 if (!seg_ptr) {
                     seg_ptr = s;
                 }
+
+                auto strm = buffer.get_istream();
+                strm.skip(off);
 
                 auto max_write = data_size - off;
                 auto to_write = std::min(avail, max_write);
