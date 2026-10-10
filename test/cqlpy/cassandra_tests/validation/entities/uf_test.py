@@ -565,7 +565,6 @@ def testUserTypeDrop(cql):
         assert_invalid_message(cql, KEYSPACE, "as it is still used by function", "DROP TYPE " + type)
 
 # Reproduces SCYLLADB-5171 (duplicate argument names in CREATE FUNCTION)
-@pytest.mark.xfail(reason="SCYLLADB-5171")
 def testDuplicateArgNames(cql, test_keyspace):
     KEYSPACE = test_keyspace
     try:
