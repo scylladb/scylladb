@@ -20,12 +20,14 @@ _SCHEDULER_JOIN_TIMEOUT = 2.0
 
 
 def control_connection_query_fallback_options(*, skip_pool_creation: bool = False) -> dict[str, object]:
-    """Return control-connection fallback options supported by the installed driver.
+    """Return the driver's option for running queries over its control connection.
 
-    The current test-suite pin, driver 3.29.7, predates this option but retains
-    explicit contact points as query hosts, so no workaround is needed there.
-    Drivers 3.29.8 and 3.29.9 neither retain those hosts nor expose fallback;
-    direct queries to excluded contact points remain unsupported on those versions.
+    Fallback uses a normal query pool when one is available and sends queries
+    over the control connection when no pool is usable. SkipPoolCreation skips
+    pools and sends every query over the control connection. Scylla driver 3.29.7
+    predates this option but retains explicit contact points as query hosts, so
+    neither mode is needed there. Scylla driver 3.29.8 and 3.29.9 neither retain
+    those hosts nor expose this option, so they cannot query excluded contact points.
     """
     fallback = getattr(cassandra_cluster, "ControlConnectionQueryFallback", None)
     if fallback is None:

@@ -74,11 +74,12 @@ async def test_describe_cluster_sanity(manager: ScyllaClusterManager, mode: str)
             return True if os.path.exists(maintenance_socket_path) else None
         await wait_for(socket_exists, time() + 30)
         socket_endpoint = UnixSocketEndPoint(maintenance_socket_path)
-        # Maintenance nodes have no tokens and are excluded from query pools.
+        # This node starts in maintenance mode without joining the ring, so it
+        # has no tokens and newer drivers will not open a query pool to it.
         cluster = manager.con_gen(
             [socket_endpoint],
             load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]),
-            use_control_connection_for_queries=True,
+            queries_only_via_control_connection=True,
         )
         cql = cluster.connect()
 

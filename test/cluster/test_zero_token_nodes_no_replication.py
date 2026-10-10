@@ -32,7 +32,7 @@ async def test_zero_token_nodes_no_replication(manager: ScyllaClusterManager):
     # Zero-token nodes coordinate requests but are excluded from query pools.
     cql_b = manager.con_gen([server_b.ip_addr],
                         load_balancing_policy=WhiteListRoundRobinPolicy([server_b.ip_addr]),
-                        use_control_connection_for_queries=True).connect()
+                        queries_only_via_control_connection=True).connect()
 
     logging.info('Creating tables for each replication strategy and tablets combination')
     ks_names = list[str]()

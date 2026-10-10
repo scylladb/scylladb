@@ -42,7 +42,7 @@ async def test_zero_token_nodes_multidc_basic(manager: ScyllaClusterManager, zer
     # servers[2] is zero-token and intentionally excluded from query pools.
     dc2_cql = manager.con_gen([servers[2].ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([servers[2].ip_addr]),
-                          use_control_connection_for_queries=True).connect()
+                          queries_only_via_control_connection=True).connect()
 
     ks_names = list[str]()
     logging.info('Trying to create tables for different replication factors')

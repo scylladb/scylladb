@@ -735,6 +735,7 @@ class ScyllaServer:
         )
         # New drivers can retain this control connection while excluding its
         # zero-token or unreachable advertised endpoint from query pools.
+        # A successful query here establishes CQL readiness even without a query pool.
         cluster_kwargs.update(control_connection_query_fallback_options())
         try:
             # In a cluster setup, it's possible that the CQL
