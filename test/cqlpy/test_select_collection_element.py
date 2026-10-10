@@ -152,6 +152,42 @@ def test_set_subscript(cql, table2):
     assert list(cql.execute(f"SELECT s[11] FROM {table2} WHERE p={p}")) == [(None,)]
     assert list(cql.execute(f"SELECT s[20] FROM {table2} WHERE p={p}")) == [(20,)]
 
+# A frozen map or set can be a clustering column, and a clustering column can
+# have descending order (CLUSTERING ORDER BY (c DESC)). Selecting an element
+# of such a column should work just like it does for ascending order.
+# Reproduces SCYLLADB-5210 (Scylla crashed).
+def test_frozen_map_subscript_reversed(cql, test_keyspace):
+    schema = 'p int, c frozen<map<int, int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{1:10,2:20})")
+        assert list(cql.execute(f"SELECT c[1] FROM {table} WHERE p={p}")) == [(10,)]
+        assert list(cql.execute(f"SELECT c[2] FROM {table} WHERE p={p}")) == [(20,)]
+        assert list(cql.execute(f"SELECT c[3] FROM {table} WHERE p={p}")) == [(None,)]
+
+def test_frozen_set_subscript_reversed(cql, test_keyspace):
+    schema = 'p int, c frozen<set<int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{10,20})")
+        assert list(cql.execute(f"SELECT c[10] FROM {table} WHERE p={p}")) == [(10,)]
+        assert list(cql.execute(f"SELECT c[11] FROM {table} WHERE p={p}")) == [(None,)]
+
+# Filtering with CONTAINS KEY on a frozen map clustering column with
+# descending order. Reproduces SCYLLADB-5210 (Scylla crashed).
+# This test is marked cassandra_bug because Cassandra rejects this query with
+# "Cannot use CONTAINS KEY on non-map column c" - its check doesn't notice
+# that a column with descending order is still a map (CASSANDRA-21742).
+def test_frozen_map_contains_key_reversed(cql, test_keyspace, cassandra_bug):
+    schema = 'p int, c frozen<map<int, int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{1:10,2:20})")
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{3:30})")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 1 ALLOW FILTERING")) == [({1:10,2:20},)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 3 ALLOW FILTERING")) == [({3:30},)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 4 ALLOW FILTERING")) == []
+
 # scylla only because cassandra doesn't support lua language
 @pytest.mark.xfail(reason="#22075")
 def test_subscript_function_arg(scylla_only, cql, test_keyspace, table1):
