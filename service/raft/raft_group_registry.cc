@@ -475,24 +475,64 @@ raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& grou
 {
 }
 
+sstring raft_server_with_timeouts::timeout_message(const char* op_name) const
+{
+    sstring quorum_message;
+    {
+        unsigned voters_count = 0;
+        std::vector<raft::server_id> dead_voters;
+        for (const auto& c: _group_server.server->get_configuration().current) {
+            if (c.can_vote) {
+                ++voters_count;
+                if (!_fd->is_alive(c.addr.id)) {
+                    dead_voters.push_back(c.addr.id);
+                }
+            }
+        }
+        if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
+            std::string dead_voters_str;
+            for (const auto id: dead_voters) {
+                fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
+                if (dead_voters_str.size() > 512) {
+                    dead_voters_str.append("...");
+                    break;
+                }
+            }
+            quorum_message = ::format(", there is no raft quorum, total voters count {}, alive voters count {}, dead voters [{}]",
+                voters_count, voters_count - dead_voters.size(), std::string_view(dead_voters_str).substr(1));
+        }
+    }
+    return ::format("group [{}] raft operation [{}] timed out{}", _group_server.gid, op_name, quorum_message);
+}
+
+std::optional<lowres_clock::time_point>
+raft_server_with_timeouts::resolve_deadline(const std::optional<raft_timeout>& timeout, const char* op_name) const
+{
+    if (!timeout) {
+        return std::nullopt;
+    }
+    if (timeout->value) {
+        return timeout->value;
+    }
+    if (!_group_server.default_op_timeout_in_ms) {
+        on_internal_error(rslog, ::format("raft operation [{}], timeout requested at [{}],"
+                                          "but no value for it has been defined",
+            op_name, fmt_loc(timeout->loc)));
+    }
+    return lowres_clock::now() + std::chrono::milliseconds(_group_server.default_op_timeout_in_ms->get());
+}
+
 template <std::invocable<abort_source*> Op>
 std::invoke_result_t<Op, abort_source*>
 raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
     seastar::abort_source* as, std::optional<raft_timeout> timeout)
 {
-    if (!timeout) {
+    const auto deadline = resolve_deadline(timeout, op_name);
+    if (!deadline) {
         co_return co_await op(as);
     }
-    if (!timeout->value) {
-        if (!_group_server.default_op_timeout_in_ms) {
-            on_internal_error(rslog, ::format("raft operation [{}], timeout requested at [{}],"
-                                              "but no value for it has been defined",
-                op_name, fmt_loc(timeout->loc)));
-        }
-        timeout->value = lowres_clock::now() + std::chrono::milliseconds(_group_server.default_op_timeout_in_ms->get());
-    }
 
-    abort_on_expiry<> operation_as{*timeout->value};
+    abort_on_expiry<> operation_as{*deadline};
     [[maybe_unused]] const auto timeout_sub = utils::chain_abort_source(operation_as.abort_source(), as);
 
     // Early return.
@@ -504,33 +544,7 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         if (!operation_as.abort_source().abort_requested() || (as && as->abort_requested())) {
             throw;
         }
-        sstring quorum_message;
-        {
-            unsigned voters_count = 0;
-            std::vector<raft::server_id> dead_voters;
-            for (const auto& c: _group_server.server->get_configuration().current) {
-                if (c.can_vote) {
-                    ++voters_count;
-                    if (!_fd->is_alive(c.addr.id)) {
-                        dead_voters.push_back(c.addr.id);
-                    }
-                }
-            }
-            if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
-                std::string dead_voters_str;
-                for (const auto id: dead_voters) {
-                    fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
-                    if (dead_voters_str.size() > 512) {
-                        dead_voters_str.append("...");
-                        break;
-                    }
-                }
-                quorum_message = ::format(", there is no raft quorum, total voters count {}, alive voters count {}, dead voters [{}]",
-                    voters_count, voters_count - dead_voters.size(), std::string_view(dead_voters_str).substr(1));
-            }
-        }
-        const auto message = ::format("group [{}] raft operation [{}] timed out{}",
-            _group_server.gid, op_name, quorum_message);
+        const auto message = timeout_message(op_name);
         static thread_local logger::rate_limit rate_limit{std::chrono::seconds(1)};
         rslog.log(log_level::warn, rate_limit, "{}; timeout requested at [{}], original error {}",
             message, fmt_loc(timeout->loc), std::current_exception());

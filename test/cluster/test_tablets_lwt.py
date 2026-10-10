@@ -496,7 +496,11 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClust
                              manager.server_stop_gracefully(servers[2].server_id))
 
         logger.info(f"Running an LWT with timeout {timeout}")
-        with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
+        # Which stage of the group0 operation trips the timeout depends on what else the
+        # node has in flight: the read barrier when the operation runs alone, the group0
+        # operation mutex when it has to queue behind one that cannot commit. Both report
+        # the same reason, which is what this test is about.
+        with pytest.raises(Exception, match=r"raft operation \[[^\]]*\] timed out, there is no raft quorum"):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
 
         logger.info("Start the second and third nodes")
