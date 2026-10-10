@@ -101,6 +101,28 @@ def test_drop_sfunc_reducefunc_or_ffunc(scylla_only, cql, test_keyspace):
                 with pytest.raises(InvalidRequest, match="it is used"):
                     cql.execute(f"DROP FUNCTION {test_keyspace}.{div_fun}(tuple<bigint, bigint>)")
 
+# Test that CREATE OR REPLACE FUNCTION can't change the return type of a
+# function used by an aggregate, even to a compatible type (ascii to text).
+# The aggregate's state type must be exactly its state function's return
+# type, and an aggregate whose state function returns a different type
+# would fail to load from the schema tables (e.g., after a restart).
+# Cassandra allows this change, because it doesn't store the state type
+# separately from the state function.
+def test_replace_sfunc_return_type(scylla_only, cql, test_keyspace):
+    concat_body = "(state ascii, val ascii) CALLED ON NULL INPUT RETURNS ascii LANGUAGE lua AS 'return state .. val'"
+    concat_body2 = "(state ascii, val ascii) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS 'return state .. val'"
+    with new_function(cql, test_keyspace, concat_body) as concat:
+        with new_aggregate(cql, test_keyspace, f"(ascii) SFUNC {concat} STYPE ascii INITCOND ''"):
+            # Check that the return type can't change while the aggregate
+            # uses the function
+            with pytest.raises(InvalidRequest, match='used by user-defined aggregate'):
+                cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{concat} {concat_body2}')
+            # Check that replacing just the body is still allowed
+            cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{concat} {concat_body}')
+        # Check that without the aggregate, the compatible return type is
+        # allowed
+        cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{concat} {concat_body2}')
+
 # Test that the state function takes a correct number of arguments - the state and the new input
 def test_incorrect_state_func(scylla_only, cql, test_keyspace):
     avg_partial_body = "(state tuple<bigint, bigint>, val bigint, redundant int) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
