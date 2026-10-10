@@ -63,6 +63,10 @@ enum class flush_mode {
 
 inline constexpr auto major_compaction_task_type = "major compaction";
 
+// Set for a cleanup driven by a topology change, i.e. one started by sstable_vnodes_cleanup_fiber,
+// as opposed to a cleanup requested by the user.
+using is_topology_cleanup = bool_class<struct is_topology_cleanup_tag>;
+
 class major_compaction_task_impl : public compaction_task_impl {
 public:
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -188,10 +192,14 @@ public:
     future<tasks::task_manager::task_ptr> start_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, tasks::is_user_task is_user_task);
 
     // Starts a cleanup compaction of the given tables of a keyspace on this shard.
-    future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, tasks::task_info parent_info);
+    // is_user_task is carried down explicitly from the task which started the cleanup,
+    // since the value inherited by a child task defaults to no.
+    future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, tasks::is_user_task is_user_task, tasks::task_info parent_info);
 
     // Starts a cleanup compaction of a single table on this shard, once the turn is taken by the created task.
-    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::task_info parent_info);
+    // is_user_task is carried down explicitly from the task which started the cleanup,
+    // since the value inherited by a child task defaults to no.
+    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::is_user_task is_user_task, tasks::task_info parent_info);
 
     // Starts an offstrategy compaction of the given tables of a keyspace on all the shards.
     // If needed is set, it receives whether any table had sstables to compact.
