@@ -8,6 +8,7 @@
 
 #include "replica/logstor/record_value.hh"
 
+#include <algorithm>
 #include <optional>
 
 #include <boost/variant/apply_visitor.hpp>
@@ -130,6 +131,8 @@ std::optional<api::timestamp_type> marker_timestamp(
 api::timestamp_type record_timestamp(const mutation& m) {
     const auto& partition = m.partition();
 
+    api::timestamp_type ts = api::missing_timestamp;
+
     for (const auto& row_entry : partition.clustered_rows()) {
         // mutation_partition_serializer does not write dummy rows, so the frozen overload has no
         // dummy rows to skip.
@@ -137,31 +140,39 @@ api::timestamp_type record_timestamp(const mutation& m) {
             continue;
         }
         if (!row_entry.row().marker().is_missing()) {
-            return row_entry.row().marker().timestamp();
+            ts = std::max(ts, row_entry.row().marker().timestamp());
         }
     }
 
     if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
-        return partition_tombstone.timestamp;
+        ts = std::max(ts, partition_tombstone.timestamp);
     }
 
-    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    if (ts == api::missing_timestamp) {
+        throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    }
+    return ts;
 }
 
 api::timestamp_type record_timestamp(const frozen_mutation& m) {
     auto partition = frozen_partition(m);
 
+    api::timestamp_type ts = api::missing_timestamp;
+
     for (auto row : partition.rows()) {
-        if (auto ts = marker_timestamp(row.marker())) {
-            return *ts;
+        if (auto marker_ts = marker_timestamp(row.marker())) {
+            ts = std::max(ts, *marker_ts);
         }
     }
 
     if (const auto partition_tombstone = tombstone(partition.tomb()); partition_tombstone) {
-        return partition_tombstone.timestamp;
+        ts = std::max(ts, partition_tombstone.timestamp);
     }
 
-    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    if (ts == api::missing_timestamp) {
+        throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    }
+    return ts;
 }
 
 record_value encode_record_value(const mutation& m) {
