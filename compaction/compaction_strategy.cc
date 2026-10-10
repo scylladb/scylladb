@@ -21,12 +21,10 @@
 #include "compaction_strategy_state.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "schema/schema.hh"
-#include "size_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
 #include "backlog_controller.hh"
 #include "compaction_backlog_manager.hh"
-#include "size_tiered_backlog_tracker.hh"
 #include "leveled_manifest.hh"
 #include "utils/to_string.hh"
 #include "incremental_compaction_strategy.hh"
@@ -177,7 +175,7 @@ void compaction_strategy_impl::validate_options_for_strategy_type(const std::map
             // schema dumped from an older version can still be replayed as-is.
             // Its value is still validated: nothing reads it any more, but a bad
             // one is a typo worth reporting, as it always was.
-            size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
+            compaction_strategy_impl::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
             break;
         case compaction_strategy_type::incremental:
             incremental_compaction_strategy::validate_options(options, unchecked_options);
@@ -216,127 +214,19 @@ void compaction_strategy_impl::validate_options(const std::map<sstring, sstring>
     unchecked_options.erase("enabled");
 }
 
+void compaction_strategy_impl::validate_deprecated_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto tmp_value = get_value(options, DEPRECATED_COLD_READS_TO_OMIT_OPTION);
+    auto cold_reads_to_omit = cql3::statements::property_definitions::to_double(DEPRECATED_COLD_READS_TO_OMIT_OPTION, tmp_value, 0.05);
+    if (cold_reads_to_omit < 0.0 || cold_reads_to_omit > 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be between 0.0 and 1.0", DEPRECATED_COLD_READS_TO_OMIT_OPTION, cold_reads_to_omit));
+    }
+    unchecked_options.erase(DEPRECATED_COLD_READS_TO_OMIT_OPTION);
+}
+
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
     _tombstone_threshold = validate_tombstone_threshold(options);
     _tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
     _unchecked_tombstone_compaction = validate_unchecked_tombstone_compaction(options);
-}
-
-size_tiered_backlog_tracker::inflight_component
-size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
-    inflight_component in;
-    for (auto const& crp : ongoing_compactions) {
-        // A SSTable being compacted may not contribute to backlog if compaction strategy decided
-        // to perform a low-efficiency compaction when system is under little load, or when user
-        // performs major even though strategy is completely satisfied
-        if (!_contrib.sstables.contains(crp.first)) {
-            continue;
-        }
-        // Ci is left untaxed on purpose: the fixed cost belongs to the sstable existing,
-        // not to the compaction reading it, so it's only retired once the sstable leaves
-        // the set. Taxing Ci would cancel the tax added to Si for every sstable being
-        // compacted, and prorating it would only decay it earlier.
-        auto compacted = crp.second->compacted();
-        in.total_bytes += compacted;
-        in.contribution += compacted * log4(crp.first->data_size());
-    }
-    return in;
-}
-
-// Provides strong exception safety guarantees.
-size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_tracker::calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const size_tiered_compaction_strategy_options& stcs_options) {
-    sstables_backlog_contribution contrib;
-    if (all.empty()) {
-        return contrib;
-    }
-
-    // Deduce threshold from the last SSTable added to the set
-    // Low-efficiency jobs, which fan-in is smaller than min-threshold, will not have backlog accounted.
-    // That's because they can only run when system is under little load, and accounting them would result
-    // in efficient jobs acting more aggressive than they really have to.
-    // TODO: potentially switch to compaction manager's fan-in threshold, so to account for the dynamic
-    //  fan-in threshold behavior.
-    const auto& newest_sst = std::ranges::max(all, std::less<sstables::generation_type>(), std::mem_fn(&sstables::sstable::generation));
-    auto threshold = newest_sst->get_schema()->min_compaction_threshold();
-
-    for (auto& bucket : size_tiered_compaction_strategy::get_buckets(all, stcs_options)) {
-        if (!size_tiered_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
-            continue;
-        }
-        contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const sstables::shared_sstable& sst) -> double {
-            // Si is taxed with the fixed per-sstable cost where it weighs the work, but
-            // not inside the log. See sstable_backlog_fixed_cost.
-            auto data_size = sst->data_size();
-            return effective_backlog_size(data_size) * log4(data_size);
-        }), double(0.0f), std::plus{});
-        // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
-        contrib.sstables.insert(bucket.begin(), bucket.end());
-    }
-
-    return contrib;
-}
-
-double size_tiered_backlog_tracker::backlog(const compaction_backlog_source&, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
-    if (_backlog_dirty) {
-        _contrib = calculate_sstables_backlog_contribution(_all | std::ranges::to<std::vector>(), _stcs_options);
-        _backlog_dirty = false;
-    }
-
-    inflight_component compacted = compacted_backlog(oc);
-
-    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform([] (const sstables::shared_sstable& sst) {
-        return effective_backlog_size(sst->data_size());
-    }), uint64_t(0), std::plus{});
-
-    // Bail out if effective backlog is zero, which happens in a small window where ongoing compaction exhausted
-    // input files but is still sealing output files or doing managerial stuff like updating history table
-    if (total_backlog_bytes <= compacted.total_bytes) {
-        return 0;
-    }
-
-    // Formula for each SSTable is (Si - Ci) * log(T / Si)
-    // Which can be rewritten as: ((Si - Ci) * log(T)) - ((Si - Ci) * log(Si))
-    //
-    // For the meaning of each variable, please refer to the doc in size_tiered_backlog_tracker.hh
-
-    // Sum of (Si - Ci) for all SSTables contributing backlog
-    auto effective_backlog_bytes = total_backlog_bytes - compacted.total_bytes;
-
-    // Sum of (Si - Ci) * log (Si) for all SSTables contributing backlog
-    auto sstables_contribution = _contrib.value - compacted.contribution;
-    // This is subtracting ((Si - Ci) * log (Si)) from ((Si - Ci) * log(T)), yielding the final backlog
-    auto b = (effective_backlog_bytes * log4(_total_bytes)) - sstables_contribution;
-    return b > 0 ? b : 0;
-}
-
-// Provides strong exception safety guarantees.
-void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
-    auto tmp_all = _all;
-    auto tmp_total_bytes = _total_bytes;
-    tmp_all.reserve(_all.size() + new_ssts.size());
-
-    for (auto& sst : old_ssts) {
-        if (sst->data_size() > 0) {
-            auto erased = tmp_all.erase(sst);
-            if (erased) {
-                tmp_total_bytes -= sst->data_size();
-            }
-        }
-    }
-    for (auto& sst : new_ssts) {
-        if (sst->data_size() > 0) {
-            auto [_, inserted] = tmp_all.insert(sst);
-            if (inserted) {
-                tmp_total_bytes += sst->data_size();
-            }
-        }
-    }
-    std::invoke([&] () noexcept {
-        _all = std::move(tmp_all);
-        _total_bytes = tmp_total_bytes;
-        // Defer recalculation to the next backlog() call, mirroring incremental_backlog_tracker.
-        _backlog_dirty = true;
-    });
 }
 
 extern logging::logger clogger;
@@ -575,7 +465,7 @@ void leveled_compaction_strategy::validate_options(const std::map<sstring, sstri
     incremental_compaction_strategy_options::validate(options, unchecked_options);
     // Accept, and ignore, the one STCS option ICS doesn't have, which LCS used to take, so
     // that a schema dumped from an older version can still be replayed as-is.
-    size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
+    compaction_strategy_impl::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
 
     auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
     auto min_sstables_size = cql3::statements::property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
@@ -630,16 +520,12 @@ void time_window_compaction_strategy::validate_options(const std::map<sstring, s
     incremental_compaction_strategy::validate_fragment_size_option(options, unchecked_options);
     // Accept, and ignore, the one STCS option ICS doesn't have, which TWCS used to take, so
     // that a schema dumped from an older version can still be replayed as-is.
-    size_tiered_compaction_strategy_options::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
+    compaction_strategy_impl::validate_deprecated_cold_reads_to_omit(options, unchecked_options);
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<time_window_backlog_tracker>(_options, _ics_options);
 }
-
-size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
-    : _options(options)
-{}
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
@@ -732,12 +618,10 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         // STCS is deprecated. It is kept only as an alias of ICS, which
         // provides the same read and write amplification with a much lower
         // space amplification. See scylladb/scylladb#22306.
-        // Note that size-tiered compaction is still used internally, per time
-        // window by TWCS and for level 0 by LCS.
         // Logged on one shard only: every shard builds a strategy per table.
-        if (this_shard_id() == 0 && options.contains(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY)) {
+        if (this_shard_id() == 0 && options.contains(compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION)) {
             compaction_strategy_logger.warn("Ignoring the {} option: it is not supported by {}, which {} is now an alias of.",
-                    size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY,
+                    compaction_strategy_impl::DEPRECATED_COLD_READS_TO_OMIT_OPTION,
                     compaction_strategy::name(compaction_strategy_type::incremental),
                     compaction_strategy::name(compaction_strategy_type::size_tiered));
         }

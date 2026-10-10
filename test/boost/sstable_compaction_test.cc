@@ -40,7 +40,6 @@
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"
 #include "compaction/incremental_backlog_tracker.hh"
-#include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -440,10 +439,13 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
         };
 
         if (strategy == compaction::compaction_strategy_type::size_tiered) {
-            // Calling function that will return a list of sstables to compact based on size-tiered strategy.
+            // Calling function that will return a list of sstables to compact based on size-tiered compaction,
+            // as done by ICS, which STCS is an alias of.
             int min_threshold = cf->schema()->min_compaction_threshold();
             int max_threshold = cf->schema()->max_compaction_threshold();
-            auto sstables_to_compact = compaction::size_tiered_compaction_strategy::most_interesting_bucket(sstables, min_threshold, max_threshold);
+            auto sstables_to_compact = compaction::incremental_compaction_strategy::runs_to_sstables(
+                    compaction::incremental_compaction_strategy::most_interesting_bucket(compaction::incremental_compaction_strategy::sstables_to_runs(sstables),
+                    min_threshold, max_threshold, compaction::incremental_compaction_strategy_options()));
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables.size());
             (void)compact_sstables(env, compaction::compaction_descriptor(std::move(sstables_to_compact)), cf, new_sstable).get();
@@ -5055,12 +5057,11 @@ void basic_ics_controller_correctness_fn(test_env& env) {
     };
 
     compaction::incremental_compaction_strategy_options ics_options;
-    auto ics_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), default_fragment_size);
-    compaction::size_tiered_compaction_strategy_options stcs_options;
-    auto stcs_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::size_tiered_backlog_tracker>(stcs_options)), std::numeric_limits<size_t>::max());
+    auto fragmented_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), default_fragment_size);
+    auto whole_backlog = backlog(compaction::compaction_backlog_tracker(std::make_unique<compaction::incremental_backlog_tracker>(ics_options)), std::numeric_limits<size_t>::max());
 
-    // don't expect ics and stcs to yield different backlogs for the same workload.
-    BOOST_CHECK_CLOSE(ics_backlog, stcs_backlog, 0.0001);
+    // don't expect the backlog to depend on whether runs are written as fragments or as whole sstables.
+    BOOST_CHECK_CLOSE(fragmented_backlog, whole_backlog, 0.0001);
 }
 
 SEASTAR_TEST_CASE(basic_ics_controller_correctness_test) {
@@ -5078,18 +5079,9 @@ SEASTAR_FIXTURE_TEST_CASE(basic_ics_controller_correctness_gcs_test, gcs_fixture
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-namespace {
-// The size-tiered tracker accounts for the sstables handed to replace_sstables(), so its
-// backlog() never looks at the source.
-struct dummy_backlog_source : public compaction::compaction_backlog_source {
-    schema_ptr _s;
-    const schema_ptr& schema() const noexcept override { return _s; }
-    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
-};
-}
-
-// Backlog must be the same whether sstables are added one at a time or all at once.
-SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
+// Backlog must be the same whether sstables are added one at a time, recalculating it in
+// between, or all at once.
+SEASTAR_TEST_CASE(incremental_subset_backlog_deferred_matches_bulk) {
     return test_env::do_with_async([](test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), "tests", "backlog_deferred_vs_bulk")
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -5105,22 +5097,32 @@ SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
             ssts.push_back(sst);
         }
 
-        compaction::size_tiered_compaction_strategy_options stcs_options;
+        compaction::incremental_compaction_strategy_options ics_options;
+        auto min_threshold = s->min_compaction_threshold();
 
-        compaction::size_tiered_backlog_tracker deferred(stcs_options);
+        compaction::incremental_subset_backlog deferred;
         for (auto& sst : ssts) {
-            deferred.replace_sstables({}, {sst});
+            deferred.add(sst);
+            (void)deferred.backlog(min_threshold, ics_options, {});
         }
 
-        compaction::size_tiered_backlog_tracker bulk(stcs_options);
-        bulk.replace_sstables({}, ssts);
+        compaction::incremental_subset_backlog bulk;
+        for (auto& sst : ssts) {
+            bulk.add(sst);
+        }
 
-        dummy_backlog_source src;
-        BOOST_CHECK_CLOSE(deferred.backlog(src, {}, {}), bulk.backlog(src, {}, {}), 0.0001);
+        BOOST_CHECK_CLOSE(deferred.backlog(min_threshold, ics_options, {}), bulk.backlog(min_threshold, ics_options, {}), 0.0001);
     });
 }
 
 namespace {
+// A backlog source for trackers whose backlog() doesn't look at it.
+struct dummy_backlog_source : public compaction::compaction_backlog_source {
+    schema_ptr _s;
+    const schema_ptr& schema() const noexcept override { return _s; }
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
+};
+
 // Test double whose backlog() always throws.
 struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tracker::impl {
     std::shared_ptr<int> calls;
@@ -7268,23 +7270,19 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
             std::map<sstring, sstring> options = {
                 { "min_sstable_age", std::to_string(min_sstable_age.count()) },
             };
-            return std::pair<compaction::size_tiered_compaction_strategy_options,
-                             compaction::incremental_compaction_strategy_options>(options, options);
+            return compaction::incremental_compaction_strategy_options(options);
         };
 
         auto expect_buckets = [&] (unsigned expected_bucket_count, db_clock::time_point write_time, std::chrono::seconds min_sstable_age) {
             sstables::test(tiny_sst).set_data_file_write_time(write_time);
             sstables::test(medium_sst).set_data_file_write_time(write_time);
 
-            auto [stcs_options, ics_options] = make_options(min_sstable_age);
+            auto ics_options = make_options(min_sstable_age);
 
             // SSTables of 1M and 40M, both smaller than min_sstable_size (50M), must end up
             // in the same tier only if they were not written within the last min_sstable_age.
             // Otherwise, they must stay in distinct tiers so that similarly sized sstables are
             // compacted together.
-            auto stcs_buckets = compaction::size_tiered_compaction_strategy::get_buckets({ tiny_sst, medium_sst }, stcs_options);
-            BOOST_REQUIRE_EQUAL(stcs_buckets.size(), expected_bucket_count);
-
             std::vector<sstables::frozen_sstable_run> runs = {
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(tiny_sst)),
                 make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(medium_sst)),

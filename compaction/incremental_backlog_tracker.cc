@@ -92,7 +92,7 @@ double incremental_backlog_tracker::backlog_of(const backlog_calculation_result&
     // Formula for each SSTable is (Si - Ci) * log(T / Si)
     // Which can be rewritten as: ((Si - Ci) * log(T)) - ((Si - Ci) * log(Si))
     //
-    // For the meaning of each variable, please refer to the doc in size_tiered_backlog_tracker.hh
+    // For the meaning of each variable, please refer to the doc in incremental_backlog_tracker.hh
 
     // Sum of (Si - Ci) for all SSTables contributing backlog
     auto effective_backlog_bytes = contribution.total_backlog_bytes - compacted.total_bytes;
