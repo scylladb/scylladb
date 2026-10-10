@@ -1435,7 +1435,10 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     // flushed and closed. After the object is copied, it can be removed. If copy
     // goes wrong, the object should be removed anyway.
     auto gh = _bg_flushes.hold();
-    (void)piece.flush().then([&piece] () {
+    (void)piece.flush().finally([&piece] () {
+        // Aborts the piece's own multipart upload if flush() left it
+        // unfinished, and drains its background part uploads before the
+        // piece is destroyed below.
         return piece.close();
     }).then([this, part_number, req = std::move(req)] () mutable {
         return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
