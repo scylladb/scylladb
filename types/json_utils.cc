@@ -544,13 +544,22 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
 }
 
 namespace {
+// Most types allow an "empty" value (for historical reasons), which is not
+// the same as null. In JSON, such an empty value is printed as an empty string.
+const sstring empty_json_string = "\"\"";
+
 struct to_json_string_visitor {
     bytes_view bv;
     sstring operator()(const reversed_type_impl& t) { return to_json_string(*t.underlying_type(), bv); }
-    template <typename T> sstring operator()(const integer_type_impl<T>& t) { return to_sstring(compose_value(t, bv)); }
+    template <typename T> sstring operator()(const integer_type_impl<T>& t) {
+        if (bv.empty()) {
+            return empty_json_string;
+        }
+        return to_sstring(compose_value(t, bv));
+    }
     template <typename T> sstring operator()(const floating_type_impl<T>& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         T d = value_cast<T>(v);
@@ -563,8 +572,13 @@ struct to_json_string_visitor {
     sstring operator()(const inet_addr_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
-    sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(timestamp_to_json_string(t, bv)); }
+    sstring operator()(const boolean_type_impl& t) { return bv.empty() ? empty_json_string : t.to_string(bv); }
+    sstring operator()(const timestamp_date_base_class& t) {
+        if (bv.empty()) {
+            return empty_json_string;
+        }
+        return quote_json_string(timestamp_to_json_string(t, bv));
+    }
     sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const set_type_impl& t) { return to_json_string_aux(t, bv); }
@@ -588,14 +602,14 @@ struct to_json_string_visitor {
     }
     sstring operator()(const decimal_type_impl& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         return value_cast<big_decimal>(v).to_string();
     }
     sstring operator()(const varint_type_impl& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         return value_cast<utils::multiprecision_int>(v).str();
