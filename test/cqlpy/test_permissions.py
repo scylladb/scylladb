@@ -1484,8 +1484,9 @@ def test_filter_granted_permissions_by_resource_type_functions(cql, test_keyspac
             cql.execute(f"DROP AGGREGATE IF EXISTS {test_keyspace}.{agg_name}")
 
 # Tests for the HASHED PASSWORD option of roles and users, which Cassandra
-# added in Cassandra 4.1. Scylla supports it only in CREATE ROLE, and even
-# there doesn't validate the hash (SCYLLADB-5229). The hashes below are
+# added in Cassandra 4.1. Scylla supports it in CREATE ROLE and ALTER ROLE,
+# but not in CREATE USER and ALTER USER, and doesn't validate the hash
+# (SCYLLADB-5229). The hashes below are
 # bcrypt hashes (the format which Cassandra requires, and Scylla supports)
 # of the password "super_secret_thing".
 hashed_password = "$2a$04$PoiUnv/9OZ5nYjlN087uIe5KLMV6yJfDkgKAAHO0pRVTEvB3UQU/i"
@@ -1507,7 +1508,6 @@ def test_create_role_with_hashed_password_login(cql):
 
 # Reproduces SCYLLADB-5229: ALTER ROLE with HASHED PASSWORD fails with an
 # internal server error.
-@pytest.mark.xfail(reason="SCYLLADB-5229")
 def test_alter_role_with_hashed_password(cql):
     role = unique_name()
     # The role is created without a password, so that the ALTER ROLE below
@@ -1519,6 +1519,23 @@ def test_alter_role_with_hashed_password(cql):
         check_login(cql, role)
     finally:
         cql.execute(f"DROP ROLE {role}")
+
+# Setting a HASHED PASSWORD directly bypasses the hashing of the password,
+# so Scylla allows it only to superusers - in CREATE ROLE, and also in ALTER
+# ROLE, even when a role alters its own password. This is a deliberate
+# difference from Cassandra, which allows a role to alter its own hashed
+# password, so this test is Scylla-only. The restriction was added to CREATE
+# ROLE in 2024 (in commit 47a5469280, "cql3/statements: Restrict CREATE ROLE
+# WITH SALTED HASH", as the statement was then called), and extended to
+# ALTER ROLE when ALTER ROLE with HASHED PASSWORD was implemented - otherwise
+# ALTER ROLE would have been a way around the restriction.
+# Reproduces SCYLLADB-5229 (ALTER ROLE with HASHED PASSWORD failed with an
+# internal server error).
+def test_alter_role_hashed_password_requires_superuser(cql, scylla_only):
+    with new_user(cql) as user:
+        with new_session(cql, user) as session:
+            with pytest.raises(Unauthorized, match='superuser'):
+                session.execute(f"ALTER ROLE {user} WITH HASHED PASSWORD = '{hashed_password}'")
 
 # Reproduces SCYLLADB-5229: CREATE USER and ALTER USER don't support
 # HASHED PASSWORD.

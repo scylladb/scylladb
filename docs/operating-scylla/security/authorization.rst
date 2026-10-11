@@ -118,6 +118,9 @@ When that statement is executed, ScyllaDB will not hash the provided hashed pass
 the database directly, with no additional processing of it. The statement only works with an authenticator that
 uses passwords, e.g. PasswordAuthenticator. It can only be executed by a role with the superuser privilege.
 
+A role's hashed password can also be changed with ``ALTER ROLE `role_name` WITH HASHED PASSWORD = `hashed_password```.
+This, too, can only be executed by a role with the superuser privilege - even when a role changes its own password.
+
 The provided hashed password must be an encrypted string using the library function `crypt(3)` specified by POSIX,
 and it must use one of the encryption algorithms that ScyllaDB supports: bcrypt, sha512crypt, sha256crypt, md5crypt.
 If the hashed password doesn't satisfy those requirements, logging in as the role may be impossible.
@@ -165,6 +168,7 @@ Conditions on executing ``ALTER ROLE`` statements:
 -  A client must have ``SUPERUSER`` status to alter the ``SUPERUSER`` status of another role
 -  A client cannot alter the ``SUPERUSER`` status of any role it currently holds
 -  A client can only modify certain properties of the role with which it identified at login (e.g. ``PASSWORD``)
+-  A client must have ``SUPERUSER`` status to set the ``HASHED PASSWORD`` of any role, including its own
 -  To modify properties of a role, the client must be granted ``ALTER`` :ref:`permission <cql-permissions>` on that role
 
 .. _drop-role-statement:
