@@ -77,17 +77,6 @@ future<> scan_segment(seastar::input_stream<char>& in,
     logstor_logger.trace("Reading records from segment {}", segment_id);
 
     while (current_position < segment_size) {
-        // Align to block boundary
-        auto skip_bytes = align_up(current_position, ondisk::block_alignment) - current_position;
-        if (skip_bytes > 0) {
-            co_await in.skip(skip_bytes);
-            current_position += skip_bytes;
-        }
-
-        if (current_position >= segment_size) {
-            break;
-        }
-
         // read chunk header
         auto chunk_header_buf = co_await in.read_exactly(ondisk::chunk_header_size);
         current_position += ondisk::chunk_header_size;
@@ -185,6 +174,13 @@ future<> scan_segment(seastar::input_stream<char>& in,
         if (seg_info.kind == segment_kind::full) {
             // A segment of this kind has only a single chunk
             break;
+        }
+
+        // The next chunk starts at the first block boundary after this one.
+        auto skip_bytes = align_up(current_position, ondisk::block_alignment) - current_position;
+        if (skip_bytes > 0) {
+            co_await in.skip(skip_bytes);
+            current_position += skip_bytes;
         }
     }
 }
