@@ -34,13 +34,12 @@ void check_partition_shape(const mutation_partition& p, const schema& s, const p
     }
 }
 
-single_row_partition to_single_row_partition(mutation&& m) {
-    auto& p = m.partition();
-    check_partition_shape(p, *m.schema(), m.key());
+single_row_partition to_single_row_partition(mutation_partition&& p, const schema& s, const partition_key& key) {
+    check_partition_shape(p, s, key);
     single_row_partition partition{.partition_tombstone = p.partition_tombstone()};
     auto& rows = p.mutable_clustered_rows();
     if (!rows.empty()) {
-        // Moved out of its entry, which stays in the tree with the key and goes with the mutation:
+        // Moved out of its entry, which stays in the tree with the key and goes with the partition:
         // what mutation::consume() does with a row.
         partition.row.emplace(std::move(rows.begin()->row()));
     }

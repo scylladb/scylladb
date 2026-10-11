@@ -838,10 +838,10 @@ public:
         }
     }
 
-    // And what it pays after that: the value is decoded into the mutation the read returns.
+    // And what it pays after that: the value is decoded into the partition the read returns.
     void do_decode(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            decode_record_value(_record->value, _schema, _record->header);
+            _sink += decode_record_value(_record->value, *_schema, _record->header).row.has_value();
         }
     }
 
@@ -964,7 +964,7 @@ private:
 
     void prepare_single_step_inputs() {
         _mutation = make_mutation(_keys[0]);
-        _partition = to_single_row_partition(mutation(*_mutation));
+        _partition = tests::logstor::to_single_row_partition(mutation(*_mutation));
         _record.emplace(log_record{
             .header = make_record_header(_mutation->decorated_key()),
             .value = encode_record_value(*_mutation),

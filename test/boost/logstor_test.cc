@@ -94,6 +94,18 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     };
 }
 
+// The mutation that a record value decodes to, for the tests that compare mutations: the decoder
+// gives a single_row_partition.
+mutation decode_to_mutation(const record_value& v, schema_ptr s, const record_header& h) {
+    auto partition = decode_record_value(v, *s, h);
+    return to_mutation(std::move(s), h.key, std::move(partition));
+}
+
+// The mutation that a whole record holds.
+mutation to_mutation(const log_record& r, schema_ptr s) {
+    return decode_to_mutation(r.value, std::move(s), r.header);
+}
+
 temporary_buffer<char> copy_chunk(bytes_view chunk) {
     return temporary_buffer<char>(reinterpret_cast<const char*>(chunk.data()), chunk.size());
 }
@@ -719,7 +731,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_round_trip) {
 
     auto m = make_multi_column_mutation(schema, "pk0", ts);
     auto value = encode_record_value(m);
-    assert_that(decode_record_value(value, schema, make_header(m, ts))).is_equal_to(m);
+    assert_that(decode_to_mutation(value, schema, make_header(m, ts))).is_equal_to(m);
     BOOST_REQUIRE_LT(value.size(), canonical_mutation(m).representation().size());
 
     // The value starts with the schema version, most significant half first. That is what a
@@ -733,7 +745,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_round_trip) {
     mutation deleted(schema, m.decorated_key());
     deleted.partition().apply(tombstone(ts, gc_clock::now()));
     auto deleted_value = encode_record_value(deleted);
-    assert_that(decode_record_value(deleted_value, schema, make_header(deleted, ts))).is_equal_to(deleted);
+    assert_that(decode_to_mutation(deleted_value, schema, make_header(deleted, ts))).is_equal_to(deleted);
 }
 
 // Checks that a record written under one schema version reads under another the way a
@@ -750,12 +762,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_decodes_under_another_schema_
 
     auto with_added = schema_builder(schema).with_column("y", long_type).build();
     BOOST_REQUIRE(with_added->version() != schema->version());
-    assert_that(decode_record_value(value, with_added, header)).is_equal_to(oracle.to_mutation(with_added));
-    assert_that(decode_record_value(value, with_added, header)).is_equal_to(m);
+    assert_that(decode_to_mutation(value, with_added, header)).is_equal_to(oracle.to_mutation(with_added));
+    assert_that(decode_to_mutation(value, with_added, header)).is_equal_to(m);
 
     auto with_dropped = schema_builder(schema).without_column("w", ts + 1).build();
     BOOST_REQUIRE(with_dropped->version() != schema->version());
-    auto decoded = decode_record_value(value, with_dropped, header);
+    auto decoded = decode_to_mutation(value, with_dropped, header);
     assert_that(decoded).is_equal_to(oracle.to_mutation(with_dropped));
     // Of the three cells written, the one of the dropped column is gone.
     const auto& cells = decoded.partition().clustered_row(*with_dropped, clustering_key::make_empty()).cells();
@@ -776,8 +788,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_rejects_the_schema_of_another
     auto header = make_header(m, ts);
 
     BOOST_REQUIRE(other->id() != schema->id());
-    BOOST_REQUIRE_THROW(decode_record_value(value, other, header), std::runtime_error);
-    assert_that(decode_record_value(value, schema, header)).is_equal_to(m);
+    BOOST_REQUIRE_THROW(decode_to_mutation(value, other, header), std::runtime_error);
+    assert_that(decode_to_mutation(value, schema, header)).is_equal_to(m);
 }
 
 // Checks that the frozen and the unfrozen forms of a mutation give the same record value and the
@@ -824,7 +836,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_frozen_record_value_matches_the_unfrozen_o
         BOOST_REQUIRE_EQUAL(record_timestamp(frozen), ts);
 
         // The value decodes to the original mutation.
-        assert_that(decode_record_value(encode_record_value(frozen, *schema), schema, make_header(m, ts))).is_equal_to(m);
+        assert_that(decode_to_mutation(encode_record_value(frozen, *schema), schema, make_header(m, ts))).is_equal_to(m);
     }
 }
 
