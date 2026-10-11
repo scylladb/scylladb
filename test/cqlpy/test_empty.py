@@ -229,8 +229,16 @@ def test_empty_string_for_other_types(cql, table_all_scalar, t):
 # Reproduces #7944 and #10625.
 # See also test_json.py::test_fromjson_{varint,int}_empty_string*
 # which reproduces the same bug but just for two specific types.
-@pytest.mark.xfail(reason="issue #7944")
-@pytest.mark.parametrize("t", ["bigint", "blob", "boolean", "decimal", "double", "duration", "float", "int", "smallint", "timeuuid", "tinyint", "uuid", "varint"])
+@pytest.mark.parametrize("t", ["bigint", "blob", "boolean",
+    pytest.param("decimal", marks=pytest.mark.xfail(reason="issue #7944")),
+    pytest.param("double", marks=pytest.mark.xfail(reason="issue #7944")),
+    pytest.param("duration", marks=pytest.mark.xfail(reason="issue #7944")),
+    pytest.param("float", marks=pytest.mark.xfail(reason="issue #7944")),
+    "int", "smallint",
+    pytest.param("timeuuid", marks=pytest.mark.xfail(reason="issue #7944")),
+    "tinyint",
+    pytest.param("uuid", marks=pytest.mark.xfail(reason="issue #7944")),
+    pytest.param("varint", marks=pytest.mark.xfail(reason="issue #7944"))])
 def test_empty_string_for_other_types_json(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(InvalidRequest, match='Error decoding JSON'):
@@ -242,7 +250,6 @@ def test_empty_string_for_other_types_json(cql, table_all_scalar, t, cassandra_b
 # a big problem for regular columns, but for key columns it is bad -
 # namely, because the partition key cannot be empty.
 # See #10625, #7944
-@pytest.mark.xfail(reason="issue #7944, Scylla returns internal server error")
 def test_empty_string_for_nonstring_partition_key1(cql, test_keyspace):
     schema = 'p int primary key, v int'
     with new_test_table(cql, test_keyspace, schema) as table:
