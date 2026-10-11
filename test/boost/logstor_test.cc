@@ -136,6 +136,12 @@ ondisk::chunk_header read_chunk_header(const temporary_buffer<char>& buf) {
     return ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
 }
 
+// The segment header that follows the chunk header in a full segment.
+ondisk::segment_header read_segment_header(const temporary_buffer<char>& buf) {
+    seastar::simple_memory_input_stream in(buf.get() + ondisk::chunk_header_size, buf.size() - ondisk::chunk_header_size);
+    return ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
+}
+
 struct rewritten_stream_result {
     temporary_buffer<char> data;
     size_t write_count{0};
@@ -631,12 +637,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(chunk.data()), chunk.size());
     auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
-    BOOST_REQUIRE(ondisk::validate_chunk_header(ch));
+    auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
+    BOOST_REQUIRE(ondisk::validate_chunk_headers(ch, sh));
     BOOST_REQUIRE(ch.kind == segment_kind::full);
     BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 17u);
     BOOST_REQUIRE_EQUAL(ch.records_size, expected_records_size);
 
-    auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
     BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
     BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
@@ -1824,6 +1830,46 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
 }
 
+// Checks that the chunk header's CRC covers the segment header: a full segment whose segment header
+// is corrupt has no segment info, gives no records, and is not taken in by the streamed rewriter.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_header) {
+    auto schema = make_kv_schema();
+
+    raw_write_buffer wb(64 * 1024, segment_kind::full);
+    wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(111))));
+    wb.seal(segment_sequence{121}, schema->id(), ondisk::block_alignment);
+
+    auto serialized = copy_chunk(wb.chunk());
+    BOOST_REQUIRE(read_segment_info_from_bytes(serialized));
+    // A byte of last_token, the last field of the segment header.
+    flip_byte(serialized, ondisk::chunk_header_size + ondisk::segment_header_size - 1);
+
+    BOOST_REQUIRE(!read_segment_info_from_bytes(serialized));
+    BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{13}, segment_sequence{131}, std::span(&serialized, 1)), std::runtime_error);
+
+    const auto segment_size = serialized.size();
+    auto in = seastar::util::as_input_stream(std::move(serialized));
+    size_t seen_segment_infos = 0;
+    size_t seen_headers = 0;
+
+    scan_segment(in, log_segment_id{13}, segment_size,
+        [&seen_segment_infos] (const segment_info&) {
+            ++seen_segment_infos;
+            return make_ready_future<>();
+        },
+        [&seen_headers] (record_location, const record_header&) {
+            ++seen_headers;
+            return want_data::yes;
+        },
+        [] (record_location, log_record) {
+            return make_ready_future<>();
+        }).get();
+    in.close().get();
+
+    BOOST_REQUIRE_EQUAL(seen_segment_infos, 0u);
+    BOOST_REQUIRE_EQUAL(seen_headers, 0u);
+}
+
 // Checks that the rewriter updates the initial full chunk header sequence number.
 SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial_full_chunk_header) {
     auto schema = make_kv_schema();
@@ -1861,7 +1907,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(rewritten.write_count, 1u);
-    BOOST_REQUIRE(ondisk::validate_chunk_header(ch));
+    BOOST_REQUIRE(ondisk::validate_chunk_headers(ch, read_segment_header(rewritten.data)));
     BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 221u);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
     BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);

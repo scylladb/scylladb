@@ -133,25 +133,27 @@ bytes_view raw_write_buffer::chunk() const {
 }
 
 void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
+    // The segment header first: the chunk header's CRC covers it.
+    std::optional<ondisk::segment_header> seg_hdr;
+    if (_segment_kind == segment_kind::full) {
+        seg_hdr = ondisk::segment_header {
+            .table = table.value(),
+            .first_token = _min_token.value_or(dht::minimum_token()),
+            .last_token = _max_token.value_or(dht::minimum_token()),
+        };
+
+        ser::serialize<ondisk::segment_header>(_segment_header_stream, *seg_hdr);
+    }
+
     _chunk_header.magic = ondisk::chunk_header_magic;
     _chunk_header.kind = _segment_kind;
     _chunk_header.version = ondisk::current_version;
     _chunk_header.reserved = 0;
     _chunk_header.segment_seq = segment_seq;
 
-    _chunk_header.crc = _chunk_header.calculate_crc();
+    _chunk_header.crc = _chunk_header.calculate_crc(seg_hdr);
 
     ser::serialize<ondisk::chunk_header>(_header_stream, _chunk_header);
-
-    if (_segment_kind == segment_kind::full) {
-        ondisk::segment_header seg_hdr {
-            .table = table.value(),
-            .first_token = _min_token.value_or(dht::minimum_token()),
-            .last_token = _max_token.value_or(dht::minimum_token()),
-        };
-
-        ser::serialize<ondisk::segment_header>(_segment_header_stream, seg_hdr);
-    }
 }
 
 size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {

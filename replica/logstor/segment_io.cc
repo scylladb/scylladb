@@ -70,10 +70,10 @@ struct chunk_headers {
     std::optional<ondisk::segment_header> segment;
 };
 
-// Returns nullopt if the stream ends first or the chunk header is invalid.
+// Returns nullopt if the stream ends first or the headers are invalid.
 future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader) {
     auto ch = co_await reader.read<ondisk::chunk_header>();
-    if (!ch || !ondisk::validate_chunk_header(*ch)) {
+    if (!ch || !ondisk::validate_chunk_header_fields(*ch)) {
         co_return std::nullopt;
     }
 
@@ -85,6 +85,9 @@ future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader) 
         }
     }
 
+    if (!ondisk::validate_chunk_headers(*ch, sh)) {
+        co_return std::nullopt;
+    }
     co_return chunk_headers{*ch, sh};
 }
 
@@ -288,7 +291,7 @@ void streamed_segment_rewriter::maybe_parse_initial_header() {
     }
 
     auto ch = read_chunk_header();
-    if (!ondisk::validate_chunk_header(ch)) {
+    if (!ondisk::validate_chunk_header_fields(ch)) {
         throw std::runtime_error("Invalid streamed logstor chunk header");
     }
 
@@ -300,12 +303,20 @@ void streamed_segment_rewriter::maybe_parse_initial_header() {
 }
 
 void streamed_segment_rewriter::rewrite_chunk_header() {
-    auto ch = read_chunk_header();
+    simple_memory_input_stream in(_pending_data.data(), *_initial_header_size);
+    auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
+    std::optional<ondisk::segment_header> sh;
+    if (ch.kind == segment_kind::full) {
+        sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
+    }
+    if (!ondisk::validate_chunk_headers(ch, sh)) {
+        throw std::runtime_error("Invalid streamed logstor chunk headers");
+    }
 
     logstor_logger.trace("Rewriting chunk header for segment {} seq {} with seq {}", _target_segment, ch.segment_seq, _target_seq);
 
     ch.segment_seq = _target_seq;
-    ch.crc = ch.calculate_crc();
+    ch.crc = ch.calculate_crc(sh);
 
     simple_memory_output_stream ch_stream(_pending_data.data(), ondisk::chunk_header_size);
     ser::serialize<ondisk::chunk_header>(ch_stream, ch);

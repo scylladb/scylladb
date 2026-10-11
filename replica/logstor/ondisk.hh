@@ -9,6 +9,7 @@
 #pragma once
 
 #include <limits>
+#include <optional>
 
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
@@ -50,6 +51,8 @@ static constexpr uint32_t chunk_header_magic = 0x4c475342;
 // at the bottom of the file if the size is needed elsewhere, and add a check_serialized_size() call
 // for the type to that test with a value whose fields are all distinct and non-zero.
 
+struct segment_header;
+
 // A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
 // a multiple of it. A chunk is this header, the segment_header in a full segment, and the record
 // frames. Chunks are appended to a mixed segment one at a time; a full segment is a single chunk.
@@ -62,9 +65,9 @@ struct chunk_header {
     uint16_t reserved;
     segment_sequence segment_seq;
     uint32_t records_size; // size of the record frames following the header(s), padding included
-    uint32_t crc;
+    uint32_t crc; // of the fields above, and of the segment header in a full segment
 
-    uint32_t calculate_crc() const;
+    uint32_t calculate_crc(const std::optional<segment_header>& sh) const;
 
     bool operator==(const chunk_header& other) const noexcept = default;
 };
@@ -91,7 +94,14 @@ struct record_frame_header {
 // validation::max_key_size), so a larger key_size can only come from corruption.
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
-bool validate_chunk_header(const chunk_header& ch);
+// Whether the header has the magic, a kind and the version this code writes. The kind tells the
+// reader whether a segment header follows. The CRC is not checked here: validate_chunk_headers()
+// checks it, as it needs the segment header too.
+bool validate_chunk_header_fields(const chunk_header& ch);
+
+// Whether the headers at the start of a chunk are the ones this code wrote: the chunk header fields
+// are valid, a segment header is there exactly in a full segment, and the CRC matches.
+bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh);
 
 inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
     // A record always carries an encoded value, so a zero value_size cannot come from a record
