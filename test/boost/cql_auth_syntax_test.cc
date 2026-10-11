@@ -196,6 +196,8 @@ BOOST_AUTO_TEST_CASE(create_user) {
     test_valid("CREATE USER IF NOT EXISTS sam NOSUPERUSER");
     test_valid("CREATE USER sam WITH PASSWORD 'shire' SUPERUSER");
     test_valid("CREATE USER IF NOT EXISTS sam WITH PASSWORD 'shire' NOSUPERUSER");
+    test_valid("CREATE USER sam WITH HASHED PASSWORD 'shire';");
+    test_valid("CREATE USER IF NOT EXISTS sam WITH HASHED PASSWORD 'shire' SUPERUSER");
 }
 
 BOOST_AUTO_TEST_CASE(alter_user) {
@@ -206,6 +208,8 @@ BOOST_AUTO_TEST_CASE(alter_user) {
     test_valid("ALTER USER sam WITH PASSWORD 'shire';");
     test_valid("ALTER USER sam NOSUPERUSER;");
     test_valid("ALTER USER sam WITH PASSWORD 'shire' SUPERUSER;");
+    test_valid("ALTER USER sam WITH HASHED PASSWORD 'shire';");
+    test_valid("ALTER USER sam WITH HASHED PASSWORD 'shire' NOSUPERUSER;");
 }
 
 BOOST_AUTO_TEST_CASE(drop_user) {
