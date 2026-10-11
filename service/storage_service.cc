@@ -4821,10 +4821,7 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
     status.tables_converging = 0;
     status.tables_total = 0;
 
-    for (const auto& schema : ks.metadata()->tables()) {
-        if (!tablet_metadata.has_tablet_map(schema->id())) {
-            continue;
-        }
+    for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
         auto& tmap = tablet_metadata.get_tablet_map(schema->id());
         bool converging = tmap.is_converging_to_pow2();
 
