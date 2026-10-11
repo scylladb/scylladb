@@ -715,7 +715,7 @@ public:
     }
 
     sstring get_segment_file_path(log_segment_id segment_id) const {
-        return sstring(_file_mgr.get_file_path(segment_id_to_file_location(segment_id).file_id).native());
+        return sstring(_file_mgr.file_path(segment_id_to_file_location(segment_id).file_id).native());
     }
 
     future<> discard_segments(logstor_group&);
@@ -1541,7 +1541,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
         if (!file) [[unlikely]] {
             on_internal_error(logstor_logger, format("Discarding segment {} of file {} that is not open", seg_id, file_id));
         }
-        co_await _file_mgr.format_file_region(std::move(file), file_offset, block_alignment);
+        co_await _file_mgr.zero_region(std::move(file), file_offset, block_alignment);
         free_segment(seg_id);
     });
 }
@@ -2230,14 +2230,14 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     // Scan the base directory for all files belonging to this shard.
     std::set<file_id_t> found_file_ids;
     std::vector<sstring> files_for_removal;
-    std::string file_prefix = _file_mgr.get_file_name_prefix();
+    std::string file_prefix = _file_mgr.file_name_prefix();
     co_await lister::scan_dir(_cfg.base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
             [this, &found_file_ids, &files_for_removal, &file_prefix] (fs::path dir, directory_entry de) {
         if (!de.name.starts_with(file_prefix)) {
             // not our file
             return make_ready_future<>();
         }
-        auto file_id_opt = _file_mgr.file_name_to_file_id(de.name);
+        auto file_id_opt = _file_mgr.file_id_of(de.name);
         if (file_id_opt) {
             found_file_ids.insert(*file_id_opt);
         } else if (de.name.ends_with(".tmp")) {
@@ -2259,7 +2259,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     file_id_t next_file_id = 0;
     for (auto file_id : found_file_ids) {
         if (file_id != next_file_id) {
-            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", _file_mgr.get_file_path(next_file_id).string()));
+            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", _file_mgr.file_path(next_file_id).string()));
         }
         next_file_id++;
     }
@@ -2287,7 +2287,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     };
 
     for (auto file_id : found_file_ids) {
-        logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.get_file_path(file_id).string(), (file_id + 1) * 100 / found_file_ids.size());
+        logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.file_path(file_id).string(), (file_id + 1) * 100 / found_file_ids.size());
         co_await max_concurrent_for_each(segments_in_file(file_id), 32,
             [this, &db, &cmp_with_seq, &segment_seqs, &max_segment_seq] (log_segment_id seg_id) {
                 return recover_segment(db, seg_id, cmp_with_seq,
@@ -2335,10 +2335,10 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     }
     logstor_logger.info("Found {} used segments and {} free segments", used_segment_count, free_segment_count);
 
-    auto target_file_count = std::max(max_used_seg_idx / _segments_per_file + 1, _file_mgr.configured_max_files());
+    auto target_file_count = std::max(max_used_seg_idx / _segments_per_file + 1, _file_mgr.configured_file_count());
     for (; next_file_id > target_file_count; next_file_id--) {
         auto file_id = next_file_id - 1;
-        logstor_logger.info("Recovery: removing retired file {}", _file_mgr.get_file_path(file_id).string());
+        logstor_logger.info("Recovery: removing retired file {}", _file_mgr.file_path(file_id).string());
         co_await _file_mgr.remove_file(file_id);
     }
 
@@ -2363,7 +2363,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     _next_new_segment_id = allocated_segment_count;
     _next_segment_seq = max_segment_seq + 1;
 
-    co_await _file_mgr.recover_next_file();
+    co_await _file_mgr.resume_file_allocation();
 
     logstor_logger.info("Recovery complete");
 }
@@ -2371,7 +2371,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 future<> segment_manager_impl::do_recovery_for_test() {
     co_await _file_mgr.start();
     co_await _file_mgr.open_recovered_files(0);
-    co_await _file_mgr.recover_next_file();
+    co_await _file_mgr.resume_file_allocation();
 }
 
 future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id,
