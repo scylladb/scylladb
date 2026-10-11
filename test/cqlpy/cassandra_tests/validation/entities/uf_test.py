@@ -96,8 +96,7 @@ def assertSchemaChange(cql, query, change, target, keyspace, name, *argTypes):
     assert [t.replace("frozen<tuple<int, int>>", "tuple<int, int>") for t in event['function'].argument_types] == list(argTypes)
 
 # Reproduces SCYLLADB-5168 (CREATE OR REPLACE FUNCTION of an existing function
-# reports CREATED instead of UPDATED)
-@pytest.mark.xfail(reason="SCYLLADB-5168")
+# reported CREATED instead of UPDATED)
 def testSchemaChange(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE:
         functionName = unique_name()
