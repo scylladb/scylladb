@@ -10,9 +10,11 @@ See docs/dev/delete-all-data.md.
 """
 import asyncio
 import logging
-import time
+import pytest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
+
+import time
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_view, wait_for
@@ -85,4 +87,136 @@ async def test_delete_all_data_with_replica_down(manager: ScyllaClusterManager):
         # Read the data of the replica which was down, through it.
         cql2 = await manager.get_cql_exclusive(servers[2])
         assert await select_pks(cql2, table, cl=ConsistencyLevel.ONE) == set()
+        assert await select_pks(cql, table) == set()
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncation_tombstone_gc(manager: ScyllaClusterManager):
+    """
+    The truncation tombstone is garbage-collected once its tombstone GC grace period
+    passed (immediately with tombstone_gc mode 'immediate') and no replica holds data
+    covered by it, which major compaction makes so. Data written after the deletion
+    survives, and the truncated data does not reappear.
+    """
+    cfg = {'error_injections_at_startup': ['short_truncation_tombstone_gc_interval']}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=cfg)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.cf"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int) WITH tombstone_gc = {{'mode': 'immediate'}}")
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'cf'"))[0].id
+
+        truncated_at = 1000
+        for pk in range(10):
+            await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMESTAMP {truncated_at - 1}",
+                                                consistency_level=ConsistencyLevel.ALL))
+        # The covered data is in sstables, so the replicas hold covered data until they are compacted.
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+        await cql.run_async(f"DELETE ALL DATA FROM {table} USING TIMESTAMP {truncated_at}")
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (100, 100) USING TIMESTAMP {truncated_at + 1}",
+                                            consistency_level=ConsistencyLevel.ALL))
+
+        async def data_deleted_at_timestamp():
+            rows = await cql.run_async(f"SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+            return rows[0].data_deleted_at_timestamp if rows else None
+        assert await data_deleted_at_timestamp() == truncated_at
+
+        for server in servers:
+            await manager.api.keyspace_compaction(server.ip_addr, ks, "cf")
+
+        async def gc_done():
+            return True if await data_deleted_at_timestamp() is None else None
+        await wait_for(gc_done, time.time() + 60)
+
+        assert await select_pks(cql, table) == {100}
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncation_tombstone_gc_single_replica(manager: ScyllaClusterManager):
+    """
+    Tablets with a single replica are not repaired, so in tombstone_gc mode 'repair' nothing
+    flushes the hints and batchlog, which may hold writes covered by the truncation tombstone,
+    on their behalf. The truncation tombstone is therefore garbage-collected only once the
+    topology coordinator flushed the hints and batchlog on all nodes, after the propagation delay.
+    """
+    cfg = {'error_injections_at_startup': ['short_truncation_tombstone_gc_interval']}
+    servers = await manager.servers_add(2, auto_rack_dc="dc1", config=cfg)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        table = f"{ks}.cf"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)"
+                            f" WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '1'}}")
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'cf'"))[0].id
+
+        truncated_at = 1000
+        for pk in range(10):
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMESTAMP {truncated_at - 1}")
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        logs = [await manager.server_open_log(server.server_id) for server in servers]
+        marks = [await log.mark() for log in logs]
+
+        await cql.run_async(f"DELETE ALL DATA FROM {table} USING TIMESTAMP {truncated_at}")
+        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (100, 100) USING TIMESTAMP {truncated_at + 1}")
+
+        async def data_deleted_at_timestamp():
+            rows = await cql.run_async(f"SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+            return rows[0].data_deleted_at_timestamp if rows else None
+        assert await data_deleted_at_timestamp() == truncated_at
+
+        for server in servers:
+            await manager.api.keyspace_compaction(server.ip_addr, ks, "cf")
+
+        async def gc_done():
+            return True if await data_deleted_at_timestamp() is None else None
+        await wait_for(gc_done, time.time() + 60)
+
+        # The topology coordinator flushed the hints and batchlog before clearing the truncation tombstone.
+        flushes = [m for log, mark in zip(logs, marks) for m in await log.grep("Flushed hints and batchlog, flush_time=", from_mark=mark)]
+        assert flushes, "the truncation tombstone was garbage-collected without flushing hints and batchlog"
+
+        assert await select_pks(cql, table) == {100}
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_deleted_data_is_not_replayed_from_commitlog(manager: ScyllaClusterManager):
+    """
+    Data which was only in memtables when DELETE ALL DATA deleted it is never written to an
+    sstable: the memtables are flushed stripped of it. Its commitlog entries must not be
+    replayed once the truncation tombstone is garbage-collected, or a node which crashes
+    brings the deleted data back.
+    """
+    # A short commitlog sync period, so that the writes are in the commitlog files when the nodes crash.
+    cfg = {'error_injections_at_startup': ['short_truncation_tombstone_gc_interval'], 'commitlog_sync_period_in_ms': 100}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=cfg)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.cf"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int) WITH tombstone_gc = {{'mode': 'immediate'}}")
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'cf'"))[0].id
+
+        deleted_at = 1000
+        # Not flushed: the data is in the memtables and in the commitlog only.
+        for pk in range(10):
+            await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMESTAMP {deleted_at - 1}",
+                                                consistency_level=ConsistencyLevel.ALL))
+        await asyncio.sleep(1)
+        await cql.run_async(f"DELETE ALL DATA FROM {table} USING TIMESTAMP {deleted_at}")
+        assert await select_pks(cql, table) == set()
+
+        async def gc_done():
+            rows = await cql.run_async(f"SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+            return True if not rows or rows[0].data_deleted_at_timestamp is None else None
+        await wait_for(gc_done, time.time() + 60)
+
+        # Crash all the nodes, so that they replay their commitlogs.
+        for server in servers:
+            await manager.server_stop(server.server_id, convict=False)
+        for server in servers:
+            await manager.server_start(server.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
         assert await select_pks(cql, table) == set()

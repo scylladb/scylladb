@@ -184,6 +184,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     serialized_action _tablet_load_stats_refresh;
 
     static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
+    static constexpr std::chrono::seconds truncation_tombstone_gc_interval = std::chrono::seconds(60);
 
     std::chrono::milliseconds _ring_delay;
 
@@ -1232,6 +1233,180 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     co_await seastar::sleep_abortable(refresh_interval, _as);
                 } catch (...) {
                     rtlogger.debug("CDC streams GC: sleep failed: {:t}", std::current_exception());
+                }
+            }
+        }
+    }
+
+    // Whether the tombstone GC grace period of the table's truncation tombstone passed,
+    // following the table's tombstone GC mode, as for any tombstone.
+    static bool truncation_tombstone_grace_period_passed(const schema& s, const locator::tablet_map& tmap, tombstone t) {
+        const auto& opts = s.tombstone_gc_options();
+        switch (opts.mode()) {
+        case tombstone_gc_mode::disabled:
+            return false;
+        case tombstone_gc_mode::immediate:
+            return true;
+        case tombstone_gc_mode::timeout:
+            return t.deletion_time + s.gc_grace_seconds() < gc_clock::now();
+        case tombstone_gc_mode::repair:
+            break;
+        }
+        // Every tablet must be repaired after the DELETE ALL DATA. Repair flushes the hints and batchlog
+        // first, which may hold writes covered by the truncation tombstone. Tablets with a single
+        // replica need no repair, but TRUNCATE flushes none of the queues a covered write may still
+        // be in (hints, batchlog, pending view updates, writes in flight), so the propagation delay
+        // must pass for them too, and the hints and batchlog are flushed on their behalf,
+        // see truncation_tombstone_needs_hints_batchlog_flush().
+        const auto delay = opts.propagation_delay_in_seconds();
+        const auto now = gc_clock::now();
+        return std::ranges::all_of(tmap.tablets(), [&] (const locator::tablet_info& info) {
+            const auto covered_until = info.replicas.size() <= 1 ? now : to_gc_clock(info.repair_time);
+            return covered_until - delay > t.deletion_time;
+        });
+    }
+
+    // Whether the hints and batchlog must be flushed before garbage-collecting the table's truncation
+    // tombstone: in repair mode, a repair after the DELETE ALL DATA does that, but tablets with a single
+    // replica are not repaired.
+    static bool truncation_tombstone_needs_hints_batchlog_flush(const schema& s, const locator::tablet_map& tmap) {
+        return s.tombstone_gc_options().mode() == tombstone_gc_mode::repair
+                && std::ranges::any_of(tmap.tablets(), [] (const locator::tablet_info& info) { return info.replicas.size() <= 1; });
+    }
+
+    // Garbage-collects the truncation tombstones of tablet tables, set by DELETE ALL DATA,
+    // once their tombstone GC grace period passed and no replica holds data covered by them, as checked by
+    // the replicas from metadata. Major compaction makes a replica clean. See docs/dev/delete-all-data.md.
+    future<> garbage_collect_truncation_tombstones() {
+        if (!_feature_service.eventually_consistent_delete_all_data) {
+            co_return;
+        }
+
+        struct candidate {
+            table_id table;
+            tombstone truncation_tombstone;
+            std::unordered_set<locator::host_id> replicas;
+            // Set if the hints and batchlog must be flushed first, to their propagation delay.
+            std::optional<std::chrono::seconds> flush_with_propagation_delay;
+        };
+        std::vector<candidate> candidates;
+        // The replicas are asked about the tablet replicas and sstables they have now. A tablet
+        // transition which started since then, even if it completed already, may have brought covered
+        // data to a replica after it answered, or to a replica which was not asked: a migration, or a
+        // restore, which attaches the snapshot's sstables as they are. Every transition advances the
+        // topology version, so the answers are used only if it did not change.
+        const auto topology_version = _topo_sm._topology.version;
+        {
+            auto tm = get_token_metadata_ptr();
+            for (const auto& [id, tmap_ptr] : tm->tablets().all_tables_ungrouped()) {
+                const auto t = tm->tablets().get_truncated_at(id);
+                if (!t) {
+                    continue;
+                }
+                auto table = _db.get_tables_metadata().get_table_if_exists(id);
+                const auto& tmap = *tmap_ptr;
+                // A tablet migrating to a new replica is checked once the migration completes.
+                if (!table || tmap.has_transitions() || !truncation_tombstone_grace_period_passed(*table->schema(), tmap, t)) {
+                    continue;
+                }
+                candidate c{id, t, {}, std::nullopt};
+                if (truncation_tombstone_needs_hints_batchlog_flush(*table->schema(), tmap)) {
+                    c.flush_with_propagation_delay = table->schema()->tombstone_gc_options().propagation_delay_in_seconds();
+                }
+                for (const auto& info : tmap.tablets()) {
+                    for (const auto& r : info.replicas) {
+                        c.replicas.insert(r.host);
+                    }
+                }
+                candidates.push_back(std::move(c));
+                co_await coroutine::maybe_yield();
+            }
+        }
+
+        std::vector<candidate> clean;
+        for (auto& c : candidates) {
+            bool is_clean = true;
+            co_await coroutine::parallel_for_each(c.replicas, [&] (locator::host_id host) -> future<> {
+                try {
+                    if (!co_await ser::storage_service_rpc_verbs::send_truncation_tombstone_clean(&_messaging, host, _as,
+                            raft::server_id(host.uuid()), c.table, c.truncation_tombstone.timestamp)) {
+                        is_clean = false;
+                    }
+                } catch (...) {
+                    rtlogger.debug("Failed to check whether {} holds data of table {} covered by its truncation tombstone: {}",
+                            host, c.table, std::current_exception());
+                    is_clean = false;
+                }
+            });
+            if (!is_clean) {
+                continue;
+            }
+            // Done last, since it is the costly step. A covered write delivered by the flush is
+            // stripped by the replica, as the truncation tombstone is still set, so the replica stays clean.
+            if (c.flush_with_propagation_delay) {
+                const auto delay = *c.flush_with_propagation_delay;
+                const auto min_flush_time = c.truncation_tombstone.deletion_time + delay;
+                const auto flush_time = co_await _hints_batchlog_flusher.flush_time(min_flush_time);
+                if (!flush_time || *flush_time <= min_flush_time) {
+                    rtlogger.debug("Not garbage-collecting the truncation tombstone of table {} yet: hints and batchlog flush_time={}, needed after {}",
+                            c.table, flush_time, min_flush_time);
+                    continue;
+                }
+            }
+            clean.push_back(std::move(c));
+        }
+        if (clean.empty()) {
+            co_return;
+        }
+
+        auto guard = co_await start_operation();
+        if (_topo_sm._topology.version != topology_version) {
+            rtlogger.debug("Not garbage-collecting truncation tombstones in this round: the topology version changed from {} to {}",
+                    topology_version, _topo_sm._topology.version);
+            release_guard(std::move(guard));
+            co_return;
+        }
+        const auto& tablets = get_token_metadata().tablets();
+        utils::chunked_vector<canonical_mutation> updates;
+        for (const auto& c : clean) {
+            // Unless another DELETE ALL DATA replaced it meanwhile, or a tablet transition started,
+            // e.g. a migration to a replica which was not checked, or a restore.
+            if (tablets.get_truncated_at(c.table) != c.truncation_tombstone
+                    || !tablets.has_tablet_map(c.table) || tablets.get_tablet_map(c.table).has_transitions()) {
+                continue;
+            }
+            rtlogger.info("Garbage-collecting the truncation tombstone {} of table {}", c.truncation_tombstone, c.table);
+            updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), c.table).del_truncated_at().build());
+        }
+        if (updates.empty()) {
+            release_guard(std::move(guard));
+            co_return;
+        }
+        co_await update_topology_state(std::move(guard), std::move(updates), "Garbage-collect truncation tombstones");
+    }
+
+    future<> truncation_tombstone_gc_fiber() {
+        auto can_proceed = [this] { return !_async_gate.is_closed() && !_as.abort_requested(); };
+        while (can_proceed()) {
+            bool sleep = true;
+            try {
+                co_await garbage_collect_truncation_tombstones();
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("Truncation tombstones GC fiber aborted");
+                sleep = false;
+            } catch (seastar::abort_requested_exception&) {
+                rtlogger.debug("Truncation tombstones GC fiber aborted");
+                sleep = false;
+            } catch (...) {
+                rtlogger.warn("Truncation tombstones GC fiber got error {:t}", std::current_exception());
+            }
+            auto interval = utils::get_local_injector().is_enabled("short_truncation_tombstone_gc_interval") ?
+                    std::chrono::seconds(1) : truncation_tombstone_gc_interval;
+            if (sleep && can_proceed()) {
+                try {
+                    co_await seastar::sleep_abortable(interval, _as);
+                } catch (...) {
+                    rtlogger.debug("Truncation tombstones GC: sleep failed: {:t}", std::current_exception());
                 }
             }
         }
@@ -6666,6 +6841,7 @@ future<> topology_coordinator::run() {
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
     auto cdc_streams_gc = cdc_streams_gc_fiber();
+    auto truncation_tombstone_gc = truncation_tombstone_gc_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
@@ -6729,6 +6905,7 @@ future<> topology_coordinator::run() {
     co_await std::move(tablet_load_stats_refresher);
     co_await std::move(cdc_generation_publisher);
     co_await std::move(cdc_streams_gc);
+    co_await std::move(truncation_tombstone_gc);
     co_await std::move(gossiper_orphan_remover);
     co_await std::move(group0_voter_refresher);
     co_await std::move(vb_coordinator_fiber);
