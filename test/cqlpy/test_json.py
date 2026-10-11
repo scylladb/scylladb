@@ -585,6 +585,25 @@ def test_select_json_null_component(cql, table1, type1):
     cql.execute(stmt, [('hello', None)])
     assert list(cql.execute(f"SELECT JSON t1 from {table1} where p = {p}")) == [('{"t1": {"t": "hello", "b": null}}',)]
 
+# Test that after a field is added to a UDT (with ALTER TYPE), SELECT JSON
+# and toJson() of a value written before the change print the new field as
+# null - and that SELECT JSON's output can be inserted back.
+# Reproduces #8092.
+def test_select_json_udt_added_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, {{a: 1}})")
+            cql.execute(f"ALTER TYPE {typ} ADD b int")
+            [(j,)] = cql.execute(f"SELECT JSON p, v FROM {table} WHERE p = {p}")
+            assert json.loads(j) == {"p": p, "v": {"a": 1, "b": None}}
+            [(j2,)] = cql.execute(f"SELECT toJson(v) FROM {table} WHERE p = {p}")
+            assert json.loads(j2) == {"a": 1, "b": None}
+            p2 = unique_key_int()
+            cql.execute(cql.prepare(f"INSERT INTO {table} JSON ?"), [json.dumps({**json.loads(j), 'p': p2})])
+            [(j3,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p2}")
+            assert json.loads(j3) == {"v": {"a": 1, "b": None}}
+
 # Reproducer for issue #8078: Test that the "AS" clause (alias) in
 # a SELECT JSON is honored, and the returned JSON string contains the
 # given alias instead of the original column name or function call.
