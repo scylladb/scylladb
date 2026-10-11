@@ -724,11 +724,9 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
                       mutation_reader::forwarding fwd_mr) {
     // Strip the data covered by the table's truncation tombstone, as sampled by the permit
     // (see docs/dev/eventually-consistent-truncate.md), before merging with other sources.
-    // FIXME: memtables created after the truncation tombstone was installed hold no covered data
-    // once writes are stripped when applied, and won't need this.
     const auto truncation_tombstone = permit.truncation_tombstone(*query_schema);
     auto maybe_strip = [&] (mutation_reader rd) {
-        if (truncation_tombstone && get_min_timestamp() <= truncation_tombstone.timestamp) {
+        if (may_hold_truncated_data(truncation_tombstone)) {
             return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
         }
         return rd;
@@ -769,7 +767,7 @@ memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
     // Strip the data covered by the table's truncation tombstone, so it never reaches disk.
     const auto truncation_tombstone = permit.truncation_tombstone(*s);
     auto maybe_strip = [&] (mutation_reader rd) {
-        if (truncation_tombstone && get_min_timestamp() <= truncation_tombstone.timestamp) {
+        if (may_hold_truncated_data(truncation_tombstone)) {
             return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
         }
         return rd;

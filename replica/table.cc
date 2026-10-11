@@ -226,12 +226,11 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
 }
 
 // The cache is populated from sstable readers, which strip the data covered by the
-// truncation tombstone, but it may still hold covered data while it is being invalidated
-// after a new truncation tombstone was installed (see cache_may_hold_truncated_data()).
-// FIXME: only needed while cache_may_hold_truncated_data(), once writes are stripped when
-// applied, so that memtables merged into the cache hold no covered data.
-static mutation_reader maybe_strip_cache_reader(mutation_reader rd, tombstone truncation_tombstone) {
-    if (truncation_tombstone) {
+// truncation tombstone, and memtables merged into it hold no covered data, but it may
+// still hold covered data while it is being invalidated after a new truncation tombstone
+// was installed, i.e. while the truncation tombstone it is known to be clean of is older.
+static mutation_reader maybe_strip_cache_reader(mutation_reader rd, tombstone truncation_tombstone, tombstone cache_truncation_tombstone) {
+    if (truncation_tombstone && cache_truncation_tombstone < truncation_tombstone) {
         return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
     }
     return rd;
@@ -283,7 +282,7 @@ table::make_mutation_reader(schema_ptr s,
     if (cache_enabled() && !bypass_cache) {
         if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
-            readers.emplace_back(maybe_strip_cache_reader(std::move(*reader_opt), permit.truncation_tombstone(*s)));
+            readers.emplace_back(maybe_strip_cache_reader(std::move(*reader_opt), permit.truncation_tombstone(*s), _cache_truncation_tombstone));
         }
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
@@ -390,7 +389,7 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
         throw std::runtime_error("table::make_cache_reader(): only singular ranges are supported");
     }
     const auto truncation_tombstone = permit.truncation_tombstone(*schema);
-    return maybe_strip_cache_reader(_cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts)), truncation_tombstone);
+    return maybe_strip_cache_reader(_cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts)), truncation_tombstone, _cache_truncation_tombstone);
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
@@ -5238,6 +5237,15 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
+        // Strip the data covered by the truncation tombstone, synchronously with applying the mutation to
+        // the active memtable, which is stamped with the current truncation tombstone, so that it holds no
+        // data covered by it. This covers commitlog replay too, which bypasses database::do_apply().
+        if (_truncation_tombstone && m.partition().has_truncated(*m.schema(), _truncation_tombstone.timestamp)) [[unlikely]] {
+            auto stripped = m;
+            stripped.partition().strip_truncated(*m.schema(), _truncation_tombstone.timestamp);
+            do_apply(cg, std::move(h), stripped, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
+            return;
+        }
         do_apply(cg, std::move(h), m, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
     }, timeout);
 }
@@ -5259,6 +5267,16 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
+        // See apply(const mutation&) above.
+        // FIXME: avoid unfreezing the mutation just to check whether it holds covered data.
+        if (_truncation_tombstone) [[unlikely]] {
+            auto unfrozen = m.unfreeze(m_schema);
+            if (unfrozen.partition().has_truncated(*m_schema, _truncation_tombstone.timestamp)) {
+                unfrozen.partition().strip_truncated(*m_schema, _truncation_tombstone.timestamp);
+                guardrails->check(*m_schema, unfrozen.partition(), m.key(), violations_out);
+                return do_apply(cg, std::move(h), unfrozen, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()));
+            }
+        }
         return do_apply(cg, std::move(h), m, m_schema, *guardrails, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()), std::move(violations_out));
     }, timeout);
 }

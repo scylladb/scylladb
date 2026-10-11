@@ -1159,6 +1159,55 @@ SEASTAR_TEST_CASE(test_reads_strip_truncated_data) {
     }, tablet_cql_test_config());
 }
 
+// Writes are stripped of the data covered by the truncation tombstone when they are applied,
+// so that memtables hold no covered data, and covered data written after the truncate does
+// not reappear once the truncation tombstone is garbage-collected.
+// See docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_writes_strip_truncated_data) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+
+        auto insert = [&] (int pk, api::timestamp_type ts) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0) USING TIMESTAMP {}", pk, ts)).get();
+        };
+        auto select_pks = [&] {
+            std::set<int32_t> pks;
+            for (const auto& row : get_rows(e.execute_cql("SELECT pk FROM cf").get())) {
+                pks.insert(value_cast<int32_t>(int32_type->deserialize(*row[0])));
+            }
+            return pks;
+        };
+
+        constexpr api::timestamp_type truncated_at = 1000;
+        auto ts = current_timestamp(e);
+        set_truncation_tombstone(e, id, tombstone(truncated_at, gc_clock::now()), ts);
+
+        insert(0, truncated_at - 1);
+        insert(1, truncated_at + 1);
+        insert(2, truncated_at);
+        // A row whose marker is covered, but one of its cells is not.
+        insert(3, truncated_at - 1);
+        e.execute_cql(format("UPDATE cf USING TIMESTAMP {} SET v = 1 WHERE pk = 3 AND ck = 0", truncated_at + 1)).get();
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({1, 3}));
+
+        // The memtables hold no covered data.
+        e.db().invoke_on_all([id] (replica::database& db) {
+            db.find_column_family(id).for_each_active_memtable([] (replica::memtable& mt) {
+                THREADSAFE_BOOST_REQUIRE(mt.empty() || mt.get_min_timestamp() > truncated_at);
+            });
+        }).get();
+
+        // Clear the truncation tombstone, as its garbage collection does: the covered data is gone.
+        set_truncation_tombstone(e, id, tombstone(), ts);
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({1, 3}));
+        e.db().invoke_on_all([id] (replica::database& db) {
+            return db.find_column_family(id).flush();
+        }).get();
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({1, 3}));
+    }, tablet_cql_test_config());
+}
+
 // Counter cells merge shard by shard, keeping the shard with the higher logical clock,
 // so covered data must be stripped from each source before merging sources: an
 // increment after the truncate writes a fresh shard, with a low clock, which must
