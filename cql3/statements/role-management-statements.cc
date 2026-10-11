@@ -216,6 +216,12 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
         const auto& user = *state.user();
         const bool user_is_superuser = state.has_superuser().get();
 
+        // As in CREATE ROLE, setting a hashed password directly, bypassing
+        // the hashing of the password, is only allowed for superusers.
+        if (_options.hashed_password && !user_is_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can alter a role's hashed password.");
+        }
+
         if (_options.is_superuser) {
             if (!user_is_superuser) {
                 throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
