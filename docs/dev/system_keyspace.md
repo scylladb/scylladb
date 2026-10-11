@@ -1549,6 +1549,8 @@ CREATE TABLE system.tablets (
     resize_type text STATIC,
     table_name text STATIC,
     tablet_count int STATIC,
+    truncated_at_deletion_time timestamp STATIC,
+    truncated_at_timestamp bigint STATIC,
     migration_task_info frozen<tablet_task_info>,
     new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
     repair_task_info frozen<tablet_task_info>,
@@ -1585,9 +1587,10 @@ CREATE TYPE system.tablet_task_info (
 - `tablet_count`: Number of tablets in the map
 - `table_name`: Name of the table (provided for convenience)
 - `keyspace_name`: Name of the keyspace
-- `base_table`: Optionally set with the `table_id` of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group. When `base_table` is set, the rest of the tablet map is empty, and the tablet map of `base_table` should be read instead. When `base_table` is NULL, this table has its own independent tablet map stored in the remaining columns.
+- `base_table`: Optionally set with the `table_id` of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group. When `base_table` is set, the rest of the tablet map is empty (except for the truncation tombstone columns below), and the tablet map of `base_table` should be read instead. When `base_table` is NULL, this table has its own independent tablet map stored in the remaining columns.
 - `resize_type`: Resize decision type that spans all tablets of a given table (`merge`, `split`, or `none`)
 - `resize_seq_number`: Sequence number (>= 0) of the resize decision that globally identifies it. It's monotonically increasing, incremented by one for every new decision, so a higher value means it came later in time.
+- `truncated_at_timestamp`, `truncated_at_deletion_time`: The truncation tombstone of the table (its write timestamp and deletion time), set by the eventually-consistent TRUNCATE of tablet tables: all data of the table written at or before `truncated_at_timestamp` is deleted. Cleared once the tombstone is garbage-collected. Set per table, including co-located tables. Unrelated to the truncation records in `system.truncated` that are used by the legacy TRUNCATE. See [docs/dev/eventually-consistent-truncate.md](eventually-consistent-truncate.md).
 - `repair_scheduler_config`: Unused. Kept in the schema for compatibility; automatic repair is configured through the `auto_repair_enabled` and `auto_repair_threshold_in_seconds` cluster config options.
 
 **Per-Tablet Columns:**

@@ -3433,6 +3433,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+            // The mutations replace the table's partition in system.tablets, so they must carry over its truncation tombstone.
             co_await replica::tablet_map_to_mutations(
                 new_tablet_map,
                 table_id,
@@ -3442,7 +3443,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 _feature_service,
                 [&] (mutation m) -> future<> {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
-                });
+                },
+                tm->tablets().get_truncated_at(table_id));
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});

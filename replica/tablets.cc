@@ -97,7 +97,11 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_column("snapshot_name", utf8_type);
+            .with_column("snapshot_name", utf8_type)
+            // The truncation tombstone of the table, set by the eventually-consistent TRUNCATE.
+            // Unrelated to the truncation records in system.truncated that are used by the legacy TRUNCATE.
+            .with_column("truncated_at_timestamp", long_type, column_kind::static_column)
+            .with_column("truncated_at_deletion_time", timestamp_type, column_kind::static_column);
 
     if (strongly_consistent_tables_enabled) {
         builder
@@ -238,9 +242,27 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
 // to unfreeze.
 constexpr size_t min_tablets_in_mutation = 1024;
 
+static void set_truncated_at_cells(mutation& m, tombstone truncated_at, api::timestamp_type ts) {
+    m.set_static_cell("truncated_at_timestamp", data_value(truncated_at.timestamp), ts);
+    m.set_static_cell("truncated_at_deletion_time", data_value(db_clock::from_time_t(gc_clock::to_time_t(truncated_at.deletion_time))), ts);
+}
+
+static tombstone get_truncated_at(table_id table, const cql3::untyped_result_set_row& row) {
+    const bool has_timestamp = row.has("truncated_at_timestamp");
+    if (has_timestamp != row.has("truncated_at_deletion_time")) {
+        on_internal_error(tablet_logger, format("Table {} has a partial truncation tombstone in system.tablets", table));
+    }
+    if (!has_timestamp) {
+        return tombstone();
+    }
+    return tombstone(row.get_as<int64_t>("truncated_at_timestamp"),
+            to_gc_clock(row.get_as<db_clock::time_point>("truncated_at_deletion_time")));
+}
+
 future<>
 tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
-                       api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
+                       api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation,
+                       tombstone truncated_at) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
@@ -282,6 +304,10 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
 
     if (tablets.target_pow2_tablet_count() > 0) {
         m.set_static_cell("target_pow2_tablet_count", data_value(int64_t(tablets.target_pow2_tablet_count())), ts);
+    }
+
+    if (features.eventually_consistent_truncate && truncated_at) {
+        set_truncated_at_cells(m, truncated_at, ts);
     }
 
     tablet_id tid = tablets.first_tablet();
@@ -334,7 +360,8 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
 }
 
 mutation
-colocated_tablet_map_to_mutation(table_id id, const sstring& keyspace_name, const sstring& table_name, table_id base_table, api::timestamp_type ts) {
+colocated_tablet_map_to_mutation(table_id id, const sstring& keyspace_name, const sstring& table_name, table_id base_table, api::timestamp_type ts,
+                                 tombstone truncated_at) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
@@ -346,6 +373,9 @@ colocated_tablet_map_to_mutation(table_id id, const sstring& keyspace_name, cons
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("base_table", data_value(base_table.uuid()), ts);
+    if (truncated_at) {
+        set_truncated_at_cells(m, truncated_at, ts);
+    }
 
     return m;
 }
@@ -435,6 +465,20 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
         auto col2 = _s->get_column_definition("selected_tablets_for_merge");
         _m.set_static_cell(*col2, atomic_cell::make_dead(_ts, gc_clock::now()));
         return del_resize_task_info(features);
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_truncated_at(tombstone truncated_at) {
+    set_truncated_at_cells(_m, truncated_at, _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_truncated_at() {
+    for (auto name : {"truncated_at_timestamp", "truncated_at_deletion_time"}) {
+        _m.set_static_cell(*_s->get_column_definition(name), atomic_cell::make_dead(_ts, gc_clock::now()));
     }
     return *this;
 }
@@ -585,12 +629,12 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         auto s = db.find_schema(base_id);
         co_await tablet_map_to_mutations(tablets, base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
             muts.emplace_back(co_await freeze_gently(m));
-        });
+        }, tm.get_truncated_at(base_id));
         for (auto id : tables) {
             if (id != base_id) {
                 auto s = db.find_schema(id);
                 muts.emplace_back(
-                        colocated_tablet_map_to_mutation(id, s->ks_name(), s->cf_name(), base_id, ts));
+                        colocated_tablet_map_to_mutation(id, s->ks_name(), s->cf_name(), base_id, ts, tm.get_truncated_at(id)));
             }
         }
     }
@@ -875,6 +919,9 @@ struct tablet_metadata_builder {
             if (current) {
                 tm.set_tablet_map(current->table, std::move(current->map));
             }
+            // The truncation tombstone is a static column, set per table, for co-located tables too.
+            // Reading the first row of the table's partition either sets it or clears a stale one.
+            tm.set_truncated_at(table, get_truncated_at(table, row));
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
                 base_tables[table] = base_table;

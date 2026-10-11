@@ -67,13 +67,13 @@ using namespace service;
 
 static inline
 future<mutation> tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
-                       api::timestamp_type ts, const gms::feature_service& features) {
+                       api::timestamp_type ts, const gms::feature_service& features, tombstone truncated_at = tombstone()) {
     std::optional<mutation> ret;
     co_await tablet_map_to_mutations(tablets, id, keyspace_name, table_name, ts, features, [&] (mutation m) {
         SCYLLA_ASSERT(!ret.has_value());
         ret = std::move(m);
         return make_ready_future();
-    });
+    }, truncated_at);
     SCYLLA_ASSERT(ret.has_value());
     co_return std::move(*ret);
 }
@@ -876,6 +876,92 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
             verify_tablet_metadata_persistence(e, tm, ts);
 
         }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_tablet_metadata_truncated_at) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto& db = e.local_db();
+
+        // table1 is a base table, table2 is co-located with it, and table3 is unrelated to both.
+        auto table1 = add_table(e).get();
+        auto table2 = add_table(e).get();
+        auto table3 = add_table(e).get();
+        auto table3_schema = db.find_schema(table3);
+        auto ts = current_timestamp(e);
+
+        auto make_tablet_map = [&] {
+            tablet_map tmap(1);
+            tmap.set_tablet(tmap.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                }
+            });
+            return tmap;
+        };
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tm.set_tablet_map(table1, make_tablet_map());
+        tm.set_colocated_table(table2, table1).get();
+        tm.set_tablet_map(table3, make_tablet_map());
+
+        const auto t1 = tombstone(api::new_timestamp(), gc_clock::now());
+        const auto t2 = tombstone(t1.timestamp + 1, t1.deletion_time + std::chrono::seconds(1));
+
+        // The truncation tombstone is kept per table: a co-located table shares the tablet map
+        // of its base table, but not its truncation tombstone.
+        tm.set_truncated_at(table1, t1);
+        tm.set_truncated_at(table2, t2);
+        BOOST_REQUIRE(tm.get_truncated_at(table1) == t1);
+        BOOST_REQUIRE(tm.get_truncated_at(table2) == t2);
+        BOOST_REQUIRE(!tm.get_truncated_at(table3));
+        // copy() carries the truncation tombstones to the other shards.
+        BOOST_REQUIRE(tm.copy().get() == tm);
+        tm = verify_tablet_metadata_persistence(e, tm, ts);
+
+        // Setting an empty tombstone clears it.
+        tm.set_truncated_at(table2, tombstone());
+        tm = verify_tablet_metadata_persistence(e, tm, ts);
+        BOOST_REQUIRE(tm.get_truncated_at(table1) == t1);
+        BOOST_REQUIRE(!tm.get_truncated_at(table2));
+
+        // Incremental updates, as done through group0.
+        verify_tablet_metadata_update(e, tm, {
+            replica::tablet_mutation_builder(++ts, table2).set_truncated_at(t2).build(),
+            replica::tablet_mutation_builder(ts, table3).set_truncated_at(t1).build(),
+        });
+        BOOST_REQUIRE(tm.get_truncated_at(table1) == t1);
+        BOOST_REQUIRE(tm.get_truncated_at(table2) == t2);
+        BOOST_REQUIRE(tm.get_truncated_at(table3) == t1);
+
+        verify_tablet_metadata_update(e, tm, {
+            replica::tablet_mutation_builder(++ts, table1).del_truncated_at().build(),
+        });
+        BOOST_REQUIRE(!tm.get_truncated_at(table1));
+        BOOST_REQUIRE(tm.get_truncated_at(table2) == t2);
+
+        // Rewriting the table's whole partition, as resize finalization does, keeps the
+        // truncation tombstone only if it is passed along.
+        verify_tablet_metadata_update(e, tm, {
+            tablet_map_to_mutation(tm.get_tablet_map(table3), table3, table3_schema->ks_name(), table3_schema->cf_name(), ++ts, db.features(), t1).get(),
+        });
+        BOOST_REQUIRE(tm.get_truncated_at(table3) == t1);
+
+        verify_tablet_metadata_update(e, tm, {
+            tablet_map_to_mutation(tm.get_tablet_map(table3), table3, table3_schema->ks_name(), table3_schema->cf_name(), ++ts, db.features()).get(),
+        });
+        BOOST_REQUIRE(!tm.get_truncated_at(table3));
+
+        // Dropping the tablet map drops the truncation tombstone with it.
+        verify_tablet_metadata_update(e, tm, {
+            replica::tablet_mutation_builder(++ts, table3).set_truncated_at(t1).build(),
+        });
+        verify_tablet_metadata_update(e, tm, {
+            make_drop_tablet_map_mutation(table3, ++ts),
+        });
+        BOOST_REQUIRE(!tm.has_tablet_map(table3));
+        BOOST_REQUIRE(!tm.get_truncated_at(table3));
     }, tablet_cql_test_config());
 }
 
