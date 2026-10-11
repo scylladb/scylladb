@@ -29,7 +29,6 @@ from uuid import UUID
 
 # Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
 # identifier P as a duration literal, so it can't be used as a name).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testCreateTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
     # CASSANDRA-17919
     # The Java test creates the table with the fixed name P, so this name
@@ -45,7 +44,6 @@ def testCreateTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
 # tablets, so we use NetworkTopologyStrategy instead.
 # Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
 # identifier P as a duration literal, so it can't be used as a name).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testCreateKeyspaceWithNameCapitalP(cql):
     # CASSANDRA-17919
     # The Java test runs on a private Cassandra node, so it can create and
