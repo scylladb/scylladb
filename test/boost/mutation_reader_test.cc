@@ -37,6 +37,7 @@
 #include "test/lib/dummy_sharder.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "readers/truncation_stripping.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/lib/fragment_scatterer.hh"
@@ -4924,6 +4925,82 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
             BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().reads_admitted, reads_from_shard);
             BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().permit_based_evictions, reads_from_shard);
         }
+    });
+}
+
+// The truncation stripping reader drops every atom written at or before the truncation
+// tombstone's timestamp, and nothing else, without emitting the truncation tombstone itself.
+// See docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_truncation_stripping_reader) {
+    return seastar::async([] {
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("s", utf8_type, column_kind::static_column)
+                .with_column("v", utf8_type)
+                .build();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto permit = semaphore.make_permit();
+
+        const auto now = gc_clock::now();
+        const api::timestamp_type truncated_at = 100;
+        // Data at the truncation timestamp is covered too.
+        const api::timestamp_type covered = truncated_at;
+        const api::timestamp_type kept = truncated_at + 1;
+        // Row and range tombstones are covered by their timestamp, regardless of their deletion time.
+        const auto later = now + std::chrono::seconds(1);
+        auto ck = [&] (int v) {
+            return clustering_key::from_single_value(*s, int32_type->decompose(v));
+        };
+        const auto pk = partition_key::from_single_value(*s, utf8_type->decompose(data_value("pk")));
+
+        mutation m(s, pk);
+        m.partition().apply(tombstone(covered, later));
+        m.set_static_cell("s", data_value("covered"), covered);
+        // A row whose marker is covered, and one of its cells is not.
+        m.partition().clustered_row(*s, ck(1)).apply(row_marker(covered));
+        m.set_clustered_cell(ck(1), "v", data_value("kept"), kept);
+        // A row whose regular tombstone is covered, but its shadowable tombstone is not,
+        // which must not end up with the truncation tombstone as its regular tombstone.
+        m.partition().clustered_row(*s, ck(2)).apply(row_tombstone(tombstone(covered, later), shadowable_tombstone(kept, now)));
+        // A covered row, which is dropped altogether.
+        m.set_clustered_cell(ck(3), "v", data_value("covered"), covered);
+        m.partition().clustered_row(*s, ck(3)).apply(row_marker(covered));
+        // A covered range tombstone, followed by one which is not.
+        m.partition().apply_delete(*s, range_tombstone(ck(4), ck(5), tombstone(covered, later)));
+        m.partition().apply_delete(*s, range_tombstone(ck(6), ck(7), tombstone(kept, now)));
+
+        mutation expected(s, pk);
+        expected.set_clustered_cell(ck(1), "v", data_value("kept"), kept);
+        expected.partition().clustered_row(*s, ck(2)).apply(row_tombstone(tombstone(), shadowable_tombstone(kept, now)));
+        expected.partition().apply_delete(*s, range_tombstone(ck(6), ck(7), tombstone(kept, now)));
+
+        auto make_reader = [&] {
+            return make_truncation_stripping_reader(make_mutation_reader_from_mutations(s, permit, m), tombstone(truncated_at, now));
+        };
+
+        assert_that(make_reader())
+                .produces(expected)
+                .produces_end_of_stream();
+
+        // No range tombstone change is redundant with the previous one.
+        auto rd = make_reader();
+        auto close_rd = deferred_close(rd);
+        std::optional<tombstone> current_rt;
+        while (auto mf = rd().get()) {
+            if (mf->is_partition_start()) {
+                BOOST_REQUIRE(!mf->as_partition_start().partition_tombstone());
+                current_rt = tombstone();
+            } else if (mf->is_range_tombstone_change()) {
+                BOOST_REQUIRE(mf->as_range_tombstone_change().tombstone() != *current_rt);
+                current_rt = mf->as_range_tombstone_change().tombstone();
+            }
+        }
+
+        // Nothing is stripped when no data is covered.
+        assert_that(make_truncation_stripping_reader(make_mutation_reader_from_mutations(s, permit, m), tombstone(covered - 1, now)))
+                .produces(m)
+                .produces_end_of_stream();
     });
 }
 
