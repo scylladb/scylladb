@@ -910,6 +910,16 @@ untyped_constant_parsed_value(const untyped_constant& uc, data_type validator)
         if (validator->is_counter()) {
             return long_type->from_string(uc.raw_text);
         }
+        // A string literal is also allowed for some non-string types (e.g.,
+        // '2024-01-01' for a date), whose from_string() accepts an empty
+        // string as the type's "empty value". But an empty string literal is
+        // not a valid value of these types, so reject it.
+        if (uc.partial_type == untyped_constant::type_class::string && uc.raw_text.empty()) {
+            auto kind = validator->without_reversed().get_kind();
+            if (kind != abstract_type::kind::utf8 && kind != abstract_type::kind::ascii) {
+                throw exceptions::invalid_request_exception(fmt::format("An empty string is not a valid value of type {}", validator->without_reversed().cql3_type_name()));
+            }
+        }
         return validator->from_string(uc.raw_text);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
