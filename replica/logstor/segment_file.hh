@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <string_view>
 #include <vector>
 
 #include <seastar/core/aligned_buffer.hh>
@@ -128,29 +127,25 @@ public:
     // nothing. Otherwise it returns an unset file, which tells the caller that get_file() must open
     // the file.
     seastar::file opened_file(file_id_t file_id) const {
-        if (file_id >= _open_files.size()) [[unlikely]] {
-            on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
-        }
+        check_file_id(file_id);
         return _open_files[file_id];
     }
 
     // The file, opened if it is not open.
     future<seastar::file> get_file(file_id_t);
 
-    // Opens the file and puts it in the cache. The caller must have checked that it is not open.
-    future<seastar::file> do_open_file(file_id_t);
-
     // Writes zeros over the region.
     future<> format_file_region(seastar::file file, uint64_t offset, uint64_t size);
-    future<> format_file(file_id_t);
-    future<> open_allocated_files();
 
     uint64_t allocated_file_count() const noexcept { return _next_file_id; }
-
     uint64_t configured_max_files() const noexcept { return _max_files.configured; }
-    uint64_t actual_max_files() const noexcept { return _max_files.actual; }
 
 private:
+    // The zero buffer is written in one request over as much of a region as the disk takes in one,
+    // see format_file_region(). 128 KiB is large enough that the vector of a request is short, and
+    // small enough that the buffer costs nothing.
+    static constexpr size_t zero_buffer_size = 128 * 1024;
+
     // configured: file count allowed by the current configuration; new file ids
     // are allocated only below this limit.
     // actual: file count currently present on disk. Recovery may raise this
@@ -181,11 +176,21 @@ private:
     std::vector<seastar::file> _open_files;
 
     std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
-    size_t _zero_buf_size{0};
 
     // Allocates the file if it is the next one, which waits for it to be formatted, opens it and
     // starts formatting the one after it in the background.
     future<> allocate_file(file_id_t);
+    future<> format_file(file_id_t);
+    future<> open_allocated_files();
+    // Opens the file and puts it in the cache. The caller must have checked that it is not open.
+    future<seastar::file> do_open_file(file_id_t);
+
+    // A file id is valid if the file is on disk (I5).
+    void check_file_id(file_id_t file_id) const {
+        if (file_id >= _open_files.size()) [[unlikely]] {
+            on_internal_error(logstor_logger, fmt::format("Attempted to access file {} beyond the {} files on disk", file_id, _open_files.size()));
+        }
+    }
 };
 
 }
