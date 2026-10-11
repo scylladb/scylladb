@@ -1025,7 +1025,6 @@ def testSelectJsonSyntax(cql, test_keyspace):
                 ["{\"system.tojson(system.blobasint(system.intasblob(v)))\": \"1\"}"])
 
 # Reproduces issues #8085
-@pytest.mark.xfail(reason="issues #8085")
 def testInsertJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"v\": 0}")
