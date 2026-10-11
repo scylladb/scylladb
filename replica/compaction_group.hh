@@ -21,6 +21,7 @@
 #include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/phased_barrier.hh"
 #include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
@@ -90,6 +91,9 @@ class compaction_group : public compaction::compaction_backlog_source {
     seastar::named_gate _async_gate;
     // Gates flushes.
     seastar::named_gate _flush_gate;
+    // Tracks the flushes of memtables switched out of the active position when the table's
+    // truncation tombstone was set, which flush() waits for too.
+    utils::phased_barrier _sealed_memtables_flushes;
     // Gates sstable being added to the group.
     // This prevents the group from being considered empty when sstables are being added.
     // Crucial for tablet split which ACKs split for a table when all pre-split groups are empty.

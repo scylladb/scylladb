@@ -2258,9 +2258,11 @@ future<> memtable_list::flush() {
 }
 
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
-    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
+    auto mt = make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
             _table_shared_data,
             _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
+    mt->set_truncation_tombstone(_truncation_tombstone);
+    return mt;
 }
 
 std::vector<replica::shared_memtable> memtable_list::make_replacement() {
