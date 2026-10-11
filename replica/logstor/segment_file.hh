@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -19,6 +20,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
@@ -106,6 +108,9 @@ struct file_manager_config {
     seastar::scheduling_group format_sg;
     bool format_on_startup;
     bool sparse_files;
+    // After the format of the next file fails, an allocation of the file starts the format again
+    // only when this interval has passed.
+    std::chrono::milliseconds format_retry_interval;
 };
 
 // The segment files of one shard. A file holds a fixed count of segments, and is named
@@ -216,7 +221,9 @@ private:
 
     seastar::gate _async_gate;
 
+    // The background format of the next file.
     shared_future<> _next_file_format{make_ready_future<>()};
+    lowres_clock::time_point _next_file_format_failed_at{};
 
     // One handle per file, opened read-write, kept open for the life of the shard and shared by
     // the read and the write paths. Both go through it, so it is always opened for writing: a file
@@ -251,6 +258,9 @@ private:
     void start_next_file_format();
 
     future<> format_file(file_id_t);
+
+    // Writes the content of a new file to the open temporary file of a format, and flushes it.
+    future<> format_temporary_file(seastar::file& tmp_file);
 
     // Writes zeros over the region. The file can be a file that is not allocated, such as the
     // temporary file of a format.
