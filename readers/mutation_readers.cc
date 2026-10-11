@@ -1575,19 +1575,6 @@ class truncation_stripping_reader : public mutation_reader::impl {
         return t && t.timestamp <= _covering.timestamp;
     }
 
-    void strip_cells(row& cells, column_kind kind) {
-        if (_schema->is_counter()) {
-            // A counter cell is covered by any tombstone, regardless of its timestamp,
-            // since a counter cannot be updated after it is deleted, so it is stripped
-            // by its timestamp here. Counter tables have no other kind of columns.
-            cells.remove_if([this, kind] (column_id id, atomic_cell_or_collection& c) {
-                return c.as_atomic_cell(_schema->column_at(kind, id)).timestamp() <= _covering.timestamp;
-            });
-            return;
-        }
-        cells.compact_and_expire(*_schema, kind, row_tombstone(_covering), gc_clock::time_point::min(), never_gc, gc_clock::time_point::min());
-    }
-
     // Returns a disengaged optional if nothing is left of the fragment.
     mutation_fragment_v2_opt strip(mutation_fragment_v2&& mf) {
         switch (mf.mutation_fragment_kind()) {
@@ -1601,7 +1588,7 @@ class truncation_stripping_reader : public mutation_reader::impl {
             return std::move(mf);
         case mutation_fragment_v2::kind::static_row:
             mf.mutate_as_static_row(*_schema, [this] (static_row& sr) {
-                strip_cells(sr.cells(), column_kind::static_column);
+                sr.cells().strip_truncated(*_schema, column_kind::static_column, _covering.timestamp);
             });
             if (mf.as_static_row().empty()) {
                 return {};
@@ -1609,17 +1596,7 @@ class truncation_stripping_reader : public mutation_reader::impl {
             return std::move(mf);
         case mutation_fragment_v2::kind::clustering_row:
             mf.mutate_as_clustering_row(*_schema, [this] (clustering_row& cr) {
-                // Strip the regular and the shadowable row tombstones separately, so that
-                // the covering tombstone is not merged into what is left of them.
-                const auto rt = cr.tomb();
-                const auto regular = covered(rt.regular()) ? tombstone() : rt.regular();
-                const auto shadowable = covered(rt.tomb()) ? tombstone() : rt.tomb();
-                const bool strip_marker = !cr.marker().is_missing() && cr.marker().timestamp() <= _covering.timestamp;
-                strip_cells(cr.cells(), column_kind::regular_column);
-                if (regular != rt.regular() || shadowable != rt.tomb() || strip_marker) {
-                    auto marker = strip_marker ? row_marker() : cr.marker();
-                    cr = clustering_row(std::move(cr.key()), row_tombstone(regular, shadowable_tombstone(shadowable)), marker, std::move(cr.cells()));
-                }
+                cr.strip_truncated(*_schema, _covering.timestamp);
             });
             if (mf.as_clustering_row().empty()) {
                 return {};
