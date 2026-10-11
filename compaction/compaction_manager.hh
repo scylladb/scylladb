@@ -485,6 +485,10 @@ public:
     future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation");
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    // Saves a commitlog cleanup record, see db::system_keyspace::save_commitlog_cleanup_record(),
+    // on behalf of a table, which has no other access to the system keyspace.
+    // Returns false if the system keyspace is not plugged.
+    future<bool> save_commitlog_cleanup_record(table_id table, dht::token_range range, db::replay_position rp);
     future<> unplug_system_keyspace() noexcept;
 
     // Adds a table to the compaction manager.
