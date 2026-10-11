@@ -105,5 +105,7 @@ verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tab
 verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
 verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]], service::tablet_repair_flush_info flush [[version 2027.1]]) -> service::tablet_operation_repair_result;
+// Whether the node holds no data of the table written at or before the given timestamp, i.e. covered by its truncation tombstone.
+verb [[cancellable]] truncation_tombstone_clean (raft::server_id dst_id, table_id table, int64_t truncated_at) -> bool;
 
 }

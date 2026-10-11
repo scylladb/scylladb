@@ -1168,6 +1168,12 @@ SEASTAR_TEST_CASE(test_table_installs_truncation_tombstone) {
             }, true, std::logical_and<bool>()).get());
         });
 
+        // The flush stripped the covered data, leaving nothing of the partitions holding
+        // only such data, so the table is known to hold no covered data.
+        BOOST_REQUIRE(e.db().map_reduce0([id, t] (replica::database& db) {
+            return !db.find_column_family(id).may_hold_truncated_data(t.timestamp);
+        }, true, std::logical_and<bool>()).get());
+
         // Clearing the truncation tombstone, as its garbage collection does.
         set_truncation_tombstone(e, id, tombstone(), ts);
         e.db().invoke_on_all([id] (replica::database& db) {

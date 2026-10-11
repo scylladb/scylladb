@@ -3059,6 +3059,12 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
         auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
         co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data, pre_flush_gc_state);
     });
+    // Major compaction drops all the data covered by the truncation tombstone, which can be garbage-collected
+    // once no replica holds any (see docs/dev/delete-all-data.md).
+    if (const auto t = _truncation_tombstone) {
+        tlogger.info("{}.{} {} data covered by its truncation tombstone {} on this shard after major compaction",
+                _schema->ks_name(), _schema->cf_name(), may_hold_truncated_data(t.timestamp) ? "still holds" : "holds no", t);
+    }
 }
 
 void table::start_compaction() {
@@ -4406,6 +4412,61 @@ future<> table::on_new_truncation_tombstone(tombstone t, std::vector<sealed_memt
         }
         co_await seal_active_memtable(s.cg, std::move(permit), s.memtable);
     });
+}
+
+bool table::may_hold_truncated_data(api::timestamp_type truncated_at) const {
+    // The cache holds no data covered by the truncation tombstone it was last invalidated for.
+    if (_cache_truncation_tombstone.timestamp < truncated_at) {
+        return true;
+    }
+    if (_commitlog_may_hold_truncated_data) {
+        return true;
+    }
+    bool found = false;
+    // All the compaction groups, also those which are being stopped, which for_each_compaction_group()
+    // skips: a group merged into another holds its sstables until they are moved over.
+    _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
+      sg.for_each_compaction_group([&] (const compaction_group_ptr& cg_ptr) {
+        const compaction_group& cg = *cg_ptr;
+        if (found) {
+            return;
+        }
+        // Writes applied to a memtable are stripped of the data covered by the truncation tombstone it was created with.
+        found = std::ranges::any_of(*cg._memtables, [&] (const shared_memtable& mt) {
+            return !mt->empty() && mt->truncation_tombstone().timestamp < truncated_at && mt->get_min_timestamp() <= truncated_at;
+        });
+        const auto may_hold = [&] (const sstables::shared_sstable& sst) {
+            return sst->get_stats_metadata().min_timestamp <= truncated_at;
+        };
+        // Includes the staging and maintenance sstables.
+        found = found || std::ranges::any_of(cg.all_sstables(), may_hold);
+        // Sstables which were compacted and not deleted yet are loaded again if the node restarts before they are.
+        found = found || std::ranges::any_of(cg.compacted_undeleted_sstables(), may_hold);
+      });
+    });
+    return found;
+}
+
+void table::on_write_raced_with_truncation_tombstone() {
+    const auto generation = ++_commitlog_truncated_data_generation;
+    _commitlog_may_hold_truncated_data = true;
+    auto holder = _async_gate.try_hold();
+    if (!holder) {
+        // The table is being stopped, which flushes its memtables.
+        return;
+    }
+    tlogger.debug("A write to {}.{} raced with its truncation tombstone, flushing", _schema->ks_name(), _schema->cf_name());
+    // Flushing the memtables records their replay positions, in the sstables written or in a
+    // commitlog cleanup record, so the entry is not replayed. Until then, the truncation tombstone
+    // is kept, see may_hold_truncated_data(), so the entry is stripped if it is replayed.
+    (void)flush().then([this, generation] {
+        if (_commitlog_truncated_data_generation == generation) {
+            _commitlog_may_hold_truncated_data = false;
+        }
+    }).handle_exception([this] (std::exception_ptr ex) {
+        // The truncation tombstone is kept until a later raced write, or a restart, clears this.
+        tlogger.warn("Failed to flush {}.{} after a write raced with its truncation tombstone: {}", _schema->ks_name(), _schema->cf_name(), ex);
+    }).finally([holder = std::move(*holder)] {});
 }
 
 void table::update_tombstone_gc_rf_one() {
