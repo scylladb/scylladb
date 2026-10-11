@@ -373,6 +373,52 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_close_interrupts_backoff) {
     check_backoff_is_interrupted(false);
 }
 
+// The retry counter must reset after progress, or blips spread over a long read
+// exhaust its budget. Drop the connection after every chunk, more times than the
+// budget allows: only a counter reset lets the read finish.
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_retry_counter_resets_on_progress) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).");
+#else
+    ::setenv("AWS_ACCESS_KEY_ID", "test", 1);
+    ::setenv("AWS_SECRET_ACCESS_KEY", "test", 1);
+
+    constexpr unsigned chunk_size = 4;
+    constexpr unsigned n_chunks = aws::default_aws_retry_strategy::default_max_retries + 2;
+
+    std::string expected;
+    for (unsigned i = 0; i < n_chunks; ++i) {
+        expected += std::string(chunk_size, char('a' + i % 26));
+    }
+    // The last chunk is served without a drop, so the read ends cleanly.
+    fake_http_error_server srv(expected.size(), 500, "Internal Server Error", [&expected, i = 0u](unsigned) mutable -> std::optional<std::pair<sstring, uint64_t>> {
+        if (i + 1 == n_chunks) {
+            utils::get_local_injector().disable("break_s3_inflight_req");
+        }
+        auto start = uint64_t(i++) * chunk_size;
+        return std::make_pair(sstring(expected.data() + start, chunk_size), start);
+    });
+    auto stop_srv = seastar::defer([&]() noexcept { srv.stop().get(); });
+
+    s3::endpoint_config cfg = {
+        .port = srv.address().port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+
+    utils::get_local_injector().enable("break_s3_inflight_req");
+    auto disable_injection = seastar::defer([] () noexcept { utils::get_local_injector().disable("break_s3_inflight_req"); });
+
+    auto in = input_stream<char>(cln->make_chunked_download_source("/test-bucket/test-object", s3::full_range));
+    auto data = seastar::util::read_entire_stream_contiguous(in).get();
+    in.close().get();
+    cln->close().get();
+
+    BOOST_REQUIRE_EQUAL(std::string_view(data), expected);
+#endif
+}
+
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
 // permissive enough policy and then run the test with env set respectively
 // E.g. like this
