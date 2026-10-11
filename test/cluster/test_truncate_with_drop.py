@@ -5,6 +5,7 @@
 #
 import logging
 import asyncio
+from datetime import datetime, timezone
 
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -85,6 +86,75 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaCluster
         # should have no truncation records now
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM system.truncated where table_uuid={table_id}', consistency_level=ConsistencyLevel.ONE))
         assert row[0].count == 0
+
+
+@pytest.mark.parametrize("truncate_first", [False, True])
+async def test_recreate_dropped_table_with_same_id(manager: ScyllaClusterManager, truncate_first: bool):
+    """Drop a table, recreate it WITH ID = <the same id> and kill the node.
+
+    DESCRIBE ... WITH INTERNALS emits the table id, and schema restore tools
+    recreate tables from it right after dropping them, so a recreated table
+    may share its id with a dropped one. Truncation records are keyed by the
+    table id, so a record left behind by the drop would apply to the
+    recreated table after a restart: a truncation time in the future makes
+    paxos reject all decisions for the table, and batchlog replay skip all
+    its batches.
+
+    Verify that, after the node is killed and restarted, the recreated table
+    has no truncation record in the future and accepts LWT writes.
+
+    With truncate_first, the table is truncated before it is dropped, so it
+    has a persisted truncation record with a real truncation time when the
+    drop starts.
+
+    Regression test for SCYLLADB-5240.
+    """
+    server = await manager.server_add()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        rows = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        table_id = rows[0].id
+
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in keys])
+        if truncate_first:
+            await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+            await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in keys])
+
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH ID = {table_id}")
+
+        logger.debug("Kill + restart the node")
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+
+        # A record left by an older truncate may survive the kill, but none may be in the future.
+        rows = await cql.run_async(SimpleStatement(f"SELECT truncated_at FROM system.truncated WHERE table_uuid = {table_id}"))
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        assert all(row.truncated_at <= now for row in rows), f"Unexpected truncation records: {rows}"
+        if not truncate_first:
+            assert not rows, f"Unexpected truncation records: {rows}"
+
+        # FIXME: enable once SCYLLADB-5245 is fixed: commitlog replay resurrects the
+        # data of the dropped table into the recreated one, if the writes above
+        # were written to the commitlog before the node was killed. With the
+        # default periodic commitlog sync this happens if a periodic sync (every
+        # 10s) runs between the writes and the kill, which makes the check flaky
+        # on slow machines and builds. See
+        # test_dropped_table_data_not_resurrected_in_recreated_table.
+        # rows = await cql.run_async(f"SELECT * FROM {ks}.test")
+        # assert not rows, f"Data of the dropped table was resurrected: {rows}"
+
+        # Use a key that was not written before the drop, so that the check does
+        # not depend on whether the dropped data was resurrected (SCYLLADB-5245).
+        new_key = len(keys)
+        rows = await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({new_key}, {new_key}) IF NOT EXISTS")
+        assert rows[0].applied
+        rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {new_key}")
+        assert len(rows) == 1 and rows[0].c == new_key
 
 
 @pytest.mark.xfail(reason="SCYLLADB-5245", strict=True)
