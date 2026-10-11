@@ -230,7 +230,7 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
 // flushes per dropped table, which makes DROP KEYSPACE slow.
 //
 // Reproducer for SCYLLADB-5240
-SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records, *boost::unit_test::expected_failures(1)) {
+SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records, *boost::uni
         e.execute_cql("DROP TABLE ks.cf;").get();
         const auto flushes_after = truncated_flush_count();
 
-        BOOST_CHECK_EQUAL(flushes_after - flushes_before, 0);
+        BOOST_REQUIRE_EQUAL(flushes_after - flushes_before, 0);
 
         auto res = e.execute_cql(fmt::format("SELECT * FROM system.truncated WHERE table_uuid = {}", uuid)).get();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
