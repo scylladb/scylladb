@@ -2960,6 +2960,12 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
         auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
         co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data);
     });
+    // Major compaction drops all the data covered by the truncation tombstone, which can be garbage-collected
+    // once no replica holds any (see docs/dev/eventually-consistent-truncate.md).
+    if (const auto t = _truncation_tombstone) {
+        tlogger.info("{}.{} {} data covered by its truncation tombstone {} on this shard after major compaction",
+                _schema->ks_name(), _schema->cf_name(), may_hold_truncated_data(t.timestamp) ? "still holds" : "holds no", t);
+    }
 }
 
 void table::start_compaction() {
@@ -4285,6 +4291,28 @@ future<> table::on_new_truncation_tombstone(tombstone t, std::vector<sealed_memt
         }
         co_await seal_active_memtable(s.cg, std::move(permit), s.memtable);
     });
+}
+
+bool table::may_hold_truncated_data(api::timestamp_type truncated_at) const {
+    // The cache holds no data covered by the truncation tombstone it was last invalidated for.
+    if (_cache_truncation_tombstone.timestamp < truncated_at) {
+        return true;
+    }
+    bool found = false;
+    for_each_compaction_group([&] (const compaction_group& cg) {
+        if (found) {
+            return;
+        }
+        // Writes applied to a memtable are stripped of the data covered by the truncation tombstone it was created with.
+        found = std::ranges::any_of(*cg._memtables, [&] (const shared_memtable& mt) {
+            return !mt->empty() && mt->truncation_tombstone().timestamp < truncated_at && mt->get_min_timestamp() <= truncated_at;
+        });
+        // Includes the staging and maintenance sstables.
+        found = found || std::ranges::any_of(cg.all_sstables(), [&] (const sstables::shared_sstable& sst) {
+            return sst->get_stats_metadata().min_timestamp <= truncated_at;
+        });
+    });
+    return found;
 }
 
 void table::update_tombstone_gc_rf_one() {

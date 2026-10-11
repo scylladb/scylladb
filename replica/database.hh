@@ -705,6 +705,10 @@ public:
     bool cache_may_hold_truncated_data() const noexcept {
         return _cache_truncation_tombstone < _truncation_tombstone;
     }
+    // Whether the table may hold data written at or before `truncated_at`, i.e. covered by its truncation
+    // tombstone, in memtables, sstables or the row cache, on this shard. Checks metadata only.
+    // The truncation tombstone can be garbage-collected once no replica holds any covered data.
+    bool may_hold_truncated_data(api::timestamp_type truncated_at) const;
 
     void notify_bootstrap_or_replace_start();
 
