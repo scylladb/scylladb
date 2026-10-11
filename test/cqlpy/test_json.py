@@ -788,3 +788,34 @@ def test_json_udt_duplicate_field(cql, test_keyspace, scylla_only):
                     cql.execute(insert_json, ['{"p": %d, "v": %s}' % (p, v)])
                 with pytest.raises(FunctionFailure, match='Duplicate field'):
                     cql.execute(insert_fromjson, [p, v])
+
+# SELECT JSON must JSON-escape the column names it prints. CQL allows a
+# column name with a double quote in it (e.g., the quoted identifier
+# "a""b" is the name a"b), and SELECT JSON must still return valid JSON.
+# Reproduces SCYLLADB-5263.
+@pytest.mark.xfail(reason="SCYLLADB-5263")
+def test_select_json_column_name_with_quote(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, "a""b" int') as table:
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table} (p, "a""b") VALUES ({p}, 1)')
+        [(j,)] = cql.execute(f"SELECT JSON * FROM {table} WHERE p = {p}")
+        assert json.loads(j) == {"p": p, 'a"b': 1}
+
+# A column name may itself begin and end with a double-quote character:
+# The CQL identifier """foo""" is the name "foo", including the quotes.
+# SELECT JSON must print such a name in an additional pair of quotes,
+# otherwise INSERT JSON of its output would remove the name's own quotes,
+# and write its value to a different column - here, foo. This is the same
+# as test_json_udt_quoted_field_name, but for column names. Cassandra has
+# this bug (CASSANDRA-21746), so this test is marked cassandra_bug.
+# Reproduces SCYLLADB-5263.
+@pytest.mark.xfail(reason="SCYLLADB-5263")
+def test_select_json_quoted_column_name(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, """foo""" int, foo int') as table:
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table} (p, """foo""", foo) VALUES ({p}, 1, 2)')
+        [(j,)] = cql.execute(f"SELECT JSON * FROM {table} WHERE p = {p}")
+        p2 = unique_key_int()
+        cql.execute(cql.prepare(f"INSERT INTO {table} JSON ?"), [json.dumps({**json.loads(j), 'p': p2})])
+        [(j2,)] = cql.execute(f"SELECT JSON * FROM {table} WHERE p = {p2}")
+        assert json.loads(j2) == {**json.loads(j), 'p': p2}
