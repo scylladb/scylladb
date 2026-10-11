@@ -964,6 +964,113 @@ SEASTAR_TEST_CASE(test_tablet_metadata_truncated_at) {
     }, tablet_cql_test_config());
 }
 
+// Installing a newer truncation tombstone switches out the table's non-empty
+// memtables, so that no write is merged in memory with data covered by it,
+// stamps the new ones with it, and, in the background, invalidates the cache
+// and flushes the switched memtables. See docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_table_installs_truncation_tombstone) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        for (int i = 0; i < 100; i++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
+        }
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+
+        auto count_sstables = [&] {
+            return e.db().map_reduce0([id] (replica::database& db) {
+                return db.find_column_family(id).get_sstables()->size();
+            }, size_t(0), std::plus<size_t>()).get();
+        };
+        BOOST_REQUIRE_EQUAL(count_sstables(), 0);
+
+        auto count_memtables = [&] {
+            return e.db().map_reduce0([id] (replica::database& db) {
+                size_t count = 0;
+                column_family_test::get_storage_group_manager(db.find_column_family(id))->for_each_storage_group([&] (size_t, replica::storage_group& sg) {
+                    count += sg.memtable_count();
+                });
+                return count;
+            }, size_t(0), std::plus<size_t>()).get();
+        };
+        auto count_memtable_switches = [&] {
+            return e.db().map_reduce0([id] (replica::database& db) {
+                return db.find_column_family(id).get_stats().memtable_switch_count;
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+        const auto memtables_before = count_memtables();
+        const auto switches_before = count_memtable_switches();
+
+        // Memtables are stamped with the table's truncation tombstone, none yet.
+        e.db().invoke_on_all([id] (replica::database& db) {
+            auto& table = db.find_column_family(id);
+            THREADSAFE_BOOST_REQUIRE(!table.get_truncation_tombstone());
+            table.for_each_active_memtable([] (replica::memtable& mt) {
+                THREADSAFE_BOOST_REQUIRE(!mt.truncation_tombstone());
+            });
+        }).get();
+
+        auto ts = current_timestamp(e);
+        auto set_truncation_tombstone = [&] (tombstone t) {
+            replica::tablet_mutation_builder builder(ts++, id);
+            if (t) {
+                builder.set_truncated_at(t);
+            } else {
+                builder.del_truncated_at();
+            }
+            utils::chunked_vector<mutation> muts;
+            muts.push_back(builder.build());
+            e.local_db().apply(freeze(muts), db::no_timeout).get();
+            e.get_storage_service().local().update_tablet_metadata({}).get();
+        };
+
+        const auto t = tombstone(api::new_timestamp(), gc_clock::now());
+        set_truncation_tombstone(t);
+        BOOST_REQUIRE_GT(count_memtable_switches(), switches_before);
+
+        e.db().invoke_on_all([id, t] (replica::database& db) {
+            auto& table = db.find_column_family(id);
+            THREADSAFE_BOOST_REQUIRE(table.get_truncation_tombstone() == t);
+            table.for_each_active_memtable([t] (replica::memtable& mt) {
+                THREADSAFE_BOOST_REQUIRE(mt.empty());
+                THREADSAFE_BOOST_REQUIRE(mt.truncation_tombstone() == t);
+            });
+        }).get();
+
+        // Writes from now on go to the new memtables.
+        e.execute_cql("INSERT INTO cf (pk, ck, v) VALUES (1000, 0, 0)").get();
+        BOOST_REQUIRE_EQUAL(e.db().map_reduce0([id, t] (replica::database& db) {
+            size_t non_empty = 0;
+            db.find_column_family(id).for_each_active_memtable([&] (replica::memtable& mt) {
+                THREADSAFE_BOOST_REQUIRE(mt.truncation_tombstone() == t);
+                non_empty += !mt.empty();
+            });
+            return non_empty;
+        }, size_t(0), std::plus<size_t>()).get(), 1);
+
+        // The switched memtables are flushed in the background, and table::flush() waits for them.
+        e.db().invoke_on_all([id] (replica::database& db) {
+            return db.find_column_family(id).flush();
+        }).get();
+        BOOST_REQUIRE_EQUAL(count_memtables(), memtables_before);
+        BOOST_REQUIRE_GT(count_sstables(), 0);
+
+        // The cache is invalidated in the background.
+        eventually([&] {
+            BOOST_REQUIRE(e.db().map_reduce0([id] (replica::database& db) {
+                return !db.find_column_family(id).cache_may_hold_truncated_data();
+            }, true, std::logical_and<bool>()).get());
+        });
+
+        // Clearing the truncation tombstone, as its garbage collection does.
+        set_truncation_tombstone(tombstone());
+        e.db().invoke_on_all([id] (replica::database& db) {
+            auto& table = db.find_column_family(id);
+            THREADSAFE_BOOST_REQUIRE(!table.get_truncation_tombstone());
+            THREADSAFE_BOOST_REQUIRE(!table.cache_may_hold_truncated_data());
+        }).get();
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_read_required_hosts) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
