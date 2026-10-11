@@ -386,7 +386,6 @@ def test_fromjson_map_key_timestamp(cql, table1):
 # that a normal value is allowed. For example, it cannot be given as an
 # element of a list.
 # Reproduces #7954.
-@pytest.mark.xfail(reason="issue #7954")
 def test_fromjson_null_constant(cql, table1):
     p = unique_key_int()
     # Check that a "null" JSON constant can be used to unset a column
@@ -721,3 +720,14 @@ def test_json_tuple_missing_components(cql, table1):
         cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["hi"]}}'""")
     with pytest.raises(FunctionFailure):
         cql.execute(f"""INSERT INTO {table1} (p, tup) VALUES ({p}, fromJson('["hi"]'))""")
+
+# A JSON null in a JSON array for a tuple column sets that component of the
+# tuple to null - in INSERT JSON just like in fromJson() (which is checked
+# by test_fromjson_null_constant above).
+# Reproduces #7954.
+def test_insert_json_tuple_null_component(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["a", null]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [(('a', None),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": [null, 2]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [((None, 2),)]
