@@ -19,6 +19,7 @@
 #include "mutation/mutation_partition_serializer.hh"
 #include "mutation/mutation_partition_view.hh"
 #include "partition_builder.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "schema/schema.hh"
 #include "serializer_impl.hh"
 #include "idl/mutation.dist.hh"
@@ -175,33 +176,29 @@ record_value encode_record_value(const frozen_mutation& m, const schema& s) {
     return record_value(std::move(out));
 }
 
-mutation decode_record_value(const record_value& v, schema_ptr s, const record_header& h) {
-    if (s->id() != h.table) {
+single_row_partition decode_record_value(const record_value& v, const schema& s, const record_header& h) {
+    if (s.id() != h.table) {
         throw std::runtime_error(format("logstor: record of table {} decoded with the schema of table {} ({}.{})",
-                h.table, s->id(), s->ks_name(), s->cf_name()));
+                h.table, s.id(), s.ks_name(), s.cf_name()));
     }
 
     auto in = ser::as_input_stream(v.representation());
     record_value_reader reader(in);
 
-    mutation m(s, h.key);
-
-    if (reader.schema_version() == s->version()) {
+    // Decode into a mutation_partition, then move the row out of it.
+    mutation_partition p(s);
+    if (reader.schema_version() == s.version()) {
         reader.skip_mapping();
         auto partition_view = mutation_partition_view::from_view(reader.read_partition());
-        partition_builder b(*s, m.partition());
-        partition_view.accept(*s, b);
+        partition_builder b(s, p);
+        partition_view.accept(s, b);
     } else {
         column_mapping cm = reader.read_mapping();
-        converting_mutation_partition_applier applier(cm, *s, m.partition());
+        converting_mutation_partition_applier applier(cm, s, p);
         auto partition_view = mutation_partition_view::from_view(reader.read_partition());
         partition_view.accept(cm, applier);
     }
-    return m;
-}
-
-mutation to_mutation(const log_record& r, schema_ptr s) {
-    return decode_record_value(r.value, std::move(s), r.header);
+    return to_single_row_partition(std::move(p), s, h.key.key());
 }
 
 } // namespace replica::logstor

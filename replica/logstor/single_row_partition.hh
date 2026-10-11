@@ -51,8 +51,9 @@ struct keyed_single_row_partition {
 // otherwise, naming the partition by `key`.
 void check_partition_shape(const mutation_partition&, const schema&, const partition_key& key);
 
-// The partition of a consumed mutation: the row is moved out of it, no cell is copied.
-single_row_partition to_single_row_partition(mutation&&);
+// The partition of a consumed mutation_partition of the schema `s`, whose key is `key`: the row is
+// moved out of it, no cell is copied.
+single_row_partition to_single_row_partition(mutation_partition&&, const schema& s, const partition_key& key);
 
 // The mutation that a single_row_partition describes.
 mutation to_mutation(schema_ptr, dht::decorated_key, single_row_partition&&);

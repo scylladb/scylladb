@@ -23,6 +23,7 @@
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/updateable_value.hh"
 
@@ -123,6 +124,12 @@ protected:
         return _cm;
     }
 };
+
+// The partition of a consumed mutation: the row is moved out of it, no cell is copied. Tests build
+// a partition from a mutation; logstor itself decodes one from a record.
+inline replica::logstor::single_row_partition to_single_row_partition(mutation&& m) {
+    return replica::logstor::to_single_row_partition(std::move(m.partition()), *m.schema(), m.key());
+}
 
 // Reads the partition of a key the way a query does, through the reader logstor::make_reader()
 // makes, and builds the mutation from what the reader emits: nullopt when the index does not hold
