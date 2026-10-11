@@ -364,6 +364,9 @@ mutation_reader evictable_reader::recreate_reader() {
     const dht::partition_range* range = _pr;
     const query::partition_slice* slice = &_ps;
 
+    // The new readers sample the table's truncation tombstone again.
+    _permit.resample_truncation_tombstone();
+
     _range_override.reset();
     _slice_override.reset();
 
@@ -417,7 +420,13 @@ future<mutation_reader> evictable_reader::resume_or_create_reader() {
         co_return std::move(*_reader);
     }
     if (auto reader_opt = try_resume()) {
-        co_return std::move(*reader_opt);
+        // If the truncation tombstone changed while the reader was paused, recreate it, as if it was
+        // evicted, rather than applying a different truncation tombstone to sources it creates from now on.
+        if (_permit.truncation_tombstone(*_schema) == _schema->truncation_tombstone().value_or(tombstone())) {
+            co_return std::move(*reader_opt);
+        }
+        co_await reader_opt->close();
+        co_return recreate_reader();
     }
     // When the reader is created the first time and we are actually resuming a
     // saved reader in `recreate_reader()`, we have two cases here:
