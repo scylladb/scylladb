@@ -18,6 +18,50 @@ namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
 
+namespace {
+
+// Reads a segment through its input stream, and keeps the position in the segment of what it
+// reads next.
+class segment_reader {
+    seastar::input_stream<char>& _in;
+    size_t _position = 0;
+public:
+    explicit segment_reader(seastar::input_stream<char>& in) noexcept : _in(in) {}
+
+    size_t position() const noexcept {
+        return _position;
+    }
+
+    future<temporary_buffer<char>> read_exactly(size_t n) {
+        _position += n;
+        return _in.read_exactly(n);
+    }
+
+    // Reads an on-disk T, or returns nullopt if the stream ends first.
+    template <typename T>
+    future<std::optional<T>> read() {
+        constexpr size_t size = ser::serializer<T>::serialized_size;
+        return read_exactly(size).then([] (temporary_buffer<char> buf) -> std::optional<T> {
+            if (buf.size() < size) {
+                return std::nullopt;
+            }
+            return ser::deserialize_from_buffer(buf, std::type_identity<T>{});
+        });
+    }
+
+    // Does nothing if the reader is at or past the position already.
+    future<> skip_to(size_t position) {
+        if (_position >= position) {
+            return make_ready_future<>();
+        }
+        auto n = position - _position;
+        _position = position;
+        return _in.skip(n);
+    }
+};
+
+} // anonymous namespace
+
 segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ondisk::segment_header> sh) {
     segment_info seg_info {
         .kind = ch.kind,
@@ -43,26 +87,21 @@ segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ond
 }
 
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
-    auto ch_buf = co_await in.read_exactly(ondisk::chunk_header_size);
-    if (ch_buf.size() < ondisk::chunk_header_size) {
-        co_return std::nullopt;
-    }
-    auto ch = ser::deserialize_from_buffer(ch_buf, std::type_identity<ondisk::chunk_header>{});
-
-    if (!ondisk::validate_chunk_header(ch)) {
+    segment_reader reader(in);
+    auto ch = co_await reader.read<ondisk::chunk_header>();
+    if (!ch || !ondisk::validate_chunk_header(*ch)) {
         co_return std::nullopt;
     }
 
     std::optional<ondisk::segment_header> sh;
-    if (ch.kind == segment_kind::full) {
-        auto sh_buf = co_await in.read_exactly(ondisk::segment_header_size);
-        if (sh_buf.size() < ondisk::segment_header_size) {
+    if (ch->kind == segment_kind::full) {
+        sh = co_await reader.read<ondisk::segment_header>();
+        if (!sh) {
             co_return std::nullopt;
         }
-        sh = ser::deserialize_from_buffer(sh_buf, std::type_identity<ondisk::segment_header>{});
     }
 
-    co_return make_segment_info(ch, sh);
+    co_return make_segment_info(*ch, sh);
 }
 
 future<> scan_segment(seastar::input_stream<char>& in,
@@ -71,24 +110,18 @@ future<> scan_segment(seastar::input_stream<char>& in,
         segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
         log_record_bytes_consumer on_record) {
-    size_t current_position = 0;
+    segment_reader reader(in);
     std::optional<segment_sequence> segment_seq;
 
     logstor_logger.trace("Reading records from segment {}", segment_id);
 
-    while (current_position < segment_size) {
-        // read chunk header
-        auto chunk_header_buf = co_await in.read_exactly(ondisk::chunk_header_size);
-        current_position += ondisk::chunk_header_size;
-        if (chunk_header_buf.size() < ondisk::chunk_header_size) {
-            break;
-        }
-        auto ch = ser::deserialize_from_buffer(chunk_header_buf, std::type_identity<ondisk::chunk_header>{});
-
+    while (reader.position() < segment_size) {
+        auto maybe_ch = co_await reader.read<ondisk::chunk_header>();
         // if the chunk is invalid then skip the rest of the segment - chunk writes are sequential and serialized.
-        if (!ondisk::validate_chunk_header(ch)) {
+        if (!maybe_ch || !ondisk::validate_chunk_header(*maybe_ch)) {
             break;
         }
+        const auto& ch = *maybe_ch;
 
         if (!segment_seq) {
             segment_seq = ch.segment_seq;
@@ -98,13 +131,10 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
         std::optional<ondisk::segment_header> sh;
         if (ch.kind == segment_kind::full) {
-            // read segment header
-            auto segment_header_buf = co_await in.read_exactly(ondisk::segment_header_size);
-            current_position += ondisk::segment_header_size;
-            if (segment_header_buf.size() < ondisk::segment_header_size) {
+            sh = co_await reader.read<ondisk::segment_header>();
+            if (!sh) {
                 break;
             }
-            sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<ondisk::segment_header>{});
         }
 
         auto seg_info = make_segment_info(ch, sh);
@@ -112,18 +142,17 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
         // TODO crc, torn writes
 
-        if (ch.records_size > segment_size - current_position) {
+        if (ch.records_size > segment_size - reader.position()) {
             break;
         }
-        auto body_buf = co_await in.read_exactly(ch.records_size);
-        current_position += ch.records_size;
+        auto body_buf = co_await reader.read_exactly(ch.records_size);
         if (body_buf.size() < ch.records_size) {
             break;
         }
 
         auto records = simple_memory_input_stream(body_buf.get(), body_buf.size());
         // Where the records start within the segment, which is what a record's location is relative to.
-        const size_t records_position = current_position - records.size();
+        const size_t records_position = reader.position() - records.size();
         // The smallest record frame: a record_frame_header and a record_header with an empty key.
         constexpr size_t min_frame_size = ondisk::record_frame_header_size + ondisk::record_header_fixed_size;
 
@@ -177,11 +206,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
         }
 
         // The next chunk starts at the first block boundary after this one.
-        auto skip_bytes = align_up(current_position, ondisk::block_alignment) - current_position;
-        if (skip_bytes > 0) {
-            co_await in.skip(skip_bytes);
-            current_position += skip_bytes;
-        }
+        co_await reader.skip_to(align_up(reader.position(), ondisk::block_alignment));
     }
 }
 
