@@ -2332,6 +2332,23 @@ get_fully_expired_sstables(const compaction_group_view& table_s, const std::vect
     }
 
     std::unordered_set<sstables::shared_sstable> candidates;
+
+    // An sstable holding only data covered by the table's truncation tombstone, set by the
+    // eventually-consistent TRUNCATE, is dropped as a whole, regardless of the tombstone GC rules:
+    // all the data its tombstones may shadow is covered by the truncation tombstone too, and is
+    // stripped wherever it is, as long as the truncation tombstone is set, which it is until no
+    // covered data remains (see docs/dev/eventually-consistent-truncate.md).
+    std::unordered_set<sstables::shared_sstable> truncated;
+    if (const auto t = table_s.schema()->truncation_tombstone().value_or(tombstone())) {
+        for (auto& candidate : compacting) {
+            if (candidate->get_stats_metadata().max_timestamp <= t.timestamp) {
+                clogger.debug("Dropping SSTable {} covered by the truncation tombstone {} (maxTimestamp={})",
+                        candidate->get_filename(), t, candidate->get_stats_metadata().max_timestamp);
+                truncated.insert(candidate);
+            }
+        }
+    }
+
     // Note: This contains both repaired and unrepaired sstables which means
     // compaction consults both repaired and unrepaired sstables for tombstone gc.
     auto uncompacting_sstables = get_uncompacting_sstables(table_s, compacting);
@@ -2360,6 +2377,9 @@ get_fully_expired_sstables(const compaction_group_view& table_s, const std::vect
 
     // SStables that do not contain live data is added to list of possibly expired sstables.
     for (auto& candidate : compacting) {
+        if (truncated.contains(candidate)) {
+            continue;
+        }
         auto gc_before = candidate->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
         clogger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
                     candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
@@ -2386,6 +2406,7 @@ get_fully_expired_sstables(const compaction_group_view& table_s, const std::vect
             it++;
         }
     }
+    candidates.merge(truncated);
     clogger.debug("Checking droppable sstables in {}.{}, candidates={}", table_s.schema()->ks_name(), table_s.schema()->cf_name(), candidates.size());
     return candidates;
 }
