@@ -2243,7 +2243,10 @@ private:
     struct table_truncate_state;
 
     static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback = {});
-    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    // If persist_truncation_record is false, no truncation record is saved in system.truncated.
+    // This is used when dropping the table, since the record has no reader once the table
+    // is dropped. See cleanup_drop_table_on_all_shards().
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt, bool persist_truncation_record);
     future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
 public:
     /** Truncates the given column family */

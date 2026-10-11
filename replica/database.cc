@@ -1422,7 +1422,17 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    // Do not persist a truncation record for the dropped table, since the table does
+    // not exist when the commitlog is replayed after a restart, and the replayer ignores
+    // mutations of tables that do not exist:
+    // - A schema drop is committed to the schema tables, which are on the schema
+    //   commitlog that is synced on every write, before the table is cleaned up.
+    // - legacy_drop_table_on_all_shards() is not backed by a schema change. It drops the
+    //   obsolete system.large_* tables on boot, which are recreated and dropped again
+    //   on every boot, before the commitlog is replayed.
+    const bool persist_truncation_record = false;
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt),
+            persist_truncation_record));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
@@ -3155,7 +3165,8 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
+    const bool persist_truncation_record = true;
+    co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt), persist_truncation_record);
 }
 
 struct database::table_truncate_state {
@@ -3163,13 +3174,15 @@ struct database::table_truncate_state {
     // This RP mark accounts for all data (includes memtable) generated until truncated_at.
     db::replay_position low_mark;
     db_clock::time_point truncated_at;
+    bool persist_truncation_record;
     std::vector<compaction::compaction_reenabler> cres;
     std::vector<replica::logstor::compaction_reenabler> logstor_cres;
     bool did_flush;
 };
 
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt,
+        bool persist_truncation_record) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -3266,6 +3279,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         // different shards might have different pace.
         st.truncated_at = truncated_at_opt.value_or(db_clock::now());
         st.did_flush = should_flush;
+        st.persist_truncation_record = persist_truncation_record;
     });
     co_await utils::get_local_injector().inject("database_truncate_wait", utils::wait_for_message(1min));
 
@@ -3336,15 +3350,19 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
             rp = st.low_mark;
         }
     }
-    co_await coroutine::parallel_for_each(views, [&sys_ks, truncated_at] (lw_shared_ptr<replica::table> v) -> future<> {
+    co_await coroutine::parallel_for_each(views, [&sys_ks, &st, truncated_at] (lw_shared_ptr<replica::table> v) -> future<> {
             db::replay_position rp = co_await v->discard_sstables(truncated_at);
-            co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
+            if (st.persist_truncation_record) {
+                co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
+            }
     });
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
     // will be available until next reboot and a client will have to retry truncation anyway.
     cf.set_truncation_time(truncated_at);
-    co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
+    if (st.persist_truncation_record) {
+        co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
+    }
 
     auto& gc_state = get_compaction_manager().get_shared_tombstone_gc_state();
     gc_state.drop_repair_history_for_table(uuid);
