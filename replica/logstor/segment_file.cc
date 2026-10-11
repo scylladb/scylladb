@@ -103,10 +103,9 @@ future<> file_manager::remove_file(file_id_t file_id) {
 future<> file_manager::resume_file_allocation() {
     if (_format_on_startup) {
         auto holder = _async_gate.hold();
-        file_id_t next_file_id = _allocated_file_count;
-        co_await with_scheduling_group(_format_sg, [this, next_file_id] -> future<> {
+        co_await with_scheduling_group(_format_sg, [this] -> future<> {
             logstor_logger.info("Formatting {} logstor files", _configured_file_count);
-            for (file_id_t file_id = next_file_id; file_id < _configured_file_count; ++file_id) {
+            for (file_id_t file_id = _allocated_file_count; file_id < _configured_file_count; ++file_id) {
                 co_await format_file(file_id);
                 // Open the file before it counts as allocated (I2).
                 co_await open_file(file_id);
