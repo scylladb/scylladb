@@ -1120,7 +1120,6 @@ def testInsertJsonSyntaxWithCollections(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT k, lf FROM %s"), [0, [1, 2, 3]])
 
 # Reproduces issue #8087
-@pytest.mark.xfail(reason="issue #8087")
 def testInsertJsonSyntaxWithNonNativeMapKeys(cql, test_keyspace):
     # JSON doesn't allow non-string keys, so we accept string representations of any type as map keys and
     # return maps with string keys when necessary.
