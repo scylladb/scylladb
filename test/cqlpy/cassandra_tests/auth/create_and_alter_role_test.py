@@ -104,8 +104,8 @@ def testcreateAlterRoleWithHashedPassword(cql):
         with use_user(cql, user2, plainTextPwd2) as session:
             session.execute("SELECT key FROM system.local")
 
-# Reproduces SCYLLADB-5229: Scylla doesn't validate the hashed password,
-# and CREATE USER and ALTER USER don't support HASHED PASSWORD.
+# Reproduces SCYLLADB-5229: Scylla doesn't validate the hashed password
+# (and CREATE USER and ALTER USER didn't support HASHED PASSWORD).
 @pytest.mark.xfail(reason="SCYLLADB-5229")
 def testcreateAlterUserWithHashedPassword(cql):
     user1 = "hashed_pw_user_" + unique_name()
