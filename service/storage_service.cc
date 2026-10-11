@@ -6002,6 +6002,61 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
 
 // Delete a tablet repair request by the given tablet_task_id
+future<> storage_service::truncate_with_timestamp(table_id table, tombstone truncation_tombstone) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.truncate_with_timestamp(table, truncation_tombstone);
+        });
+    }
+
+    if (!_feature_service.eventually_consistent_truncate) {
+        throw std::runtime_error("The EVENTUALLY_CONSISTENT_TRUNCATE feature is not enabled on the cluster yet");
+    }
+
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+        const auto& tablets = get_token_metadata().tablets();
+
+        // The views and indexes of the table are truncated with it, with the same truncation tombstone.
+        // Not its Paxos state table or CDC log table, which are not views.
+        auto& cf = _db.local().find_column_family(table);
+        std::vector<table_id> tables{table};
+        for (const auto& view : cf.views()) {
+            tables.push_back(view->id());
+        }
+
+        group0_update_collector updates;
+        for (auto id : tables) {
+            if (!tablets.has_tablet_map(id)) {
+                continue;
+            }
+            auto current = tablets.get_truncated_at(id);
+            auto t = current;
+            t.apply(truncation_tombstone);
+            if (t != current) {
+                updates.add_small(replica::tablet_mutation_builder(guard.write_timestamp(), id).set_truncated_at(t).build());
+            }
+        }
+        if (updates.empty()) {
+            break;
+        }
+
+        auto reason = format("Truncating {}.{} with {}", cf.schema()->ks_name(), cf.schema()->cf_name(), truncation_tombstone);
+        slogger.info("{}", reason);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+
+    // Wait until the live nodes apply the truncation tombstone, so that a read through any coordinator
+    // observes the TRUNCATE once it returns. A node which is down observes it when it comes back, before
+    // serving reads, so it need not be waited for.
+    co_await _group0->client().send_group0_read_barrier_to_live_members();
+}
+
 future<> storage_service::del_repair_tablet_request(table_id table, locator::tablet_task_id tablet_task_id) {
     auto holder = _async_gate.hold();
 
