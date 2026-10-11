@@ -7,8 +7,9 @@
 #############################################################################
 
 from .util import new_test_table, unique_key_int
-from cassandra.query import UNSET_VALUE
-from cassandra.protocol import ConfigurationException
+from cassandra.query import UNSET_VALUE, BoundStatement
+from cassandra.protocol import ConfigurationException, InvalidRequest
+import struct
 import pytest
 import time
 
@@ -95,3 +96,19 @@ def test_default_time_to_live_limit(cql, test_keyspace):
 # Cassandra has no paxos_grace_seconds property.
 def test_paxos_grace_seconds_limit(scylla_only, cql, test_keyspace):
     check_ttl_property_limit(cql, test_keyspace, 'paxos_grace_seconds')
+
+# An empty (zero-length) value bound to USING TTL ? is rejected with
+# InvalidRequest, like an empty USING TIMESTAMP ? (see
+# test_using_timestamp.py::test_empty_timestamp). Cassandra treats an empty
+# TTL like a null one (CASSANDRA-17822 made it behave like null), but empty
+# values are a misfeature which we don't want to support in new places, so
+# this test is scylla_only.
+# Reproduces SCYLLADB-5208 (an empty TTL caused a server error).
+def test_empty_ttl(cql, table_ttl_100, scylla_only):
+    stmt = cql.prepare(f'INSERT INTO {table_ttl_100} (p, v) VALUES (?, 1) USING TTL ?')
+    # The Python driver can't send an empty value for an int bind variable,
+    # so we send the raw serialized values ourselves.
+    bound = BoundStatement(stmt)
+    bound.values = [struct.pack('>i', unique_key_int()), b'']
+    with pytest.raises(InvalidRequest, match='empty'):
+        cql.execute(bound)
