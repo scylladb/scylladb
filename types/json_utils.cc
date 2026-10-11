@@ -357,13 +357,13 @@ struct from_json_object_visitor {
         if (value.IsNumber()) {
             return long_type->decompose(to_int<int64_t>(value));
         }
-        return to_bytes(t.from_string(rjson::to_string_view(value)));
+        return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
     }
     bytes operator()(const timeuuid_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "timeuuid_type"), t))); }
-    bytes operator()(const simple_date_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "simple_date_type"))); }
-    bytes operator()(const time_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "time_type"))); }
+    bytes operator()(const simple_date_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "simple_date_type"), t))); }
+    bytes operator()(const time_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "time_type"), t))); }
     bytes operator()(const uuid_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "uuid_type"), t))); }
-    bytes operator()(const inet_addr_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "inet_addr_type"))); }
+    bytes operator()(const inet_addr_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "inet_addr_type"), t))); }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (value.IsString()) {
             return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
