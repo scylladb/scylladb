@@ -195,6 +195,61 @@ async def test_dropped_table_data_not_resurrected_in_recreated_table(manager: Sc
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_crash_during_drop_keyspace(manager: ScyllaClusterManager):
+    """Kill the node while DROP KEYSPACE is cleaning up its tables.
+
+    The drop is committed to the schema tables before the tables are
+    truncated and their storage is destroyed, one after the other. Kill the
+    node while the first table is being truncated, after its memtables were
+    cleared, and verify that after a restart the keyspace and its tables are
+    gone, commitlog replay reports no errors, and the keyspace can be
+    recreated.
+
+    Directories of the tables whose cleanup did not complete are left behind
+    on disk. That is a known limitation, not checked here.
+
+    Regression test for SCYLLADB-5240.
+    """
+    server = await manager.server_add()
+    cql = manager.get_cql()
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    ks = await create_new_test_keyspace(cql, ks_opts)
+    tables = ("t1", "t2", "t3")
+    for table in tables:
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({k}, {k})") for k in range(100)])
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    await manager.api.enable_injection(server.ip_addr, "database_truncate_wait", one_shot=True)
+    drop = asyncio.ensure_future(cql.run_async(f"DROP KEYSPACE {ks}"))
+    await manager.api.wait_for_injection_enter(server.ip_addr, "database_truncate_wait")
+
+    logger.debug("Kill + restart the node")
+    await manager.server_stop(server.server_id, convict=False)
+    await asyncio.gather(drop, return_exceptions=True)
+    await manager.server_start(server.server_id)
+    cql, _ = await manager.get_ready_cql([server])
+
+    rows = await cql.run_async(f"SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+    assert not rows, f"Keyspace {ks} exists after restart"
+    rows = await cql.run_async(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{ks}'")
+    assert not rows, f"Tables of keyspace {ks} exist after restart: {rows}"
+
+    assert await log.grep("commitlog_replayer - Log replay complete", from_mark=mark)
+    assert not await log.grep("error replaying", from_mark=mark)
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} {ks_opts}")
+    for table in tables:
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+        rows = await cql.run_async(f"SELECT * FROM {ks}.{table}")
+        assert not rows, f"Data of the dropped table {ks}.{table} appeared in the recreated table: {rows}"
+    await cql.run_async(f"DROP KEYSPACE {ks}")
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
     """Drop a keyspace while the node is shutting down.
 
