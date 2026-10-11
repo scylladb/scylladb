@@ -451,6 +451,16 @@ bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
 }
 
+std::vector<schema_ptr> tablet_metadata::base_tables(const data_dictionary::keyspace_metadata& ksm) const {
+    std::vector<schema_ptr> result;
+    for (const auto& s : ksm.cf_meta_data() | std::views::values) {
+        if (has_tablet_map(s->id()) && is_base_table(s->id())) {
+            result.push_back(s);
+        }
+    }
+    return result;
+}
+
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {

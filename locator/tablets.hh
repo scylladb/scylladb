@@ -1044,6 +1044,9 @@ public:
     table_id get_base_table(table_id id) const;
     bool is_base_table(table_id id) const;
 
+    // Returns the base tables of the keyspace's co-location groups (see is_base_table()).
+    std::vector<schema_ptr> base_tables(const data_dictionary::keyspace_metadata& ksm) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()

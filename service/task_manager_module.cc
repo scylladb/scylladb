@@ -732,10 +732,7 @@ pow2_convergence_virtual_task::find_converging_table_for_task_id(tasks::task_id 
         if (!ks.uses_tablets()) {
             continue;
         }
-        for (const auto& schema : ks.metadata()->tables()) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                continue;
-            }
+        for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             auto& tmap = tablet_metadata.get_tablet_map(schema->id());
             if (!tmap.is_converging_to_pow2()) {
                 continue;
@@ -758,10 +755,7 @@ pow2_convergence_virtual_task::find_converging_ks_for_task_id(tasks::task_id id)
             continue;
         }
         bool has_converging_table = false;
-        for (const auto& schema : ks.metadata()->tables()) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                continue;
-            }
+        for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
                 has_converging_table = true;
                 break;
@@ -812,10 +806,7 @@ future<std::vector<tasks::task_stats>> pow2_convergence_virtual_task::get_stats(
             continue;
         }
         bool has_converging_table = false;
-        for (const auto& schema : ks.metadata()->tables()) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                continue;
-            }
+        for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             auto& tmap = tablet_metadata.get_tablet_map(schema->id());
             if (!tmap.is_converging_to_pow2()) {
                 continue;
@@ -892,10 +883,7 @@ future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::get_sta
     double tables_total = 0;
     utils::chunked_vector<tasks::task_identity> children;
 
-    for (const auto& schema : ks.metadata()->tables()) {
-        if (!tablet_metadata.has_tablet_map(schema->id())) {
-            continue;
-        }
+    for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
         auto& tmap = tablet_metadata.get_tablet_map(schema->id());
         if (!tmap.is_converging_to_pow2()) {
             continue;
@@ -959,10 +947,7 @@ future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::wait(ta
         }
         auto& ks = db.find_keyspace(*ks_name);
         const auto& tablet_metadata = _ss.get_token_metadata().tablets();
-        for (const auto& schema : ks.metadata()->tables()) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                continue;
-            }
+        for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
                 tracked_tables.insert(schema->id());
             }
