@@ -117,6 +117,81 @@ And you wanted to delete all of the concerts from the month of October using an 
    (4 rows)
 
 
+.. _delete-all-data-statement:
+
+DELETE ALL DATA
+^^^^^^^^^^^^^^^
+
+Deleting all the data of a table uses the ``DELETE ALL DATA`` statement:
+
+.. code-block::
+
+   delete_all_data_statement: DELETE ALL DATA FROM `table_name`
+                            : [ USING `delete_all_data_parameter` ( AND `delete_all_data_parameter` )* ]
+   delete_all_data_parameter: ( TIMESTAMP `int_value` | TIMEOUT `duration` )
+
+For instance:
+
+.. code-block:: cql
+
+   DELETE ALL DATA FROM NerdMovies;
+
+   DELETE ALL DATA FROM NerdMovies USING TIMESTAMP 1240003134000000 AND TIMEOUT 30s;
+
+The ``DELETE ALL DATA`` statement deletes all the data of the table that was written with a timestamp less than or
+equal to the statement's timestamp, like a ``DELETE`` of every partition of the table, and keeps the data written with
+a higher timestamp. Writes concurrent with the statement are resolved by their timestamp, like writes concurrent with a
+``DELETE``. The data of the table's materialized views and secondary indexes is deleted with it, with the same timestamp.
+
+The timestamp is given by the ``USING TIMESTAMP`` clause, or else by the client-side timestamp, if the driver sends one,
+or else by the coordinator. ``USING TIMEOUT`` sets the timeout of the request; the default is the timeout
+of ``TRUNCATE`` (``truncate_request_timeout_in_ms``), not that of writes, since the statement waits for the cluster's metadata to be updated. ``USING TTL`` is not supported. The statement requires the ``MODIFY`` permission on
+the table.
+
+.. caution:: Most drivers send a client-side timestamp with every request by default. If the clock of the client which
+   deletes the data is behind the clock of a client which wrote data shortly before, that data has a higher timestamp
+   than the deletion, and is not deleted. Likewise, data written with timestamps in the future is not deleted.
+   Use ``USING TIMESTAMP`` when it matters exactly which data is deleted.
+
+``DELETE ALL DATA`` is supported only for tables in keyspaces which use tablets, and not for strongly consistent tables.
+For other tables it returns an error; use :ref:`TRUNCATE <truncate-statement>` for them. It is available once all the
+nodes of the cluster are upgraded to a version that supports it. It cannot be used on a materialized view; delete the
+data of the base table instead. It is not supported for tables which have a vector index.
+
+``DELETE ALL DATA`` differs from a regular ``DELETE`` in the following ways:
+
+* It has no consistency level. The deletion is not written to the table's replicas like other writes: it is recorded in
+  the cluster's metadata, which, like a schema change, requires a majority (quorum) of the cluster's nodes to be
+  available, and does not require the table's replicas to be alive. A replica which is down observes the deletion
+  when it comes back.
+* It cannot be part of a ``BATCH``, and it has no ``IF`` clause.
+* It does not write a CDC log entry, and it does not delete anything from the table's CDC log table.
+* Counters can be updated again after it, and count from zero. A counter deleted by a regular ``DELETE`` cannot be used
+  again. The outcome of counter updates concurrent with ``DELETE ALL DATA`` is undefined, so they should be stopped
+  while the data of a counter table is deleted.
+
+The deleted data is not removed from disk right away. It is removed as the table's SSTables are compacted, and major
+compaction (``nodetool compact``) removes all of it. SSTables which hold only deleted data, typically most of the
+table's SSTables, are removed without being rewritten.
+
+The deletion is remembered like a tombstone: while it is, data written or loaded into the table with a timestamp at or
+before the deletion timestamp is deleted too. The deletion is forgotten under the table's ``tombstone_gc`` rules
+(see :ref:`Tombstones GC options <ddl-tombstones-gc>`), once no replica holds data which it deleted. Whether it was
+forgotten can be read from the table's partition in ``system.tablets``, where ``data_deleted_at_timestamp`` is null when
+no deletion is remembered:
+
+.. code-block:: cql
+
+   SELECT id FROM system_schema.tables WHERE keyspace_name = 'mykeyspace' AND table_name = 'nerdmovies';
+   SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = <id> LIMIT 1;
+
+:ref:`TRUNCATE <truncate-statement>` of the table also makes the deletion forgotten.
+
+Unlike :ref:`TRUNCATE <truncate-statement>`, ``DELETE ALL DATA`` may be used while the table is written to, and does not
+remove data regardless of its timestamp. To empty a table before restoring a backup into it, use ``TRUNCATE``:
+restored data which is older than a ``DELETE ALL DATA`` would stay deleted.
+
+
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst

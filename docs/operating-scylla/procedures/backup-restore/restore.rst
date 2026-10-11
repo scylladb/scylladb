@@ -55,6 +55,28 @@ The following steps and notes apply to all restore methods.
 
 .. note::
 
+   If data of a table was deleted with :ref:`DELETE ALL DATA <delete-all-data-statement>`, and the deletion is not
+   forgotten yet, restored data which is older than the deletion stays deleted. ``TRUNCATE`` clears the deletion, so
+   truncate the table before restoring it, as described above.
+
+   A snapshot may still hold data which was deleted with ``DELETE ALL DATA`` before the snapshot was taken. The
+   snapshot's ``manifest.json`` records such a deletion, as ``data_deleted_at_timestamp`` in its ``table`` section, if it was
+   not forgotten yet when the snapshot was taken. The tablet restore API (``POST /storage_service/tablets/restore``,
+   see :ref:`Restore a cluster backup <restore-cluster-backup>`) applies the deletion recorded in the manifests it is
+   given to the destination table, so the deleted data stays deleted. The manifests written by ``nodetool cluster backup``
+   do not record the deletion yet. ``nodetool refresh`` and ``nodetool restore`` do not read the manifest: before
+   loading such a snapshot with them, and after truncating the destination table, run
+
+   ``cqlsh -e "DELETE ALL DATA FROM <keyspace_name>.<table_name> USING TIMESTAMP <data_deleted_at_timestamp>"``
+
+   with the ``data_deleted_at_timestamp`` recorded in the manifest. The deletion must stay in effect until the snapshot
+   is loaded and compacted, but a table whose ``tombstone_gc`` mode is ``immediate`` forgets a deletion as soon as
+   no replica holds data which it deleted, which is at once for an empty table. Set the table's ``tombstone_gc``
+   mode to ``timeout`` or ``repair`` before running the statement, and set it back after loading the snapshot and
+   running major compaction on the table.
+
+.. note::
+
    If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
 
 .. _restore-cluster-backup:
