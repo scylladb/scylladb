@@ -104,8 +104,8 @@ arguments) as well as the format ScyllaDB will use when returning data for ``SEL
  ``vector``      list, string             list            Uses JSON's native list representation
 =============== ======================== =============== ==============================================================
 
-An empty string is not a valid value of a numeric type (such as ``int`` or ``float``), ``uuid``, ``timeuuid``,
-``boolean``, ``blob`` or ``duration``, and is rejected.
+An empty string is a valid value only of the string types ``ascii``, ``text`` and ``varchar``. For all other types, it
+is rejected.
 
 The fromJson() Function
 ^^^^^^^^^^^^^^^^^^^^^^^

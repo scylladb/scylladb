@@ -189,14 +189,12 @@ def test_empty_string_for_string_types_fromjson(cql, table_all_scalar, t):
 # constant, but the string needs to follow a particular format and in
 # particular the empty string should not be allowed.
 # Reproduces #10625.
-@pytest.mark.xfail(reason="issue #10625")
 @pytest.mark.parametrize("t", ["date", "time"])
 def test_empty_string_for_fussy_string_types(cql, table_all_scalar, t):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, '')")
 
-@pytest.mark.xfail(reason="issue #10625")
 @pytest.mark.parametrize("t", ["date", "time"])
 def test_empty_string_for_fussy_string_types_json(cql, table_all_scalar, t):
     p = unique_key_int()
@@ -206,21 +204,36 @@ def test_empty_string_for_fussy_string_types_json(cql, table_all_scalar, t):
 # Same as test_empty_string_for_fussy_string_types, but for some reason
 # Cassandra allows the empty string for these two types, even though an
 # empty string doesn't make sense as an IP address or a timestamp.
-# We consider this a Cassandra bug, hence the tag "cassandra_bug" below.
+# We consider this a Cassandra bug (CASSANDRA-21745), hence the tag
+# "cassandra_bug" below.
 # Reproduces #10625.
-@pytest.mark.xfail(reason="issue #10625")
 @pytest.mark.parametrize("t", ["inet", "timestamp"])
 def test_empty_string_for_fussy_string_types2(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, '')")
 
-@pytest.mark.xfail(reason="issue #10625")
 @pytest.mark.parametrize("t", ["inet", "timestamp"])
 def test_empty_string_for_fussy_string_types2_json(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table_all_scalar} JSON '{{\"p\": {p}, \"v{t}\": \"\"}}'")
+
+# Same as the above tests, but with fromJson(), which reports the error as
+# a FunctionFailure. Cassandra rejects an empty string for date and time,
+# but accepts it for inet and timestamp (CASSANDRA-21745).
+# Reproduces #10625.
+@pytest.mark.parametrize("t", ["date", "time"])
+def test_empty_string_for_fussy_string_types_fromjson(cql, table_all_scalar, t):
+    p = unique_key_int()
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, fromJson('\"\"'))")
+
+@pytest.mark.parametrize("t", ["inet", "timestamp"])
+def test_empty_string_for_fussy_string_types2_fromjson(cql, table_all_scalar, t, cassandra_bug):
+    p = unique_key_int()
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, fromJson('\"\"'))")
 
 # All other types cannot be assigned a string constant at all (the error
 # is not specific to the empty string)
