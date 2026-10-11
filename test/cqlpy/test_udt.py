@@ -164,3 +164,26 @@ def test_ttl_frozen_udt(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table}(p, x) VALUES ({p}, {{a: 1, b: 2}}) USING TTL {ttl}")
             [(t,)] = cql.execute(f"SELECT TTL(x) FROM {table} WHERE p={p}")
             assert t is not None and t <= ttl and t > ttl - 100
+
+# Test a frozen UDT as a clustering column with descending clustering order.
+# The column's type is then "reversed", and UDT literals and bind markers
+# need to look through the reversed type to the underlying UDT. Check that
+# a UDT literal (also with bind markers for its fields) and a bind marker
+# for the whole UDT can be written and used in restrictions, and that rows
+# come back in descending order.
+# Reproduces #9215.
+def test_udt_clustering_key_desc(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b text)') as typ:
+        schema = f"p int, c frozen<{typ}>, v int, PRIMARY KEY (p, c)"
+        with new_test_table(cql, test_keyspace, schema, "WITH CLUSTERING ORDER BY (c DESC)") as table:
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, c, v) VALUES ({p}, {{a: 1, b: 'x'}}, 1)")
+            stmt = cql.prepare(f"INSERT INTO {table} (p, c, v) VALUES (?, {{a: ?, b: ?}}, ?)")
+            cql.execute(stmt, [p, 2, 'y', 2])
+            stmt = cql.prepare(f"INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)")
+            cql.execute(stmt, [p, (3, 'z'), 3])
+            assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE p = {p}")] == [3, 2, 1]
+            assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE p = {p} AND c = {{a: 2, b: 'y'}}")] == [2]
+            assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE p = {p} AND c < {{a: 3, b: 'z'}}")] == [2, 1]
+            stmt = cql.prepare(f"SELECT v FROM {table} WHERE p = ? AND c >= {{a: ?, b: ?}}")
+            assert [r.v for r in cql.execute(stmt, [p, 2, 'y'])] == [3, 2]
