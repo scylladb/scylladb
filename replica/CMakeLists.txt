@@ -11,6 +11,7 @@ target_sources(replica
     dirty_memory_manager.cc
     logstor/ondisk.cc
     logstor/segment_io.cc
+    logstor/segment_file.cc
     logstor/cache.cc
     logstor/compaction.cc
     logstor/segment_manager.cc
