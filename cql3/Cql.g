@@ -1355,7 +1355,7 @@ functionResource returns [uninitialized<auth::resource> res]
     ;
 
 /**
- * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
+ * CREATE USER [IF NOT EXISTS] <username> [WITH [HASHED] PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
 createUserStatement returns [std::unique_ptr<create_role_statement> stmt]
     @init {
@@ -1366,22 +1366,27 @@ createUserStatement returns [std::unique_ptr<create_role_statement> stmt]
         bool ifNotExists = false;
     }
     : K_CREATE K_USER (K_IF K_NOT K_EXISTS { ifNotExists = true; })? u=username
-      ( K_WITH K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; })?
+      ( K_WITH userPassword[opts] )?
       ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
       { $stmt = std::make_unique<create_role_statement>(cql3::role_name(u, cql3::preserve_role_case::yes), std::move(opts), ifNotExists); }
     ;
 
 /**
- * ALTER USER <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
+ * ALTER USER <username> [WITH [HASHED] PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
 alterUserStatement returns [std::unique_ptr<alter_role_statement> stmt]
     @init {
         cql3::role_options opts;
     }
     : K_ALTER K_USER u=username
-      ( K_WITH K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; })?
+      ( K_WITH userPassword[opts] )?
       ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
       { $stmt = std::make_unique<alter_role_statement>(cql3::role_name(u, cql3::preserve_role_case::yes), std::move(opts)); }
+    ;
+
+userPassword[cql3::role_options& opts]
+    : K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; }
+    | K_HASHED K_PASSWORD v=STRING_LITERAL { opts.hashed_password = $v.text; }
     ;
 
 /**

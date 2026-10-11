@@ -1484,11 +1484,10 @@ def test_filter_granted_permissions_by_resource_type_functions(cql, test_keyspac
             cql.execute(f"DROP AGGREGATE IF EXISTS {test_keyspace}.{agg_name}")
 
 # Tests for the HASHED PASSWORD option of roles and users, which Cassandra
-# added in Cassandra 4.1. Scylla supports it in CREATE ROLE and ALTER ROLE,
-# but not in CREATE USER and ALTER USER, and doesn't validate the hash
-# (SCYLLADB-5229). The hashes below are
-# bcrypt hashes (the format which Cassandra requires, and Scylla supports)
-# of the password "super_secret_thing".
+# added in Cassandra 4.1. Scylla supports it in CREATE ROLE, ALTER ROLE,
+# CREATE USER and ALTER USER, but doesn't validate the hash (SCYLLADB-5229).
+# The hashes below are bcrypt hashes (the format which Cassandra requires,
+# and Scylla supports) of the password "super_secret_thing".
 hashed_password = "$2a$04$PoiUnv/9OZ5nYjlN087uIe5KLMV6yJfDkgKAAHO0pRVTEvB3UQU/i"
 
 # Check that we can log in as the given user with the password
@@ -1536,10 +1535,11 @@ def test_alter_role_hashed_password_requires_superuser(cql, scylla_only):
         with new_session(cql, user) as session:
             with pytest.raises(Unauthorized, match='superuser'):
                 session.execute(f"ALTER ROLE {user} WITH HASHED PASSWORD = '{hashed_password}'")
+            with pytest.raises(Unauthorized, match='superuser'):
+                session.execute(f"ALTER USER {user} WITH HASHED PASSWORD '{hashed_password}'")
 
-# Reproduces SCYLLADB-5229: CREATE USER and ALTER USER don't support
+# Reproduces SCYLLADB-5229: CREATE USER and ALTER USER didn't support
 # HASHED PASSWORD.
-@pytest.mark.xfail(reason="SCYLLADB-5229")
 def test_create_and_alter_user_with_hashed_password(cql):
     user1 = unique_name()
     cql.execute(f"CREATE USER {user1} WITH HASHED PASSWORD '{hashed_password}'")
