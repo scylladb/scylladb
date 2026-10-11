@@ -223,6 +223,10 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
         throw marshal_exception(
                 format("Too many values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
     }
+    if (value.Size() < t.all_types().size()) {
+        throw marshal_exception(
+                format("Too few values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
+    }
     std::vector<bytes_opt> raw_tuple;
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();

@@ -137,7 +137,7 @@ def testSelectJsonWithPagingWithFrozenUDT(cql, test_keyspace):
                           ["{\"a\": 1, \"b\": 2, \"c\": [\"1\", \"2\"]}", "[\"" + str(uuid) + "\", 4]", "4"])
 
 # Reproduces issue #7911, #7912, #7914, #7915, #7944, #7954, SCYLLADB-5260
-@pytest.mark.xfail(reason="issues #7944, SCYLLADB-5260")
+@pytest.mark.xfail(reason="issue #7944")
 def testFromJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:

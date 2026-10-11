@@ -713,7 +713,6 @@ def test_insert_json_invalid(cql, table1):
 # in INSERT JSON and in fromJson(). (An explicit null component, e.g.
 # ["hi", null], should be allowed, but that's a different issue, #7954).
 # Reproduces SCYLLADB-5260.
-@pytest.mark.xfail(reason="SCYLLADB-5260")
 def test_json_tuple_missing_components(cql, table1):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
