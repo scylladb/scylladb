@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -52,6 +53,9 @@ struct segment_manager_config {
     // preallocating or zero-filling. Saves disk space and I/O, at the cost of
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
+    // After the format of the next file fails, an allocation of the file starts the format again
+    // only when this interval has passed.
+    std::chrono::milliseconds format_retry_interval = std::chrono::seconds(1);
     bool compaction_enabled = true;
     // The space floor as a fraction of the disk, see compaction_space_floor().
     utils::updateable_value<double> compaction_space_floor{0.03};
