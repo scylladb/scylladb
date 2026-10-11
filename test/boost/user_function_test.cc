@@ -106,10 +106,11 @@ SEASTAR_TEST_CASE(test_user_function_errors) {
         auto msg = e.execute_cql("CREATE FUNCTION IF NOT EXISTS my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
         BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::void_message>(msg));
 
+        // my_func already exists, so CREATE OR REPLACE reports it was UPDATED.
         msg = e.execute_cql("CREATE OR REPLACE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
         auto change = get_schema_change(msg);
         using sc = cql_transport::event::schema_change;
-        BOOST_REQUIRE(change->change == sc::change_type::CREATED);
+        BOOST_REQUIRE(change->change == sc::change_type::UPDATED);
         BOOST_REQUIRE(change->target == sc::target_type::FUNCTION);
 
         msg = e.execute_cql("DROP FUNCTION IF EXISTS no_such_func(int);").get();
