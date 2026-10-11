@@ -293,36 +293,29 @@ future<> file_manager::zero_region(seastar::file file, uint64_t offset, uint64_t
 
 future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) {
     check_recovery_step(recovery_step::finished, "get_file_for_new_segment");
-    if (file_id >= _allocated_file_count) [[unlikely]] {
-        return allocate_file(file_id).then([this, file_id] {
-            return get_file(file_id);
-        });
+    if (file_id == _allocated_file_count) [[unlikely]] {
+        co_await allocate_file(file_id);
     }
-    return get_file(file_id);
+    // A file after the next one fails here.
+    co_return get_open_file(file_id);
 }
 
 future<> file_manager::allocate_file(file_id_t file_id) {
-    check_file_id(file_id);
+    if (file_id != _allocated_file_count || file_id >= _configured_file_count) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _configured_file_count));
+    }
+    co_await _next_file_format.get_future();
+    if (file_id != _allocated_file_count) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {} twice", file_id));
+    }
 
-    if (file_id == _allocated_file_count && file_id < _configured_file_count) {
-        // allocate file_id and wait for it to be formatted, and start formatting
-        // the next file in background
-        co_await _next_file_format.get_future();
+    // The format does not open the file, thus only the allocated files are open. If the open
+    // fails, the file stays the next one, and the next attempt opens it again.
+    co_await open_file(file_id);
+    _allocated_file_count++;
 
-        if (file_id == _allocated_file_count) {
-            // The format does not open the file, thus only the allocated files are open. If the
-            // open fails, the file stays the next one, and the next attempt opens it again.
-            co_await open_file(file_id);
-            _allocated_file_count++;
-
-            if (_allocated_file_count < _configured_file_count) {
-                start_next_file_format();
-            }
-        }
-    } else if (file_id >= _configured_file_count && file_id >= _allocated_file_count) {
-        on_internal_error(logstor_logger, "Disk size limit reached, cannot allocate more files");
-    } else if (file_id > _allocated_file_count) {
-        on_internal_error(logstor_logger, "files must be allocated in sequential order");
+    if (_allocated_file_count < _configured_file_count) {
+        start_next_file_format();
     }
 }
 
@@ -349,19 +342,6 @@ future<seastar::file> file_manager::open_file(file_id_t file_id) {
     _open_files[file_id] = file;
 
     co_return file;
-}
-
-// Not a coroutine: every file is opened at startup and held for the life of the shard, so this ends
-// in a value it already has, and in continuation style it hands that value back without allocating
-// a frame for a wait that does not happen.
-future<seastar::file> file_manager::get_file(file_id_t file_id) {
-    check_file_id(file_id);
-
-    if (auto& cached_file = _open_files[file_id]) {
-        return make_ready_future<seastar::file>(cached_file);
-    }
-
-    return open_file(file_id);
 }
 
 }
