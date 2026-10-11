@@ -11,9 +11,10 @@ import pytest
 import asyncio
 import logging
 import subprocess
+from collections import Counter
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas, get_base_table
+from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas, get_tablet_replicas, get_base_table
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import get_enabled_features, wait_for_feature, wait_for_cql_and_get_hosts, wait_for, wait_for_view
@@ -2528,3 +2529,158 @@ async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaC
             await cql.run_async(f"CREATE MATERIALIZED VIEW {tablets_ks}.mv_tablets AS SELECT pk, c FROM {tablets_ks}.t "
                                 "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
             await wait_for_view(cql, 'mv_tablets', 2, timeout=60)
+
+
+async def verify_view_rows_on_rf_nodes(cql, hosts, ks: str, expected: dict[int, int], rf: int, timeout: float = 60):
+    """Verify that each row of the views keyed by c is eventually stored on
+    exactly `rf` nodes.
+
+    Reads the local data of each node with SELECT FROM MUTATION_FRAGMENTS():
+    QUORUM reads would merge the replicas and repair a row missing on one of
+    them, and a CL=ONE read may still be served by another replica. If two
+    base replicas paired with the same view replica, a view row would be
+    stored on fewer than `rf` nodes.
+    """
+    want = {(c, pk) for pk, c in expected.items()}
+    deadline = time.time() + timeout
+    for view in NON_COLOCATED_VIEWS:
+        while True:
+            per_node = await asyncio.gather(*(cql.run_async(
+                    f"SELECT c, pk, mutation_fragment_kind FROM MUTATION_FRAGMENTS({ks}.{view})", host=h) for h in hosts))
+            counts = Counter(row for rows in per_node
+                             for row in {(r.c, r.pk) for r in rows if r.mutation_fragment_kind == 'clustering row'})
+            wrong = sorted(row for row in want if counts[row] != rf)
+            if not wrong:
+                break
+            assert time.time() < deadline, \
+                f"{view}: {len(wrong)} rows not stored on {rf} nodes, e.g. {[(row, counts[row]) for row in wrong[:5]]}"
+            await asyncio.sleep(1)
+
+
+async def test_migration_with_views_under_writes(manager: ScyllaClusterManager):
+    """Verify base-view pairing while a keyspace with views migrates from
+    vnodes to tablets, i.e. while some nodes use tablets and others vnodes.
+
+    There are two pairing schemes: vnode-based pairing, which pairs base and
+    view replicas by their position in the replica lists, and tablet-based
+    pairing, which pairs them by rack. All nodes are expected to stick with
+    vnode-based pairing until finalization, including the nodes whose tables
+    already use tablets. Otherwise, a node pairing by rack and a node pairing
+    by position could pick the same view replica, which would get the update
+    twice while the other view replica never gets it.
+
+    The test has been designed so that the two schemes pick different view
+    replicas for some rows, and so that it can tell when that happens:
+    - The views mv_by_c and idx_c are partitioned by c, so the replicas of a
+      view row are determined by the token of c, while the replicas of its
+      base row are determined by the token of pk. The test writes rows with
+      c = pk + 1000000, so that the two tokens differ, and so may their
+      replicas. With c = pk, every view row would live on the same nodes as
+      its base row.
+    - RF must be greater than 1, so that a row has several base and view
+      replicas to pair, and lower than the number of nodes, so that the
+      base and view replicas of a row can be disjoint: a base
+      replica that is also a view replica pairs with itself (self-pairing) in
+      both schemes. The test uses RF=2 on 4 nodes, in 2 racks so that each rack
+      holds one replica of every row, as tablet keyspaces require. It
+      checks that some base rows and their view rows indeed have disjoint
+      replicas.
+    - A wrong pairing causes a view row to appear on fewer than RF nodes.
+      To detect that, the test reads the local mutation fragments of each node
+      and counts on how many nodes each view row is stored.
+    Co-located views always use self-pairing but they are included in this test
+    for completeness.
+
+    The test stops writing before finalizing the migration: nodes switch
+    from vnode-based to tablet-based pairing one by one but not atomically, so
+    any view may miss view replicas while the nodes disagree. The user is
+    expected to reconcile those inconsistencies with a post-migration repair.
+
+    Steps:
+    1. Create a vnode keyspace (RF=2, 2 nodes in each of 2 racks) with a
+       table and views of both kinds; insert data at CL=ALL.
+    2. Start the migration.
+       - Precondition: Verify that some base rows and their view rows have
+         disjoint replicas.
+    3. Upgrade and restart each node in turn, and write new rows at
+       CL=QUORUM after each restart.
+       - Verify that each row of the views keyed by c is stored on RF
+         nodes, and that the views match the base table.
+    4. Finalize the migration.
+       - Verify the views match the base table.
+    """
+    num_racks = 2
+    nodes_per_rack = 2
+    rf = num_racks
+    num_keys = 500
+    # Gives each row a view key c that differs from its base key pk.
+    c_offset = 1_000_000
+
+    cfg = {'num_tokens': 16}
+    racks = [{'dc': 'dc1', 'rack': f'rack{i % num_racks}'} for i in range(num_racks * nodes_per_rack)]
+    servers = await manager.servers_add(len(racks), cmdline=['--smp', '2'], config=cfg, property_file=racks)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'enabled': false}}") as ks:
+        await create_table_with_views(cql, ks)
+
+        logger.info("Populating the base table")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k + c_offset]) for k in range(num_keys)))
+        expected = {k: k + c_offset for k in range(num_keys)}
+
+        for view_name in ALL_VIEWS:
+            await wait_for_view(cql, view_name, len(servers))
+        await verify_views_match_base(cql, ks, expected)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+        # Look up the replicas in the tablet maps.
+        # The migration copies the tablet maps from vnodes, so the tablet
+        # replicas are also the replicas the vnodes use.
+        logger.info("Checking the test's precondition: some base rows and their view rows have disjoint replicas")
+        disjoint = 0
+        for k in range(0, num_keys, 10):
+            base_token = (await cql.run_async(f"SELECT token(pk) FROM {ks}.test WHERE pk = {k}"))[0][0]
+            view_token = (await cql.run_async(f"SELECT token(c) FROM {ks}.mv_by_c WHERE c = {expected[k]}"))[0][0]
+            base_hosts = {h for h, _ in await get_tablet_replicas(manager, servers[0], ks, 'test', base_token)}
+            view_hosts = {h for h, _ in await get_tablet_replicas(manager, servers[0], ks, 'mv_by_c', view_token)}
+            disjoint += base_hosts.isdisjoint(view_hosts)
+        assert disjoint > 0, \
+            "Test setup error: every sampled view row shares a replica with its base row, " \
+            "so the pairing schemes can't disagree; fix the test"
+
+        for s in servers:
+            logger.info(f"Upgrading node {s.server_id} to tablets and restarting it")
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            cql = await reconnect_driver(manager)
+            cql, hosts = await manager.get_ready_cql(servers)
+
+            # Write while some nodes use tablets and others still use vnodes.
+            logger.info(f"Writing {num_keys} new rows after restarting node {s.server_id}")
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.QUORUM
+            new_keys = range(len(expected), len(expected) + num_keys)
+            await asyncio.gather(*(cql.run_async(insert_stmt, [k, k + c_offset]) for k in new_keys))
+            expected.update({k: k + c_offset for k in new_keys})
+
+            logger.info(f"Verifying that the views match the base table after restarting node {s.server_id}")
+            # Check the replicas first: the QUORUM reads of
+            # verify_views_match_base() may repair them.
+            await verify_view_rows_on_rf_nodes(cql, hosts, ks, expected, rf)
+            await verify_views_match_base(cql, ks, expected)
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        # Any node may coordinate the queries below, so wait for all of them
+        # to apply the finalization.
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+        await verify_views_match_base(cql, ks, expected)
