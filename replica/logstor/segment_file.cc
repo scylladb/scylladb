@@ -72,19 +72,9 @@ std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& f
     return std::nullopt;
 }
 
-void file_manager::set_actual_max_files(uint64_t actual_max_files) {
-    if (actual_max_files < _max_files.configured) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to set actual max files {} below configured max files {}", actual_max_files, _max_files.configured));
-    }
-    if (actual_max_files < _max_files.actual) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to reduce actual max files from {} to {}", _max_files.actual, actual_max_files));
-    }
-    _max_files.actual = actual_max_files;
-    _open_files.resize(static_cast<size_t>(_max_files.actual));
-}
-
-future<> file_manager::recover_files(file_id_t file_count) {
-    _next_file_id = file_count;
+future<> file_manager::open_recovered_files(file_id_t found_file_count) {
+    _open_files.resize(static_cast<size_t>(std::max(_configured_file_count, found_file_count)));
+    _next_file_id = found_file_count;
     co_await open_allocated_files();
 }
 
@@ -98,28 +88,19 @@ future<> file_manager::open_allocated_files() {
 }
 
 future<> file_manager::remove_file(file_id_t file_id) {
-    if (file_id != _max_files.actual - 1) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last file on disk, actual max files {}", file_id, _max_files.actual));
+    // The file is the last allocated one, at or above the configured count, thus the
+    // last entry of _open_files.
+    if (file_id + 1 != _next_file_id || _next_file_id <= _configured_file_count) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {}: {} files allocated, {} configured",
+                file_id, _next_file_id, _configured_file_count));
     }
-    if (file_id + 1 != _next_file_id) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last allocated file {}", file_id, _next_file_id));
-    }
-    if (_max_files.actual <= _max_files.configured) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while actual max files {} is not above configured max files {}", file_id, _max_files.actual, _max_files.configured));
-    }
-    if (file_id < _open_files.size()) {
-        if (file_id + 1 != _open_files.size()) {
-            on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while higher file {} is still allocated", file_id, file_id + 1));
-        }
-        if (_open_files[file_id]) {
-            co_await _open_files[file_id].close();
-        }
-        _open_files.pop_back();
-    }
+    // The file is open. The handle leaves _open_files before the close, so that stop() does
+    // not close it again when the close or the removal fails.
+    co_await std::exchange(_open_files[file_id], seastar::file()).close();
     co_await do_io_check(logstor_error_handler, [this, file_id] {
         return seastar::remove_file(get_file_path(file_id).string());
     });
-    _max_files.actual--;
+    _open_files.pop_back();
     _next_file_id--;
 }
 
@@ -128,8 +109,8 @@ future<> file_manager::recover_next_file() {
         auto holder = _async_gate.hold();
         file_id_t next_file_id = _next_file_id;
         co_await with_scheduling_group(_sched_group, [this, next_file_id] -> future<> {
-            logstor_logger.info("Formatting {} logstor files", _max_files.configured);
-            for (file_id_t file_id = next_file_id; file_id < _max_files.configured; ++file_id) {
+            logstor_logger.info("Formatting {} logstor files", _configured_file_count);
+            for (file_id_t file_id = next_file_id; file_id < _configured_file_count; ++file_id) {
                 co_await format_file(file_id);
                 // Open the file before it counts as allocated.
                 co_await do_open_file(file_id);
@@ -139,7 +120,7 @@ future<> file_manager::recover_next_file() {
         co_return;
     }
 
-    if (_next_file_id < _max_files.configured) {
+    if (_next_file_id < _configured_file_count) {
         _next_file_formatter = with_gate(_async_gate, [this] {
             return with_scheduling_group(_sched_group, [this] {
                 return format_file(_next_file_id);
@@ -234,7 +215,7 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
 future<> file_manager::allocate_file(file_id_t file_id) {
     check_file_id(file_id);
 
-    if (file_id == _next_file_id && file_id < _max_files.configured) {
+    if (file_id == _next_file_id && file_id < _configured_file_count) {
         // allocate file_id and wait for it to be formatted, and start formatting
         // the next file in background
         co_await _next_file_formatter.get_future();
@@ -245,7 +226,7 @@ future<> file_manager::allocate_file(file_id_t file_id) {
             co_await do_open_file(file_id);
             _next_file_id++;
 
-            if (_next_file_id < _max_files.configured) {
+            if (_next_file_id < _configured_file_count) {
                 _next_file_formatter = with_gate(_async_gate, [this] {
                     return with_scheduling_group(_sched_group, [this] {
                         return format_file(_next_file_id);
@@ -253,7 +234,7 @@ future<> file_manager::allocate_file(file_id_t file_id) {
                 });
             }
         }
-    } else if (file_id >= _max_files.configured && file_id >= _next_file_id) {
+    } else if (file_id >= _configured_file_count && file_id >= _next_file_id) {
         on_internal_error(logstor_logger, "Disk size limit reached, cannot allocate more files");
     } else if (file_id > _next_file_id) {
         on_internal_error(logstor_logger, "files must be allocated in sequential order");
