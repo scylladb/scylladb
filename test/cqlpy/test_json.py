@@ -793,7 +793,6 @@ def test_json_udt_duplicate_field(cql, test_keyspace, scylla_only):
 # column name with a double quote in it (e.g., the quoted identifier
 # "a""b" is the name a"b), and SELECT JSON must still return valid JSON.
 # Reproduces SCYLLADB-5263.
-@pytest.mark.xfail(reason="SCYLLADB-5263")
 def test_select_json_column_name_with_quote(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int primary key, "a""b" int') as table:
         p = unique_key_int()
@@ -809,7 +808,6 @@ def test_select_json_column_name_with_quote(cql, test_keyspace):
 # as test_json_udt_quoted_field_name, but for column names. Cassandra has
 # this bug (CASSANDRA-21746), so this test is marked cassandra_bug.
 # Reproduces SCYLLADB-5263.
-@pytest.mark.xfail(reason="SCYLLADB-5263")
 def test_select_json_quoted_column_name(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, """foo""" int, foo int') as table:
         p = unique_key_int()
