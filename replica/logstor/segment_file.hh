@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include <seastar/core/aligned_buffer.hh>
@@ -102,7 +103,7 @@ public:
     }
 
     // The file id in a file name of this shard, or none if the name is not one.
-    std::optional<file_id_t> file_id_of(const std::string& fname) const;
+    static std::optional<file_id_t> file_id_of(std::string_view file_name);
 
     // Recovery calls this with the count of the files it found on disk, before it reads them. The
     // count can be above the configured count (I4). The files are allocated, and this opens them

@@ -8,10 +8,12 @@
 #include "replica/logstor/segment_file.hh"
 
 #include <algorithm>
+#include <charconv>
 #include <cstring>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -60,21 +62,19 @@ future<> file_manager::stop() {
     });
 }
 
-std::optional<file_id_t> file_manager::file_id_of(const std::string& fname) const {
-    std::string prefix = file_name_prefix();
-    std::string suffix = "-Data.db";
-    if (fname.starts_with(prefix) && fname.ends_with(suffix)) {
-        // Extract file_id between prefix and suffix
-        size_t start = prefix.size();
-        size_t end = fname.size() - suffix.size();
-        std::string file_id_str = fname.substr(start, end - start);
-        try {
-            return static_cast<file_id_t>(std::stoull(file_id_str));
-        } catch (...) {
-            return std::nullopt;
-        }
+std::optional<file_id_t> file_manager::file_id_of(std::string_view file_name) {
+    const std::string prefix = file_name_prefix();
+    const std::string_view suffix = "-Data.db";
+    if (!file_name.starts_with(prefix) || !file_name.ends_with(suffix) || file_name.size() <= prefix.size() + suffix.size()) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    const auto digits = file_name.substr(prefix.size(), file_name.size() - prefix.size() - suffix.size());
+    file_id_t file_id;
+    const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), file_id);
+    if (ec != std::errc() || end != digits.data() + digits.size()) {
+        return std::nullopt;
+    }
+    return file_id;
 }
 
 future<> file_manager::open_recovered_files(file_id_t found_file_count) {
