@@ -41,6 +41,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "cql3/query_options.hh"
+#include "transport/messages/result_message.hh"
 #include "service/tablet_allocator.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablet_sharder.hh"
@@ -964,6 +965,34 @@ SEASTAR_TEST_CASE(test_tablet_metadata_truncated_at) {
     }, tablet_cql_test_config());
 }
 
+// Sets the table's truncation tombstone in system.tablets, as the eventually-consistent
+// TRUNCATE does, and installs it on all shards. An empty tombstone clears it.
+static void set_truncation_tombstone(cql_test_env& e, table_id id, tombstone t, api::timestamp_type& ts) {
+    replica::tablet_mutation_builder builder(ts++, id);
+    if (t) {
+        builder.set_truncated_at(t);
+    } else {
+        builder.del_truncated_at();
+    }
+    utils::chunked_vector<mutation> muts;
+    muts.push_back(builder.build());
+    e.local_db().apply(freeze(muts), db::no_timeout).get();
+    e.get_storage_service().local().update_tablet_metadata({}).get();
+}
+
+static std::vector<std::vector<bytes_opt>> get_rows(::shared_ptr<cql_transport::messages::result_message> msg) {
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+    std::vector<std::vector<bytes_opt>> ret;
+    for (const auto& row : rows->rs().result_set().rows()) {
+        auto& r = ret.emplace_back();
+        for (const auto& cell : row) {
+            r.push_back(to_bytes_opt(cell));
+        }
+    }
+    return ret;
+}
+
 // Installing a newer truncation tombstone switches out the table's non-empty
 // memtables, so that no write is merged in memory with data covered by it,
 // stamps the new ones with it, and, in the background, invalidates the cache
@@ -1010,21 +1039,8 @@ SEASTAR_TEST_CASE(test_table_installs_truncation_tombstone) {
         }).get();
 
         auto ts = current_timestamp(e);
-        auto set_truncation_tombstone = [&] (tombstone t) {
-            replica::tablet_mutation_builder builder(ts++, id);
-            if (t) {
-                builder.set_truncated_at(t);
-            } else {
-                builder.del_truncated_at();
-            }
-            utils::chunked_vector<mutation> muts;
-            muts.push_back(builder.build());
-            e.local_db().apply(freeze(muts), db::no_timeout).get();
-            e.get_storage_service().local().update_tablet_metadata({}).get();
-        };
-
         const auto t = tombstone(api::new_timestamp(), gc_clock::now());
-        set_truncation_tombstone(t);
+        set_truncation_tombstone(e, id, t, ts);
         BOOST_REQUIRE_GT(count_memtable_switches(), switches_before);
 
         e.db().invoke_on_all([id, t] (replica::database& db) {
@@ -1062,12 +1078,130 @@ SEASTAR_TEST_CASE(test_table_installs_truncation_tombstone) {
         });
 
         // Clearing the truncation tombstone, as its garbage collection does.
-        set_truncation_tombstone(tombstone());
+        set_truncation_tombstone(e, id, tombstone(), ts);
         e.db().invoke_on_all([id] (replica::database& db) {
             auto& table = db.find_column_family(id);
             THREADSAFE_BOOST_REQUIRE(!table.get_truncation_tombstone());
             THREADSAFE_BOOST_REQUIRE(!table.cache_may_hold_truncated_data());
         }).get();
+    }, tablet_cql_test_config());
+}
+
+// Reads strip the data covered by the truncation tombstone, whether it is in sstables,
+// in the cache, or in memtables, and whether it was written before or after the
+// truncation tombstone was installed. See docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_reads_strip_truncated_data) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+
+        auto insert = [&] (int pk, api::timestamp_type ts) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0) USING TIMESTAMP {}", pk, ts)).get();
+        };
+        auto select_pks = [&] {
+            std::set<int32_t> pks;
+            for (const auto& row : get_rows(e.execute_cql("SELECT pk FROM cf").get())) {
+                pks.insert(value_cast<int32_t>(int32_type->deserialize(*row[0])));
+            }
+            return pks;
+        };
+        auto flush = [&] {
+            e.db().invoke_on_all([id] (replica::database& db) {
+                return db.find_column_family(id).flush();
+            }).get();
+        };
+
+        constexpr api::timestamp_type truncated_at = 1000;
+
+        // Covered data in sstables and in the cache.
+        for (int pk = 0; pk < 10; pk++) {
+            insert(pk, truncated_at - 1);
+        }
+        flush();
+        BOOST_REQUIRE_EQUAL(select_pks().size(), 10);
+        // Covered data in memtables.
+        for (int pk = 10; pk < 20; pk++) {
+            insert(pk, truncated_at);
+        }
+        // Data written before the truncate, above the truncation timestamp.
+        insert(100, truncated_at + 1);
+        // A row whose marker is covered but one of its cells is not.
+        insert(200, truncated_at - 1);
+        e.execute_cql(format("UPDATE cf USING TIMESTAMP {} SET v = 1 WHERE pk = 200 AND ck = 0", truncated_at + 1)).get();
+
+        auto ts = current_timestamp(e);
+        set_truncation_tombstone(e, id, tombstone(truncated_at, gc_clock::now()), ts);
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({100, 200}));
+        auto rows = get_rows(e.execute_cql("SELECT v FROM cf WHERE pk = 200").get());
+        BOOST_REQUIRE_EQUAL(rows.size(), 1);
+        BOOST_REQUIRE_EQUAL(value_cast<int32_t>(int32_type->deserialize(*rows[0][0])), 1);
+
+        // Data written after the truncate is visible only if it is above the truncation timestamp.
+        insert(101, truncated_at + 1);
+        insert(102, truncated_at);
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({100, 101, 200}));
+
+        flush();
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({100, 101, 200}));
+
+        // Compaction drops the covered data: no sstable is left with data at or below
+        // the truncation timestamp, which is what makes a tablet clean for the GC of T.
+        e.db().invoke_on_all([id] (replica::database& db) {
+            return db.find_column_family(id).compact_all_sstables(tasks::make_empty_task_info());
+        }).get();
+        BOOST_REQUIRE(select_pks() == std::set<int32_t>({100, 101, 200}));
+        e.db().invoke_on_all([id] (replica::database& db) {
+            for (const auto& sst : *db.find_column_family(id).get_sstables()) {
+                THREADSAFE_BOOST_REQUIRE(sst->get_stats_metadata().min_timestamp > truncated_at);
+            }
+        }).get();
+    }, tablet_cql_test_config());
+}
+
+// Counter cells merge shard by shard, keeping the shard with the higher logical clock,
+// so covered data must be stripped from each source before merging sources: an
+// increment after the truncate writes a fresh shard, with a low clock, which must
+// not be merged with the covered shard. See Counters in docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_reads_strip_truncated_counters) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cnt (pk int PRIMARY KEY, c counter)").get();
+        const auto id = e.local_db().find_schema("ks", "cnt")->id();
+        auto read_counter = [&] {
+            auto rows = get_rows(e.execute_cql("SELECT c FROM cnt WHERE pk = 0").get());
+            return rows.empty() ? int64_t(0) : value_cast<int64_t>(long_type->deserialize(*rows[0][0]));
+        };
+        auto flush = [&] {
+            e.db().invoke_on_all([id] (replica::database& db) {
+                return db.find_column_family(id).flush();
+            }).get();
+        };
+
+        for (int i = 0; i < 5; i++) {
+            e.execute_cql("UPDATE cnt SET c = c + 1 WHERE pk = 0").get();
+        }
+        flush();
+        BOOST_REQUIRE_EQUAL(read_counter(), 5);
+
+        auto ts = current_timestamp(e);
+        set_truncation_tombstone(e, id, tombstone(api::new_timestamp(), gc_clock::now()), ts);
+        BOOST_REQUIRE_EQUAL(read_counter(), 0);
+
+        e.execute_cql("UPDATE cnt SET c = c + 1 WHERE pk = 0").get();
+        BOOST_REQUIRE_EQUAL(read_counter(), 1);
+        flush();
+        BOOST_REQUIRE_EQUAL(read_counter(), 1);
+        // Reading the counter from sstables, not from the cache, and after compacting
+        // the covered and the uncovered shards together.
+        auto read_counter_bypass_cache = [&] {
+            auto rows = get_rows(e.execute_cql("SELECT c FROM cnt WHERE pk = 0 BYPASS CACHE").get());
+            return rows.empty() ? int64_t(0) : value_cast<int64_t>(long_type->deserialize(*rows[0][0]));
+        };
+        BOOST_REQUIRE_EQUAL(read_counter_bypass_cache(), 1);
+        e.db().invoke_on_all([id] (replica::database& db) {
+            return db.find_column_family(id).compact_all_sstables(tasks::make_empty_task_info());
+        }).get();
+        BOOST_REQUIRE_EQUAL(read_counter_bypass_cache(), 1);
+        BOOST_REQUIRE_EQUAL(read_counter(), 1);
     }, tablet_cql_test_config());
 }
 
