@@ -11,6 +11,7 @@ from .util import unique_name, unique_key_int
 import pytest
 
 from cassandra.util import Time
+from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -49,3 +50,16 @@ def test_type_time_from_string_prepared(cql, table1):
     for t in ["08:12:54", "08:12:54.123", "08:12:54.123456", "08:12:54.123456789"]:
         cql.execute(stmt, [p, t])
         assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(t),)]
+
+# A malformed time string, e.g., one with a non-numeric or out-of-range
+# component, should be rejected with an InvalidRequest error - both as a CQL
+# string literal and as a JSON value in INSERT JSON - not cause some
+# internal server error.
+def test_type_time_from_bad_string(cql, table1):
+    p = unique_key_int()
+    for bad in ['x:00:00', '01:x:00', '01:00:x', '01:00:00.x', ':00:00',
+                '99999999999999999999:00:00', '01:00:00.99999999999999999999']:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '{bad}')")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "t": "{bad}"}}'""")
