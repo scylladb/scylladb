@@ -636,8 +636,12 @@ def testFunctionExecutionExceptionNet(cql, test_keyspace):
             execute(cql, table, "SELECT " + fName + "(dval) FROM %s WHERE key = 1")
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions) and
-# SCYLLADB-5183 (an empty int value passed to a function causes a server error)
-@pytest.mark.xfail(reason="SCYLLADB-5141, SCYLLADB-5183")
+# SCYLLADB-5183 (an empty int value passed to a function caused a server error)
+# Note that the Python driver returns None for an empty int value, just like
+# for a null, so unlike the Java test, the checks of the int results below
+# can't tell an empty result from a null one. test_udf.py's
+# test_udf_empty_argument checks this more carefully.
+@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testEmptyString(cql, test_keyspace):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, sval text, aval ascii, bval blob, empty_int int)") as table:
         execute(cql, table, "INSERT INTO %s (key, sval, aval, bval, empty_int) VALUES (?, ?, ?, ?, blob_as_int(0x))", 1, "", "", b"")
