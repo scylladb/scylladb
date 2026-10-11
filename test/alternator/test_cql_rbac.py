@@ -976,8 +976,9 @@ def test_rbac_streams(dynamodb, cql):
 # We have two tests for the two ways to create a CDC log: creating a table
 # with streams enabled up-front during creation - and enabling the stream
 # later in an already existing table.
-# Reproduces issue #19798
-@pytest.mark.xfail(reason="#19798")
+# Reproduces issue #19798 - which was fixed only for CQL - and SCYLLADB-5248
+# (the same missing auto-grant in Alternator).
+@pytest.mark.xfail(reason="SCYLLADB-5248")
 @pytest.mark.parametrize("during_creation", [True, False])
 def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
     schema = {

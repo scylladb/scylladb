@@ -137,7 +137,7 @@ def testSelectJsonWithPagingWithFrozenUDT(cql, test_keyspace):
                           ["{\"a\": 1, \"b\": 2, \"c\": [\"1\", \"2\"]}", "[\"" + str(uuid) + "\", 4]", "4"])
 
 # Reproduces issue #7911, #7912, #7914, #7915, #7944, #7954
-@pytest.mark.xfail(reason="issues #7914, #7915, #7944, #7954")
+@pytest.mark.xfail(reason="issues #7944, #7954")
 def testFromJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -278,7 +278,9 @@ def testFromJsonFct(cql, test_keyspace):
             # Reproduces #7911
             assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, dateval) VALUES (?, fromJson(?))", 0, "123")
-            assert_invalid_throw_message(cql, table, "Unable to coerce 'xyz' to a formatted date", FunctionFailure,
+            # Scylla's error message is different: "Unable to make unsigned
+            # int (for date) from xyz".
+            assert_invalid_throw_message_re(cql, table, "Unable to coerce 'xyz' to a formatted date|for date.* from xyz", FunctionFailure,
                 "INSERT INTO %s (k, dateval) VALUES (?, fromJson(?))", 0, "\"xyz\"")
 
             # ================ decimal ================
@@ -683,7 +685,7 @@ class EquivalentIp:
         return f'EquivalentIp("{self.obj}")'
 
 # Reproduces issue #7972, #7988, #7997, #8001
-@pytest.mark.xfail(reason="issues #7997, #8001")
+@pytest.mark.xfail(reason="issue #8001")
 def testToJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -780,7 +782,11 @@ def testToJsonFct(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s (k, doubleval) VALUES (?, ?)", 0, 123123.123123)
             assert_rows(execute(cql, table, "SELECT k, toJson(doubleval) FROM %s WHERE k = ?", 0), [0, "123123.123123"])
             execute(cql, table, "INSERT INTO %s (k, doubleval) VALUES (?, ?)", 0, 123123)
-            assert_rows(execute(cql, table, "SELECT k, toJson(doubleval) FROM %s WHERE k = ?", 0), [0, "123123.0"])
+            # Cassandra prints this double like Java's Double.toString(), as
+            # "123123.0", while Scylla prints "123123". Both are valid JSON
+            # for the same number, so we accept either.
+            [row] = execute(cql, table, "SELECT k, toJson(doubleval) FROM %s WHERE k = ?", 0)
+            assert row[0] == 0 and json.loads(row[1]) == 123123.0
 
             # ================ float ================
             execute(cql, table, "INSERT INTO %s (k, floatval) VALUES (?, ?)", 0, 123.123)

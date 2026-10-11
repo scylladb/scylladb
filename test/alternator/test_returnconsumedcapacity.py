@@ -552,7 +552,7 @@ def test_scan_consumed_capacity(dynamodb):
 # This test doesn't check again what the ConsumedCapacity value is, just that
 # the request succeeds and sets ConsumedCapacity for the total and the table
 # and doesn't set it for any index.
-@pytest.mark.xfail(reason="issue #29138 - ReturnConsumedCapacity=INDEXES not supported")
+@pytest.mark.xfail(reason="issue #5027 - ReturnConsumedCapacity=INDEXES not supported")
 def test_return_consumed_capacity_indexes_no_indexes(test_table_s):
     p = random_string()
     def check_consumed_capacity(consumed_capacity):
@@ -612,7 +612,7 @@ def test_return_consumed_capacity_indexes_no_indexes(test_table_s):
 # sure that each operation sets the right ones. In this test we just check
 # that the right fields are set in the response, and that the total capacity is
 # the sum of the table and index capacities, without checking the actual values
-@pytest.mark.xfail(reason="issue #29138 - ReturnConsumedCapacity=INDEXES not supported")
+@pytest.mark.xfail(reason="issue #5027 - ReturnConsumedCapacity=INDEXES not supported")
 def test_return_consumed_capacity_indexes_with_indexes(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[

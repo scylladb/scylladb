@@ -591,7 +591,7 @@ def testIndexOnFullCollectionEntryInsertCollectionValueOver64k(cql, test_keyspac
                    "INSERT INTO %s (a, b) VALUES (0, ?) IF NOT EXISTS;\n" +
                    "APPLY BATCH", map)
 
-@pytest.mark.xfail(reason="issue #2203")
+@pytest.mark.xfail(reason="SASI is not supported, issue #2203 was closed as not planned")
 def testPrepareStatementsWithLIKEClauses(cql, test_keyspace):
     SASI = 'org.apache.cassandra.index.sasi.SASIIndex'
     with create_table(cql, test_keyspace, "(a int, c1 text, c2 text, v1 text, v2 text, v3 int, PRIMARY KEY (a, c1, c2))") as table:
@@ -700,7 +700,7 @@ def testIndexesOnNonStaticColumnsWhereSchemaIncludesStaticColumns(cql, test_keys
 # Reproduces Scylla issues #4244 (mixing single-column and multi-columns
 # restriction) and #8711 (Finding or filtering with an empty string with
 # a secondary index seems to be broken).
-@pytest.mark.xfail(reason="issues #4244, #8711")
+@pytest.mark.xfail(reason="issue #4244")
 def testWithEmptyRestrictionValueAndSecondaryIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, PRIMARY KEY ((pk), c))") as table:
         execute(cql, table, "CREATE INDEX ON %s(c)")
@@ -1030,11 +1030,12 @@ def testIndexOnNonFrozenCollectionOfFrozenUDT(cql, test_keyspace):
             assert_invalid_message(cql, table, "ALLOW FILTERING",
                              "SELECT * FROM %s WHERE v CONTAINS ?", udt1)
 
-@pytest.mark.xfail(reason="#8745")
 def testIndexOnNonFrozenUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as t:
         with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, v {t})") as table:
-            assert_invalid_message(cql, table, "index on non-frozen", "CREATE INDEX ON %s (v)")
+            # Scylla's error message is different: "Cannot create secondary
+            # index on UDT column v".
+            assert_invalid_message_re(cql, table, "index on non-frozen|secondary index on UDT column", "CREATE INDEX ON %s (v)")
             # Cassandra and Scylla focus on different parts of the error
             # below - Cassandra complains that a because this is not a
             # collection keys()/values() cannot be supported, while Scylla

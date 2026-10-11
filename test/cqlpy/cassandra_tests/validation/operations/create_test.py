@@ -335,8 +335,10 @@ def testCreateKeyspaceWithNetworkTopologyStrategyNoOptions(cql):
 
 # Test {@link ConfigurationException} is not thrown on create SimpleStrategy keyspace without any options.
 # Reproduces one aspect of #8892 (a default_keyspace_rf allows creating
-# a keyspace without specifying a replication factor).
-@pytest.mark.xfail(reason="Issue #8892")
+# a keyspace without specifying a replication factor). #8892 was closed after
+# a default replication factor was added for NetworkTopologyStrategy, but not
+# for SimpleStrategy - which is SCYLLADB-5250.
+@pytest.mark.xfail(reason="SCYLLADB-5250")
 def testCreateKeyspaceWithSimpleStrategyNoOptions(cql):
     n = unique_name()
     execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'SimpleStrategy' }")

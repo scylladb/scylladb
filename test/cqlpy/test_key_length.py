@@ -166,7 +166,7 @@ def table2(cql, test_keyspace):
 # therefore cannot make this test pass; it stays xfail until the driver
 # either lifts the limit or surfaces the error as InvalidRequest. The
 # matching upstream issue is CASSANDRA-19270.
-@pytest.mark.xfail(reason="Driver rejects oversized compound-pk component (struct.pack '>H'); see CASSANDRA-19270, #12247")
+@pytest.mark.xfail(reason="Driver rejects oversized compound-pk component (struct.pack '>H'); see CASSANDRA-19270")
 def test_insert_65k_pk_compound(cql, table2, cassandra_bug):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     big = 'x'*(65*1024)
