@@ -79,18 +79,16 @@ def testInsertZeroDurationWithoutDesignator(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a INT PRIMARY KEY, b DURATION);") as table:
         assertInvalidThrow(cql, table, SyntaxException, "INSERT INTO %s (a, b) VALUES (15, P)")
 
-# Reproduces #12243 (Scylla rejects a null TTL) and SCYLLADB-5208 (an empty
-# TTL causes a server error).
-@pytest.mark.xfail(reason="#12243, SCYLLADB-5208")
+# Reproduces #12243 (Scylla rejects a null TTL).
+@pytest.mark.xfail(reason="#12243")
 def testEmptyTTL(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
         execute(cql, table, "INSERT INTO %s (k, v) VALUES (0, 0) USING TTL ?", None)
-        # The Python driver can't send an empty value for an int bind
-        # variable, so we send the raw serialized values ourselves.
-        bound = BoundStatement(cql.prepare(f"INSERT INTO {table} (k, v) VALUES (1, 1) USING TTL ?"))
-        bound.values = [b'']
-        cql.execute(bound)
-        assertRowsIgnoringOrder(execute(cql, table, "SELECT k, v, ttl(v) FROM %s"), row(1, 1, None), row(0, 0, None))
+        # Cassandra treats an empty TTL like a null one, but Scylla
+        # deliberately rejects it (see test_ttl.py::test_empty_ttl), so we
+        # don't check it here (nor the row(1, 1, None) it adds below):
+        #execute("INSERT INTO %s (k, v) VALUES (1, 1) USING TTL ?", ByteBuffer.wrap(new byte[0]));
+        assertRowsIgnoringOrder(execute(cql, table, "SELECT k, v, ttl(v) FROM %s"), row(0, 0, None))
 
 def testInsertWithUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s text, i int)") as table:
