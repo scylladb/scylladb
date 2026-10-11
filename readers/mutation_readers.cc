@@ -28,6 +28,7 @@
 #include "readers/nonforwardable.hh"
 #include "readers/queue.hh"
 #include "readers/reversing.hh"
+#include "readers/truncation_stripping.hh"
 #include "readers/upgrading_consumer.hh"
 #include "tombstone_gc.hh"
 #include <seastar/core/coroutine.hh>
@@ -1560,4 +1561,136 @@ mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_po
         max_purgeable_fn get_max_purgeable,
         const tombstone_gc_state& gc_state, streamed_mutation::forwarding fwd, tombstone_purge_stats* tombstone_stats) {
     return make_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, gc_state, fwd, tombstone_stats);
+}
+
+class truncation_stripping_reader : public mutation_reader::impl {
+    mutation_reader _rd;
+    // Covers every atom written at or before the truncation tombstone's timestamp,
+    // regardless of the deletion time of row and range tombstones.
+    tombstone _covering;
+    // The current range tombstone in the output, used to drop redundant changes.
+    tombstone _current_rt;
+
+    bool covered(tombstone t) const noexcept {
+        return t && t.timestamp <= _covering.timestamp;
+    }
+
+    void strip_cells(row& cells, column_kind kind) {
+        if (_schema->is_counter()) {
+            // A counter cell is covered by any tombstone, regardless of its timestamp,
+            // since a counter cannot be updated after it is deleted, so it is stripped
+            // by its timestamp here. Counter tables have no other kind of columns.
+            cells.remove_if([this, kind] (column_id id, atomic_cell_or_collection& c) {
+                return c.as_atomic_cell(_schema->column_at(kind, id)).timestamp() <= _covering.timestamp;
+            });
+            return;
+        }
+        cells.compact_and_expire(*_schema, kind, row_tombstone(_covering), gc_clock::time_point::min(), never_gc, gc_clock::time_point::min());
+    }
+
+    // Returns a disengaged optional if nothing is left of the fragment.
+    mutation_fragment_v2_opt strip(mutation_fragment_v2&& mf) {
+        switch (mf.mutation_fragment_kind()) {
+        case mutation_fragment_v2::kind::partition_start:
+            mf.mutate_as_partition_start(*_schema, [this] (partition_start& ps) {
+                if (covered(ps.partition_tombstone())) {
+                    ps.partition_tombstone() = tombstone();
+                }
+            });
+            _current_rt = tombstone();
+            return std::move(mf);
+        case mutation_fragment_v2::kind::static_row:
+            mf.mutate_as_static_row(*_schema, [this] (static_row& sr) {
+                strip_cells(sr.cells(), column_kind::static_column);
+            });
+            if (mf.as_static_row().empty()) {
+                return {};
+            }
+            return std::move(mf);
+        case mutation_fragment_v2::kind::clustering_row:
+            mf.mutate_as_clustering_row(*_schema, [this] (clustering_row& cr) {
+                // Strip the regular and the shadowable row tombstones separately, so that
+                // the covering tombstone is not merged into what is left of them.
+                const auto rt = cr.tomb();
+                const auto regular = covered(rt.regular()) ? tombstone() : rt.regular();
+                const auto shadowable = covered(rt.tomb()) ? tombstone() : rt.tomb();
+                const bool strip_marker = !cr.marker().is_missing() && cr.marker().timestamp() <= _covering.timestamp;
+                strip_cells(cr.cells(), column_kind::regular_column);
+                if (regular != rt.regular() || shadowable != rt.tomb() || strip_marker) {
+                    auto marker = strip_marker ? row_marker() : cr.marker();
+                    cr = clustering_row(std::move(cr.key()), row_tombstone(regular, shadowable_tombstone(shadowable)), marker, std::move(cr.cells()));
+                }
+            });
+            if (mf.as_clustering_row().empty()) {
+                return {};
+            }
+            return std::move(mf);
+        case mutation_fragment_v2::kind::range_tombstone_change: {
+            auto t = covered(mf.as_range_tombstone_change().tombstone()) ? tombstone() : mf.as_range_tombstone_change().tombstone();
+            if (t == _current_rt) {
+                return {};
+            }
+            _current_rt = t;
+            mf.mutate_as_range_tombstone_change(*_schema, [t] (range_tombstone_change& rtc) {
+                rtc.set_tombstone(t);
+            });
+            return std::move(mf);
+        }
+        case mutation_fragment_v2::kind::partition_end:
+            return std::move(mf);
+        }
+        std::abort();
+    }
+
+    struct consumer {
+        truncation_stripping_reader* _owner;
+        stop_iteration operator()(mutation_fragment_v2&& mf) {
+            if (auto stripped = _owner->strip(std::move(mf))) {
+                _owner->push_mutation_fragment(std::move(*stripped));
+            }
+            return stop_iteration(_owner->is_buffer_full());
+        }
+    };
+public:
+    truncation_stripping_reader(mutation_reader rd, tombstone truncation_tombstone)
+        : impl(rd.schema(), rd.permit())
+        , _rd(std::move(rd))
+        , _covering(truncation_tombstone.timestamp, gc_clock::time_point::max())
+    { }
+    virtual future<> fill_buffer() override {
+        if (_end_of_stream) {
+            return make_ready_future<>();
+        }
+        return _rd.consume_pausable(consumer{this}).then([this] {
+            if (_rd.is_end_of_stream()) {
+                _end_of_stream = true;
+            }
+        });
+    }
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            return _rd.next_partition();
+        }
+        return make_ready_future<>();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return _rd.fast_forward_to(pr);
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        // Each forwarded range opens with the range tombstone active at its start.
+        _current_rt = tombstone();
+        return _rd.fast_forward_to(std::move(pr));
+    }
+    virtual future<> close() noexcept override {
+        return _rd.close();
+    }
+};
+
+mutation_reader make_truncation_stripping_reader(mutation_reader source, tombstone truncation_tombstone) {
+    return make_mutation_reader<truncation_stripping_reader>(std::move(source), truncation_tombstone);
 }
