@@ -239,7 +239,8 @@ async def get_topology_coordinator(manager: ScyllaClusterManager) -> HostID:
     host = await get_available_host(manager.cql, time.time() + 60)
     host_address = get_host_api_address(host)
     await read_barrier(manager.api, host_address)
-    return await manager.api.get_raft_leader(host_address)
+    # The leader can go away between the barrier and this query; wait for the next one.
+    return await wait_for(lambda: manager.api.get_raft_leader(host_address), time.time() + 60, label="group0 leader")
 
 
 async def get_topology_version(cql: Session, host: Host) -> int:
@@ -590,7 +591,7 @@ async def ensure_raft_group_leader_on(manager: ScyllaClusterManager, server: Ser
         if coord == desired_host_id:
             break
 
-        if not coord:
+        if coord is None:
             logger.info("no leader")
             continue
 
