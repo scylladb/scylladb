@@ -109,6 +109,18 @@ class FeatureConfig:
         return self._merge_with_clause(create_stmt, self.ks_opts)
 
 
+def with_physical_truncate(cfg: dict) -> dict:
+    """
+    Returns a copy of the given node config, which suppresses the EVENTUALLY_CONSISTENT_TRUNCATE
+    cluster feature, so that TRUNCATE of tablet tables removes their data physically, as it does
+    until the feature is enabled. For tests of that implementation.
+    """
+    cfg = dict(cfg)
+    cfg['error_injections_at_startup'] = list(cfg.get('error_injections_at_startup', [])) + \
+        [{'name': 'suppress_features', 'value': 'EVENTUALLY_CONSISTENT_TRUNCATE'}]
+    return cfg
+
+
 class FeatureConfigurations(Enum):
     EVENTUAL_CONSISTENCY = FeatureConfig()
     STRONG_CONSISTENCY = FeatureConfig(

@@ -170,8 +170,6 @@ def test_truncate_using_timeout(scylla_only, cql, table1):
     with pytest.raises(SyntaxException):
         cql.execute(f"TRUNCATE TABLE {table} USING TTL 1")
     with pytest.raises(SyntaxException):
-        cql.execute(f"TRUNCATE TABLE {table} USING TIMESTAMP 123456789")
-    with pytest.raises(SyntaxException):
         cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 1h AND TTL 42")
 
 # Regression test for SCYLLADB-3645: the timeout of a TRUNCATE can be a marker,

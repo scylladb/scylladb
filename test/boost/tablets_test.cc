@@ -1209,6 +1209,47 @@ SEASTAR_TEST_CASE(test_writes_strip_truncated_data) {
     }, tablet_cql_test_config());
 }
 
+// TRUNCATE of a tablet table deletes the data written at or before its timestamp, given by
+// USING TIMESTAMP, or else by the coordinator. Views are tested in test/cluster.
+// See docs/dev/eventually-consistent-truncate.md.
+SEASTAR_TEST_CASE(test_truncate_using_timestamp) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+
+        auto count_rows = [&] (sstring table) {
+            return get_rows(e.execute_cql(format("SELECT * FROM {}", table)).get()).size();
+        };
+        auto truncation_tombstone = [&] (table_id id) {
+            return e.local_db().find_column_family(id).get_truncation_tombstone();
+        };
+
+        constexpr api::timestamp_type truncated_at = 1000;
+        for (int pk = 0; pk < 10; pk++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, {}) USING TIMESTAMP {}", pk, pk, truncated_at - 1)).get();
+        }
+        e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES (100, 0, 100) USING TIMESTAMP {}", truncated_at + 1)).get();
+
+        e.execute_cql(format("TRUNCATE cf USING TIMESTAMP {}", truncated_at)).get();
+        BOOST_REQUIRE_EQUAL(truncation_tombstone(id).timestamp, truncated_at);
+        BOOST_REQUIRE_EQUAL(count_rows("cf"), 1);
+
+        // An older truncation does not undo a newer one.
+        e.execute_cql(format("TRUNCATE cf USING TIMESTAMP {}", truncated_at - 10)).get();
+        BOOST_REQUIRE_EQUAL(truncation_tombstone(id).timestamp, truncated_at);
+
+        // Without USING TIMESTAMP, the coordinator's clock is used.
+        e.execute_cql("TRUNCATE cf").get();
+        BOOST_REQUIRE_GT(truncation_tombstone(id).timestamp, truncated_at + 1);
+        BOOST_REQUIRE_EQUAL(count_rows("cf"), 0);
+
+        // USING TIMESTAMP is not supported for vnode tables.
+        e.execute_cql("CREATE KEYSPACE vnodes_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE vnodes_ks.cf (pk int PRIMARY KEY)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("TRUNCATE vnodes_ks.cf USING TIMESTAMP 1").get(), exceptions::invalid_request_exception);
+    }, tablet_cql_test_config());
+}
+
 // Counter cells merge shard by shard, keeping the shard with the higher logical clock,
 // so covered data must be stripped from each source before merging sources: an
 // increment after the truncate writes a fresh shard, with a low clock, which must
