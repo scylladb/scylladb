@@ -245,6 +245,11 @@ public:
         return _value_views;
     }
 
+    // Which of get_values() are unset.
+    const unset_bind_variable_vector& get_unset() const noexcept {
+        return _unset;
+    }
+
     const cql_config& get_cql_config() const {
         return _cql_config;
     }

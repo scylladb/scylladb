@@ -114,8 +114,7 @@ def testCqlStatementTracing(cql, test_keyspace):
 # The end of the Java test testCqlStatementTracing, checking that the trace
 # shows which bound values are unset. Cassandra shows an unset value as
 # "<unset>", and we check that it is at least shown differently from a null.
-# Reproduces SCYLLADB-5188 (unset bound value is traced as "null").
-@pytest.mark.xfail(reason="SCYLLADB-5188")
+# Reproduces SCYLLADB-5188 (unset bound value was traced as "null").
 def testCqlStatementTracingUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, COMPLEX_TABLE) as table:
         value = (3, "bar", 2.1)
