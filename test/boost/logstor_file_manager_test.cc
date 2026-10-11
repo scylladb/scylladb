@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <type_traits>
@@ -41,6 +42,8 @@ file_manager_config make_config(const tmpdir& dir, uint64_t file_count, bool for
         .format_sg = default_scheduling_group(),
         .format_on_startup = format_on_startup,
         .sparse_files = sparse_files,
+        // The next allocation of a file starts a failed format again.
+        .format_retry_interval = std::chrono::milliseconds(0),
     };
 }
 
@@ -294,6 +297,55 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_tries_a_failed_open_again) {
     BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 1);
     files.get_open_file(0);
     BOOST_REQUIRE(eventually_true([&] { return on_disk(files.file_path(1)); }));
+}
+
+// Checks that the allocation of a file fails when its format failed, and that an allocation after
+// the retry interval starts the format again, but an allocation before it does not.
+SEASTAR_THREAD_TEST_CASE(test_file_manager_tries_a_failed_format_again) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    // The end of the recovery starts the format of file 0, and the injection makes it fail. The
+    // injection fails only one format, thus a retry succeeds.
+    auto with_failed_format = [] (std::chrono::milliseconds retry_interval, auto test) {
+        tmpdir dir;
+        auto config = make_config(dir, 2, false);
+        config.format_retry_interval = retry_interval;
+        file_manager files(std::move(config));
+        auto stop = defer([&files] noexcept { files.stop().get(); });
+        utils::get_local_injector().enable("logstor_format_file_fail", true /* one shot */);
+        auto disable_injection = defer([] noexcept {
+            utils::get_local_injector().disable("logstor_format_file_fail");
+        });
+        recover(files);
+        // A one shot injection is disabled after it fails a call.
+        BOOST_REQUIRE(eventually_true([] { return !utils::get_local_injector().is_enabled("logstor_format_file_fail"); }));
+        test(files);
+    };
+
+    // Before the retry interval passes, each allocation fails, and the format is not tried again.
+    with_failed_format(std::chrono::hours(1), [] (file_manager& files) {
+        BOOST_REQUIRE_THROW(files.get_file_for_new_segment(0).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(files.get_file_for_new_segment(0).get(), std::runtime_error);
+        BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 0);
+        BOOST_REQUIRE(!on_disk(files.file_path(0)));
+    });
+
+    // After the retry interval, an allocation starts the format again. If the failed format has not
+    // ended yet, the allocation waits for it and fails, so the test tries again.
+    with_failed_format(std::chrono::milliseconds(0), [] (file_manager& files) {
+        BOOST_REQUIRE(eventually_true([&files] {
+            try {
+                files.get_file_for_new_segment(0).get();
+                return true;
+            } catch (const std::runtime_error&) {
+                return false;
+            }
+        }));
+        BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 1);
+        BOOST_REQUIRE(on_disk(files.file_path(0)));
+    });
 }
 
 // Checks that each misuse of the file manager is an internal error: the recovery steps out of order

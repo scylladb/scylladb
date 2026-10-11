@@ -943,6 +943,7 @@ static file_manager_config make_file_manager_config(const segment_manager_config
         .format_sg = config.compaction_sg,
         .format_on_startup = config.format_on_startup,
         .sparse_files = config.sparse_files,
+        .format_retry_interval = config.format_retry_interval,
     };
 }
 

@@ -45,6 +45,7 @@ file_manager::file_manager(file_manager_config cfg)
     , _format_sg(cfg.format_sg)
     , _format_on_startup(cfg.format_on_startup)
     , _sparse_files(cfg.sparse_files)
+    , _format_retry_interval(cfg.format_retry_interval)
     , _open_files(static_cast<size_t>(_configured_file_count))
     , _zero_buf(allocate_aligned_buffer<char>(zero_buffer_size, ondisk::block_alignment))
 {
@@ -173,10 +174,17 @@ future<> file_manager::format_remaining_files() {
     }
 }
 
+// A failure is logged when it occurs, because the next allocation of the file, which gets the
+// error, can come much later. The failure handler runs inside the gate, so that stop() waits for it.
 void file_manager::start_next_file_format() {
-    _next_file_format = with_gate(_async_gate, [this, file_id = _allocated_file_count] {
+    const auto file_id = _allocated_file_count;
+    _next_file_format = with_gate(_async_gate, [this, file_id] {
         return with_scheduling_group(_format_sg, [this, file_id] {
             return format_file(file_id);
+        }).handle_exception([this, file_id] (std::exception_ptr ep) {
+            logstor_logger.warn("Failed to format logstor file {}: {}", file_path(file_id).string(), ep);
+            _next_file_format_failed_at = lowres_clock::now();
+            return make_exception_future<>(std::move(ep));
         });
     });
 }
@@ -268,6 +276,10 @@ future<> file_manager::write_zeros(seastar::file file, uint64_t offset, uint64_t
 // logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
 // must not isolate the node, while writes to already formatted files keep working.
 future<> file_manager::format_file(file_id_t file_id) {
+    utils::get_local_injector().inject("logstor_format_file_fail", [] {
+        throw std::runtime_error("file format failed by injection");
+    });
+
     auto path = file_path(file_id).string();
     bool file_exists = co_await seastar::file_exists(path);
     if (!file_exists) {
@@ -311,6 +323,15 @@ future<> file_manager::open_allocated_files() {
 future<> file_manager::allocate_file(file_id_t file_id) {
     if (file_id != _allocated_file_count || file_id >= _configured_file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _configured_file_count));
+    }
+    // If the format of the file failed, it starts again here, when the retry interval has passed
+    // since the failure. Before that, the allocation fails at once with the error of the failed
+    // format. The format starts again only when a segment needs the file, so stop() has no retry in
+    // the background to wait for. A retry is safe, because format_file() does not change a file
+    // that it published, and it truncates the temporary file.
+    if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _format_retry_interval) {
+        logstor_logger.info("Trying again to format logstor file {}", file_path(file_id).string());
+        start_next_file_format();
     }
     co_await _next_file_format.get_future();
     if (file_id != _allocated_file_count) [[unlikely]] {
