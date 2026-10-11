@@ -21,6 +21,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "replica/logstor/ondisk.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
@@ -29,9 +30,8 @@ namespace replica::logstor {
 
 future<> file_manager::start() {
     co_await seastar::recursive_touch_directory(_base_dir.string());
-    _zero_buf_size = 128 * 1024;
-    _zero_buf = allocate_aligned_buffer<char>(_zero_buf_size, 4096);
-    std::memset(_zero_buf.get(), 0, _zero_buf_size);
+    _zero_buf = allocate_aligned_buffer<char>(zero_buffer_size, ondisk::block_alignment);
+    std::memset(_zero_buf.get(), 0, zero_buffer_size);
 }
 
 future<> file_manager::stop() {
@@ -130,7 +130,6 @@ future<> file_manager::recover_next_file(file_id_t next_file_id) {
                 _next_file_id = file_id + 1;
             }
         });
-        _next_file_formatter = make_ready_future<>();
         co_await open_allocated_files();
         co_return;
     }
@@ -202,15 +201,15 @@ future<> file_manager::format_file_region(seastar::file file, uint64_t offset, u
         auto write_size = std::min(remaining, max_write_size);
 
         size_t written;
-        if (write_size <= _zero_buf_size) {
+        if (write_size <= zero_buffer_size) {
             // A region smaller than the buffer needs no vector, which is every write of the block a
             // discarded segment has its header invalidated with.
             written = co_await file.dma_write(current_offset, _zero_buf.get(), write_size);
         } else {
             std::vector<iovec> iov;
-            iov.reserve(write_size / _zero_buf_size + 1);
-            for (uint64_t covered = 0; covered < write_size; covered += _zero_buf_size) {
-                iov.emplace_back(iovec{_zero_buf.get(), std::min<size_t>(_zero_buf_size, write_size - covered)});
+            iov.reserve(write_size / zero_buffer_size + 1);
+            for (uint64_t covered = 0; covered < write_size; covered += zero_buffer_size) {
+                iov.emplace_back(iovec{_zero_buf.get(), std::min<size_t>(zero_buffer_size, write_size - covered)});
             }
             written = co_await file.dma_write(current_offset, std::move(iov));
         }
@@ -230,9 +229,7 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
 }
 
 future<> file_manager::allocate_file(file_id_t file_id) {
-    if (file_id >= _max_files.actual) {
-        on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
-    }
+    check_file_id(file_id);
 
     if (file_id == _next_file_id && file_id < _max_files.configured) {
         // allocate file_id and wait for it to be formatted, and start formatting
@@ -285,9 +282,7 @@ future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
 // in a value it already has, and in continuation style it hands that value back without allocating
 // a frame for a wait that does not happen.
 future<seastar::file> file_manager::get_file(file_id_t file_id) {
-    if (file_id >= _open_files.size()) [[unlikely]] {
-        on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
-    }
+    check_file_id(file_id);
 
     if (auto& cached_file = _open_files[file_id]) {
         return make_ready_future<seastar::file>(cached_file);
