@@ -70,7 +70,7 @@ def create_user(cql, user):
 # Reproduces SCYLLADB-5145: GRANT and REVOKE of multiple permissions in one
 # statement aren't supported.
 @pytest.mark.xfail(reason="SCYLLADB-5145")
-def testGrantedKeyspace(cql):
+def testGrantedKeyspace(cql, this_dc):
     user = "user_" + unique_name()
     with keyspace_per_test(cql) as KEYSPACE_PER_TEST, dropped_roles(cql, user):
         create_user(cql, user)
@@ -117,7 +117,15 @@ def testGrantedKeyspace(cql):
 
         with use_user(cql, user, pass_) as session:
             # Spin assert for effective auth changes.
-            spin_assert(lambda: session.execute("ALTER KEYSPACE " + KEYSPACE_PER_TEST + " WITH replication = " + KEYSPACE_REPLICATION))
+            # The Java test alters the keyspace's replication to the same
+            # KEYSPACE_REPLICATION, which uses the 'replication_factor' option.
+            # But in a keyspace with tablets, Scylla's ALTER KEYSPACE doesn't
+            # allow 'replication_factor' (as documented in docs/cql/ddl.rst),
+            # and requires listing the datacenters. Here we only check that
+            # the ALTER permission allows ALTER KEYSPACE, so we list the
+            # datacenter, which works on both Scylla and Cassandra.
+            spin_assert(lambda: session.execute("ALTER KEYSPACE " + KEYSPACE_PER_TEST + " WITH replication = " +
+                                                f"{{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}"))
 
             session.execute("INSERT INTO %s (pk, ck, val, val_2) VALUES (1, 1, 1, '1')" % table)
             session.execute("UPDATE %s SET val = 1 WHERE pk = 1 AND ck = 1" % table)
