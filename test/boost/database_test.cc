@@ -224,6 +224,39 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
     }, cfg);
 }
 
+// DROP TABLE must not flush system.truncated: the truncation record
+// written by the truncate part of the drop has no reader once the
+// table is gone from the schema, and flushing it costs two blocking
+// flushes per dropped table, which makes DROP KEYSPACE slow.
+//
+// Reproducer for SCYLLADB-5240
+SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records, *boost::unit_test::expected_failures(1)) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Flushes that switch out a non-empty memtable of system.truncated, summed over all shards.
+        auto truncated_flush_count = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return db.find_column_family(db::system_keyspace::NAME, db::system_keyspace::TRUNCATED).get_stats().memtable_switch_count;
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+
+        e.execute_cql("CREATE TABLE ks.cf (k TEXT PRIMARY KEY, v INT);").get();
+        const table_id uuid = e.local_db().find_uuid("ks", "cf");
+
+        const auto flushes_before = truncated_flush_count();
+        e.execute_cql("DROP TABLE ks.cf;").get();
+        const auto flushes_after = truncated_flush_count();
+
+        BOOST_CHECK_EQUAL(flushes_after - flushes_before, 0);
+
+        auto res = e.execute_cql(fmt::format("SELECT * FROM system.truncated WHERE table_uuid = {}", uuid)).get();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+        BOOST_REQUIRE(rows);
+        BOOST_REQUIRE(rows->rs().result_set().empty());
+    }, cfg);
+}
+
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env_thread([](cql_test_env& e) {
             // FIXME: restore indent.
