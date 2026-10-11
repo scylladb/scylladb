@@ -32,6 +32,8 @@ public:
     default_aws_retry_strategy(unsigned max_retries = default_max_retries, s3::throttling_controller& controller = no_throttling());
 
     seastar::future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override;
+    // The backoff and the brake wait end early, with the abort's exception, when `as` fires.
+    seastar::future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries, seastar::abort_source* as) const;
 };
 
 } // namespace aws
