@@ -42,6 +42,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "cql3/query_options.hh"
+#include "service/pager/paging_state.hh"
 #include "transport/messages/result_message.hh"
 #include "service/tablet_allocator.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -1203,6 +1204,52 @@ SEASTAR_TEST_CASE(test_reads_strip_truncated_counters) {
         }).get();
         BOOST_REQUIRE_EQUAL(read_counter_bypass_cache(), 1);
         BOOST_REQUIRE_EQUAL(read_counter(), 1);
+    }, tablet_cql_test_config());
+}
+
+// A paged query whose truncation tombstone changes between pages reads the next page
+// with new readers, which apply the new truncation tombstone, rather than resuming the
+// readers saved between pages: in the querier cache, for a single-partition query, and
+// as evictable readers, for a range scan.
+static void do_test_paged_read_across_truncation_tombstone_change(cql_test_env& e, sstring query, sstring insert) {
+    e.execute_cql("CREATE TABLE cf (pk int, ck int, PRIMARY KEY (pk, ck))").get();
+    const auto id = e.local_db().find_schema("ks", "cf")->id();
+    for (int i = 0; i < 20; i++) {
+        e.execute_cql(seastar::format(fmt::runtime(std::string_view(insert)), i)).get();
+    }
+
+    auto query_page = [&] (const lw_shared_ptr<const service::pager::paging_state>& paging_state) {
+        auto ps = paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr;
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{5, std::move(ps), {}, api::new_timestamp()});
+        auto msg = e.execute_cql(query, std::move(qo)).get();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        return std::make_pair(rows->rs().result_set().size(), rows->rs().get_metadata().paging_state());
+    };
+
+    // The second page is read by the readers saved after the first one.
+    auto [count, paging_state] = query_page(nullptr);
+    BOOST_REQUIRE_EQUAL(count, 5);
+    std::tie(count, paging_state) = query_page(paging_state);
+    BOOST_REQUIRE_EQUAL(count, 5);
+    BOOST_REQUIRE(paging_state);
+
+    auto ts = current_timestamp(e);
+    set_truncation_tombstone(e, id, tombstone(api::new_timestamp(), gc_clock::now()), ts);
+
+    std::tie(count, paging_state) = query_page(paging_state);
+    BOOST_REQUIRE_EQUAL(count, 0);
+}
+
+SEASTAR_TEST_CASE(test_paged_partition_read_across_truncation_tombstone_change) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        do_test_paged_read_across_truncation_tombstone_change(e, "SELECT * FROM cf WHERE pk = 0", "INSERT INTO cf (pk, ck) VALUES (0, {})");
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_paged_range_scan_across_truncation_tombstone_change) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        do_test_paged_read_across_truncation_tombstone_change(e, "SELECT * FROM cf", "INSERT INTO cf (pk, ck) VALUES ({}, 0)");
     }, tablet_cql_test_config());
 }
 
