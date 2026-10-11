@@ -98,6 +98,8 @@ If the option is used and the role exists, the statement is a no-op::
     CREATE ROLE other_role;
     CREATE ROLE IF NOT EXISTS other_role;
 
+.. _create-role-with-hashed-password:
+
 Creating a role with a hashed password
 ``````````````````````````````````````
 
@@ -284,7 +286,7 @@ Creating a user uses the ``CREATE USER`` statement:
 
 .. code-block::
    
-   create_user_statement: CREATE USER [ IF NOT EXISTS ] [ WITH PASSWORD `string` ] [ `user_option` ]
+   create_user_statement: CREATE USER [ IF NOT EXISTS ] [ WITH [ HASHED ] PASSWORD `string` ] [ `user_option` ]
    user_option: SUPERUSER | NOSUPERUSER
 
 For instance::
@@ -317,12 +319,15 @@ Altering the options of a user uses the ``ALTER USER`` statement:
 
 .. code-block::
    
-   alter_user_statement: ALTER USER `user_name` [ WITH PASSWORD `string` ] [ `user_option` ]
+   alter_user_statement: ALTER USER `user_name` [ WITH [ HASHED ] PASSWORD `string` ] [ `user_option` ]
 
 For instance::
 
     ALTER USER alice WITH PASSWORD 'PASSWORD_A';
     ALTER USER bob SUPERUSER;
+
+``WITH HASHED PASSWORD``, in both ``CREATE USER`` and ``ALTER USER``, sets a pre-hashed password,
+as described in :ref:`Creating a role with a hashed password <create-role-with-hashed-password>`.
 
 .. _drop-user-statement:
 
