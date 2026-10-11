@@ -83,21 +83,26 @@ void file_manager::set_actual_max_files(uint64_t actual_max_files) {
     _open_files.resize(static_cast<size_t>(_max_files.actual));
 }
 
-// Opens every file that has been allocated, so that no read opens one during normal operation. A
-// file that is allocated later is opened by allocate_file(). Files are formatted before they are
-// allocated, so they all exist here.
+future<> file_manager::recover_files(file_id_t file_count) {
+    _next_file_id = file_count;
+    co_await open_allocated_files();
+}
+
+// Opens every file that recovery found, so that no read opens one. A file that is allocated later
+// is opened by allocate_file(). Files are formatted before they are allocated, so they all exist.
 future<> file_manager::open_allocated_files() {
     return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
-            [this] (file_id_t file_id) -> future<> {
-        if (!_open_files[file_id]) {
-            co_await do_open_file(file_id);
-        }
+            [this] (file_id_t file_id) {
+        return do_open_file(file_id).discard_result();
     });
 }
 
 future<> file_manager::remove_file(file_id_t file_id) {
     if (file_id != _max_files.actual - 1) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last allocated file", file_id));
+        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last file on disk, actual max files {}", file_id, _max_files.actual));
+    }
+    if (file_id + 1 != _next_file_id) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last allocated file {}", file_id, _next_file_id));
     }
     if (_max_files.actual <= _max_files.configured) {
         on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while actual max files {} is not above configured max files {}", file_id, _max_files.actual, _max_files.configured));
@@ -115,11 +120,10 @@ future<> file_manager::remove_file(file_id_t file_id) {
         return seastar::remove_file(get_file_path(file_id).string());
     });
     _max_files.actual--;
+    _next_file_id--;
 }
 
-future<> file_manager::recover_next_file(file_id_t next_file_id) {
-    _next_file_id = next_file_id;
-
+future<> file_manager::recover_next_file() {
     if (_format_on_startup) {
         auto holder = _async_gate.hold();
         file_id_t next_file_id = _next_file_id;
@@ -127,14 +131,13 @@ future<> file_manager::recover_next_file(file_id_t next_file_id) {
             logstor_logger.info("Formatting {} logstor files", _max_files.configured);
             for (file_id_t file_id = next_file_id; file_id < _max_files.configured; ++file_id) {
                 co_await format_file(file_id);
+                // Open the file before it counts as allocated.
+                co_await do_open_file(file_id);
                 _next_file_id = file_id + 1;
             }
         });
-        co_await open_allocated_files();
         co_return;
     }
-
-    co_await open_allocated_files();
 
     if (_next_file_id < _max_files.configured) {
         _next_file_formatter = with_gate(_async_gate, [this] {
@@ -239,9 +242,7 @@ future<> file_manager::allocate_file(file_id_t file_id) {
         if (file_id == _next_file_id) {
             // The format does not open the file, thus only the allocated files are open. If the
             // open fails, the file stays the next one, and the next attempt opens it again.
-            if (!_open_files[file_id]) {
-                co_await do_open_file(file_id);
-            }
+            co_await do_open_file(file_id);
             _next_file_id++;
 
             if (_next_file_id < _max_files.configured) {
@@ -273,6 +274,12 @@ future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
         seastar::open_flags::rw | seastar::open_flags::dsync
     );
 
+    // Each file is opened once. The file is open now if the caller opened an open file, or if
+    // another caller opened it at the same time.
+    if (_open_files[file_id]) [[unlikely]] {
+        co_await file.close();
+        on_internal_error(logstor_logger, fmt::format("Attempted to open logstor file {} that is already open", file_id));
+    }
     _open_files[file_id] = file;
 
     co_return file;

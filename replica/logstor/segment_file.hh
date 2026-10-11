@@ -64,18 +64,18 @@ struct file_manager_config {
 //
 // Invariants:
 // I1. Files are allocated in order. File N is allocated if and only if N < allocated_file_count().
-// I2. An allocated file is formatted and open. Outside recovery, only allocated files are open.
+// I2. An allocated file is formatted and open. Only allocated files are open.
 // I3. After recovery, while N files are allocated and N < configured, _next_file_formatter is the
 //     format of file N: pending, done or failed.
 // I4. configured <= actual. The files in [configured, actual) exist from an earlier, larger
 //     configuration. They are allocated, but a new file is never allocated at or above configured.
 //     Recovery removes them from the end when they hold no used segment.
 // I5. _open_files has one entry per file on disk, actual in total.
-// I6. Recovery reads the files it found before it sets the allocated count. After recovery, every
-//     file a reader asks for is allocated, and open.
-// I7. Recovery drives the file manager in this order: start(), set_actual_max_files(), reads of
-//     the found files, remove_file() for each retired file, recover_next_file(). After that, only
-//     get_file_for_new_segment() allocates files.
+// I6. Recovery opens the files it found before it reads them. Every file a reader asks for is
+//     allocated, and open.
+// I7. Recovery drives the file manager in this order: start(), set_actual_max_files(),
+//     recover_files(), reads of the found files, remove_file() for each retired file,
+//     recover_next_file(). After that, only get_file_for_new_segment() allocates files.
 class file_manager {
 public:
     file_manager(file_manager_config cfg)
@@ -109,13 +109,17 @@ public:
     // configured count.
     void set_actual_max_files(uint64_t actual_max_files);
 
+    // Recovery calls this with the count of the files it found, before it reads them. The files
+    // are allocated, and this opens them, so that the reads find them open.
+    future<> recover_files(file_id_t file_count);
+
     // Removes a retired file. The caller must have checked that the file is the last one on disk,
     // at or above the configured count, and that it holds no used segment.
     future<> remove_file(file_id_t);
 
-    // Recovery calls this at its end, with the count of the files it keeps. It opens them, and
-    // formats the files that are not allocated, or starts the background format of the next file.
-    future<> recover_next_file(file_id_t);
+    // Recovery calls this at its end. It formats the files that are not allocated, or it starts
+    // the background format of the next file.
+    future<> recover_next_file();
 
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
@@ -188,7 +192,7 @@ private:
     // starts formatting the one after it in the background.
     future<> allocate_file(file_id_t);
 
-    // Opens the file and puts it in the cache. The caller must have checked that it is not open.
+    // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> do_open_file(file_id_t);
 
     // A file id is valid if the file is on disk.
