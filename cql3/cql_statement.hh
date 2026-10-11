@@ -67,6 +67,13 @@ public:
         return false;
     }
 
+    // For a statement that needs the guard, called before taking it, for
+    // slow checks which don't need it - so that they don't delay other
+    // group0 operations while the guard is held.
+    virtual seastar::future<> before_guard(query_processor& qp, service::query_state& state) const {
+        return seastar::make_ready_future<>();
+    }
+
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
     cql_statement(cql_statement&& o) = default;
     cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr), _metadata(o._metadata) { }

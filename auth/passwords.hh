@@ -122,4 +122,15 @@ sstring hash(const sstring& pass, RandomNumberEngine& g, scheme scheme) {
 ///
 seastar::future<bool> check(const sstring& pass, const sstring& salted_hash);
 
+///
+/// Check that the given string is a salted hash which \ref check can check passwords against, i.e., one which
+/// `crypt(3)` produces with a hashing scheme that it supports. It may have been computed by a different system, so
+/// its scheme may be different from those which \ref hash uses.
+///
+/// Like \ref check, this runs `crypt(3)` with the cost which the salted hash specifies, so it may be slow.
+///
+/// \returns `true` if the salted hash is valid.
+///
+seastar::future<bool> is_valid_salted_hash(const sstring& salted_hash);
+
 } // namespace auth::passwords

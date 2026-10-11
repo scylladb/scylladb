@@ -70,9 +70,8 @@ def change_password(cql, cmd):
                 raise
             time.sleep(0.5)
 
-# Reproduces SCYLLADB-5229: Scylla doesn't validate the hashed password
+# Reproduces SCYLLADB-5229: Scylla didn't validate the hashed password
 # (and ALTER ROLE with a hashed password used to fail).
-@pytest.mark.xfail(reason="SCYLLADB-5229")
 def testcreateAlterRoleWithHashedPassword(cql):
     user1 = "hashed_pw_role_" + unique_name()
     user2 = "pw_role_" + unique_name()
@@ -104,9 +103,8 @@ def testcreateAlterRoleWithHashedPassword(cql):
         with use_user(cql, user2, plainTextPwd2) as session:
             session.execute("SELECT key FROM system.local")
 
-# Reproduces SCYLLADB-5229: Scylla doesn't validate the hashed password
+# Reproduces SCYLLADB-5229: Scylla didn't validate the hashed password
 # (and CREATE USER and ALTER USER didn't support HASHED PASSWORD).
-@pytest.mark.xfail(reason="SCYLLADB-5229")
 def testcreateAlterUserWithHashedPassword(cql):
     user1 = "hashed_pw_user_" + unique_name()
     user2 = "pw_user_" + unique_name()
