@@ -519,18 +519,19 @@ def test_decimal_modulo(cql, test_keyspace):
 # for DecimalType delegates to BigDecimal.toString(). This test can be
 # run on Cassandra to validate the expected output strings.
 #
-# Scylla's to_string() currently diverges from Java in several cases:
-# - Zero with scale (e.g. 0.0, 0.00) loses the scale
-# - Negative scale values are expanded instead of using exponential form
-# Once to_string() is fixed (SCYLLADB-1574), this test should pass and
-# the xfail can be removed.
-@pytest.mark.xfail(reason="SCYLLADB-1574")
+# Scylla's to_string() currently diverges from Java in two cases:
+# - Zero with scale (e.g. 0.0, 0.00) loses the scale. Both forms are valid
+#   JSON for the same number, so the test accepts either.
+# - Very small numbers and numbers with a negative scale are written without
+#   an exponent, which can make the output huge - this is issue #8002.
+@pytest.mark.xfail(reason="issue #8002")
 def test_decimal_tojson_representation(cql, test_keyspace):
     with new_test_table(cql, test_keyspace,
             "p int PRIMARY KEY, v decimal") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
         cases = [
-            # (input, expected toJson output per Java BigDecimal.toString())
+            # (input, expected toJson output per Java BigDecimal.toString(),
+            #  or a tuple of acceptable outputs)
 
             # Plain integers -- scale=0, no surprises
             (Decimal('0'), '0'),
@@ -542,9 +543,10 @@ def test_decimal_tojson_representation(cql, test_keyspace):
             (Decimal('0.001'), '0.001'),
             (Decimal('-1.23'), '-1.23'),
 
-            # Zero with scale -- Scylla's to_string() loses scale info
-            (Decimal('0.0'), '0.0'),
-            (Decimal('0.00'), '0.00'),
+            # Zero with scale -- Scylla's to_string() loses scale info, which
+            # we accept because "0" is the same JSON number.
+            (Decimal('0.0'), ('0.0', '0')),
+            (Decimal('0.00'), ('0.00', '0')),
 
             # adjusted_exp boundary: -6 is plain, -7 switches to exponential
             # adj_exp = num_digits - 1 - scale
@@ -570,6 +572,6 @@ def test_decimal_tojson_representation(cql, test_keyspace):
             rows = list(cql.execute(
                 f"SELECT toJson(v) FROM {table} WHERE p = {i}"))
             assert len(rows) == 1
-            assert rows[0][0] == expected, \
+            assert rows[0][0] in (expected if isinstance(expected, tuple) else (expected,)), \
                 f"For input {val} (as_tuple={val.as_tuple()}): " \
                 f"expected toJson={expected!r}, got {rows[0][0]!r}"

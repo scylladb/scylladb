@@ -1221,9 +1221,10 @@ def test_non_primary_key_restrictions(cql, test_keyspace, scylla_only):
 # when one of the columns is modified back and forth.
 # The following two tests, test_non_primary_key_restrictions_update()
 # and test_non_primary_key_restrictions_ttl(), reproduce issue #3430 in two
-# ways, and still don't work today, so they are marked xfail. Until #3430 is
-# fixed they fail already on the CREATE MATERIALIZED VIEW, which this first
-# test checks is refused.
+# ways, and still don't work today, so they are marked xfail. Issue #3430 was
+# closed after such filters were forbidden, and allowing them is tracked by
+# #4250. Until then they fail already on the CREATE MATERIALIZED VIEW, which
+# this first test checks is refused.
 def test_non_primary_key_restrictions_forbidden(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
         with pytest.raises(InvalidRequest, match='Non-primary key columns'):
@@ -1231,7 +1232,7 @@ def test_non_primary_key_restrictions_forbidden(cql, test_keyspace):
                     'a is not null and b is not null and c = 1'):
                 pass
 
-@pytest.mark.xfail(reason="issue #3430")
+@pytest.mark.xfail(reason="issue #4250")
 def test_non_primary_key_restrictions_update(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
         with new_materialized_view(cql, table, '*', 'a, b',
@@ -1260,7 +1261,7 @@ def test_non_primary_key_restrictions_update(cql, test_keyspace):
 # This is another reproducer for #3430. While in the above test we updated
 # column "c" to remove make it match and un-match the filter, here we use
 # a TTL to expire c, and have it un-match the filter.
-@pytest.mark.xfail(reason="issue #3430")
+@pytest.mark.xfail(reason="issue #4250")
 def test_non_primary_key_restrictions_ttl(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
         with new_materialized_view(cql, table, '*', 'a, b',

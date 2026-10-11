@@ -42,7 +42,7 @@ def testsingleValuePk(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match='Key may not be empty'):
             execute(cql, table, "INSERT INTO %s (a) VALUES (?)", b'')
 
-@pytest.mark.xfail(reason="Driver rejects oversized compound-pk component (struct.pack '>H'); see CASSANDRA-19270, #12247")
+@pytest.mark.xfail(reason="Driver rejects oversized compound-pk component (struct.pack '>H'); see CASSANDRA-19270")
 # Currently fails on Cassandra due to CASSANDRA-19270
 def testcompositeValuePk(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(a blob, b blob, PRIMARY KEY ((a, b)))") as table:

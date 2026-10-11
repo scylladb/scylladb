@@ -434,7 +434,7 @@ def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
 # a test 'test_query_select' for this parameter on a query of a normal (base)
 # table, but for GSI and LSI the ALL_PROJECTED_ATTRIBUTES is additionally
 # allowed (and in fact is the default), and we want to test it.
-@pytest.mark.xfail(reason="Projection and Select not supported yet. Issue #5036, #5058")
+@pytest.mark.xfail(reason="Projection not supported yet. Issue #5036")
 def test_lsi_query_select(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],

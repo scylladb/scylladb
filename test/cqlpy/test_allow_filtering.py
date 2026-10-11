@@ -308,10 +308,10 @@ def test_allow_filtering_prefix(cql, table3):
 # doesn't work at all (not without ALLOW FILTERING and not with it); Scylla
 # does support this use case with ALLOW FILTERING, but refuses to do it
 # without ALLOW FILTERING. The test test_allow_filtering_index_in()
-# reproduces issue #5545 / #13533
+# reproduces issue #5545 / #13533 (both closed - now tracked by #21430)
 def test_allow_filtering_pk_in(cql, table1):
     check_af_optional(cql, table1, 'k IN (1,2)', lambda row: row.k in {1,2})
-@pytest.mark.xfail(reason="issue #5545, #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+@pytest.mark.xfail(reason="issue #21430: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_index_in(cql, table2):
     check_af_optional(cql, table2, 'a IN (1,2)', lambda row: row.a in {1,2})
 
@@ -332,7 +332,7 @@ def table2local(cql, test_keyspace):
     wait_for_local_index(cql, table, 'k', 'a', everything)
     yield (table, everything)
     cql.execute("DROP TABLE " + table)
-@pytest.mark.xfail(reason="issue #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+@pytest.mark.xfail(reason="issue #21430: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_local_index_in(cql, table2local, scylla_only):
     check_af_optional(cql, table2local, 'k = 0 AND a IN (1,2)', lambda row: row.a in {1,2})
 
@@ -425,11 +425,11 @@ def test_select_indexed_cluster_three_keys_conservative(cql, table5, cassandra_b
 # require ALLOW FILTERING in this case, even when the query has a full
 # prefix of the index table's clustering key.
 # This test demonstrates how after PR #9122 we wrongly require ALLOW FILTERING
-# in one such case.
+# in one such case. Reproduces SCYLLADB-5249.
 # This test is basically the same as test_multi_column_with_regular_index in
 # test_secondary_index.py, but it focuses on the correctness of the ALLOW
 # FILTERING requirement, not just on the correctness of the results.
-@pytest.mark.xfail(reason="PR #9122 loose end")
+@pytest.mark.xfail(reason="SCYLLADB-5249")
 def test_allow_filtering_multi_column_and_index(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, primary key(p,c1,c2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(r)')
