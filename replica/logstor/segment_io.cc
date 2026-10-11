@@ -9,6 +9,7 @@
 #include "replica/logstor/segment_io.hh"
 
 #include <seastar/core/align.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/util/log.hh>
 
@@ -60,9 +61,33 @@ public:
     }
 };
 
-} // anonymous namespace
+// The headers at the start of a chunk: the chunk header, and the segment header in a full segment.
+struct chunk_headers {
+    ondisk::chunk_header chunk;
+    std::optional<ondisk::segment_header> segment;
+};
 
-segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ondisk::segment_header> sh) {
+// Returns nullopt if the stream ends first or the chunk header is invalid.
+future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader) {
+    auto ch = co_await reader.read<ondisk::chunk_header>();
+    if (!ch || !ondisk::validate_chunk_header(*ch)) {
+        co_return std::nullopt;
+    }
+
+    std::optional<ondisk::segment_header> sh;
+    if (ch->kind == segment_kind::full) {
+        sh = co_await reader.read<ondisk::segment_header>();
+        if (!sh) {
+            co_return std::nullopt;
+        }
+    }
+
+    co_return chunk_headers{*ch, sh};
+}
+
+segment_info make_segment_info(const chunk_headers& headers) {
+    const auto& ch = headers.chunk;
+    const auto& sh = headers.segment;
     segment_info seg_info {
         .kind = ch.kind,
         .segment_seq = ch.segment_seq,
@@ -70,8 +95,9 @@ segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ond
 
     switch (ch.kind) {
     case segment_kind::full:
+        // read_chunk_headers() reads the segment header of every full segment.
         if (!sh) {
-            throw std::runtime_error("Full segment chunk header without segment header");
+            on_internal_error(logstor_logger, "Full segment chunk header without segment header");
         }
         seg_info.v = segment_info::full {
             .table = sh->table,
@@ -86,22 +112,16 @@ segment_info make_segment_info(const ondisk::chunk_header& ch, std::optional<ond
     return seg_info;
 }
 
+} // anonymous namespace
+
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
     segment_reader reader(in);
-    auto ch = co_await reader.read<ondisk::chunk_header>();
-    if (!ch || !ondisk::validate_chunk_header(*ch)) {
+    auto headers = co_await read_chunk_headers(reader);
+    if (!headers) {
         co_return std::nullopt;
     }
 
-    std::optional<ondisk::segment_header> sh;
-    if (ch->kind == segment_kind::full) {
-        sh = co_await reader.read<ondisk::segment_header>();
-        if (!sh) {
-            co_return std::nullopt;
-        }
-    }
-
-    co_return make_segment_info(*ch, sh);
+    co_return make_segment_info(*headers);
 }
 
 future<> scan_segment(seastar::input_stream<char>& in,
@@ -116,12 +136,12 @@ future<> scan_segment(seastar::input_stream<char>& in,
     logstor_logger.trace("Reading records from segment {}", segment_id);
 
     while (reader.position() < segment_size) {
-        auto maybe_ch = co_await reader.read<ondisk::chunk_header>();
+        auto headers = co_await read_chunk_headers(reader);
         // if the chunk is invalid then skip the rest of the segment - chunk writes are sequential and serialized.
-        if (!maybe_ch || !ondisk::validate_chunk_header(*maybe_ch)) {
+        if (!headers) {
             break;
         }
-        const auto& ch = *maybe_ch;
+        const auto& ch = headers->chunk;
 
         if (!segment_seq) {
             segment_seq = ch.segment_seq;
@@ -129,15 +149,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             break;
         }
 
-        std::optional<ondisk::segment_header> sh;
-        if (ch.kind == segment_kind::full) {
-            sh = co_await reader.read<ondisk::segment_header>();
-            if (!sh) {
-                break;
-            }
-        }
-
-        auto seg_info = make_segment_info(ch, sh);
+        auto seg_info = make_segment_info(*headers);
         co_await on_segment_info(seg_info);
 
         // TODO crc, torn writes
