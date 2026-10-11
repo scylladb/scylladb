@@ -256,6 +256,35 @@ def test_fromjson_varint_empty_string_prepared(cql, table1):
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
 
+# Most types allow an "empty" value - a zero-length value, which is not the
+# same as null - and SELECT JSON returns it as an empty string. The test
+# cassandra_tests/empty_values_test.py, translated from Cassandra, checks
+# this for some of the types, and the following tests check more.
+def check_select_json_empty_value(cql, test_keyspace, typ):
+    with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v {typ}') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, blobAs{typ}(0x))")
+        assert list(cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")) == [('{"v": ""}',)]
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed, for some
+# of these types with a server error).
+@pytest.mark.parametrize("typ", ["int", "bigint", "varint", "float", "double", "decimal", "timestamp"])
+def test_select_json_empty_value(cql, test_keyspace, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+
+# Cassandra doesn't allow an empty value of these types at all.
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed with a
+# server error).
+@pytest.mark.parametrize("typ", ["smallint", "tinyint"])
+def test_select_json_empty_value_scylla_only(cql, test_keyspace, scylla_only, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+
+# Cassandra fails here with a NullPointerException (CASSANDRA-21743).
+# Reproduces SCYLLADB-5185 (for an empty boolean value, SELECT JSON produced
+# the invalid JSON {"v": }).
+def test_select_json_empty_boolean(cql, test_keyspace, cassandra_bug):
+    check_select_json_empty_value(cql, test_keyspace, "boolean")
+
 # Cassandra allows the strings "true" and "false", not just the JSON constants
 # true and false, to be assigned to a boolean column.
 # Reproduces issue #7915
