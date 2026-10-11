@@ -65,7 +65,7 @@ struct file_manager_config {
 // Invariants:
 // I1. Files are allocated in order. File N is allocated if and only if N < allocated_file_count().
 // I2. An allocated file is formatted and open. Only allocated files are open.
-// I3. After recovery, while N files are allocated and N < configured, _next_file_formatter is the
+// I3. After recovery, while N files are allocated and N < configured, _next_file_format is the
 //     format of file N: pending, done or failed.
 // I4. The files at or above configured exist from an earlier, larger configuration. They are
 //     allocated, but a new file is never allocated at or above configured. Recovery removes them
@@ -74,15 +74,15 @@ struct file_manager_config {
 // I6. Recovery opens the files it found before it reads them. Every file a reader asks for is
 //     allocated, and open.
 // I7. Recovery drives the file manager in this order: start(), open_recovered_files(), reads of
-//     the found files, remove_file() for each retired file, recover_next_file(). After that, only
-//     get_file_for_new_segment() allocates files.
+//     the found files, remove_file() for each retired file, resume_file_allocation(). After that,
+//     only get_file_for_new_segment() allocates files.
 class file_manager {
 public:
     file_manager(file_manager_config cfg)
         : _configured_file_count(cfg.file_count)
         , _file_size(cfg.file_size)
         , _base_dir(std::move(cfg.base_dir))
-        , _sched_group(cfg.format_sg)
+        , _format_sg(cfg.format_sg)
         , _format_on_startup(cfg.format_on_startup)
         , _sparse_files(cfg.sparse_files)
         , _open_files(static_cast<size_t>(_configured_file_count))
@@ -93,17 +93,17 @@ public:
     future<> stop();
 
     // The file names are ls_{shard_id}-{file_id}-Data.db
-    static const sstring get_file_name_prefix() {
+    static sstring file_name_prefix() {
         return fmt::format("ls_{}-", this_shard_id());
     }
 
-    std::filesystem::path get_file_path(file_id_t file_id) const {
-        auto fname = fmt::format("{}{}-Data.db", get_file_name_prefix(), file_id);
+    std::filesystem::path file_path(file_id_t file_id) const {
+        auto fname = fmt::format("{}{}-Data.db", file_name_prefix(), file_id);
         return _base_dir / fname;
     }
 
     // The file id in a file name of this shard, or none if the name is not one.
-    std::optional<file_id_t> file_name_to_file_id(const std::string& fname) const;
+    std::optional<file_id_t> file_id_of(const std::string& fname) const;
 
     // Recovery calls this with the count of the files it found on disk, before it reads them. The
     // count can be above the configured count. The files are allocated, and this opens them,
@@ -116,7 +116,7 @@ public:
 
     // Recovery calls this at its end. It formats the files that are not allocated, or it starts
     // the background format of the next file.
-    future<> recover_next_file();
+    future<> resume_file_allocation();
 
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
@@ -124,9 +124,9 @@ public:
     // allocated and open.
     future<seastar::file> get_file_for_new_segment(file_id_t);
 
-    uint64_t allocated_file_count() const noexcept { return _next_file_id; }
+    uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
 
-    uint64_t configured_max_files() const noexcept { return _configured_file_count; }
+    uint64_t configured_file_count() const noexcept { return _configured_file_count; }
 
     // The file, if it is already open, which after startup it always is. A caller that finds it here
     // gets at it without the call and the future that get_file() costs even when it waits for
@@ -141,11 +141,11 @@ public:
     future<seastar::file> get_file(file_id_t);
 
     // Writes zeros over the region.
-    future<> format_file_region(seastar::file file, uint64_t offset, uint64_t size);
+    future<> zero_region(seastar::file file, uint64_t offset, uint64_t size);
 
 private:
     // The zero buffer is written in one request over as much of a region as the disk takes in one,
-    // see format_file_region(). 128 KiB is large enough that the vector of a request is short, and
+    // see zero_region(). 128 KiB is large enough that the vector of a request is short, and
     // small enough that the buffer costs nothing.
     static constexpr size_t zero_buffer_size = 128 * 1024;
 
@@ -155,15 +155,15 @@ private:
 
     const uint64_t _file_size;
     const std::filesystem::path _base_dir;
-    const seastar::scheduling_group _sched_group;
+    const seastar::scheduling_group _format_sg;
     const bool _format_on_startup;
     const bool _sparse_files;
 
-    file_id_t _next_file_id{0};
+    file_id_t _allocated_file_count{0};
 
     seastar::gate _async_gate;
 
-    shared_future<> _next_file_formatter{make_ready_future<>()};
+    shared_future<> _next_file_format{make_ready_future<>()};
 
     // One handle per file, opened read-write, kept open for the life of the shard and shared by
     // the read and the write paths. Both go through it, so it is always opened for writing: a file
@@ -182,7 +182,7 @@ private:
     future<> allocate_file(file_id_t);
 
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
-    future<seastar::file> do_open_file(file_id_t);
+    future<seastar::file> open_file(file_id_t);
 
     // A file id is valid if _open_files has an entry for it.
     void check_file_id(file_id_t file_id) const {

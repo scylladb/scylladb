@@ -50,13 +50,13 @@ future<> file_manager::stop() {
         }
         auto result = co_await coroutine::as_future(file.close());
         if (result.failed()) {
-            logstor_logger.warn("Failed to close logstor file {}: {}", get_file_path(file_id).string(), result.get_exception());
+            logstor_logger.warn("Failed to close logstor file {}: {}", file_path(file_id).string(), result.get_exception());
         }
     });
 }
 
-std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& fname) const {
-    std::string prefix = get_file_name_prefix();
+std::optional<file_id_t> file_manager::file_id_of(const std::string& fname) const {
+    std::string prefix = file_name_prefix();
     std::string suffix = "-Data.db";
     if (fname.starts_with(prefix) && fname.ends_with(suffix)) {
         // Extract file_id between prefix and suffix
@@ -74,56 +74,56 @@ std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& f
 
 future<> file_manager::open_recovered_files(file_id_t found_file_count) {
     _open_files.resize(static_cast<size_t>(std::max(_configured_file_count, found_file_count)));
-    _next_file_id = found_file_count;
+    _allocated_file_count = found_file_count;
     co_await open_allocated_files();
 }
 
 // Opens every file that recovery found, so that no read opens one. A file that is allocated later
 // is opened by allocate_file(). Files are formatted before they are allocated, so they all exist.
 future<> file_manager::open_allocated_files() {
-    return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
+    return max_concurrent_for_each(std::views::iota(file_id_t(0), _allocated_file_count), 32,
             [this] (file_id_t file_id) {
-        return do_open_file(file_id).discard_result();
+        return open_file(file_id).discard_result();
     });
 }
 
 future<> file_manager::remove_file(file_id_t file_id) {
     // The file is the last allocated one, at or above the configured count, thus the
     // last entry of _open_files.
-    if (file_id + 1 != _next_file_id || _next_file_id <= _configured_file_count) {
+    if (file_id + 1 != _allocated_file_count || _allocated_file_count <= _configured_file_count) {
         on_internal_error(logstor_logger, fmt::format("Attempted to remove file {}: {} files allocated, {} configured",
-                file_id, _next_file_id, _configured_file_count));
+                file_id, _allocated_file_count, _configured_file_count));
     }
     // The file is open. The handle leaves _open_files before the close, so that stop() does
     // not close it again when the close or the removal fails.
     co_await std::exchange(_open_files[file_id], seastar::file()).close();
     co_await do_io_check(logstor_error_handler, [this, file_id] {
-        return seastar::remove_file(get_file_path(file_id).string());
+        return seastar::remove_file(file_path(file_id).string());
     });
     _open_files.pop_back();
-    _next_file_id--;
+    _allocated_file_count--;
 }
 
-future<> file_manager::recover_next_file() {
+future<> file_manager::resume_file_allocation() {
     if (_format_on_startup) {
         auto holder = _async_gate.hold();
-        file_id_t next_file_id = _next_file_id;
-        co_await with_scheduling_group(_sched_group, [this, next_file_id] -> future<> {
+        file_id_t next_file_id = _allocated_file_count;
+        co_await with_scheduling_group(_format_sg, [this, next_file_id] -> future<> {
             logstor_logger.info("Formatting {} logstor files", _configured_file_count);
             for (file_id_t file_id = next_file_id; file_id < _configured_file_count; ++file_id) {
                 co_await format_file(file_id);
                 // Open the file before it counts as allocated.
-                co_await do_open_file(file_id);
-                _next_file_id = file_id + 1;
+                co_await open_file(file_id);
+                _allocated_file_count = file_id + 1;
             }
         });
         co_return;
     }
 
-    if (_next_file_id < _configured_file_count) {
-        _next_file_formatter = with_gate(_async_gate, [this] {
-            return with_scheduling_group(_sched_group, [this] {
-                return format_file(_next_file_id);
+    if (_allocated_file_count < _configured_file_count) {
+        _next_file_format = with_gate(_async_gate, [this] {
+            return with_scheduling_group(_format_sg, [this] {
+                return format_file(_allocated_file_count);
             });
         });
     }
@@ -133,8 +133,8 @@ future<> file_manager::recover_next_file() {
 // logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
 // must not isolate the node, while writes to already formatted files keep working.
 future<> file_manager::format_file(file_id_t file_id) {
-    auto file_path = get_file_path(file_id).string();
-    bool file_exists = co_await seastar::file_exists(file_path);
+    auto path = file_path(file_id).string();
+    bool file_exists = co_await seastar::file_exists(path);
     if (!file_exists) {
         // Create and format a temporary file, then move it to the final location.
         //
@@ -145,7 +145,7 @@ future<> file_manager::format_file(file_id_t file_id) {
         // than an order of magnitude, and the durability of the published file is the same either
         // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
         // reason, see segment_manager::allocate_segment_ex().
-        auto tmp_path = file_path + ".tmp";
+        auto tmp_path = path + ".tmp";
         auto tmp_file = co_await seastar::open_file_dma(tmp_path,
                 seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
         if (_sparse_files) {
@@ -154,13 +154,13 @@ future<> file_manager::format_file(file_id_t file_id) {
             co_await tmp_file.truncate(_file_size);
         } else {
             co_await tmp_file.allocate(0, _file_size);
-            co_await format_file_region(tmp_file, 0, _file_size);
+            co_await zero_region(tmp_file, 0, _file_size);
         }
         co_await tmp_file.flush();
         co_await tmp_file.close();
 
         // move the temp file to the final location
-        co_await seastar::rename_file(tmp_path, file_path);
+        co_await seastar::rename_file(tmp_path, path);
     }
 }
 
@@ -169,7 +169,7 @@ future<> file_manager::format_file(file_id_t file_id) {
 // disk with the reads of that traffic, which wait behind whatever request is in flight.
 static constexpr uint64_t max_format_write_size = 1024 * 1024;
 
-future<> file_manager::format_file_region(seastar::file file, uint64_t offset, uint64_t size) {
+future<> file_manager::zero_region(seastar::file file, uint64_t offset, uint64_t size) {
     // One request covers as much as the disk takes in one, up to max_format_write_size, which the
     // zero buffer is repeated across rather than held in memory: a request an order of magnitude
     // larger than the buffer is worth most of the difference between a stream of small writes and
@@ -204,7 +204,7 @@ future<> file_manager::format_file_region(seastar::file file, uint64_t offset, u
 }
 
 future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) {
-    if (file_id >= _next_file_id) [[unlikely]] {
+    if (file_id >= _allocated_file_count) [[unlikely]] {
         return allocate_file(file_id).then([this, file_id] {
             return get_file(file_id);
         });
@@ -215,28 +215,28 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
 future<> file_manager::allocate_file(file_id_t file_id) {
     check_file_id(file_id);
 
-    if (file_id == _next_file_id && file_id < _configured_file_count) {
+    if (file_id == _allocated_file_count && file_id < _configured_file_count) {
         // allocate file_id and wait for it to be formatted, and start formatting
         // the next file in background
-        co_await _next_file_formatter.get_future();
+        co_await _next_file_format.get_future();
 
-        if (file_id == _next_file_id) {
+        if (file_id == _allocated_file_count) {
             // The format does not open the file, thus only the allocated files are open. If the
             // open fails, the file stays the next one, and the next attempt opens it again.
-            co_await do_open_file(file_id);
-            _next_file_id++;
+            co_await open_file(file_id);
+            _allocated_file_count++;
 
-            if (_next_file_id < _configured_file_count) {
-                _next_file_formatter = with_gate(_async_gate, [this] {
-                    return with_scheduling_group(_sched_group, [this] {
-                        return format_file(_next_file_id);
+            if (_allocated_file_count < _configured_file_count) {
+                _next_file_format = with_gate(_async_gate, [this] {
+                    return with_scheduling_group(_format_sg, [this] {
+                        return format_file(_allocated_file_count);
                     });
                 });
             }
         }
-    } else if (file_id >= _configured_file_count && file_id >= _next_file_id) {
+    } else if (file_id >= _configured_file_count && file_id >= _allocated_file_count) {
         on_internal_error(logstor_logger, "Disk size limit reached, cannot allocate more files");
-    } else if (file_id > _next_file_id) {
+    } else if (file_id > _allocated_file_count) {
         on_internal_error(logstor_logger, "files must be allocated in sequential order");
     }
 }
@@ -245,13 +245,13 @@ future<> file_manager::allocate_file(file_id_t file_id) {
 // is what asked for it, and with O_DSYNC, which is what makes a completed segment write durable.
 // It is not opened with O_CREAT: files are created by format_file() alone, and a read of a file that
 // is missing must fail rather than quietly create an empty one.
-future<seastar::file> file_manager::do_open_file(file_id_t file_id) {
+future<seastar::file> file_manager::open_file(file_id_t file_id) {
     utils::get_local_injector().inject("logstor_open_file_fail", [] {
         throw std::runtime_error("file open failed by injection");
     });
 
     auto file = co_await open_checked_file_dma(logstor_error_handler,
-        get_file_path(file_id).string(),
+        file_path(file_id).string(),
         seastar::open_flags::rw | seastar::open_flags::dsync
     );
 
@@ -276,7 +276,7 @@ future<seastar::file> file_manager::get_file(file_id_t file_id) {
         return make_ready_future<seastar::file>(cached_file);
     }
 
-    return do_open_file(file_id);
+    return open_file(file_id);
 }
 
 }
