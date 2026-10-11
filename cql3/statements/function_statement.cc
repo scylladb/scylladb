@@ -66,13 +66,12 @@ function_statement::function_statement(
     : _name(std::move(name)), _raw_arg_types(std::move(raw_arg_types)) {}
 
 shared_ptr<cql_transport::event::schema_change> function_statement::create_schema_change(
-        const functions::function& func, bool created) {
+        const functions::function& func, cql_transport::event::schema_change::change_type change) {
     using namespace cql_transport;
     std::vector<sstring> options{func.name().name};
     for (const auto& type : func.arg_types()) {
         options.push_back(type->as_cql3_type().to_string());
     }
-    auto change = created ? event::schema_change::change_type::CREATED : event::schema_change::change_type::DROPPED;
     auto type = dynamic_cast<const functions::user_function*>(&func) ? event::schema_change::target_type::FUNCTION
                                                                      : event::schema_change::target_type::AGGREGATE;
     return ::make_shared<event::schema_change>(change, type, func.name().keyspace, std::move(options));
@@ -118,6 +117,18 @@ void function_statement::prepare_keyspace(const service::client_state& state) {
 create_function_statement_base::create_function_statement_base(functions::function_name name,
         std::vector<shared_ptr<cql3_type::raw>> raw_arg_types, bool or_replace, bool if_not_exists)
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
+
+cql_transport::event::schema_change::change_type create_function_statement_base::change_type() const {
+    // This is the same lookup that validate_while_executing() did (after
+    // preparing _arg_types) to decide whether the statement replaces an
+    // existing function. Both lookups find the same thing, because the
+    // functions only change when schema changes are applied, which the
+    // group0 guard held by the statement prevents until the statement's own
+    // change is applied.
+    return functions::instance().find(_name, _arg_types)
+            ? cql_transport::event::schema_change::change_type::UPDATED
+            : cql_transport::event::schema_change::change_type::CREATED;
+}
 
 seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
