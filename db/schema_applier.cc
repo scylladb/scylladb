@@ -354,12 +354,11 @@ static row_diff diff_rows(const schema_result& before, const schema_result& afte
 
 // User-defined aggregate stores its information in two tables: aggregates and scylla_aggregates
 // The difference has to be joined to properly create an UDA.
-//
-// FIXME: Since UDA cannot be altered now, set of differing rows should be empty and those rows are
-// ignored in calculating the diff.
+// An aggregate is altered (by CREATE OR REPLACE AGGREGATE) if its row in either table changed.
 struct aggregate_diff {
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> altered;
 };
 
 static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, const schema_result& aggr_after,
@@ -369,6 +368,7 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
 
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> altered;
 
     // Primary key for `aggregates` and `scylla_aggregates` tables
     auto primary_key = get_primary_key_definition(aggregates());
@@ -395,7 +395,11 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
             created.push_back({&row, (entry != scylla_aggr_rows.end()) ? entry->second : nullptr});
         }
     }
-    for (const auto& key : aggr_diff.entries_differing) {
+    // A keyspace whose aggregates rows didn't change may still have an altered
+    // aggregate, whose scylla_aggregates row changed.
+    auto keyspaces = aggr_diff.entries_differing;
+    keyspaces.insert(aggr_diff.entries_in_common.begin(), aggr_diff.entries_in_common.end());
+    for (const auto& key : keyspaces) {
         auto aggr_before_rows = build_row_map(*aggr_before.find(key)->second);
         auto aggr_after_rows = build_row_map(*aggr_after.find(key)->second);
         auto diff = difference(aggr_before_rows, aggr_after_rows, indirect_equal_to<const query::result_set_row*>());
@@ -417,9 +421,23 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
                 aggr_after_rows.find(k)->second, (entry != scylla_aggr_rows_after.end()) ? entry->second : nullptr
             });
         }
+        auto find_scylla_row = [] (const map& rows, const std::vector<bytes>& k) -> const query::result_set_row* {
+            auto entry = rows.find(k);
+            return (entry != rows.end()) ? entry->second : nullptr;
+        };
+        for (const auto& k : diff.entries_differing) {
+            altered.push_back({aggr_after_rows.find(k)->second, find_scylla_row(scylla_aggr_rows_after, k)});
+        }
+        for (const auto& k : diff.entries_in_common) {
+            auto scylla_before = find_scylla_row(scylla_aggr_rows_before, k);
+            auto scylla_after = find_scylla_row(scylla_aggr_rows_after, k);
+            if (scylla_before != scylla_after && !(scylla_before && scylla_after && *scylla_before == *scylla_after)) {
+                altered.push_back({aggr_after_rows.find(k)->second, scylla_after});
+            }
+        }
     }
 
-    return {std::move(created), std::move(dropped)};
+    return {std::move(created), std::move(dropped), std::move(altered)};
 }
 
 // see the comments for merge_keyspaces()
@@ -793,6 +811,9 @@ future<> schema_applier::merge_aggregates() {
             auto commited_storage = _types_storage.local().committed_storage();
             auto arg_types = read_arg_types(*val.first, name.keyspace, *commited_storage);
             batch.remove_aggregate(name, arg_types);
+        }
+        for (const auto& val : diff.altered) {
+            batch.replace_function(create_aggregate(db, *val.first, val.second, batch, _types_storage.local()));
         }
         co_return;
     });
