@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <seastar/core/shared_future.hh>
@@ -51,6 +52,9 @@ struct segment_manager_config {
     // preallocating or zero-filling. Saves disk space and I/O, at the cost of
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
+    // After the format of the next file fails, an allocation of the file starts the format again
+    // only when this interval has passed.
+    std::chrono::milliseconds format_retry_interval = std::chrono::seconds(1);
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 32;
     utils::updateable_value<double> trigger_compaction_threshold{0.05};
