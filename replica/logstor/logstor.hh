@@ -118,15 +118,15 @@ private:
     };
 
     // The first part of a point read. It does not yield. Returns nullopt if the index does not have
-    // the key. Uses the cache, unless the slice has bypass_cache. Throws key_mismatch_error if the
-    // cached mutation has a different key.
-    static std::optional<point_lookup> lookup(const primary_index&, const dht::decorated_key&, const schema&, const query::partition_slice&);
+    // the key. Looks the cache up if the read uses it. Throws key_mismatch_error if the cached
+    // mutation has a different key.
+    static std::optional<point_lookup> lookup(const primary_index&, const dht::decorated_key&, const schema&, use_cache);
 
     // The second part of a point read, if the cache does not have the key. Reads the record from
-    // its segment, compares its key with the requested key, and decodes it. If populate is true
-    // and the index still points to the location, adds the mutation to the cache.
+    // its segment, compares its key with the requested key, and decodes it. If the read uses the
+    // cache and the index still points to the location, adds the mutation to the cache.
     future<mutation> read_from_segment(schema_ptr, const primary_index&, const dht::decorated_key&, const primary_index_key&,
-            primary_index::guarded_location, bool populate);
+            primary_index::guarded_location, use_cache);
 };
 
 } // namespace logstor

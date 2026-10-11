@@ -78,7 +78,7 @@ void populate(primary_index& index, const primary_index_key& key, const mutation
 }
 
 mutation lookup_mutation(primary_index& index, const primary_index_key& key, schema_ptr schema) {
-    auto result = index.lookup_for_read(key, *schema, true);
+    auto result = index.lookup_for_read(key, *schema, use_cache::yes);
     BOOST_REQUIRE(result);
     auto* cached = std::get_if<mutation>(&*result);
     BOOST_REQUIRE(cached);
@@ -90,7 +90,7 @@ mutation_partition lookup(primary_index& index, const primary_index_key& key, sc
 }
 
 bool lookup_exists(primary_index& index, const primary_index_key& key, schema_ptr schema) {
-    auto result = index.lookup_for_read(key, *schema, true);
+    auto result = index.lookup_for_read(key, *schema, use_cache::yes);
     BOOST_REQUIRE(result);
     return std::holds_alternative<mutation>(*result);
 }

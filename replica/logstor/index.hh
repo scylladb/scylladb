@@ -21,6 +21,7 @@
 #include "utils/small_vector.hh"
 #include <utility>
 #include <variant>
+#include <seastar/util/bool_class.hh>
 #include "replica/logstor/cache.hh"
 
 namespace replica::logstor {
@@ -135,6 +136,10 @@ class index_read_guard {
 
     friend class primary_index;
 };
+
+// Whether a read looks the cache up, and admits what it reads from a segment. A reader decides it
+// once, from its slice: a slice with the bypass_cache option does neither.
+using use_cache = bool_class<class use_cache_tag>;
 
 class primary_index final {
 public:
@@ -468,26 +473,27 @@ public:
     }
 
     // Returns the cached mutation for an entry the caller already holds from scan(), or nullopt
-    // when the entry holds nothing or the cache is not set up. Counts a hit or a miss and touches
-    // the LRU, like the read path does. The entry must belong to this index.
-    std::optional<mutation> lookup_cached(const primary_index_entry& e, const schema& target_schema) const {
-        if (!_cache_tracker) {
+    // when the entry holds nothing, the cache is not set up or the read does not use it. Counts a
+    // hit or a miss and touches the LRU, like the read path does. The entry must belong to this
+    // index.
+    std::optional<mutation> lookup_cached(const primary_index_entry& e, const schema& target_schema, use_cache uses_cache) const {
+        if (!_cache_tracker || !uses_cache) {
             return std::nullopt;
         }
         return _cache_tracker->lookup(e, target_schema);
     }
 
-    // Finds a key for a point read. Returns nullopt if the index does not have the key. If
-    // `cache_enabled` and the cache has the key, returns the cached mutation. If not, returns the
-    // location of the record with a guard.
-    std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, bool cache_enabled) const {
+    // Finds a key for a point read. Returns nullopt if the index does not have the key. If the
+    // read uses the cache and the cache has the key, returns the cached mutation. If not, returns
+    // the location of the record with a guard.
+    std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, use_cache uses_cache) const {
         auto it = find_key(key);
         if (it == _partitions.end()) {
             return std::nullopt;
         }
 
-        if (cache_enabled) {
-            if (auto cached = lookup_cached(*it, target_schema)) {
+        if (_cache_tracker && uses_cache) {
+            if (auto cached = _cache_tracker->lookup(*it, target_schema)) {
                 return std::move(*cached);
             }
         }

@@ -688,7 +688,7 @@ public:
     // holding a location from before the measurement would not survive compaction moving its record.
     future<> do_segment_read() {
         const auto& key = random_key();
-        auto result = index().lookup_for_read(primary_index_key{key}, *_schema, false);
+        auto result = index().lookup_for_read(primary_index_key{key}, *_schema, use_cache::no);
         if (!result) [[unlikely]] {
             on_internal_error(logstor_logger, "key of the dataset is missing from the index");
         }
@@ -791,7 +791,7 @@ public:
     // lookup that finds nothing is counted by the cache tracker, see cache_misses().
     void do_cache_lookup(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            auto result = index().lookup_for_read(primary_index_key{random_cached_key()}, *_schema, true);
+            auto result = index().lookup_for_read(primary_index_key{random_cached_key()}, *_schema, use_cache::yes);
             if (!result) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }

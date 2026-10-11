@@ -131,7 +131,7 @@ class logstor_range_reader : public mutation_reader::impl {
     dht::partition_range _pr;
     primary_index::token_range_scan _scan;
     query::partition_slice _slice;
-    bool _bypass_cache;
+    const use_cache _use_cache;
     tracing::trace_state_ptr _trace_state;
 
     // A mutation read from the log, together with the permit memory it is accounted
@@ -273,11 +273,9 @@ class logstor_range_reader : public mutation_reader::impl {
         batch.slots.reserve(index_batch->entry_count);
         for (const auto& entry : index_batch->entries) {
             batch_slot slot{.location = entry.get().entry().location};
-            if (!_bypass_cache) {
-                if (auto cached = _index.lookup_cached(entry.get(), *_schema)) {
-                    auto memory = _permit.consume_memory(cached->memory_usage(*_schema));
-                    slot.mut = pending_mutation{std::move(*cached), std::move(memory)};
-                }
+            if (auto cached = _index.lookup_cached(entry.get(), *_schema, _use_cache)) {
+                auto memory = _permit.consume_memory(cached->memory_usage(*_schema));
+                slot.mut = pending_mutation{std::move(*cached), std::move(memory)};
             }
             batch.slots.push_back(std::move(slot));
         }
@@ -350,7 +348,7 @@ public:
         , _logstor(ls), _index(idx), _pr(std::move(pr))
         , _scan(_index.scan(partition_range_to_token_range(_pr)))
         , _slice(std::move(slice))
-        , _bypass_cache(_slice.options.contains(query::partition_slice::option::bypass_cache))
+        , _use_cache(!_slice.options.contains(query::partition_slice::option::bypass_cache))
         , _trace_state(std::move(ts))
         , _current_partition_memory(_permit.consume_memory())
     {}
