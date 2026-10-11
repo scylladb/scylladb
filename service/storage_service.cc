@@ -4459,7 +4459,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     _feature_service,
                     [&] (mutation m) -> future<> {
                         updates.emplace_back(co_await make_canonical_mutation_gently(m));
-                    });
+                    },
+                    tombstone());
             };
 
             if (use_pow2_presplit) {
