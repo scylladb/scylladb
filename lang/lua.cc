@@ -9,6 +9,7 @@
 #include <boost/date_time/gregorian/greg_date.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <random>
+#include <ranges>
 #include "lua.hh"
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
@@ -727,7 +728,11 @@ struct from_lua_visitor {
         }
 
         size_t num_elements = t.size();
-        std::vector<std::optional<data_value>> opt_elements(num_elements);
+        // A Lua table can't hold a nil value, so a tuple component which is
+        // missing from the table is null.
+        auto elements = t.all_types()
+                | std::views::transform(data_value::make_null)
+                | std::ranges::to<std::vector>();
 
         lua_pushnil(l);
         while (lua_next(l, -2) != 0) {
@@ -737,18 +742,8 @@ struct from_lua_visitor {
                         seastar::format("key {} is not valid for a sequence of size {}", k_varint.str(), num_elements));
             }
             size_t k = size_t(k_varint);
-            opt_elements[k - 1] = convert_from_lua(l, t.type(k - 1));
+            elements[k - 1] = convert_from_lua(l, t.type(k - 1));
             lua_pop(l, 1);
-        }
-
-        std::vector<data_value> elements;
-        elements.reserve(num_elements);
-        for (size_t i = 0; i < num_elements; ++i) {
-            if (!opt_elements[i]) {
-                throw exceptions::invalid_request_exception(
-                        format("key {} missing in sequence of size {}", i + 1, num_elements));
-            }
-            elements.push_back(*opt_elements[i]);
         }
         return make_tuple_value(t.shared_from_this(), std::move(elements));
     }
@@ -799,7 +794,11 @@ struct from_lua_visitor {
             field_types.insert({t.field_name_as_string(i), {i, t.field_type(i)}});
         }
 
-        std::vector<std::optional<data_value>> opt_elements(num_fields);
+        // A Lua table can't hold a nil value, so a field which is missing
+        // from the table is null.
+        auto elements = t.field_types()
+                | std::views::transform(data_value::make_null)
+                | std::ranges::to<std::vector>();
         lua_pushnil(l);
         while (lua_next(l, -2) != 0) {
             auto s = get_string(l, -2);
@@ -812,17 +811,7 @@ struct from_lua_visitor {
             auto v = convert_from_lua(l, p.second);
             lua_pop(l, 1);
 
-            opt_elements[p.first] = std::move(v);
-        }
-
-        std::vector<data_value> elements;
-        elements.reserve(num_fields);
-        for (size_t i = 0; i < num_fields; ++i) {
-            if (!opt_elements[i]) {
-                throw exceptions::invalid_request_exception(
-                        format("key {} missing in udt {}", t.field_name_as_string(i), t.get_name_as_string()));
-            }
-            elements.push_back(*opt_elements[i]);
+            elements[p.first] = std::move(v);
         }
 
         return make_user_value(t.shared_from_this(), std::move(elements));

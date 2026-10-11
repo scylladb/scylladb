@@ -1467,9 +1467,8 @@ def testFunctionWithFrozenMapType(cql):
         assert_invalid_message(cql, table, "Argument 'frozen<map<int, int>>' cannot be frozen; remove frozen<> modifier from 'frozen<map<int, int>>'",
                              "DROP AGGREGATE " + ks + "." + unique_name() + " (frozen<map<int, int>>);")
 
-# Reproduces SCYLLADB-5164 (a Lua function can't return a tuple with null
+# Reproduces SCYLLADB-5164 (a Lua function couldn't return a tuple with null
 # components)
-@pytest.mark.xfail(reason="SCYLLADB-5164")
 def testFunctionWithFrozenTupleType(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<tuple<int, int>>)") as table:
         execute(cql, table, "CREATE INDEX ON %s (b)")

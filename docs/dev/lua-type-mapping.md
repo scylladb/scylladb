@@ -104,7 +104,10 @@ table that is not a sequence.
 ## TUPLE
 
 A tuple is represented the same way as a list, but on return we check
-the number of elements and the types.
+that there are no keys beyond the number of elements, and the types.
+A Lua table can't hold a nil value, so a null element is represented by
+a missing key: the tuple (1, null, 3) is represented as
+{[1] = 1, [3] = 3}, and on return a missing key is a null element.
 
 ## MAP
 
@@ -116,8 +119,10 @@ represented as {foo = 42}.
 A UDT is represented by a table like a map, but on return we check
 that:
 * There are no unexpected keys
-* All expected keys are present
 * The fields have valid types
+
+A Lua table can't hold a nil value, so a null field is represented by a
+missing key, and on return a missing key is a null field.
 
 ## SET
 
