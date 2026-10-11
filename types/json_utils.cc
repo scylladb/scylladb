@@ -502,6 +502,15 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
         ++ti;
         ++vi;
     }
+    // A tuple value may be serialized with fewer components than its type
+    // has (e.g., when written as the CQL literal (1) for a tuple<int, text>).
+    // The missing components are null, so print them as such.
+    for (; ti != t.all_types().end(); ++ti) {
+        if (ti != t.all_types().begin()) {
+            out << ", ";
+        }
+        out << "null";
+    }
 
     out << ']';
     return std::move(out).str();
