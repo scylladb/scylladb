@@ -68,8 +68,7 @@ def create_user(cql, user):
     cql.execute("CREATE ROLE %s WITH LOGIN = TRUE AND password='%s'" % (user, pass_))
 
 # Reproduces SCYLLADB-5145: GRANT and REVOKE of multiple permissions in one
-# statement aren't supported.
-@pytest.mark.xfail(reason="SCYLLADB-5145")
+# statement weren't supported.
 def testGrantedKeyspace(cql, this_dc):
     user = "user_" + unique_name()
     with keyspace_per_test(cql) as KEYSPACE_PER_TEST, dropped_roles(cql, user):
@@ -200,9 +199,7 @@ def testGrantedKeyspace(cql, this_dc):
 
 # Reproduces SCYLLADB-5230: GRANT and REVOKE ON ALL TABLES IN KEYSPACE
 # (added in Cassandra 4.1, CASSANDRA-17027) aren't supported.
-# Also reproduces SCYLLADB-5145: GRANT and REVOKE of multiple permissions in
-# one statement aren't supported.
-@pytest.mark.xfail(reason="SCYLLADB-5230, SCYLLADB-5145")
+@pytest.mark.xfail(reason="SCYLLADB-5230")
 def testGrantedAllTables(cql):
     user = "user_" + unique_name()
     with keyspace_per_test(cql) as KEYSPACE_PER_TEST, dropped_roles(cql, user):
@@ -337,9 +334,7 @@ def assertWarningsContain(result, message):
 
 # Reproduces SCYLLADB-5231: GRANT and REVOKE which don't change anything
 # don't return a warning (added in Cassandra 4.1, CASSANDRA-17333).
-# Also reproduces SCYLLADB-5145: GRANT and REVOKE of multiple permissions in
-# one statement aren't supported.
-@pytest.mark.xfail(reason="SCYLLADB-5231, SCYLLADB-5145")
+@pytest.mark.xfail(reason="SCYLLADB-5231")
 def testWarnings(cql):
     user = "user_" + unique_name()
     with new_test_keyspace(cql, "WITH replication = " + KEYSPACE_REPLICATION) as revoke_yeah, dropped_roles(cql, user):
