@@ -23,6 +23,8 @@ uint32_t chunk_header::calculate_crc(const std::optional<segment_header>& sh) co
     c.process_le(reserved);
     c.process_le(segment_seq.value);
     c.process_le(records_size);
+    c.process_le(body_crc);
+    c.process_le(reserved2);
     if (sh) {
         c.process_le(sh->table.uuid().get_most_significant_bits());
         c.process_le(sh->table.uuid().get_least_significant_bits());
@@ -53,6 +55,12 @@ bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_
         return false;
     }
     return ch.calculate_crc(sh) == ch.crc;
+}
+
+uint32_t calculate_body_crc(std::span<const char> body) {
+    utils::crc32 c;
+    c.process(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+    return c.get();
 }
 
 void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size) {

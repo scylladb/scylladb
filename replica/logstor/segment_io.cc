@@ -118,16 +118,26 @@ segment_info make_segment_info(const chunk_headers& headers) {
     return seg_info;
 }
 
-// Reads the body of the chunk whose headers the reader read last: its record frames. Returns
-// nullopt if the body goes past the end of the segment or the stream ends first.
+// Reads the body of the chunk whose headers the reader read last - its record frames - and checks
+// it against the header's body CRC. Returns nullopt if the body goes past the end of the segment,
+// the stream ends first, or the CRC does not match.
+//
+// The scan delivers no record of a chunk before this check: a torn chunk can hold records of an
+// earlier use of the segment that parse cleanly. See chunk_header::body_crc.
 future<std::optional<temporary_buffer<char>>> read_chunk_body(segment_reader& reader,
         const ondisk::chunk_header& ch,
+        log_segment_id segment_id,
         size_t segment_size) {
     if (ch.records_size > segment_size - reader.position()) {
         co_return std::nullopt;
     }
     auto body = co_await reader.read_exactly(ch.records_size);
     if (body.size() < ch.records_size) {
+        co_return std::nullopt;
+    }
+    if (!ondisk::validate_chunk_body(ch, std::span(body.get(), body.size()))) {
+        // After a crash, this is the torn last chunk of a segment. Anywhere else, it is corruption.
+        logstor_logger.warn("The chunk body in {} at {} does not match its CRC. The scan stops.", segment_id, ch.segment_seq);
         co_return std::nullopt;
     }
     co_return body;
@@ -142,7 +152,8 @@ struct parsed_record {
 // frame header is invalid or the record does not fit in what is left of records.
 std::optional<parsed_record> read_record(simple_memory_input_stream& records) {
     // The sizes a record claims are checked against what is left of the chunk's records before
-    // they are trusted.
+    // they are trusted, as the CRC only says the bytes are the ones written, not that the writer
+    // was right.
     const size_t bytes_left = records.size();
     if (bytes_left < min_frame_size) {
         return std::nullopt;
@@ -238,12 +249,13 @@ future<> scan_segment(seastar::input_stream<char>& in,
             break;
         }
 
+        // The segment info comes before the body check. Recovery takes the highest segment_seq from
+        // it, and a segment_seq that is on disk must not go to a new segment again, even when the
+        // body of its chunk is torn.
         auto seg_info = make_segment_info(*headers);
         co_await on_segment_info(seg_info);
 
-        // TODO crc, torn writes
-
-        auto body_buf = co_await read_chunk_body(reader, ch, segment_size);
+        auto body_buf = co_await read_chunk_body(reader, ch, segment_id, segment_size);
         if (!body_buf) {
             break;
         }

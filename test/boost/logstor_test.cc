@@ -142,6 +142,20 @@ ondisk::segment_header read_segment_header(const temporary_buffer<char>& buf) {
     return ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
 }
 
+// Recomputes the chunk header's CRCs over the bytes as they are now, for a test that corrupts the
+// records on purpose and wants the scan to get past the body CRC to what it is testing.
+void reseal_chunk_crcs(temporary_buffer<char>& buf) {
+    auto ch = read_chunk_header(buf);
+    std::optional<ondisk::segment_header> sh;
+    if (ch.kind == segment_kind::full) {
+        sh = read_segment_header(buf);
+    }
+    ch.body_crc = ondisk::calculate_body_crc(std::span(buf.get() + raw_write_buffer::chunk_headers_size(ch.kind), ch.records_size));
+    ch.crc = ch.calculate_crc(sh);
+    seastar::simple_memory_output_stream out(buf.get_write(), ondisk::chunk_header_size);
+    ser::serialize<ondisk::chunk_header>(out, ch);
+}
+
 struct rewritten_stream_result {
     temporary_buffer<char> data;
     size_t write_count{0};
@@ -456,6 +470,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .reserved = 0x1234,
         .segment_seq = segment_sequence{0x0102030405060708},
         .records_size = 0xdeadbeef,
+        .body_crc = 0x0badf00d,
+        .reserved2 = 0x5eed1e55,
         .crc = 0xfeedface,
     });
 
@@ -1565,6 +1581,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         // The first record_frame_header of the first chunk follows the chunk header; key_size is its first field.
         seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size, sizeof(uint32_t));
         ser::serialize(out, key_size);
+        // The corruption is in the records, which is what the body CRC would catch first.
+        reseal_chunk_crcs(serialized0);
 
         auto segment = concat_chunks({&serialized0, &serialized1});
         const auto segment_size = segment.size();
@@ -1868,6 +1886,80 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_heade
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos, 0u);
     BOOST_REQUIRE_EQUAL(seen_headers, 0u);
+}
+
+// A crash while a chunk is being written over a reused segment can leave the headers on disk and
+// only part of the body, with the previous incarnation's bytes in the rest. Where the old and the
+// new records' boundaries line up - here, as they do under a uniform record size - the old records
+// parse cleanly under the new header, so the scan has to check the chunk's body CRC before it
+// delivers anything of the chunk. It still reports the segment info of the chunk, as recovery
+// takes the highest segment_seq on disk from it.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_torn_chunk) {
+    auto schema = make_kv_schema();
+    constexpr size_t record_size = 1024;
+    constexpr size_t record_count = 4;
+
+    auto make_chunk = [&] (const char* key_prefix, api::timestamp_type first_ts, segment_sequence seq) {
+        raw_write_buffer wb(64 * 1024, segment_kind::mixed);
+        for (size_t i = 0; i < record_count; ++i) {
+            auto m = make_kv_mutation_of_record_size(schema, fmt::format("{}{}", key_prefix, i), record_size);
+            wb.append(log_record_writer(log_record {
+                .header = {
+                    .key = m.decorated_key(),
+                    .timestamp = api::timestamp_type(first_ts + i),
+                    .table = schema->id(),
+                },
+                .value = encode_record_value(m),
+            }));
+        }
+        wb.seal(seq, std::nullopt, ondisk::block_alignment);
+        return copy_chunk(wb.chunk());
+    };
+    auto old_incarnation = make_chunk("old", api::timestamp_type(1), segment_sequence{10});
+    auto new_incarnation = make_chunk("new", api::timestamp_type(11), segment_sequence{11});
+    BOOST_REQUIRE_EQUAL(old_incarnation.size(), new_incarnation.size());
+
+    // The header and the first two record frames of the new incarnation made it to disk, the rest
+    // is still the old one's.
+    const size_t torn_at = ondisk::chunk_header_size + 2 * align_up(ondisk::record_frame_header_size + record_size, ondisk::record_alignment);
+    auto torn = slice_buffer(new_incarnation, 0, new_incarnation.size());
+    std::copy_n(old_incarnation.get() + torn_at, old_incarnation.size() - torn_at, torn.get_write() + torn_at);
+
+    struct scan_result {
+        std::vector<segment_sequence> segment_seqs;
+        std::vector<api::timestamp_type> timestamps;
+    };
+    auto scan = [] (const temporary_buffer<char>& buf) {
+        scan_result result;
+        auto in = seastar::util::as_input_stream(slice_buffer(buf, 0, buf.size()));
+        scan_segment(in, log_segment_id{8}, buf.size(),
+            [&result] (const segment_info& info) {
+                result.segment_seqs.push_back(info.segment_seq);
+                return make_ready_future<>();
+            },
+            [] (record_location, const record_header&) {
+                return want_data::yes;
+            },
+            [&result] (record_location, log_record rec) {
+                result.timestamps.push_back(rec.header.timestamp);
+                return make_ready_future<>();
+            }).get();
+        in.close().get();
+        return result;
+    };
+
+    const auto torn_result = scan(torn);
+    BOOST_REQUIRE(torn_result.segment_seqs == std::vector<segment_sequence>{segment_sequence{11}});
+    BOOST_REQUIRE(torn_result.timestamps.empty());
+
+    // The same bytes with the CRCs matching them, which is what a scan that did not check the body
+    // would see: the old incarnation's records come back under the new sequence.
+    reseal_chunk_crcs(torn);
+    const auto resealed_result = scan(torn);
+    const auto expected = std::vector<api::timestamp_type>{
+        api::timestamp_type(11), api::timestamp_type(12), api::timestamp_type(3), api::timestamp_type(4),
+    };
+    BOOST_REQUIRE(resealed_result.timestamps == expected);
 }
 
 // Checks that the rewriter updates the initial full chunk header sequence number.

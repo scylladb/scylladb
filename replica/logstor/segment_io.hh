@@ -53,6 +53,8 @@ concept log_record_consumer_like =
     (std::invocable<Consumer&, record_location, const record_header&, log_record_bytes_view> &&
      std::same_as<std::invoke_result_t<Consumer&, record_location, const record_header&, log_record_bytes_view>, future<>>);
 
+// The segment info of the segment's first chunk, or nothing if its headers are not valid. The
+// chunk's body is not read, so a torn chunk is told apart only by scan_segment().
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
 
 future<> scan_segment(seastar::input_stream<char>& in,

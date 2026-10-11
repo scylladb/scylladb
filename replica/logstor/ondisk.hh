@@ -10,6 +10,7 @@
 
 #include <limits>
 #include <optional>
+#include <span>
 
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
@@ -55,9 +56,9 @@ struct segment_header;
 
 // A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
 // a multiple of it. A chunk is this header, the segment_header in a full segment, and the record
-// frames. Chunks are appended to a mixed segment one at a time; a full segment is a single chunk.
-// A write buffer builds a chunk in memory and seals it - pads it and fills in its header - before
-// it is written.
+// frames, which are the chunk's body. Chunks are appended to a mixed segment one at a time; a full
+// segment is a single chunk. A write buffer builds a chunk in memory and seals it - pads it and
+// fills in its header - before it is written.
 struct chunk_header {
     uint32_t magic;
     segment_kind kind;
@@ -65,6 +66,11 @@ struct chunk_header {
     uint16_t reserved;
     segment_sequence segment_seq;
     uint32_t records_size; // size of the record frames following the header(s), padding included
+    // CRC32 of the chunk's body: the record frames, records_size bytes after the headers. It is what
+    // tells a chunk whose header is durable but whose body was only partly written - a crash mid-write
+    // over a reused segment - from a whole one.
+    uint32_t body_crc;
+    uint32_t reserved2;
     uint32_t crc; // of the fields above, and of the segment header in a full segment
 
     uint32_t calculate_crc(const std::optional<segment_header>& sh) const;
@@ -103,6 +109,14 @@ bool validate_chunk_header_fields(const chunk_header& ch);
 // are valid, a segment header is there exactly in a full segment, and the CRC matches.
 bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh);
 
+// The CRC a chunk header carries in body_crc, over the chunk's body.
+uint32_t calculate_body_crc(std::span<const char> body);
+
+// Whether the body of the chunk - its record frames - is the one the header was written with.
+inline bool validate_chunk_body(const chunk_header& ch, std::span<const char> body) {
+    return calculate_body_crc(body) == ch.body_crc;
+}
+
 inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
     // A record always carries an encoded value, so a zero value_size cannot come from a record
     // this code wrote. It is what a scan sees in the zero-filled tail of a torn
@@ -129,6 +143,8 @@ struct serializer<replica::logstor::ondisk::chunk_header> {
         + sizeof(uint16_t)          // reserved
         + sizeof(uint64_t)          // segment_seq
         + sizeof(uint32_t)          // records_size
+        + sizeof(uint32_t)          // body_crc
+        + sizeof(uint32_t)          // reserved2
         + sizeof(uint32_t);         // crc
 
     template <typename Output>
@@ -139,6 +155,8 @@ struct serializer<replica::logstor::ondisk::chunk_header> {
         serializer<uint16_t>::write(out, h.reserved);
         serializer<uint64_t>::write(out, h.segment_seq.value);
         serializer<uint32_t>::write(out, h.records_size);
+        serializer<uint32_t>::write(out, h.body_crc);
+        serializer<uint32_t>::write(out, h.reserved2);
         serializer<uint32_t>::write(out, h.crc);
     }
 
@@ -151,6 +169,8 @@ struct serializer<replica::logstor::ondisk::chunk_header> {
         h.reserved = serializer<uint16_t>::read(in);
         h.segment_seq = replica::logstor::segment_sequence{serializer<uint64_t>::read(in)};
         h.records_size = serializer<uint32_t>::read(in);
+        h.body_crc = serializer<uint32_t>::read(in);
+        h.reserved2 = serializer<uint32_t>::read(in);
         h.crc = serializer<uint32_t>::read(in);
         return h;
     }
@@ -162,6 +182,8 @@ struct serializer<replica::logstor::ondisk::chunk_header> {
         serializer<uint8_t>::skip(in);
         serializer<uint16_t>::skip(in);
         serializer<uint64_t>::skip(in);
+        serializer<uint32_t>::skip(in);
+        serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
