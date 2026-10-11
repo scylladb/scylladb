@@ -1092,7 +1092,6 @@ def testInsertJsonSyntaxDefaultUnset(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k=2"), [2, None, None])
 
 # Reproduces issues #8078, #8086
-@pytest.mark.xfail(reason="issues #8086")
 def testCaseSensitivity(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, \"Foo\" int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"\\\"Foo\\\"\": 0}")

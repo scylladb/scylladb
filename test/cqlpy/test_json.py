@@ -11,7 +11,7 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int, new_test_table, is_scylla
+from .util import unique_name, unique_key_int, new_test_table, is_scylla, new_type
 
 from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
@@ -708,3 +708,64 @@ def test_insert_json_invalid(cql, table1):
     # A null bound value is also an InvalidRequest error.
     with pytest.raises(InvalidRequest):
         cql.execute(stmt, [None])
+
+# Test that the field names of a user-defined type in JSON follow the same
+# case-sensitivity rules as column names: In INSERT JSON and fromJson(), a
+# field name in quotes (e.g., "\"Foo\"") is case-sensitive, and other field
+# names are case-insensitive (so "a" and "A" both mean the field a, and
+# "Foo" means foo). SELECT JSON and toJson() print a field name which has
+# uppercase letters in quotes, so it can be read back.
+# Reproduces #8086.
+def test_json_udt_case_sensitive_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, "Foo" int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            insert_json = cql.prepare(f"INSERT INTO {table} JSON ?")
+            for v in ['{"a": 1, "\\"Foo\\"": 2}', '{"A": 1, "\\"Foo\\"": 2}']:
+                cql.execute(insert_json, ['{"p": %d, "v": %s}' % (p, v)])
+                [(j,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")
+                assert json.loads(j) == {"v": {"a": 1, '"Foo"': 2}}
+            # An unquoted "Foo" means the field foo, which doesn't exist
+            with pytest.raises(InvalidRequest):
+                cql.execute(insert_json, ['{"p": %d, "v": {"Foo": 2}}' % p])
+            insert_fromjson = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, fromJson(?))")
+            cql.execute(insert_fromjson, [p, '{"a": 3, "\\"Foo\\"": 4}'])
+            [(j,)] = cql.execute(f"SELECT toJson(v) FROM {table} WHERE p = {p}")
+            assert json.loads(j) == {"a": 3, '"Foo"': 4}
+
+# A UDT field name may itself begin and end with a double-quote character:
+# The CQL identifier """foo""" is the name "foo", including the quotes.
+# SELECT JSON must print such a name in an additional pair of quotes,
+# otherwise INSERT JSON of its output would remove the name's own quotes,
+# and write its value to a different field - here, foo. Cassandra has this
+# bug (CASSANDRA-21746), so this test is marked cassandra_bug.
+# Reproduces #8086 (an edge case of its fix).
+def test_json_udt_quoted_field_name(cql, test_keyspace, cassandra_bug):
+    with new_type(cql, test_keyspace, '("""foo""" int, foo int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            cql.execute(f'INSERT INTO {table} (p, v) VALUES ({p}, {{"""foo""": 1, foo: 2}})')
+            [(j,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")
+            p2 = unique_key_int()
+            cql.execute(cql.prepare(f"INSERT INTO {table} JSON ?"), [json.dumps({**json.loads(j), 'p': p2})])
+            [(j2,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p2}")
+            assert json.loads(j2) == json.loads(j)
+
+# Because field names in JSON are case-insensitive unless quoted, two
+# different names in a JSON object may refer to the same UDT field (e.g.,
+# "a" and "A"). Such ambiguous input, like a repeated name, should be
+# rejected rather than silently ignoring one of the values. This test is
+# scylla_only because Cassandra accepts this input, and silently uses one of
+# the values - not even consistently the first or the last one.
+# Reproduces #8086 (an edge case of its fix).
+def test_json_udt_duplicate_field(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f'p int primary key, v frozen<{typ}>') as table:
+            p = unique_key_int()
+            insert_json = cql.prepare(f'INSERT INTO {table} JSON ?')
+            insert_fromjson = cql.prepare(f'INSERT INTO {table} (p, v) VALUES (?, fromJson(?))')
+            for v in ['{"a": 1, "A": 2}', '{"A": 1, "a": 2}', '{"a": 1, "a": 2}', '{"a": 1, "\\"a\\"": 2}']:
+                with pytest.raises(InvalidRequest, match='Duplicate field'):
+                    cql.execute(insert_json, ['{"p": %d, "v": %s}' % (p, v)])
+                with pytest.raises(FunctionFailure, match='Duplicate field'):
+                    cql.execute(insert_fromjson, [p, v])
