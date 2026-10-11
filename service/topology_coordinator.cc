@@ -3627,6 +3627,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+            // The mutations replace the table's partition in system.tablets, so they must carry over its truncation tombstone.
             co_await replica::tablet_map_to_mutations(
                 new_tablet_map,
                 table_id,
@@ -3636,7 +3637,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 _feature_service,
                 [&] (mutation m) -> future<> {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
-                });
+                },
+                tm->tablets().get_truncated_at(table_id));
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
@@ -4020,7 +4022,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             for (const auto& [tid, cf_name] : it->second) {
                 auto cm = co_await make_canonical_mutation_gently(
-                        replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp()));
+                        replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp(), tombstone()));
                 size += cm.representation().size();
                 out.emplace_back(std::move(cm));
                 rtlogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})", ks_name, cf_name, base_id);
@@ -4054,7 +4056,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto cm = co_await make_canonical_mutation_gently(m);
                         table_size += cm.representation().size();
                         table_updates.emplace_back(std::move(cm));
-                    });
+                    }, tombstone());
             measured = table_size;
             // The views co-located with the table go into the same command as its map.
             const size_t colocated = co_await append_colocated_tablet_map_mutations(tid, table_updates, table_size);
