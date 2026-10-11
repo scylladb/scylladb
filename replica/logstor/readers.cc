@@ -238,42 +238,31 @@ public:
     }
 };
 
-class logstor_range_reader : public mutation_reader::impl {
+class logstor_range_reader : public logstor_reader_base {
     segment_manager& _segment_manager;
     const primary_index& _index;
     dht::partition_range _pr;
     primary_index::token_range_scan _scan;
-    query::partition_slice _slice;
-    const use_cache _use_cache;
     tracing::trace_state_ptr _trace_state;
 
-    // A mutation read from the log, together with the permit memory it is accounted
-    // with. Mutations are held until they are fragmented into the reader's buffer,
-    // which does its own accounting, so they are charged for from the moment they
-    // are read until the partition reader holding them is closed.
-    struct pending_mutation {
-        mutation mut;
-        reader_permit::resource_units memory;
-    };
+    // The partitions of a batch that are not in the buffer yet, in ring order. Charged to the
+    // permit from the moment they were read or copied out of the cache until their fragments
+    // account for themselves: the buffer does its own accounting, and they are not in it.
+    std::queue<pending_partition> _pending;
 
-    std::queue<pending_mutation> _pending_mutations;
-    mutation_reader_opt _current_partition_reader;
-    reader_permit::resource_units _current_partition_memory;
-
-    // One entry of a batch: where its record lives, and the mutation once it is available,
-    // either taken from the cache while the index entry was still in hand or read from the log.
+    // One entry of a batch: where its record lives, and the partition once it is available -
+    // taken from the cache while the index entry was still in hand, or read from the log.
     struct batch_slot {
         record_location location;
-        std::optional<pending_mutation> mut;
+        std::optional<pending_partition> partition;
     };
 
-    struct mutation_batch {
+    struct partition_batch {
         std::vector<batch_slot> slots;
         // Keeps the locations of the slots readable until the batch is read.
         index_read_guard guard;
         dht::token first_token;
         dht::token last_token;
-        bool exhausted;
     };
 
     static dht::token_range partition_range_to_token_range(const dht::partition_range& pr) {
@@ -297,10 +286,17 @@ class logstor_range_reader : public mutation_reader::impl {
         return dht::token_range(std::move(start), std::move(end));
     }
 
+    // A partition of a batch, charged from now: it waits in the batch and then in
+    // _pending, across fills, before it goes into the buffer.
+    pending_partition make_pending(dht::decorated_key key, single_row_partition partition) {
+        auto memory = _permit.consume_memory(waiting_memory_usage(key, partition));
+        return pending_partition{std::move(key), std::move(partition), std::move(memory)};
+    }
+
     // Reads the records the cache did not have, filling each slot in place so that the batch
     // keeps the index order the scan produced. A range read does not populate the cache: a
     // scan would pull a whole table through it and evict what the point reads rely on.
-    future<std::vector<pending_mutation>> read_mutations_for_batch(mutation_batch& batch) {
+    future<std::vector<pending_partition>> read_partitions_for_batch(partition_batch& batch) {
         auto guard = reader_permit::awaits_guard(_permit);
         auto& slots = batch.slots;
 
@@ -308,24 +304,23 @@ class logstor_range_reader : public mutation_reader::impl {
         reads.reserve(slots.size());
 
         for (auto& slot : slots) {
-            if (slot.mut) {
+            if (slot.partition) {
                 continue;
             }
             reads.push_back(_segment_manager.read(batch.guard, slot.location).then([this, &slot] (log_record record) {
-                auto mut = decode_record_value(record.value, _schema, record.header);
-                auto memory = _permit.consume_memory(mut.memory_usage(*_schema));
-                slot.mut = pending_mutation{std::move(mut), std::move(memory)};
+                auto partition = to_single_row_partition(decode_record_value(record.value, _table_schema, record.header));
+                slot.partition = make_pending(std::move(record.header.key), std::move(partition));
             }));
         }
 
         co_await when_all_succeed(reads.begin(), reads.end());
 
-        std::vector<pending_mutation> mutations;
-        mutations.reserve(slots.size());
+        std::vector<pending_partition> partitions;
+        partitions.reserve(slots.size());
         for (auto& slot : slots) {
-            mutations.push_back(std::move(*slot.mut));
+            partitions.push_back(std::move(*slot.partition));
         }
-        co_return mutations;
+        co_return partitions;
     }
 
     // Primary-index scan order is by (token, key hash). That means the batch already arrives
@@ -338,64 +333,68 @@ class logstor_range_reader : public mutation_reader::impl {
     // partition_range_to_token_range() keeps the whole token of a key-bearing bound. Sorting
     // each same-token run first means that filtering against the non-wrapping partition range
     // can only remove a prefix and/or a suffix of the batch.
-    void sort_and_filter_mutations_for_range(std::vector<pending_mutation>& mutations) const {
+    void sort_and_filter_partitions_for_range(std::vector<pending_partition>& partitions) const {
         auto cmp = dht::ring_position_comparator(*_schema);
-        auto in_range = [&] (const pending_mutation& pending) {
-            return _pr.contains(dht::ring_position(pending.mut.decorated_key()), cmp);
+        auto in_range = [&] (const pending_partition& p) {
+            return _pr.contains(dht::ring_position(p.key), cmp);
         };
 
-        auto run_begin = mutations.begin();
-        while (run_begin != mutations.end()) {
-            const auto& token = run_begin->mut.decorated_key().token();
-            auto run_end = std::ranges::find_if(run_begin, mutations.end(), [&] (const pending_mutation& pending) {
-                return pending.mut.decorated_key().token() != token;
+        auto run_begin = partitions.begin();
+        while (run_begin != partitions.end()) {
+            const auto& token = run_begin->key.token();
+            auto run_end = std::ranges::find_if(run_begin, partitions.end(), [&] (const pending_partition& p) {
+                return p.key.token() != token;
             });
             if (std::distance(run_begin, run_end) > 1) {
-                std::ranges::sort(run_begin, run_end, [&] (const pending_mutation& lhs, const pending_mutation& rhs) {
-                    return cmp(lhs.mut.decorated_key(), rhs.mut.decorated_key()) < 0;
+                std::ranges::sort(run_begin, run_end, [&] (const pending_partition& lhs, const pending_partition& rhs) {
+                    return cmp(lhs.key, rhs.key) < 0;
                 });
             }
             run_begin = run_end;
         }
 
-        auto first_in_range = std::ranges::find_if(mutations, in_range);
-        if (first_in_range == mutations.end()) {
-            mutations.clear();
+        auto first_in_range = std::ranges::find_if(partitions, in_range);
+        if (first_in_range == partitions.end()) {
+            partitions.clear();
             return;
         }
 
-        auto last_in_range = std::ranges::find_if(mutations.rbegin(), mutations.rend(), in_range).base();
-        mutations.erase(last_in_range, mutations.end());
-        mutations.erase(mutations.begin(), first_in_range);
+        auto last_in_range = std::ranges::find_if(partitions.rbegin(), partitions.rend(), in_range).base();
+        partitions.erase(last_in_range, partitions.end());
+        partitions.erase(partitions.begin(), first_in_range);
     }
 
     // Must not yield: the entries the scan returns are only valid until the next yield, and a
     // cache lookup needs the entry itself, since that is what the cached partition hangs off.
-    std::optional<mutation_batch> collect_batch(size_t max_entries) {
+    std::optional<partition_batch> collect_batch(size_t max_entries) {
         auto index_batch = _scan.next_batch(max_entries);
         if (!index_batch) {
             return std::nullopt;
         }
 
-        mutation_batch batch{
+        partition_batch batch{
             .guard = std::move(index_batch->guard),
             .first_token = index_batch->first_token,
             .last_token = index_batch->last_token,
-            .exhausted = index_batch->exhausted,
         };
         batch.slots.reserve(index_batch->entry_count);
         for (const auto& entry : index_batch->entries) {
             batch_slot slot{.location = entry.get().entry().location};
-            if (auto cached = _index.lookup_cached(entry.get(), *_schema, _use_cache)) {
-                auto memory = _permit.consume_memory(cached->memory_usage(*_schema));
-                slot.mut = pending_mutation{std::move(*cached), std::move(memory)};
+            if (auto cached = _index.lookup_cached(entry.get(), *_table_schema, _use_cache)) {
+                // Copied, since to_single_row_partition() takes only the row out of the mutation.
+                auto key = cached->decorated_key();
+                slot.partition = make_pending(std::move(key), to_single_row_partition(std::move(*cached)));
             }
             batch.slots.push_back(std::move(slot));
         }
         return batch;
     }
 
-    future<bool> load_next_token_mutations() {
+    // Takes the next batch of entries from the scan, which may span many tokens, and queues their
+    // partitions in ring order. Returns false when the scan has no more entries.
+    future<bool> load_next_batch() {
+        // The entries one batch takes from the scan, and so the records read from their segments
+        // concurrently: a scan holds at most this many partitions ahead of its buffer.
         static constexpr size_t read_ahead_entries = 10;
 
         if (_scan.exhausted()) {
@@ -407,84 +406,44 @@ class logstor_range_reader : public mutation_reader::impl {
             co_return false;
         }
 
-        auto mutations = co_await read_mutations_for_batch(*batch);
-        sort_and_filter_mutations_for_range(mutations);
+        auto partitions = co_await read_partitions_for_batch(*batch);
+        sort_and_filter_partitions_for_range(partitions);
 
         tracing::trace(_trace_state,
                 "logstor_range_reader: fetched {} keys for token range [{}, {}]",
-                mutations.size(), batch->first_token, batch->last_token);
+                partitions.size(), batch->first_token, batch->last_token);
 
-        for (auto& m : mutations) {
-            _pending_mutations.push(std::move(m));
+        for (auto& p : partitions) {
+            _pending.push(std::move(p));
         }
         co_return true;
-    }
-
-    bool has_pending_mutations_for_current_token() const {
-        return !_pending_mutations.empty();
-    }
-
-    future<bool> open_next_partition_reader() {
-        while (!has_pending_mutations_for_current_token()) {
-            if (!co_await load_next_token_mutations()) {
-                co_return false;
-            }
-        }
-
-        auto pending = std::move(_pending_mutations.front());
-        _pending_mutations.pop();
-        _current_partition_memory = std::move(pending.memory);
-        _current_partition_reader = make_mutation_reader_from_mutations(
-            _schema, _permit, std::move(pending.mut),
-            _slice, streamed_mutation::forwarding::no
-        );
-        _current_partition_reader->set_max_buffer_size(max_buffer_size_in_bytes);
-        co_return true;
-    }
-
-    future<> reset_current_partition_reader() {
-        if (!_current_partition_reader) {
-            return make_ready_future<>();
-        }
-
-        auto fut = _current_partition_reader->close();
-        _current_partition_reader = std::nullopt;
-        _current_partition_memory.reset_to_zero();
-        return fut;
     }
 
 public:
     logstor_range_reader(schema_ptr s, const primary_index& idx, reader_permit p,
                 segment_manager& sm, dht::partition_range pr,
-                query::partition_slice slice, tracing::trace_state_ptr ts)
-        : impl(std::move(s), std::move(p))
+                const query::partition_slice& slice, tracing::trace_state_ptr ts)
+        : logstor_reader_base(std::move(s), std::move(p), slice)
         , _segment_manager(sm), _index(idx), _pr(std::move(pr))
         , _scan(_index.scan(partition_range_to_token_range(_pr)))
-        , _slice(std::move(slice))
-        , _use_cache(!_slice.options.contains(query::partition_slice::option::bypass_cache))
         , _trace_state(std::move(ts))
-        , _current_partition_memory(_permit.consume_memory())
     {}
 
     virtual future<> fill_buffer() override {
         while (!is_buffer_full() && !_end_of_stream) {
-            // Drain current partition's reader first
-            if (_current_partition_reader) {
-                co_await _current_partition_reader->fill_buffer();
-                _current_partition_reader->move_buffer_content_to(*this);
-                if (!_current_partition_reader->is_end_of_stream()) {
-                    continue;
-                }
-                co_await reset_current_partition_reader();
-                // Open the next partition only when the buffer has room for it. Its
-                // reader is closed by next_partition(), so a partition that was opened
-                // but not produced yet would be skipped.
+            if (emitting()) {
+                emit_rest();
                 continue;
             }
-
-            if (!co_await open_next_partition_reader()) {
+            if (_pending.empty() && !co_await load_next_batch()) {
                 _end_of_stream = true;
                 break;
+            }
+            // A batch filtered down to nothing leaves the queue empty, and the next round loads
+            // the one after it.
+            if (!_pending.empty()) {
+                start_partition(std::move(_pending.front()));
+                _pending.pop();
             }
         }
     }
@@ -495,9 +454,7 @@ public:
             return make_ready_future<>();
         }
         _end_of_stream = false;
-        if (_current_partition_reader) {
-            return reset_current_partition_reader();
-        }
+        drop_partition();
         return make_ready_future<>();
     }
 
@@ -506,21 +463,9 @@ public:
         _end_of_stream = false;
         _pr = pr;
         _scan = _index.scan(partition_range_to_token_range(_pr));
-        _pending_mutations = {};
-        if (_current_partition_reader) {
-            return reset_current_partition_reader();
-        }
+        _pending = {};
+        drop_partition();
         return make_ready_future<>();
-    }
-
-    virtual future<> fast_forward_to(position_range) override {
-        // Clustering forwarding is served by the make_forwardable() wrapper, which
-        // never forwards the underlying reader, see make_reader().
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-    }
-
-    virtual future<> close() noexcept override {
-        return reset_current_partition_reader();
     }
 };
 
