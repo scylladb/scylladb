@@ -1485,16 +1485,15 @@ def test_filter_granted_permissions_by_resource_type_functions(cql, test_keyspac
 
 # Tests for the HASHED PASSWORD option of roles and users, which Cassandra
 # added in Cassandra 4.1. Scylla supports it in CREATE ROLE, ALTER ROLE,
-# CREATE USER and ALTER USER, but doesn't validate the hash (SCYLLADB-5229).
-# The hashes below are bcrypt hashes (the format which Cassandra requires,
-# and Scylla supports) of the password "super_secret_thing".
+# CREATE USER and ALTER USER. The hashes below are bcrypt hashes (the format
+# which Cassandra requires, and Scylla supports) of the password
+# "super_secret_thing".
 hashed_password = "$2a$04$PoiUnv/9OZ5nYjlN087uIe5KLMV6yJfDkgKAAHO0pRVTEvB3UQU/i"
 
-# Check that we can log in as the given user with the password
-# "super_secret_thing".
-def check_login(cql, user):
+# Check that we can log in as the given user with the given password.
+def check_login(cql, user, password="super_secret_thing"):
     endpoint = cql.hosts[0].endpoint
-    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=(cql.cluster.ssl_context is not None), username=user, password="super_secret_thing") as session:
+    with cql_session(host=endpoint.address, port=endpoint.port, is_ssl=(cql.cluster.ssl_context is not None), username=user, password=password) as session:
         session.execute("SELECT key FROM system.local")
 
 def test_create_role_with_hashed_password_login(cql):
@@ -1557,9 +1556,8 @@ def test_create_and_alter_user_with_hashed_password(cql):
     finally:
         cql.execute(f"DROP USER {user2}")
 
-# Reproduces SCYLLADB-5229: a HASHED PASSWORD which isn't a valid hash is
-# accepted, so the role can never log in. Cassandra rejects it.
-@pytest.mark.xfail(reason="SCYLLADB-5229")
+# Reproduces SCYLLADB-5229: a HASHED PASSWORD which isn't a valid hash was
+# accepted, so the role could never log in. Cassandra rejects it.
 def test_create_role_with_invalid_hashed_password(cql):
     role = unique_name()
     try:
@@ -1567,3 +1565,81 @@ def test_create_role_with_invalid_hashed_password(cql):
             cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
     finally:
         cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+# Reproduces SCYLLADB-5229: ALTER ROLE also accepted a HASHED PASSWORD which
+# isn't a valid hash. Check that it is rejected, and that the role's old
+# password remains.
+def test_alter_role_with_invalid_hashed_password(cql):
+    role = unique_name()
+    cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = '{hashed_password}'")
+    try:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"ALTER ROLE {role} WITH HASHED PASSWORD = 'this_is_an_invalid_hash'")
+        check_login(cql, role)
+    finally:
+        cql.execute(f"DROP ROLE {role}")
+
+# Reproduces SCYLLADB-5229: strings which are almost a valid hash were
+# accepted as a HASHED PASSWORD, although no password can match them.
+# Here the string is just a prefix of a valid hash, without its salt.
+@pytest.mark.parametrize("hash", [
+    "",
+    hashed_password[:7],    # only the scheme and cost ("$2a$04$")
+], ids=["empty", "no_salt"])
+def test_create_role_with_almost_valid_hashed_password(cql, hash):
+    role = unique_name()
+    try:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = '{hash}'")
+    finally:
+        cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+# Reproduces SCYLLADB-5229: like the previous test, but here the string
+# has a valid scheme and salt, and only the hash which follows them is
+# missing, truncated, or has an extra character. Cassandra checks only the
+# scheme and salt, so it accepts these strings, and a role with such a
+# hashed password can never log in - so this is a Cassandra bug
+# (CASSANDRA-21744).
+@pytest.mark.parametrize("hash", [
+    hashed_password[:29],   # only the scheme, cost and salt
+    hashed_password[:-1],
+    hashed_password + "x",
+], ids=["no_hash", "truncated", "extra_char"])
+def test_create_role_with_wrong_length_hashed_password(cql, hash, cassandra_bug):
+    role = unique_name()
+    try:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = '{hash}'")
+    finally:
+        cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+# Reproduces SCYLLADB-5229: a string without '$' is read by crypt(3) as a
+# hash of the traditional DES-based scheme, whose first two characters are
+# the salt. But this string can't be such a hash, because it has characters
+# that this scheme's hashes don't have.
+def test_create_role_with_des_shaped_hashed_password(cql):
+    role = unique_name()
+    try:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'not_a_hash_ok'")
+    finally:
+        cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+# A HASHED PASSWORD may use any hashing scheme which Scylla's crypt(3)
+# supports, not just those which Scylla uses itself, and logging in with the
+# password works. This includes the "bigcrypt" scheme, whose hashes grow with
+# the length of the password. This test is scylla_only because Cassandra only
+# supports bcrypt hashes.
+@pytest.mark.parametrize("hash,password", [
+    ("abosjNU668tCk", "verylong"),
+    ("abosjNU668tCkh8OUj3EgOjk", "verylongpassword"),
+    ("$3$$8cc19b6a8cfeac299c2871c86b38de28", "pw"),
+    ("$y$j9T$MRUx292k5JS.rBKW3MWPS1$MB8INh9eaP/JSZWR0ppbvMyOePqSjWttnx02rVwS1v0", "pw"),
+], ids=["des", "bigcrypt", "nt", "yescrypt"])
+def test_create_role_with_other_scheme_hashed_password(cql, hash, password, scylla_only):
+    role = unique_name()
+    cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = '{hash}'")
+    try:
+        check_login(cql, role, password)
+    finally:
+        cql.execute(f"DROP ROLE {role}")

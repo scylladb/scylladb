@@ -1998,13 +1998,20 @@ def test_desc_roles_quotation_marks(cql, scylla_only):
 
         andrew_single_quote = make_identifier(andrew_raw, quotation_mark="'")
         andrew_double_quote = make_identifier(andrew_raw, quotation_mark='"')
+        jane_single_quote = make_identifier(jane_raw, quotation_mark="'")
         jane_double_quote = make_identifier(jane_raw, quotation_mark='"')
 
         andrew_hashed_password = make_identifier(andrew_hashed_password_raw, quotation_mark="'")
         jane_hashed_password = make_identifier(jane_hashed_password_raw, quotation_mark="'")
 
-        cql.execute(f"CREATE ROLE {andrew_single_quote} WITH HASHED PASSWORD = {andrew_hashed_password}")
-        cql.execute(f"CREATE ROLE {jane_double_quote} WITH HASHED PASSWORD = {jane_hashed_password}")
+        # A valid hashed password never contains quotation marks, so CREATE ROLE
+        # rejects these hashed passwords. But older versions of Scylla accepted
+        # them, so they may still be stored, and DESCRIBE must quote them
+        # correctly. So we write them directly into system.roles.
+        cql.execute(f"CREATE ROLE {andrew_single_quote}")
+        cql.execute(f"CREATE ROLE {jane_double_quote}")
+        cql.execute(f"UPDATE system.roles SET salted_hash = {andrew_hashed_password} WHERE role = {andrew_single_quote}")
+        cql.execute(f"UPDATE system.roles SET salted_hash = {jane_hashed_password} WHERE role = {jane_single_quote}")
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS")
         desc_iter = filter_roles(desc_iter)

@@ -601,6 +601,12 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         co_return bounce_to_shard(0, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), false);
     }
 
+    auto before_guard_future = co_await coroutine::as_future(statement->before_guard(*this, query_state));
+    if (before_guard_future.failed()) {
+        co_await audit::inspect(statement, query_state, options, true);
+        std::rethrow_exception(before_guard_future.get_exception());
+    }
+
     auto [remote_, holder] = remote();
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
     while (true)  {
