@@ -120,20 +120,18 @@ public:
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
     // is allocated here, by the first segment taken from it. Each later segment finds the file
-    // allocated and open. The caller must have finished the recovery (I7).
+    // allocated and open. The caller must have finished the recovery (I7). The caller must not call
+    // this again before the call returns, because a second call for a file that is in allocation is
+    // an internal error.
     future<seastar::file> get_file_for_new_segment(file_id_t);
 
-    // The file, if it is already open, which after startup it always is. A caller that finds it here
-    // gets at it without the call and the future that get_file() costs even when it waits for
-    // nothing. Otherwise it returns an unset file, which tells the caller that get_file() must open
-    // the file.
-    seastar::file opened_file(file_id_t file_id) const {
-        check_file_id(file_id);
+    // The open file. The caller must ask for an allocated file (I6), which is open (I2).
+    seastar::file get_open_file(file_id_t file_id) const {
+        if (file_id >= _allocated_file_count) [[unlikely]] {
+            on_internal_error(logstor_logger, fmt::format("Attempted to access file {} that is not allocated, {} files allocated", file_id, _allocated_file_count));
+        }
         return _open_files[file_id];
     }
-
-    // The file, opened if it is not open.
-    future<seastar::file> get_file(file_id_t);
 
     // Writes zeros over the region.
     future<> zero_region(seastar::file file, uint64_t offset, uint64_t size);
@@ -186,8 +184,9 @@ private:
     // Removes a retired file. The caller must have checked that the file is the last one on disk,
     // at or above the configured count, and that it holds no used segment.
     future<> remove_file(file_id_t);
-    // Allocates the file if it is the next one, which waits for it to be formatted, opens it and
-    // starts formatting the one after it in the background.
+    // Allocates the next file: waits for its format, opens it, and starts the format of the file
+    // after it in the background. The caller must give the next file (I1), below the configured
+    // count (I4), and must not call this again before it returns.
     future<> allocate_file(file_id_t);
     future<> format_file(file_id_t);
     // Formats and opens the configured files that are not allocated, in order. Each file counts
@@ -198,13 +197,6 @@ private:
     future<> open_allocated_files();
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> open_file(file_id_t);
-
-    // A file id is valid if _open_files has an entry for it (I5).
-    void check_file_id(file_id_t file_id) const {
-        if (file_id >= _open_files.size()) [[unlikely]] {
-            on_internal_error(logstor_logger, fmt::format("Attempted to access file {} beyond the {} files on disk", file_id, _open_files.size()));
-        }
-    }
 };
 
 }

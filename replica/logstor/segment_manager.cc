@@ -1344,10 +1344,7 @@ future<log_record> segment_manager_impl::read(record_location location) {
     auto [file_id, file_offset] = segment_id_to_file_location(location.segment);
     // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
     // because the read is issued on it and seastar keeps reading from it after the first suspension.
-    auto file = _file_mgr.opened_file(file_id);
-    if (!file) [[unlikely]] {
-        file = co_await _file_mgr.get_file(file_id);
-    }
+    auto file = _file_mgr.get_open_file(file_id);
 
     // The bulk read is what dma_read_exactly() does underneath, over two coroutine frames of its
     // own: one to trim the buffer the disk gave back to the size that was asked for, and one to
@@ -1536,11 +1533,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
         logstor_logger.trace("Discard segment {}", seg_id);
         auto [file_id, file_offset] = segment_id_to_file_location(seg_id);
         // The segments being discarded were written, so their file is allocated and open.
-        auto file = _file_mgr.opened_file(file_id);
-        if (!file) [[unlikely]] {
-            on_internal_error(logstor_logger, format("Discarding segment {} of file {} that is not open", seg_id, file_id));
-        }
-        co_await _file_mgr.zero_region(std::move(file), file_offset, block_alignment);
+        co_await _file_mgr.zero_region(_file_mgr.get_open_file(file_id), file_offset, block_alignment);
         free_segment(seg_id);
     });
 }
@@ -2572,8 +2565,7 @@ public:
 
 future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts) {
     auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
-    auto file = co_await _file_mgr.get_file(file_id);
-    auto stream = make_file_input_stream(std::move(file), file_offset, _cfg.segment_size, opts);
+    auto stream = make_file_input_stream(_file_mgr.get_open_file(file_id), file_offset, _cfg.segment_size, opts);
     co_return std::move(stream);
 }
 
