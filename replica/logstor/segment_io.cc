@@ -123,27 +123,31 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
         // TODO crc, torn writes
 
-        const auto records_end_position = current_position + ch.records_size;
+        if (ch.records_size > segment_size - current_position) {
+            break;
+        }
+        auto body_buf = co_await in.read_exactly(ch.records_size);
+        current_position += ch.records_size;
+        if (body_buf.size() < ch.records_size) {
+            break;
+        }
+
+        auto records = simple_memory_input_stream(body_buf.get(), body_buf.size());
+        // Where the records start within the segment, which is what a record's location is relative to.
+        const size_t records_position = current_position - records.size();
         // The smallest record frame: a record_frame_header and a record_header with an empty key.
         constexpr size_t min_frame_size = ondisk::record_frame_header_size + ondisk::record_header_fixed_size;
 
-        while (current_position < records_end_position) {
-            const auto record_offset = current_position;
-            // What is left of this chunk's records. The stream spans the whole segment and is not
-            // bounded per chunk, so each size is checked against this before its bytes are read;
-            // otherwise a short tail or a record claiming more than the chunk holds would consume
-            // the next chunk's bytes. The loop condition keeps this at 1 or more, so the
-            // subtraction below cannot wrap.
-            const size_t chunk_bytes_left = records_end_position - current_position;
+        while (records.size() > 0) {
+            // What is left of this chunk's records. The sizes a record claims are checked against it
+            // before they are trusted. The loop condition keeps this at 1 or more, so the subtraction
+            // below cannot wrap.
+            const size_t chunk_bytes_left = records.size();
             if (chunk_bytes_left < min_frame_size) {
                 break;
             }
-            auto frame_header_buf = co_await in.read_exactly(ondisk::record_frame_header_size);
-            current_position += ondisk::record_frame_header_size;
-            if (frame_header_buf.size() < ondisk::record_frame_header_size) {
-                break;
-            }
-            auto frame_header = ser::deserialize_from_buffer(frame_header_buf, std::type_identity<ondisk::record_frame_header>{});
+            const size_t record_offset = records_position + (ch.records_size - chunk_bytes_left);
+            auto frame_header = ser::deserialize(records, std::type_identity<ondisk::record_frame_header>{});
             if (!ondisk::validate_record_frame_header(frame_header) || size_t(frame_header.key_size) + frame_header.value_size > chunk_bytes_left - min_frame_size) {
                 // invalid record size
                 break;
@@ -153,13 +157,10 @@ future<> scan_segment(seastar::input_stream<char>& in,
             logstor_logger.trace("Found record of size {} bytes in segment {}",
                                 header_size + frame_header.value_size, segment_id);
 
-            // Read the record_header bytes
-            auto header_buf = co_await in.read_exactly(header_size);
-            current_position += header_size;
-            if (header_buf.size() < header_size) {
-                break;
-            }
-            auto header_stream = simple_memory_input_stream(header_buf.get(), header_buf.size());
+            auto header_stream = records.read_substream(header_size);
+            auto value_stream = records.read_substream(frame_header.value_size);
+            // Taken before read_record_header() consumes the stream.
+            const auto header_bytes = bytes_view(reinterpret_cast<const int8_t*>(header_stream.begin()), header_size);
             auto header = ondisk::read_record_header(header_stream, frame_header.key_size);
 
             record_location loc {
@@ -169,40 +170,21 @@ future<> scan_segment(seastar::input_stream<char>& in,
             };
 
             if (on_record_header(loc, header) == want_data::yes) {
-                auto value_buf = co_await in.read_exactly(frame_header.value_size);
-                current_position += frame_header.value_size;
-                if (value_buf.size() < frame_header.value_size) {
-                    break;
-                }
                 log_record_bytes_view record_view{
-                    .header = bytes_view(reinterpret_cast<const int8_t*>(header_buf.get()), header_buf.size()),
-                    .value = bytes_view(reinterpret_cast<const int8_t*>(value_buf.get()), value_buf.size()),
+                    .header = header_bytes,
+                    .value = bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size()),
                 };
                 co_await on_record(loc, header, record_view);
-            } else {
-                // Skip the value bytes without reading them
-                co_await in.skip(frame_header.value_size);
-                current_position += frame_header.value_size;
             }
 
             // align up to next record
-            auto padding = align_up(current_position, ondisk::record_alignment) - current_position;
-            if (padding > 0) {
-                co_await in.skip(padding);
-                current_position += padding;
-            }
+            const size_t consumed = ch.records_size - records.size();
+            records.skip(std::min(align_up(consumed, ondisk::record_alignment) - consumed, records.size()));
         }
 
         if (seg_info.kind == segment_kind::full) {
             // A segment of this kind has only a single chunk
             break;
-        }
-
-        if (current_position < records_end_position) {
-            // skip remaining chunk data
-            auto bytes_to_skip = records_end_position - current_position;
-            co_await in.skip(bytes_to_skip);
-            current_position += bytes_to_skip;
         }
     }
 }
