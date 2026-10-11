@@ -116,16 +116,18 @@ However, there also exists a version of the statement allowing you to create a r
               :| SUPERUSER '=' `boolean`
               :| OPTIONS '=' `map_literal`
 
-When that statement is executed, ScyllaDB will not hash the provided hashed password; it will be inserted into
-the database directly, with no additional processing of it. The statement only works with an authenticator that
+When that statement is executed, ScyllaDB will not hash the provided hashed password; after checking that it is
+a valid hash (see below), it will be inserted into the database directly. The statement only works with an authenticator that
 uses passwords, e.g. PasswordAuthenticator. It can only be executed by a role with the superuser privilege.
 
 A role's hashed password can also be changed with ``ALTER ROLE `role_name` WITH HASHED PASSWORD = `hashed_password```.
 This, too, can only be executed by a role with the superuser privilege - even when a role changes its own password.
 
 The provided hashed password must be an encrypted string using the library function `crypt(3)` specified by POSIX,
-and it must use one of the encryption algorithms that ScyllaDB supports: bcrypt, sha512crypt, sha256crypt, md5crypt.
-If the hashed password doesn't satisfy those requirements, logging in as the role may be impossible.
+and it must use an encryption algorithm that ScyllaDB's `crypt(3)` supports, so that ScyllaDB can check passwords
+against it: bcrypt, sha512crypt, sha256crypt and md5crypt - the algorithms that ScyllaDB itself uses - and others,
+such as yescrypt. If the hashed password doesn't satisfy those requirements, the statement fails with an "Invalid
+hashed password value" error.
 
 Example how to generate a hashed password using `crypt(3)`:
 

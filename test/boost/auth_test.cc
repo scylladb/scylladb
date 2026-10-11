@@ -29,6 +29,7 @@
 #include "auth/authenticator.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/service.hh"
+#include "auth/cache.hh"
 #include "auth/authenticated_user.hh"
 
 #include "db/config.hh"
@@ -387,16 +388,50 @@ SEASTAR_TEST_CASE(test_create_roles_with_hashed_password_and_log_in) {
     }, auth_on(true));
 }
 
-SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_hashed_password) {
-    co_await do_with_cql_env_thread([] (cql_test_env& env) {
-        // Note: crypt(5) specifies:
-        //
-        //    "Hashed passphrases are always entirely printable ASCII, and do not contain any whitespace
-        //     or the characters `:`, `;`, `*`, `!`, or `\`.   (These  characters  are
-        //     used as delimiters and special markers in the passwd(5) and shadow(5) files.)"
+// Note: crypt(5) specifies:
+//
+//    "Hashed passphrases are always entirely printable ASCII, and do not contain any whitespace
+//     or the characters `:`, `;`, `*`, `!`, or `\`.   (These  characters  are
+//     used as delimiters and special markers in the passwd(5) and shadow(5) files.)"
+//
+// So ';' is not a valid hash, and crypt() fails on it. 'hashed_password' is not
+// a valid hash either, but crypt() reads its first two characters as the salt
+// of the old DES scheme, and computes a hash which can never be equal to it.
 
-        env.execute_cql("CREATE ROLE invalid_role WITH HASHED PASSWORD = ';' AND LOGIN = true").get();
-        env.execute_cql("CREATE ROLE valid_role WITH HASHED PASSWORD = 'hashed_password' AND LOGIN = true").get();
+SEASTAR_TEST_CASE(test_try_to_create_roles_with_invalid_hashed_password) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("CREATE ROLE r WITH PASSWORD = 'pwd' AND LOGIN = true").get();
+        for (std::string_view hash : {";", "hashed_password"}) {
+            BOOST_REQUIRE_EXCEPTION(
+                    env.execute_cql(fmt::format("CREATE ROLE r2 WITH HASHED PASSWORD = '{}' AND LOGIN = true", hash)).get(),
+                    exceptions::invalid_request_exception,
+                    exception_predicate::message_contains("Invalid hashed password value"));
+            BOOST_REQUIRE_EXCEPTION(
+                    env.execute_cql(fmt::format("ALTER ROLE r WITH HASHED PASSWORD = '{}'", hash)).get(),
+                    exceptions::invalid_request_exception,
+                    exception_predicate::message_contains("Invalid hashed password value"));
+        }
+        // The role's password didn't change.
+        authenticate(env, "r", "pwd").get();
+    }, auth_on(true));
+}
+
+SEASTAR_TEST_CASE(test_try_login_with_invalid_stored_hashed_password) {
+    // CREATE ROLE and ALTER ROLE no longer accept an invalid hashed password,
+    // but older versions did, so one may still be stored. Write such hashes
+    // directly into system.roles, and check that logging in fails cleanly.
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::pair<std::string_view, std::string_view> roles[] = {
+            {"invalid_role", ";"},
+            {"valid_role", "hashed_password"},
+        };
+        for (auto [role, hash] : roles) {
+            env.execute_cql(fmt::format("CREATE ROLE {} WITH PASSWORD = 'pwd' AND LOGIN = true", role)).get();
+            env.local_qp().execute_internal("UPDATE system.roles SET salted_hash = ? WHERE role = ?",
+                    {sstring(hash), sstring(role)}, cql3::query_processor::cache_internal::no).get();
+            // load_roles() runs on shard 0 and updates all shards.
+            env.auth_cache().local().load_roles({sstring(role)}).get();
+        }
         BOOST_REQUIRE_EXCEPTION(authenticate(env, "invalid_role", "pwd").get(), exceptions::authentication_exception,
                 exception_predicate::message_equals("Could not verify password"));
         BOOST_REQUIRE_EXCEPTION(authenticate(env, "valid_role", "pwd").get(), exceptions::authentication_exception,
