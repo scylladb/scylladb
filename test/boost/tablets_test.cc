@@ -24,6 +24,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
@@ -1294,6 +1295,103 @@ SEASTAR_TEST_CASE(test_writes_strip_truncated_data) {
             return db.find_column_family(id).flush();
         }).get();
         BOOST_REQUIRE(select_pks() == std::set<int32_t>({1, 3}));
+    }, tablet_cql_test_config());
+}
+
+// DELETE ALL DATA deletes the data of a tablet table written at or before its timestamp, given by
+// USING TIMESTAMP, or else by the coordinator. Views are tested in test/cluster.
+// See docs/dev/delete-all-data.md.
+SEASTAR_TEST_CASE(test_delete_all_data_using_timestamp) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+
+        auto count_rows = [&] (sstring table) {
+            return get_rows(e.execute_cql(format("SELECT * FROM {}", table)).get()).size();
+        };
+        auto truncation_tombstone = [&] (table_id id) {
+            return e.local_db().find_column_family(id).get_truncation_tombstone();
+        };
+
+        constexpr api::timestamp_type deleted_at = 1000;
+        for (int pk = 0; pk < 10; pk++) {
+            e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, {}) USING TIMESTAMP {}", pk, pk, deleted_at - 1)).get();
+        }
+        e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES (100, 0, 100) USING TIMESTAMP {}", deleted_at + 1)).get();
+
+        e.execute_cql(format("DELETE ALL DATA FROM cf USING TIMESTAMP {}", deleted_at)).get();
+        BOOST_REQUIRE_EQUAL(truncation_tombstone(id).timestamp, deleted_at);
+        BOOST_REQUIRE_EQUAL(count_rows("cf"), 1);
+
+        // An older deletion does not undo a newer one.
+        e.execute_cql(format("DELETE ALL DATA FROM cf USING TIMESTAMP {} AND TIMEOUT 1m", deleted_at - 10)).get();
+        BOOST_REQUIRE_EQUAL(truncation_tombstone(id).timestamp, deleted_at);
+
+        // Without USING TIMESTAMP, the coordinator's clock is used.
+        e.execute_cql("DELETE ALL DATA FROM ks.cf").get();
+        BOOST_REQUIRE_GT(truncation_tombstone(id).timestamp, deleted_at + 1);
+        BOOST_REQUIRE_EQUAL(count_rows("cf"), 0);
+
+        // TRUNCATE is not timestamped.
+        BOOST_REQUIRE_THROW(e.execute_cql("TRUNCATE cf USING TIMESTAMP 1").get(), exceptions::syntax_exception);
+        // TTL makes no sense for a deletion.
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE ALL DATA FROM cf USING TTL 10").get(), exceptions::syntax_exception);
+
+        // Not supported for vnode tables.
+        e.execute_cql("CREATE KEYSPACE vnodes_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE vnodes_ks.cf (pk int PRIMARY KEY)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE ALL DATA FROM vnodes_ks.cf").get(), exceptions::invalid_request_exception);
+    }, tablet_cql_test_config());
+}
+
+// "data" became a keyword with DELETE ALL DATA, like "all" an unreserved one: columns may
+// still be named so, and DELETE of the columns named "all" and "data" is told apart from
+// DELETE ALL DATA by the comma between them.
+SEASTAR_TEST_CASE(test_delete_all_data_does_not_take_over_column_names) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int PRIMARY KEY, all int, data int, v int)").get();
+        const auto id = e.local_db().find_schema("ks", "cf")->id();
+        e.execute_cql("INSERT INTO cf (pk, all, data, v) VALUES (1, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO cf (pk, all, data, v) VALUES (2, 2, 2, 2)").get();
+
+        e.execute_cql("DELETE all FROM cf WHERE pk = 1").get();
+        e.execute_cql("DELETE data FROM cf WHERE pk = 1").get();
+        e.execute_cql("DELETE all, data FROM cf WHERE pk = 2").get();
+        assert_that(e.execute_cql("SELECT pk, all, data, v FROM cf WHERE pk = 1").get()).is_rows()
+                .with_rows({{int32_type->decompose(1), {}, {}, int32_type->decompose(1)}});
+        assert_that(e.execute_cql("SELECT data, all FROM cf WHERE pk = 2").get()).is_rows().with_rows({{{}, {}}});
+        BOOST_REQUIRE(!e.local_db().find_column_family(id).get_truncation_tombstone());
+
+        // Neither form is valid without the other's clauses.
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE all data FROM cf WHERE pk = 1").get(), exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE all, data FROM cf").get(), exceptions::syntax_exception);
+
+        // Also from a qualified table name, and with USING TIMESTAMP, which DELETE ALL DATA takes as well.
+        e.execute_cql("INSERT INTO cf (pk, all, data, v) VALUES (3, 3, 3, 3)").get();
+        e.execute_cql("DELETE all FROM ks.cf WHERE pk = 3").get();
+        assert_that(e.execute_cql("SELECT all, data FROM cf WHERE pk = 3").get()).is_rows().with_rows({{{}, int32_type->decompose(3)}});
+        e.execute_cql("DELETE data FROM ks.cf USING TIMESTAMP 1 WHERE pk = 3").get();
+        e.execute_cql("DELETE all, data FROM ks.cf USING TIMESTAMP 1 WHERE pk = 3").get();
+        // Timestamp 1 is older than the data.
+        assert_that(e.execute_cql("SELECT all, data FROM cf WHERE pk = 3").get()).is_rows().with_rows({{{}, int32_type->decompose(3)}});
+        BOOST_REQUIRE(!e.local_db().find_column_family(id).get_truncation_tombstone());
+        // Without WHERE, deleting the column named "all" is still a syntax error, not a DELETE ALL DATA.
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE all FROM cf").get(), exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE all FROM ks.cf USING TIMESTAMP 1").get(), exceptions::syntax_exception);
+        BOOST_REQUIRE(!e.local_db().find_column_family(id).get_truncation_tombstone());
+
+        // Elements of collections and fields of user-defined types named "all" and "data".
+        e.execute_cql("CREATE TYPE ut (all int, data int)").get();
+        e.execute_cql("CREATE TABLE coll (pk int PRIMARY KEY, all map<int, int>, data list<int>, u ut)").get();
+        e.execute_cql("INSERT INTO coll (pk, all, data, u) VALUES (1, {1: 1, 2: 2}, [1, 2], {all: 1, data: 2})").get();
+        e.execute_cql("DELETE all[1], data[0], u.all FROM coll WHERE pk = 1").get();
+        e.execute_cql("DELETE u.data FROM coll WHERE pk = 1").get();
+        assert_that(e.execute_cql("SELECT all[1], all[2], u.all, u.data FROM coll WHERE pk = 1").get()).is_rows()
+                .with_rows({{{}, int32_type->decompose(2), {}, {}}});
+
+        e.execute_cql("DELETE ALL DATA FROM cf").get();
+        BOOST_REQUIRE(e.local_db().find_column_family(id).get_truncation_tombstone());
+        assert_that(e.execute_cql("SELECT * FROM cf").get()).is_rows().is_empty();
     }, tablet_cql_test_config());
 }
 

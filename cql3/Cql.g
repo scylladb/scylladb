@@ -45,6 +45,7 @@ options {
 #include "cql3/statements/drop_service_level_statement.hh"
 #include "cql3/statements/detach_service_level_statement.hh"
 #include "cql3/statements/raw/truncate_statement.hh"
+#include "cql3/statements/raw/delete_all_data_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
@@ -390,6 +391,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
     | st51=alterClusterStatement       { $stmt = std::move(st51); }
+    | st52=deleteAllDataStatement      { $stmt = std::move(st52); }
     ;
 
 /*
@@ -712,6 +714,23 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
                                             std::move(wclause),
                                             std::move(cond_opt),
                                             if_exists);
+      }
+    ;
+
+/**
+ * DELETE ALL DATA FROM <CF>
+ * [USING TIMESTAMP <timestamp> [AND TIMEOUT <duration>]];
+ *
+ * Told apart from DELETE of the columns named "all" and "data", which separates them with a comma.
+ */
+deleteAllDataStatement returns [std::unique_ptr<raw::delete_all_data_statement> stmt]
+    @init {
+        auto attrs = std::make_unique<cql3::attributes::raw>();
+    }
+    : K_DELETE K_ALL K_DATA K_FROM cf=columnFamilyName
+      ( usingTimestampTimeoutClause[attrs] )?
+      {
+        $stmt = std::make_unique<raw::delete_all_data_statement>(std::move(cf), std::move(attrs));
       }
     ;
 
@@ -2233,6 +2252,7 @@ unreserved_function_keyword returns [sstring str]
 
 basic_unreserved_keyword returns [sstring str]
     : k=( K_KEYS
+        | K_DATA
         | K_AS
         | K_CLUSTER
         | K_CLUSTERING
@@ -2413,6 +2433,7 @@ K_ONLY:        O N L Y;
 
 K_GRANT:       G R A N T;
 K_ALL:         A L L;
+K_DATA:        D A T A;
 K_PERMISSION:  P E R M I S S I O N;
 K_PERMISSIONS: P E R M I S S I O N S;
 K_OF:          O F;
