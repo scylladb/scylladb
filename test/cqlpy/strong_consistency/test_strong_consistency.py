@@ -350,9 +350,7 @@ def test_lwt_on_sc_table(cql, sc_keyspace):
     Conditional statements (LWT) are rejected on strongly consistent
     tables, standalone and inside a batch. The strongly consistent
     execution path never evaluates conditions, so accepting them would
-    silently execute the write unconditionally. INSERT JSON is covered
-    separately: its IF NOT EXISTS is not tracked as a condition in the
-    prepared statement.
+    silently execute the write unconditionally.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")

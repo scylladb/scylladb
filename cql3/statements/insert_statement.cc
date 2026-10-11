@@ -427,7 +427,6 @@ insert_json_statement::insert_json_statement(cf_name name,
     : raw::modification_statement{name, std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
     , _name(name)
     , _json_value(std::move(json_value))
-    , _if_not_exists(if_not_exists)
     , _default_unset(default_unset) { }
 
 ::shared_ptr<cql3::statements::modification_statement>
@@ -435,8 +434,6 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
     const modification_executor& executor) const
 {
-    // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
-    (void)_if_not_exists;
     throwing_assert(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = prepare_expression(_json_value, db, "", nullptr, make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
@@ -444,6 +441,9 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
     expr::fill_prepare_context(prepared_json_value, ctx);
     auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, executor, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);
+    // The JSON value must contain all the primary key columns, so the
+    // statement restricts the clustering columns if the table has any.
+    stmt->classify_exists_condition(schema->clustering_key_size() > 0);
     return stmt;
 }
 
