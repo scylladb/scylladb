@@ -173,14 +173,16 @@ Working with times
 Values of the ``time`` type are encoded as 64-bit signed integers representing the number of nanoseconds since midnight.
 
 As for :ref:`timestamp <timestamps>`, time can be input either as an :token:`integer` or using a :token:`string`
-representing the time. In the latter case, the format should be ``hh:mm:ss[.fffffffff]`` (where the sub-second precision
-is optional and if provided, can be less than the nanosecond). So, for instance, the following are valid inputs for a
-time:
+representing the time. An integer is the number of nanoseconds since midnight, so it must be between 0 and
+86399999999999 (it can also be given as a string of digits). In the case of a string, the format should be
+``hh:mm:ss[.fffffffff]`` (where the sub-second precision is optional and if provided, can be less than the nanosecond).
+So, for instance, the following are valid inputs for a time:
 
 -  ``'08:12:54'``
 -  ``'08:12:54.123'``
 -  ``'08:12:54.123456'``
 -  ``'08:12:54.123456789'``
+-  ``29574123456789`` (the same as ``'08:12:54.123456789'``)
 
 .. _durations:
 
