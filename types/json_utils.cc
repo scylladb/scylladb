@@ -227,7 +227,13 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();
     for (auto vi = value.Begin(); vi != value.End(); ++vi, ++ti) {
-        raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        // A JSON null sets this component to null, as in a user type (but
+        // unlike in a list or set, whose elements cannot be null).
+        if (vi->IsNull()) {
+            raw_tuple.emplace_back(std::nullopt);
+        } else {
+            raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        }
     }
     return t.build_value(std::move(raw_tuple));
 }
