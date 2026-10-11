@@ -546,13 +546,30 @@ def test_select_json_function_call(cql, table1):
 # This is issue #8087.
 # This issue is also reproduced by the much more comprehensive test
 # cassandra_tests/validation/entities/json_test.py::testInsertJsonSyntaxWithNonNativeMapKeys
-@pytest.mark.xfail(reason="issue #8087")
 def test_select_json_string_in_nonstring_map_key(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, tupmap) VALUES ({p}, ?)")
     cql.execute(stmt, [{('hello', 3): 7}])
     expected = '{"tupmap": {"[\\"hello\\", 3]": 7}}'
     assert list(cql.execute(f"SELECT JSON tupmap from {table1} where p = {p}")) == [(expected,)]
+
+# Like test_select_json_string_in_nonstring_map_key, but with strings which
+# themselves contain characters which need escaping (a quote and a backslash),
+# so they need to be escaped twice in the map key. Check that the SELECT JSON
+# output is valid JSON, and that writing it back with INSERT JSON gives the
+# same map. Reproduces issue #8087.
+def test_select_json_nonstring_map_key_roundtrip(cql, table1):
+    p = unique_key_int()
+    value = {('he"llo', 3): 7, ('back\\slash', 4): 8}
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, tupmap) VALUES ({p}, ?)")
+    cql.execute(stmt, [value])
+    [(j,)] = cql.execute(f"SELECT JSON p, tupmap from {table1} where p = {p}")
+    keys = {tuple(json.loads(k)): v for k, v in json.loads(j)['tupmap'].items()}
+    assert keys == value
+    p2 = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} JSON ?")
+    cql.execute(stmt, [json.dumps({**json.loads(j), 'p': p2})])
+    assert list(cql.execute(f"SELECT tupmap from {table1} where p = {p2}")) == [(value,)]
 
 # Test that SELECT JSON correctly prints unset components of a UDT or tuple
 # as "null". This test passes which demonstrates that issue #8092 is specific

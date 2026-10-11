@@ -413,16 +413,15 @@ static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
             out << ", ";
         }
 
-        // Valid keys in JSON map must be quoted strings
+        // Keys in a JSON map must be strings. If the key's JSON representation
+        // isn't a string (e.g., a number, or a tuple's array), we turn it into
+        // a string - which must escape the quotes inside it, e.g., of the
+        // strings in a tuple.
         sstring string_key = to_json_string(*t.get_keys_type(), kb);
-        bool is_unquoted = string_key.empty() || string_key[0] != '"';
-        if (is_unquoted) {
-            out << '"';
+        if (string_key.empty() || string_key[0] != '"') {
+            string_key = quote_json_string(string_key);
         }
         out << string_key;
-        if (is_unquoted) {
-            out << '"';
-        }
         out << ": ";
         out << to_json_string(*t.get_values_type(), vb);
     }
