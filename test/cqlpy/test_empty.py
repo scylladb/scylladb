@@ -9,7 +9,7 @@
 import struct
 import pytest
 from cassandra.cqltypes import Int32Type, EMPTY
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, FunctionFailure
 from .util import unique_name, unique_key_string, unique_key_int, new_test_table
 
 from . import nodetool
@@ -179,6 +179,12 @@ def test_empty_string_for_string_types_json(cql, table_all_scalar, t):
     cql.execute(f"INSERT INTO {table_all_scalar} JSON '{{\"p\": {p}, \"v{t}\": \"\"}}'")
     assert list(cql.execute(f"SELECT v{t} FROM {table_all_scalar} WHERE p={p}")) == [('',)]
 
+@pytest.mark.parametrize("t", ["ascii", "text", "varchar"])
+def test_empty_string_for_string_types_fromjson(cql, table_all_scalar, t):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, fromJson('\"\"'))")
+    assert list(cql.execute(f"SELECT v{t} FROM {table_all_scalar} WHERE p={p}")) == [('',)]
+
 # "fussy" string types are types that in CQL can be assigned a string
 # constant, but the string needs to follow a particular format and in
 # particular the empty string should not be allowed.
@@ -225,25 +231,27 @@ def test_empty_string_for_other_types(cql, table_all_scalar, t):
         cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, '')")
 
 # Although INSERT JSON can convert strings to numbers, it shouldn't allow
-# an *empty* string.
+# an *empty* string. Cassandra allows it for most of these types, which we
+# consider a Cassandra bug (CASSANDRA-21745).
 # Reproduces #7944 and #10625.
 # See also test_json.py::test_fromjson_{varint,int}_empty_string*
 # which reproduces the same bug but just for two specific types.
-@pytest.mark.parametrize("t", ["bigint", "blob", "boolean",
-    pytest.param("decimal", marks=pytest.mark.xfail(reason="issue #7944")),
-    pytest.param("double", marks=pytest.mark.xfail(reason="issue #7944")),
-    pytest.param("duration", marks=pytest.mark.xfail(reason="issue #7944")),
-    pytest.param("float", marks=pytest.mark.xfail(reason="issue #7944")),
-    "int", "smallint",
-    pytest.param("timeuuid", marks=pytest.mark.xfail(reason="issue #7944")),
-    "tinyint",
-    pytest.param("uuid", marks=pytest.mark.xfail(reason="issue #7944")),
-    pytest.param("varint", marks=pytest.mark.xfail(reason="issue #7944"))])
+@pytest.mark.parametrize("t", ["bigint", "blob", "boolean", "decimal", "double", "duration", "float", "int", "smallint", "timeuuid", "tinyint", "uuid", "varint"])
 def test_empty_string_for_other_types_json(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(InvalidRequest, match='Error decoding JSON'):
         cql.execute(f"INSERT INTO {table_all_scalar} JSON '{{\"p\": {p}, \"v{t}\": \"\"}}'")
         assert list(cql.execute(f"SELECT v{t} FROM {table_all_scalar} WHERE p={p}")) == [('',)]
+
+# Same as test_empty_string_for_other_types_json, but with fromJson(),
+# which reports the error as a FunctionFailure. Cassandra allows an empty
+# string for most of these types too (CASSANDRA-21745).
+# Reproduces #7944.
+@pytest.mark.parametrize("t", ["bigint", "blob", "boolean", "decimal", "double", "duration", "float", "int", "smallint", "timeuuid", "tinyint", "uuid", "varint"])
+def test_empty_string_for_other_types_fromjson(cql, table_all_scalar, t, cassandra_bug):
+    p = unique_key_int()
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, fromJson('\"\"'))")
 
 # Some of the tests that failed above allowed inserting a empty value
 # in an "unofficial" way by assigning an empty string to it. This is not
