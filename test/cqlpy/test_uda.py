@@ -8,6 +8,7 @@
 #############################################################################
 
 import pytest
+import re
 from cassandra.protocol import InvalidRequest, ConfigurationException
 from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type, is_scylla
 
@@ -266,6 +267,85 @@ def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
                 cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{sum_final} {sum_final_body2}")
                 result = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
                 assert result.result == 36
+
+# Test that CREATE OR REPLACE AGGREGATE which doesn't specify FINALFUNC or
+# INITCOND (or specifies INITCOND null) removes the replaced aggregate's
+# final function or initial condition - both from the schema tables and
+# from the aggregate's behavior.
+# Reproduces SCYLLADB-5162.
+def test_replace_aggregate_removes_finalfunc_initcond(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    if is_scylla(cql):
+        state_body = "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'if s == nil then s = 0 end return s + a'"
+        final_body = "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s * 100'"
+    else:
+        state_body = "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return (s == null ? 0 : s) + a;'"
+        final_body = "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return s * 100;'"
+    with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 3)")
+        with new_function(cql, test_keyspace, state_body) as state, new_function(cql, test_keyspace, final_body) as final:
+            with new_aggregate(cql, test_keyspace, f"(int) SFUNC {state} STYPE int FINALFUNC {final} INITCOND 5") as aggr:
+                def check(expected_result, expected_final, expected_initcond):
+                    assert cql.execute(f"SELECT {test_keyspace}.{aggr}(v) FROM {table}").one()[0] == expected_result
+                    assert list(cql.execute(f"SELECT final_func, initcond FROM system_schema.aggregates WHERE keyspace_name = '{test_keyspace}' AND aggregate_name = '{aggr}'")) == [(expected_final, expected_initcond)]
+                replace = f"CREATE OR REPLACE AGGREGATE {test_keyspace}.{aggr}(int) SFUNC {state} STYPE int"
+                check(800, final, '5')
+                cql.execute(replace)
+                check(3, None, None)
+                cql.execute(replace + " INITCOND 7")
+                check(10, None, '7')
+                cql.execute(replace + " INITCOND null")
+                check(3, None, None)
+                cql.execute(replace + f" FINALFUNC {final}")
+                check(300, final, None)
+                cql.execute(replace)
+                check(3, None, None)
+
+# Test that CREATE OR REPLACE AGGREGATE of an existing aggregate changes
+# its definition - its state function, final function and initial
+# condition - as seen in the aggregate's results, in the schema table, and
+# in DESCRIBE AGGREGATE.
+# Reproduces SCYLLADB-5162 (the replaced aggregate kept being used until
+# the node restarted).
+def test_replace_aggregate_changes_definition(cql, test_keyspace):
+    lua = {
+        'st': "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'if s == nil then s = 0 end return s + a'",
+        'st2': "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'if s == nil then s = 0 end return s + 10 * a'",
+        'fin': "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s * 100'",
+        'fin2': "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s * 1000'",
+    }
+    java = {
+        'st': "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return (s == null ? 0 : s) + a;'",
+        'st2': "(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return (s == null ? 0 : s) + 10 * a;'",
+        'fin': "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return s * 100;'",
+        'fin2': "(s int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return s * 1000;'",
+    }
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    bodies = lua if is_scylla(cql) else java
+    with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 3)")
+        with new_function(cql, test_keyspace, bodies['st']) as st, new_function(cql, test_keyspace, bodies['st2']) as st2, \
+             new_function(cql, test_keyspace, bodies['fin']) as fin, new_function(cql, test_keyspace, bodies['fin2']) as fin2:
+            with new_aggregate(cql, test_keyspace, f"(int) SFUNC {st} STYPE int INITCOND 5") as aggr:
+                def replace_and_check(definition, expected_result, expected_state, expected_final, expected_initcond):
+                    if definition:
+                        cql.execute(f"CREATE OR REPLACE AGGREGATE {test_keyspace}.{aggr}(int) {definition}")
+                    assert cql.execute(f"SELECT {test_keyspace}.{aggr}(v) FROM {table}").one()[0] == expected_result
+                    assert list(cql.execute(f"SELECT state_func, final_func, initcond FROM system_schema.aggregates WHERE keyspace_name = '{test_keyspace}' AND aggregate_name = '{aggr}'")) == [(expected_state, expected_final, expected_initcond)]
+                    desc = cql.execute(f"DESCRIBE AGGREGATE {test_keyspace}.{aggr}").one().create_statement
+                    assert re.search(rf"SFUNC\s+(\w+\.)?{expected_state}\b", desc)
+                    assert bool(re.search(rf"FINALFUNC\s+(\w+\.)?{expected_final}\b", desc)) if expected_final else ('FINALFUNC' not in desc)
+                    assert bool(re.search(rf"INITCOND\s+{expected_initcond}\b", desc)) if expected_initcond else ('INITCOND' not in desc)
+                replace_and_check(None, 8, st, None, '5')
+                # Change the initial condition
+                replace_and_check(f"SFUNC {st} STYPE int INITCOND 7", 10, st, None, '7')
+                # Change the state function
+                replace_and_check(f"SFUNC {st2} STYPE int INITCOND 7", 37, st2, None, '7')
+                # Add a final function, then change it
+                replace_and_check(f"SFUNC {st2} STYPE int FINALFUNC {fin} INITCOND 7", 3700, st2, fin, '7')
+                replace_and_check(f"SFUNC {st2} STYPE int FINALFUNC {fin2} INITCOND 7", 37000, st2, fin2, '7')
+                # Go back to the original definition
+                replace_and_check(f"SFUNC {st} STYPE int INITCOND 5", 8, st, None, '5')
 
 # Test that an aggregate cannot reference a UDT from another keyspace.
 # Ported from scylla-dtest user_functions_test.py::test_aggregate_with_udt_keyspace_isolation (SCYLLADB-1928).

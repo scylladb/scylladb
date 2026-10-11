@@ -1654,11 +1654,18 @@ utils::chunked_vector<mutation> make_create_aggregate_mutations(schema_features 
     utils::chunked_vector<mutation> muts;
 
     data_type state_type = aggregate->sfunc()->arg_types()[0];
+    // If CREATE OR REPLACE AGGREGATE replaces an aggregate, the replaced
+    // aggregate's optional final function and initial condition must be
+    // deleted if the new aggregate doesn't have them.
     if (aggregate->has_finalfunc()) {
         m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc()->name().name, timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("final_func"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     if (aggregate->initcond()) {
         m.set_clustered_cell(ckey, "initcond", state_type->deserialize(managed_bytes_view(*aggregate->initcond())).to_parsable_string(), timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("initcond"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);
