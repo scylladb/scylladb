@@ -1010,6 +1010,9 @@ public:
     // in one group0 command, keeping the later of it and their current one, and waits until the live
     // nodes apply it.
     future<> truncate_with_timestamp(table_id table, tombstone truncation_tombstone);
+    // Whether this node holds no data of the table covered by its truncation tombstone,
+    // which can be garbage-collected once no replica holds any.
+    future<bool> is_truncation_tombstone_clean(table_id table, api::timestamp_type truncated_at);
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);

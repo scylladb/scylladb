@@ -6057,6 +6057,15 @@ future<> storage_service::truncate_with_timestamp(table_id table, tombstone trun
     co_await _group0->client().send_group0_read_barrier_to_live_members();
 }
 
+future<bool> storage_service::is_truncation_tombstone_clean(table_id table, api::timestamp_type truncated_at) {
+    // A table which does not exist on this node, e.g. since it was dropped, holds no covered data.
+    // The coordinator asks only the table's replica hosts, so this is not a check of the whole cluster.
+    return _db.map_reduce0([table, truncated_at] (replica::database& db) {
+        auto t = db.get_tables_metadata().get_table_if_exists(table);
+        return !t || !t->may_hold_truncated_data(truncated_at);
+    }, true, std::logical_and<bool>());
+}
+
 future<> storage_service::del_repair_tablet_request(table_id table, locator::tablet_task_id tablet_task_id) {
     auto holder = _async_gate.hold();
 
@@ -7219,6 +7228,11 @@ void storage_service::init_messaging_service() {
             return ss.load_stats_for_tablet_based_tables().then([] (auto stats) {
                 return locator::load_stats_v1{ .tables = std::move(stats.tables) };
             });
+        });
+    });
+    ser::storage_service_rpc_verbs::register_truncation_tombstone_clean(&_messaging.local(), [this] (raft::server_id dst_id, table_id table, int64_t truncated_at) {
+        return handle_raft_rpc(dst_id, [table, truncated_at] (auto& ss) {
+            return ss.is_truncation_tombstone_clean(table, truncated_at);
         });
     });
     ser::storage_service_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (table_id t_id) -> future<uint64_t> {
