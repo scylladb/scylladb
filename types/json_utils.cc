@@ -547,23 +547,25 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
     std::ostringstream out;
     out << '{';
 
-    auto ti = t.all_types().begin();
     auto vi = tuple_deserializing_iterator::start(bv);
-    int i = 0;
-    while (ti != t.all_types().end() && vi != tuple_deserializing_iterator::finish(bv)) {
-        if (ti != t.all_types().begin()) {
+    auto vend = tuple_deserializing_iterator::finish(bv);
+    for (size_t i = 0; i < t.size(); ++i) {
+        if (i > 0) {
             out << ", ";
         }
         out << json_key_for_name(t.field_name_as_string(i)) << ": ";
-        if (*vi) {
+        // A value may have fewer fields than its type, if fields were added
+        // to the type (with ALTER TYPE) after the value was written. These
+        // missing fields are null.
+        if (vi != vend && *vi) {
             //TODO(sarna): We can avoid copying if to_json_string accepted bytes_view
-            out << to_json_string(**ti, **vi);
+            out << to_json_string(*t.all_types()[i], **vi);
         } else {
             out << "null";
         }
-        ++ti;
-        ++i;
-        ++vi;
+        if (vi != vend) {
+            ++vi;
+        }
     }
 
     out << '}';
