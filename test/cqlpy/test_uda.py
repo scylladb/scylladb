@@ -347,6 +347,28 @@ def test_replace_aggregate_changes_definition(cql, test_keyspace):
                 # Go back to the original definition
                 replace_and_check(f"SFUNC {st} STYPE int INITCOND 5", 8, st, None, '5')
 
+# Test that CREATE OR REPLACE AGGREGATE without REDUCEFUNC removes the
+# replaced aggregate's reduce function (a Scylla extension), both from the
+# schema table system_schema.scylla_aggregates and from the aggregate
+# itself (as shown by DESCRIBE AGGREGATE). This is the same bug as
+# SCYLLADB-5162, but for REDUCEFUNC.
+def test_replace_aggregate_removes_reducefunc(scylla_only, cql, test_keyspace):
+    row_body = "(acc bigint, val int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return acc+val'"
+    reduce_body = "(acc1 bigint, acc2 bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return acc1+acc2'"
+    with new_function(cql, test_keyspace, row_body) as row_f, new_function(cql, test_keyspace, reduce_body) as reduce_f:
+        with new_aggregate(cql, test_keyspace, f"(int) SFUNC {row_f} STYPE bigint REDUCEFUNC {reduce_f} INITCOND 0") as aggr_f:
+            def check(expected_reduce_f):
+                rows = list(cql.execute(f"SELECT reduce_func FROM system_schema.scylla_aggregates WHERE keyspace_name = '{test_keyspace}' AND aggregate_name = '{aggr_f}'"))
+                assert [r.reduce_func for r in rows] == ([expected_reduce_f] if expected_reduce_f else [])
+                desc = cql.execute(f"DESCRIBE AGGREGATE {test_keyspace}.{aggr_f}").one().create_statement
+                assert ('REDUCEFUNC' in desc) == bool(expected_reduce_f)
+            replace = f"CREATE OR REPLACE AGGREGATE {test_keyspace}.{aggr_f}(int) SFUNC {row_f} STYPE bigint"
+            check(reduce_f)
+            cql.execute(replace + " INITCOND 0")
+            check(None)
+            cql.execute(replace + f" REDUCEFUNC {reduce_f} INITCOND 0")
+            check(reduce_f)
+
 # Test that an aggregate cannot reference a UDT from another keyspace.
 # Ported from scylla-dtest user_functions_test.py::test_aggregate_with_udt_keyspace_isolation (SCYLLADB-1928).
 # Reproduces CASSANDRA-9409.

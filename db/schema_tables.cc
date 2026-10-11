@@ -1672,14 +1672,19 @@ utils::chunked_vector<mutation> make_create_aggregate_mutations(schema_features 
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
     muts.emplace_back(std::move(m));
 
-    if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>()) {
         schema_ptr sa_schema = scylla_aggregates();
         auto sa_p = get_mutation(sa_schema, *aggregate);
         mutation& sa_mut = sa_p.first;
         clustering_key& sa_ckey = sa_p.second;
-        sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
-        sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
-
+        if (aggregate->is_reducible()) {
+            sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
+            sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
+        } else {
+            // If CREATE OR REPLACE AGGREGATE replaces a reducible aggregate,
+            // the replaced aggregate's reduce function must be deleted.
+            sa_mut.partition().apply_delete(*sa_schema, sa_ckey, tombstone(timestamp, gc_clock::now()));
+        }
         muts.emplace_back(std::move(sa_mut));
     }
 
