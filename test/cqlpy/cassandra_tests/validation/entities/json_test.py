@@ -1026,7 +1026,9 @@ def testInsertJsonSyntax(cql, test_keyspace):
         assert_invalid_message(cql, table, "Got null for INSERT JSON values", "INSERT INTO %s JSON ?", "null")
         assert_invalid_message(cql, table, "Could not decode JSON string as a map", "INSERT INTO %s JSON ?", "\"notamap\"")
         assert_invalid_message(cql, table, "Could not decode JSON string as a map", "INSERT INTO %s JSON ?", "12.34")
-        assert_invalid_message(cql, table, "Unable to make int from",
+        # Cassandra's message for a bad int is "Unable to make int from
+        # 'notanint'", Scylla's is "Invalid number format 'notanint'".
+        assert_invalid_message_re(cql, table, "Unable to make int from|Invalid number format",
                 "INSERT INTO %s JSON ?",
                 "{\"k\": 0, \"v\": \"notanint\"}")
 
