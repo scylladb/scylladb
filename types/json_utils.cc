@@ -300,15 +300,18 @@ struct from_json_object_visitor {
         return t.decompose(to_int<T>(value));
     }
     bytes operator()(const string_type_impl& t) {
-        return to_bytes(t.from_string(rjson::to_string_view(value)));
+        return to_bytes(t.from_string(validated_to_string_view(value, "string_type")));
     }
     bytes operator()(const bytes_type_impl& t) {
         std::string_view string_v = validated_to_string_view(value, "bytes_type");
         if (string_v.size() < 2 || string_v[0] != '0' || string_v[1] != 'x') {
             throw marshal_exception("Blob JSON strings must start with 0x");
         }
-        string_v.remove_prefix(2);
-        return to_bytes(bytes_type->from_string(string_v));
+        try {
+            return to_bytes(bytes_type->from_string(string_v.substr(2)));
+        } catch (const std::invalid_argument& e) {
+            throw marshal_exception(fmt::format("Value '{}' is not a valid blob representation: {}", string_v, e.what()));
+        }
     }
     bytes operator()(const boolean_type_impl& t) {
         if (!value.IsBool()) {

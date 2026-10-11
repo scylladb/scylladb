@@ -13,7 +13,7 @@
 
 from .util import unique_name, unique_key_int, new_test_table
 
-from cassandra.protocol import FunctionFailure
+from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
 
 import pytest
@@ -643,3 +643,38 @@ def test_select_distinct_json(cql, test_keyspace):
         result = list(cql.execute(f"SELECT JSON p FROM {table} WHERE p IN ({p1}, {p2})"))
         json_values = [json.loads(row[0])["p"] for row in result]
         assert sorted(json_values) == sorted([p1, p1, p2, p2])
+
+# Test that INSERT JSON with a bad JSON string - one that isn't valid JSON,
+# isn't a JSON object, or has a value which doesn't fit its column's type -
+# fails with an InvalidRequest error, not some internal server error. Test
+# both a bound value and a string literal. We don't check the specific
+# error messages, which differ between Scylla and Cassandra.
+# Reproduces #8085.
+def test_insert_json_invalid(cql, table1):
+    p = unique_key_int()
+    bad_json = [
+        # Not valid JSON:
+        'not json', '', '{"p": %d, "v": 1' % p,
+        # Valid JSON, but not a JSON object:
+        'null', '[1, 2]', '12.34', '"hello"', 'true',
+        # A JSON object, but with a value which doesn't fit its column:
+        '{"p": %d, "v": "notanint"}' % p,
+        '{"p": %d, "v": [1]}' % p,
+        '{"p": %d, "mai": 3}' % p,
+        '{"p": %d, "l": {"a": 1}}' % p,
+        '{"p": %d, "tup": {"a": 1}}' % p,
+        '{"p": %d, "t1": [1]}' % p,
+        '{"p": %d, "ts": [1]}' % p,
+        '{"p": %d, "blobmap": {"0xzz": 1}}' % p,
+        '{"p": %d, "a": 3}' % p,
+        '{"p": %d, "l": [1]}' % p,
+    ]
+    stmt = cql.prepare(f"INSERT INTO {table1} JSON ?")
+    for s in bad_json:
+        with pytest.raises(InvalidRequest):
+            cql.execute(stmt, [s])
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table1} JSON '{s}'")
+    # A null bound value is also an InvalidRequest error.
+    with pytest.raises(InvalidRequest):
+        cql.execute(stmt, [None])
