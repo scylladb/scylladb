@@ -73,6 +73,7 @@
 #include "readers/multi_range.hh"
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
+#include "readers/truncation_stripping.hh"
 #include "replica/schema_describe_helper.hh"
 #include "repair/incremental.hh"
 
@@ -266,6 +267,18 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     }
 }
 
+// The cache is populated from sstable readers, which strip the data covered by the
+// truncation tombstone, but it may still hold covered data while it is being invalidated
+// after a new truncation tombstone was installed (see cache_may_hold_truncated_data()).
+// FIXME: only needed while cache_may_hold_truncated_data(), once writes are stripped when
+// applied, so that memtables merged into the cache hold no covered data.
+static mutation_reader maybe_strip_cache_reader(mutation_reader rd, tombstone truncation_tombstone) {
+    if (truncation_tombstone) {
+        return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
+    }
+    return rd;
+}
+
 mutation_reader
 table::make_mutation_reader(schema_ptr s,
                            reader_permit permit,
@@ -312,7 +325,7 @@ table::make_mutation_reader(schema_ptr s,
     if (cache_enabled() && !bypass_cache) {
         if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
+            readers.emplace_back(maybe_strip_cache_reader(std::move(*reader_opt), permit.truncation_tombstone(*s)));
         }
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
@@ -419,7 +432,8 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
     if (!range.is_singular()) {
         throw std::runtime_error("table::make_cache_reader(): only singular ranges are supported");
     }
-    return _cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts));
+    const auto truncation_tombstone = permit.truncation_tombstone(*schema);
+    return maybe_strip_cache_reader(_cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts)), truncation_tombstone);
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
@@ -2006,9 +2020,11 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
-        if (m->truncation_tombstone() < _truncation_tombstone) {
+        if (m->truncation_tombstone() < _truncation_tombstone || cache_may_hold_truncated_data()) {
             // The memtable predates the truncation tombstone and may hold data covered by it,
             // so it must not be merged into the cache, which holds no covered data.
+            // Nor while the cache is being invalidated and may still hold covered data, which
+            // merging could combine in memory with the memtable's data, e.g. counter shards.
             co_return co_await _cache.update_invalidating(std::move(adder), *m);
         }
         co_return co_await _cache.update(std::move(adder), *m);
