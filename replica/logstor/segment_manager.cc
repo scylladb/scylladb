@@ -2266,9 +2266,8 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 
     uint64_t allocated_segment_count = next_file_id * _segments_per_file;
 
-    _file_mgr.set_actual_max_files(std::max(_file_mgr.configured_max_files(), next_file_id));
     set_actual_max_segments(std::max(_max_segments.configured, allocated_segment_count));
-    co_await _file_mgr.recover_files(next_file_id);
+    co_await _file_mgr.open_recovered_files(next_file_id);
 
     std::vector<segment_sequence> segment_seqs(static_cast<size_t>(allocated_segment_count), segment_sequence(0));
     segment_sequence max_segment_seq = segment_sequence(0);
@@ -2371,7 +2370,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 
 future<> segment_manager_impl::do_recovery_for_test() {
     co_await _file_mgr.start();
-    co_await _file_mgr.recover_files(0);
+    co_await _file_mgr.open_recovered_files(0);
     co_await _file_mgr.recover_next_file();
 }
 

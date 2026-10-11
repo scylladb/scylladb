@@ -67,25 +67,25 @@ struct file_manager_config {
 // I2. An allocated file is formatted and open. Only allocated files are open.
 // I3. After recovery, while N files are allocated and N < configured, _next_file_formatter is the
 //     format of file N: pending, done or failed.
-// I4. configured <= actual. The files in [configured, actual) exist from an earlier, larger
-//     configuration. They are allocated, but a new file is never allocated at or above configured.
-//     Recovery removes them from the end when they hold no used segment.
-// I5. _open_files has one entry per file on disk, actual in total.
+// I4. The files at or above configured exist from an earlier, larger configuration. They are
+//     allocated, but a new file is never allocated at or above configured. Recovery removes them
+//     from the end when they hold no used segment.
+// I5. _open_files has one entry per file id below max(configured, allocated).
 // I6. Recovery opens the files it found before it reads them. Every file a reader asks for is
 //     allocated, and open.
-// I7. Recovery drives the file manager in this order: start(), set_actual_max_files(),
-//     recover_files(), reads of the found files, remove_file() for each retired file,
-//     recover_next_file(). After that, only get_file_for_new_segment() allocates files.
+// I7. Recovery drives the file manager in this order: start(), open_recovered_files(), reads of
+//     the found files, remove_file() for each retired file, recover_next_file(). After that, only
+//     get_file_for_new_segment() allocates files.
 class file_manager {
 public:
     file_manager(file_manager_config cfg)
-        : _max_files{cfg.file_count, cfg.file_count}
+        : _configured_file_count(cfg.file_count)
         , _file_size(cfg.file_size)
         , _base_dir(std::move(cfg.base_dir))
         , _sched_group(cfg.format_sg)
         , _format_on_startup(cfg.format_on_startup)
         , _sparse_files(cfg.sparse_files)
-        , _open_files(static_cast<size_t>(_max_files.actual))
+        , _open_files(static_cast<size_t>(_configured_file_count))
     {}
 
     future<> start();
@@ -104,17 +104,14 @@ public:
     // The file id in a file name of this shard, or none if the name is not one.
     std::optional<file_id_t> file_name_to_file_id(const std::string& fname) const;
 
-    // Recovery calls this with the count of the files it found on disk, which can be above the
-    // configured count (I4).
-    void set_actual_max_files(uint64_t actual_max_files);
+    // Recovery calls this with the count of the files it found on disk, before it reads them. The
+    // count can be above the configured count (I4). The files are allocated, and this opens them
+    // (I2), so that the reads find them open.
+    future<> open_recovered_files(file_id_t found_file_count);
 
     // Removes a retired file. The caller must have checked that the file is the last one on disk,
     // at or above the configured count, and that it holds no used segment.
     future<> remove_file(file_id_t);
-
-    // Recovery calls this with the count of the files it found, before it reads them. The files
-    // are allocated, and this opens them (I2), so that the reads find them open.
-    future<> recover_files(file_id_t file_count);
 
     // Recovery calls this at its end. It formats the files that are not allocated, or it starts
     // the background format of the next file.
@@ -142,7 +139,7 @@ public:
     future<> format_file_region(seastar::file file, uint64_t offset, uint64_t size);
 
     uint64_t allocated_file_count() const noexcept { return _next_file_id; }
-    uint64_t configured_max_files() const noexcept { return _max_files.configured; }
+    uint64_t configured_max_files() const noexcept { return _configured_file_count; }
 
 private:
     // The zero buffer is written in one request over as much of a region as the disk takes in one,
@@ -150,17 +147,9 @@ private:
     // small enough that the buffer costs nothing.
     static constexpr size_t zero_buffer_size = 128 * 1024;
 
-    // configured: file count allowed by the current configuration; new file ids
-    // are allocated only below this limit.
-    // actual: file count currently present on disk. Recovery may raise this
-    // above configured if it finds existing files beyond the configured limit.
-    // Such files remain readable and their live segments remain usable until
-    // freed, but new files are never allocated beyond configured. Fully retired
-    // files may be deleted from the end.
-    struct {
-        uint64_t configured;
-        uint64_t actual;
-    } _max_files;
+    // The file count of the configuration. A new file is allocated only below it. Recovery can
+    // find more files, from an earlier, larger configuration (I4).
+    uint64_t _configured_file_count;
 
     uint64_t _file_size;
     std::filesystem::path _base_dir;
@@ -189,7 +178,7 @@ private:
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> do_open_file(file_id_t);
 
-    // A file id is valid if the file is on disk (I5).
+    // A file id is valid if _open_files has an entry for it (I5).
     void check_file_id(file_id_t file_id) const {
         if (file_id >= _open_files.size()) [[unlikely]] {
             on_internal_error(logstor_logger, fmt::format("Attempted to access file {} beyond the {} files on disk", file_id, _open_files.size()));
