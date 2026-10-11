@@ -231,10 +231,10 @@ def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
 # not just JSON number constants, it also allows a string containing a number.
 # Strings which do not hold a number fail with a FunctionFailure. In
 # particular, the empty string "" is not a valid number, and should report an
-# error, but both Scylla and Cassandra have bugs that allow it for some types
-# and not for others. The following tests reproduce #7944. Where Cassandra
-# has (what we consider to be) a bug, it is marked with "cassandra_bug"
-# which causes it to xfail when testing against Cassandra.
+# error. Cassandra allows it for some types and not for others, which we
+# consider a Cassandra bug (CASSANDRA-21745), so such tests are marked
+# "cassandra_bug", which causes them to xfail when testing against Cassandra.
+# Scylla also allowed it for some types - the following tests reproduce #7944.
 def test_fromjson_int_empty_string_unprepared(cql, table1, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(FunctionFailure):
@@ -244,12 +244,10 @@ def test_fromjson_int_empty_string_prepared(cql, table1, cassandra_bug):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
-@pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_unprepared(cql, table1):
     p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, vi) VALUES ({p}, fromJson('\"\"'))")
-@pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
