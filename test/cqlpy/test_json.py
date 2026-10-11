@@ -643,3 +643,31 @@ def test_select_distinct_json(cql, test_keyspace):
         result = list(cql.execute(f"SELECT JSON p FROM {table} WHERE p IN ({p1}, {p2})"))
         json_values = [json.loads(row[0])["p"] for row in result]
         assert sorted(json_values) == sorted([p1, p1, p2, p2])
+
+# INSERT JSON can set a static column, like a regular INSERT can.
+# Reproduces SCYLLADB-4465 (the static column's value was silently ignored).
+def test_insert_json_static_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, s int static, r int, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"""INSERT INTO {table} JSON '{{"p": {p}, "c": 1, "s": 7, "r": 8}}'""")
+        assert list(cql.execute(f"SELECT p, c, s, r FROM {table} WHERE p = {p}")) == [(p, 1, 7, 8)]
+
+# A static column missing from the JSON value of INSERT JSON is set to null,
+# like a missing regular column - unless DEFAULT UNSET is used, which leaves
+# it unchanged. Reproduces SCYLLADB-4465 (the static column was never changed).
+def test_insert_json_static_column_default(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, s int static, r int, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, c, s, r) VALUES ({p}, 1, 7, 8)")
+        cql.execute(f"""INSERT INTO {table} JSON '{{"p": {p}, "c": 2, "r": 9}}' DEFAULT UNSET""")
+        assert list(cql.execute(f"SELECT p, c, s, r FROM {table} WHERE p = {p}")) == [(p, 1, 7, 8), (p, 2, 7, 9)]
+        cql.execute(f"""INSERT INTO {table} JSON '{{"p": {p}, "c": 2, "r": 9}}'""")
+        assert list(cql.execute(f"SELECT p, c, s, r FROM {table} WHERE p = {p}")) == [(p, 1, None, 8), (p, 2, None, 9)]
+
+# INSERT JSON can set a static column of a collection type.
+# Reproduces SCYLLADB-4465.
+def test_insert_json_static_collection(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, s list<int> static, m map<text, int> static, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"""INSERT INTO {table} JSON '{{"p": {p}, "c": 1, "s": [1, 2], "m": {{"a": 3}}}}'""")
+        assert list(cql.execute(f"SELECT s, m FROM {table} WHERE p = {p}")) == [([1, 2], {'a': 3})]

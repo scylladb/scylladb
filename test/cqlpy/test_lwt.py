@@ -251,9 +251,9 @@ def test_lwt_insert_json_if_not_exists_new_row(cql, table1):
     assert len(rs) == 1 and rs[0].applied
     rs = list(cql.execute("""INSERT INTO %s JSON '{"p": %s, "c": 2, "r": 3}' IF NOT EXISTS""" % (table1, p)))
     assert len(rs) == 1 and not rs[0].applied
-    # We don't check the static column s here, because INSERT JSON should set
-    # it to null (DEFAULT NULL), and Scylla doesn't (SCYLLADB-4465).
-    assert list(cql.execute(f'SELECT p, c, r FROM {table1} WHERE p={p}')) == [(p, 1, 1), (p, 2, 2)]
+    # The first INSERT JSON set the static column s to null, because it is
+    # missing from its JSON value.
+    assert list(cql.execute(f'SELECT p, c, r, s FROM {table1} WHERE p={p}')) == [(p, 1, 1, None), (p, 2, 2, None)]
 
 # INSERT JSON ... IF NOT EXISTS in a table without clustering columns, and
 # with the JSON value given as a bind variable of a prepared statement.
