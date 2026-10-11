@@ -1812,6 +1812,28 @@ async def test_restore_tablets_vnodes_backup_into_tablets_table(manager: ScyllaC
             assert kept == expected, f'Failed restore into {dst_ks}.cf2 modified the source table {src_ks}.cf1: {len(kept)} rows'
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_requires_cluster_feature(manager: ScyllaClusterManager):
+    '''Check that tablet-aware restore is rejected until the whole cluster supports it.
+
+    Nodes without the TABLET_AWARE_RESTORE feature cannot parse the restore
+    transitions and topology request that a restore persists, so a node that
+    supports restore must refuse it while such a node is in the cluster, as
+    during a rolling upgrade.
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-3938'''
+
+    # The old node goes first: a cluster that has already enabled the feature refuses to admit it.
+    config = {'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'TABLET_AWARE_RESTORE'}]}
+    await manager.server_add(config=config)
+    upgraded = await manager.server_add()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+        with pytest.raises(HTTPError, match="TABLET_AWARE_RESTORE"):
+            await manager.api.restore_tablets(upgraded.ip_addr, ks, 'test', 'snap', upgraded.datacenter, 'endpoint', 'bucket', ['manifest.json'])
+
+
 async def test_restore_with_non_existing_sstable(manager: ScyllaClusterManager, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
