@@ -12,16 +12,16 @@
 
 namespace replica::logstor {
 
-// cached_mutation_entry
+// cached_partition_entry
 
-cached_mutation_entry::cached_mutation_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot)
+cached_partition_entry::cached_partition_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot)
         : _schema(std::move(schema))
         , _key(key)
         , _partition(*_schema, partition)
         , _slot_link(entangled::make_paired_with(slot._entry_link)) {
 }
 
-void cached_mutation_entry::on_evicted() noexcept {
+void cached_partition_entry::on_evicted() noexcept {
     if (auto* ct = get_current_cache_tracker()) {
         ct->on_partition_eviction();
     }
@@ -102,7 +102,7 @@ void cache_tracker::populate(const primary_index_entry& pie, const mutation& m) 
                 _shared_tracker.on_miss_already_populated();
                 return;
             }
-            auto* e = current_allocator().construct<cached_mutation_entry>(m.schema(), m.decorated_key().key(), m.partition(), pie._cached_entry);
+            auto* e = current_allocator().construct<cached_partition_entry>(m.schema(), m.decorated_key().key(), m.partition(), pie._cached_entry);
             get_lru().add(*e);
             _shared_tracker.on_partition_insert();
         });

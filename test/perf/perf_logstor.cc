@@ -538,7 +538,7 @@ class logstor_bench {
     std::unique_ptr<logstor> _logstor;
     std::unique_ptr<tests::logstor::test_logstor_group> _group;
     std::vector<dht::decorated_key> _keys;
-    // The keys of the dataset whose mutations are in the cache, which is what the cache-lookup and
+    // The keys of the dataset whose partitions are in the cache, which is what the cache-lookup and
     // query-cached tests draw from: a dataset larger than the cache of the shard leaves only part of
     // itself in it, and a key the LRU dropped is not one a test of what a hit costs can use. Points
     // into _keys, which does not change once the dataset is written.
@@ -619,7 +619,7 @@ public:
             _data_file = seastar::file();
         }
         if (_group) {
-            // The index evicts what it has in the cache before it goes, since a cached mutation
+            // The index evicts what it has in the cache before it goes, since a cached partition
             // lives in the shared cache region and the index entry only points at it. This is what
             // a table does when it stops.
             co_await index().drain_cache();
@@ -875,7 +875,7 @@ public:
 
     size_t cached_key_count() const noexcept { return _resident_keys; }
 
-    // Lookups of the cache of the shard that found no cached mutation, whether a test looked the
+    // Lookups of the cache of the shard that found no cached partition, whether a test looked the
     // cache up itself or a read did. Once the cache was warmed, a miss of a key it held then is the
     // LSA reclaiming under memory pressure, or a miss of a cached read evicting another key to admit
     // its own. Counted rather than treated as an error: a run that says its number is not a cache hit is
@@ -1003,7 +1003,7 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         auto results = run();
         const auto misses = count_misses() - misses_before;
         if (misses) {
-            fmt::print("WARNING: {} lookups found no cached mutation, so the number above is not what a hit"
+            fmt::print("WARNING: {} lookups found no cached partition, so the number above is not what a hit"
                     " costs. Either nothing of the dataset fit the cache, or the LSA reclaimed while the"
                     " test ran; give the run more memory or fewer partitions\n", misses);
         }

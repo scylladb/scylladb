@@ -31,7 +31,7 @@ class cached_entry_slot;
 // The back-pointer (_slot_link) is an entangled paired with the
 // primary_index_entry::_cached_entry._entry_link, which lives in the
 // standard-heap B+tree and is therefore stable across LSA compaction.
-class cached_mutation_entry final : public evictable {
+class cached_partition_entry final : public evictable {
     schema_ptr _schema;
     partition_key _key;
     mutation_partition _partition;
@@ -39,11 +39,11 @@ class cached_mutation_entry final : public evictable {
 
 public:
     // Note: constructed inside the LSA region.
-    cached_mutation_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot);
+    cached_partition_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot);
 
     // LSA compaction moves cached entries between addresses, so the owning
     // primary_index_entry::_cached_entry pointer must be rebound to the new object.
-    cached_mutation_entry(cached_mutation_entry&& other) noexcept
+    cached_partition_entry(cached_partition_entry&& other) noexcept
             : evictable(std::move(other))
             , _schema(std::move(other._schema))
             , _key(std::move(other._key))
@@ -53,9 +53,9 @@ public:
     }
 
     // Not copyable.
-    cached_mutation_entry(const cached_mutation_entry&) = delete;
-    cached_mutation_entry& operator=(const cached_mutation_entry&) = delete;
-    cached_mutation_entry& operator=(cached_mutation_entry&&) = delete;
+    cached_partition_entry(const cached_partition_entry&) = delete;
+    cached_partition_entry& operator=(const cached_partition_entry&) = delete;
+    cached_partition_entry& operator=(cached_partition_entry&&) = delete;
 
     const schema_ptr& schema() const noexcept {
         return _schema;
@@ -97,21 +97,21 @@ public:
     cached_entry_slot(const cached_entry_slot&) = delete;
     cached_entry_slot& operator=(const cached_entry_slot&) = delete;
 
-    cached_mutation_entry* get() const noexcept {
-        return _entry_link.get(&cached_mutation_entry::_slot_link);
+    cached_partition_entry* get() const noexcept {
+        return _entry_link.get(&cached_partition_entry::_slot_link);
     }
 
     explicit operator bool() const noexcept { return bool(_entry_link); }
-    cached_mutation_entry& operator*() const noexcept { return *get(); }
-    cached_mutation_entry* operator->() const noexcept { return get(); }
+    cached_partition_entry& operator*() const noexcept { return *get(); }
+    cached_partition_entry* operator->() const noexcept { return get(); }
 
-    friend class cached_mutation_entry;
+    friend class cached_partition_entry;
 };
 
 // Uses the shared row-cache LSA region and LRU list for the logstor cache.
 class cache_tracker {
 public:
-    friend class cached_mutation_entry;
+    friend class cached_partition_entry;
 
 private:
     ::cache_tracker& _shared_tracker;

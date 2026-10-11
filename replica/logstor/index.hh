@@ -30,15 +30,17 @@ extern seastar::logger logstor_logger;
 
 // One entry in the primary index B+tree.
 //
-// In addition to the on-disk location (index_entry), each entry may hold a
-// pointer to a cached_mutation_entry that lives in the logstor_cache_tracker's
-// LSA region.  When the cache evicts the entry under memory pressure it zeroes
-// _cached_entry via the back-pointer stored inside cached_mutation_entry.
+// In addition to the on-disk location (index_entry), each entry can have a
+// cached partition: a cached_partition_entry in the LSA region of the shared
+// cache tracker. _cached_entry links the entry to it. It is a cached_entry_slot,
+// paired with the _slot_link of the cached_partition_entry. When the cache
+// evicts the cached partition, it destroys the cached_partition_entry. This
+// breaks the pair, and _cached_entry becomes empty.
 class primary_index_entry {
     primary_index_key _key;
     index_entry _e;
     // Non-owning slot pointing into the shared cache region.
-    // Empty when no cached mutation exists for this key.
+    // Empty when no cached partition exists for this key.
     mutable cached_entry_slot _cached_entry;
     struct {
         bool _head : 1;
@@ -530,7 +532,7 @@ public:
                 it->_e.location = new_location;
                 space_accounting_on_record_freed(old_location);
                 space_accounting_on_record_added(new_location);
-                // The cached mutation is still valid (same data, new location on
+                // The cached partition is still valid (same data, new location on
                 // disk after compaction moved it) — do not evict the cache here.
                 return true;
             }
@@ -556,7 +558,7 @@ public:
         auto i = _partitions.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
-                // Overwriting with newer data: evict stale cached mutation.
+                // Overwriting with newer data: evict the stale cached partition.
                 if (_cache_tracker) {
                     _cache_tracker->evict(*i);
                 }
