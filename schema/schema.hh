@@ -30,6 +30,7 @@
 #include "column_computation.hh"
 #include "mutation/timestamp.hh"
 #include "tombstone_gc_options.hh"
+#include "mutation/tombstone.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "db/tablet_options.hh"
 #include "schema_fwd.hh"
@@ -825,6 +826,13 @@ public:
 
     // Like maybe_table() but throws replica::no_such_column_family if the table is not set.
     replica::table& table() const;
+
+    // Returns the truncation tombstone of the table, set by the eventually-consistent TRUNCATE
+    // (see docs/dev/eventually-consistent-truncate.md), or std::nullopt if the local database
+    // has no table which this object references. It is the same for all versions of the table's
+    // schema. It may change at any time, so a reader must sample it once, when it is created,
+    // to apply it consistently to all of its sources.
+    std::optional<tombstone> truncation_tombstone() const;
 
     bool has_custom_partitioner() const;
 

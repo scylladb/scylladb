@@ -272,6 +272,13 @@ replica::table* schema::maybe_table() const {
     return nullptr;
 }
 
+std::optional<tombstone> schema::truncation_tombstone() const {
+    if (auto t = maybe_table()) {
+        return t->get_truncation_tombstone();
+    }
+    return std::nullopt;
+}
+
 replica::table& schema::table() const {
     auto t = maybe_table();
     if (!t) {
