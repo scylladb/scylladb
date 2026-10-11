@@ -74,60 +74,56 @@ struct file_manager_config {
 // I5. _open_files has one entry per file id below max(configured, allocated).
 // I6. Recovery opens the files it found before it reads them. Every file a reader asks for is
 //     allocated, and open.
-// I7. Recovery drives the file manager in this order: start(), open_recovered_files(), reads of
-//     the found files, remove_file() for each retired file, resume_file_allocation(). After that,
-//     only get_file_for_new_segment() allocates files.
+// I7. Recovery drives the file manager through one recovery object, in three steps: open the found
+//     files, retire the unused files, finish. Recovery reads the found files between the first two
+//     steps. The file manager checks the order of the steps, and allocates no file before the
+//     recovery finished.
 class file_manager {
 public:
-    file_manager(file_manager_config cfg)
-        : _configured_file_count(cfg.file_count)
-        , _file_size(cfg.file_size)
-        , _base_dir(std::move(cfg.base_dir))
-        , _format_sg(cfg.format_sg)
-        , _format_on_startup(cfg.format_on_startup)
-        , _sparse_files(cfg.sparse_files)
-        , _open_files(static_cast<size_t>(_configured_file_count))
-    {}
-
-    future<> start();
+    explicit file_manager(file_manager_config cfg);
 
     future<> stop();
-
-    // The file names are ls_{shard_id}-{file_id}-Data.db
-    static sstring file_name_prefix() {
-        return fmt::format("ls_{}-", this_shard_id());
-    }
 
     std::filesystem::path file_path(file_id_t file_id) const {
         auto fname = fmt::format("{}{}-Data.db", file_name_prefix(), file_id);
         return _base_dir / fname;
     }
 
-    // The file id in a file name of this shard, or none if the name is not one.
-    static std::optional<file_id_t> file_id_of(std::string_view file_name);
+    // The recovery of the files of the shard. start_recovery() makes one, and its three steps run
+    // in this order. A step out of order is a programming error. The file manager keeps the step,
+    // and the object cannot be copied or moved, so there is one object per recovery.
+    class recovery {
+        file_manager& _files;
 
-    // Recovery calls this with the count of the files it found on disk, before it reads them. The
-    // count can be above the configured count. The files are allocated, and this opens them,
-    // so that the reads find them open.
-    future<> open_recovered_files(file_id_t found_file_count);
+        explicit recovery(file_manager& files) noexcept : _files(files) {}
+        friend class file_manager;
+    public:
+        recovery(const recovery&) = delete;
+        recovery(recovery&&) = delete;
 
-    // Removes a retired file. The caller must have checked that the file is the last one on disk,
-    // at or above the configured count, and that it holds no used segment.
-    future<> remove_file(file_id_t);
+        // Scans the base directory, removes the temporary files of formats that did not finish,
+        // checks that the found files are 0..N-1, and opens them as allocated. Returns N.
+        future<file_id_t> open_found_files();
 
-    // Recovery calls this at its end. It formats the files that are not allocated, or it starts
-    // the background format of the next file.
-    future<> resume_file_allocation();
+        // Removes the found files at or above the configured count that hold no used segment, from
+        // the end. used_file_count is the count of the files that hold a used segment.
+        future<> retire_unused_files(file_id_t used_file_count);
+
+        // Formats the rest of the configured files, or starts the background format of the next
+        // one. After it, the file manager allocates files.
+        future<> finish();
+    };
+
+    // Starts the recovery of the files. Call it once.
+    recovery start_recovery();
 
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
     // is allocated here, by the first segment taken from it. Each later segment finds the file
-    // allocated and open.
+    // allocated and open. The caller must have finished the recovery.
     future<seastar::file> get_file_for_new_segment(file_id_t);
 
     uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
-
-    uint64_t configured_file_count() const noexcept { return _configured_file_count; }
 
     // The file, if it is already open, which after startup it always is. A caller that finds it here
     // gets at it without the call and the future that get_file() costs even when it waits for
@@ -162,6 +158,11 @@ private:
 
     file_id_t _allocated_file_count{0};
 
+    // The step of the recovery. start_recovery() and the steps of the recovery object advance
+    // it, each after its work is done.
+    enum class recovery_step { not_started, started, opened, retired, finished };
+    recovery_step _recovery_step{recovery_step::not_started};
+
     seastar::gate _async_gate;
 
     shared_future<> _next_file_format{make_ready_future<>()};
@@ -172,9 +173,31 @@ private:
     // A file is opened when it is allocated, thus only the allocated files are open.
     std::vector<seastar::file> _open_files;
 
-    std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
+    const std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
+
+    // The file names are ls_{shard_id}-{file_id}-Data.db
+    static sstring file_name_prefix() {
+        return fmt::format("ls_{}-", this_shard_id());
+    }
+
+    // The file id in a file name of this shard, or none if the name is not one.
+    static std::optional<file_id_t> file_id_of(std::string_view file_name);
+
+    // Fails with an internal error when the recovery is not at the expected step.
+    void check_recovery_step(recovery_step expected, std::string_view call) const;
 
     future<> open_allocated_files();
+
+    // Removes a retired file. The caller must have checked that the file is the last one on disk,
+    // at or above the configured count, and that it holds no used segment.
+    future<> remove_file(file_id_t);
+
+    // Formats and opens the configured files that are not allocated, in order. Each file counts
+    // as allocated after it is open.
+    future<> format_remaining_files();
+
+    // Starts the background format of the next file.
+    void start_next_file_format();
 
     future<> format_file(file_id_t);
 

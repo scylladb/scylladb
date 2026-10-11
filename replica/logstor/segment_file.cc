@@ -11,6 +11,7 @@
 #include <charconv>
 #include <cstring>
 #include <ranges>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -22,17 +23,26 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "replica/logstor/ondisk.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
+#include "utils/lister.hh"
 
 namespace replica::logstor {
 
-future<> file_manager::start() {
-    co_await seastar::recursive_touch_directory(_base_dir.string());
-    _zero_buf = allocate_aligned_buffer<char>(zero_buffer_size, ondisk::block_alignment);
+file_manager::file_manager(file_manager_config cfg)
+    : _configured_file_count(cfg.file_count)
+    , _file_size(cfg.file_size)
+    , _base_dir(std::move(cfg.base_dir))
+    , _format_sg(cfg.format_sg)
+    , _format_on_startup(cfg.format_on_startup)
+    , _sparse_files(cfg.sparse_files)
+    , _open_files(static_cast<size_t>(_configured_file_count))
+    , _zero_buf(allocate_aligned_buffer<char>(zero_buffer_size, ondisk::block_alignment))
+{
     std::memset(_zero_buf.get(), 0, zero_buffer_size);
 }
 
@@ -72,10 +82,69 @@ std::optional<file_id_t> file_manager::file_id_of(std::string_view file_name) {
     return file_id;
 }
 
-future<> file_manager::open_recovered_files(file_id_t found_file_count) {
-    _open_files.resize(static_cast<size_t>(std::max(_configured_file_count, found_file_count)));
-    _allocated_file_count = found_file_count;
-    co_await open_allocated_files();
+file_manager::recovery file_manager::start_recovery() {
+    check_recovery_step(recovery_step::not_started, "start_recovery");
+    _recovery_step = recovery_step::started;
+    return recovery(*this);
+}
+
+void file_manager::check_recovery_step(recovery_step expected, std::string_view call) const {
+    if (_recovery_step != expected) [[unlikely]] {
+        auto name = [] (recovery_step step) -> std::string_view {
+            switch (step) {
+            case recovery_step::not_started: return "not_started";
+            case recovery_step::started: return "started";
+            case recovery_step::opened: return "opened";
+            case recovery_step::retired: return "retired";
+            case recovery_step::finished: return "finished";
+            }
+            return "unknown";
+        };
+        on_internal_error(logstor_logger, fmt::format("File recovery: {} called at step {}, expected step {}",
+                call, name(_recovery_step), name(expected)));
+    }
+}
+
+future<file_id_t> file_manager::recovery::open_found_files() {
+    auto& files = _files;
+    files.check_recovery_step(recovery_step::started, "open_found_files");
+    co_await seastar::recursive_touch_directory(files._base_dir.string());
+
+    std::set<file_id_t> found_file_ids;
+    std::vector<sstring> temporary_files;
+    const std::string prefix = file_name_prefix();
+    co_await lister::scan_dir(files._base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
+            [&] (fs::path dir, directory_entry de) {
+        if (de.name.starts_with(prefix)) {
+            if (auto file_id = file_id_of(de.name)) {
+                found_file_ids.insert(*file_id);
+            } else if (de.name.ends_with(".tmp")) {
+                temporary_files.push_back((dir / de.name).string());
+            }
+        }
+        return make_ready_future<>();
+    });
+    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), files._base_dir.string());
+
+    // A temporary file is a format that did not finish. format_file() makes a new one.
+    co_await coroutine::parallel_for_each(temporary_files.begin(), temporary_files.end(), [] (const sstring& path) {
+        logstor_logger.info("Recovery: removing leftover temp file {}", path);
+        return seastar::remove_file(path);
+    });
+
+    file_id_t found_file_count = 0;
+    for (auto file_id : found_file_ids) {
+        if (file_id != found_file_count) {
+            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", files.file_path(found_file_count).string()));
+        }
+        found_file_count++;
+    }
+
+    files._open_files.resize(static_cast<size_t>(std::max(files._configured_file_count, found_file_count)));
+    files._allocated_file_count = found_file_count;
+    co_await files.open_allocated_files();
+    files._recovery_step = recovery_step::opened;
+    co_return found_file_count;
 }
 
 // Opens every file that recovery found, so that no read opens one. A file that is allocated later
@@ -85,6 +154,18 @@ future<> file_manager::open_allocated_files() {
             [this] (file_id_t file_id) {
         return open_file(file_id).discard_result();
     });
+}
+
+future<> file_manager::recovery::retire_unused_files(file_id_t used_file_count) {
+    auto& files = _files;
+    files.check_recovery_step(recovery_step::opened, "retire_unused_files");
+    const auto kept_file_count = std::max(used_file_count, files._configured_file_count);
+    while (files._allocated_file_count > kept_file_count) {
+        const auto file_id = files._allocated_file_count - 1;
+        logstor_logger.info("Recovery: removing retired file {}", files.file_path(file_id).string());
+        co_await files.remove_file(file_id);
+    }
+    files._recovery_step = recovery_step::retired;
 }
 
 future<> file_manager::remove_file(file_id_t file_id) {
@@ -104,28 +185,36 @@ future<> file_manager::remove_file(file_id_t file_id) {
     _allocated_file_count--;
 }
 
-future<> file_manager::resume_file_allocation() {
-    if (_format_on_startup) {
-        auto holder = _async_gate.hold();
-        co_await with_scheduling_group(_format_sg, [this] -> future<> {
-            logstor_logger.info("Formatting {} logstor files", _configured_file_count);
-            for (file_id_t file_id = _allocated_file_count; file_id < _configured_file_count; ++file_id) {
-                co_await format_file(file_id);
-                // Open the file before it counts as allocated.
-                co_await open_file(file_id);
-                _allocated_file_count = file_id + 1;
-            }
-        });
+future<> file_manager::recovery::finish() {
+    auto& files = _files;
+    files.check_recovery_step(recovery_step::retired, "finish");
+    if (files._format_on_startup) {
+        auto holder = files._async_gate.hold();
+        co_await with_scheduling_group(files._format_sg, [&files] { return files.format_remaining_files(); });
+    } else if (files._allocated_file_count < files._configured_file_count) {
+        files.start_next_file_format();
+    }
+    files._recovery_step = recovery_step::finished;
+}
+
+future<> file_manager::format_remaining_files() {
+    if (_allocated_file_count >= _configured_file_count) {
         co_return;
     }
-
-    if (_allocated_file_count < _configured_file_count) {
-        _next_file_format = with_gate(_async_gate, [this] {
-            return with_scheduling_group(_format_sg, [this] {
-                return format_file(_allocated_file_count);
-            });
-        });
+    logstor_logger.info("Formatting {} logstor files", _configured_file_count - _allocated_file_count);
+    for (file_id_t file_id = _allocated_file_count; file_id < _configured_file_count; ++file_id) {
+        co_await format_file(file_id);
+        co_await open_file(file_id);
+        _allocated_file_count = file_id + 1;
     }
+}
+
+void file_manager::start_next_file_format() {
+    _next_file_format = with_gate(_async_gate, [this, file_id = _allocated_file_count] {
+        return with_scheduling_group(_format_sg, [this, file_id] {
+            return format_file(file_id);
+        });
+    });
 }
 
 // Formatting a new file grows the store, so its I/O deliberately does not go through
@@ -203,6 +292,7 @@ future<> file_manager::zero_region(seastar::file file, uint64_t offset, uint64_t
 }
 
 future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) {
+    check_recovery_step(recovery_step::finished, "get_file_for_new_segment");
     if (file_id >= _allocated_file_count) [[unlikely]] {
         return allocate_file(file_id).then([this, file_id] {
             return get_file(file_id);
@@ -226,11 +316,7 @@ future<> file_manager::allocate_file(file_id_t file_id) {
             _allocated_file_count++;
 
             if (_allocated_file_count < _configured_file_count) {
-                _next_file_format = with_gate(_async_gate, [this] {
-                    return with_scheduling_group(_format_sg, [this] {
-                        return format_file(_allocated_file_count);
-                    });
-                });
+                start_next_file_format();
             }
         }
     } else if (file_id >= _configured_file_count && file_id >= _allocated_file_count) {
