@@ -87,6 +87,43 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaCluster
         assert row[0].count == 0
 
 
+@pytest.mark.xfail(reason="SCYLLADB-5245", strict=True)
+async def test_dropped_table_data_not_resurrected_in_recreated_table(manager: ScyllaClusterManager):
+    """Drop a table with data, recreate it WITH ID = <the same id>, and kill the node.
+
+    The commitlog replayer skips entries only by the replay positions stored in
+    system.truncated for existing tables. The drop deletes the truncation
+    records of the table, so after a restart, commitlog entries written to the
+    dropped table, if their segments were not recycled yet, are replayed into
+    the recreated table, which has the same id, resurrecting the dropped data.
+
+    The commitlog is in batch mode, so that the writes are in the commitlog
+    when the node is killed (with the default periodic mode they are typically
+    still in memory, and lost).
+
+    Reproducer for SCYLLADB-5245.
+    """
+    server = await manager.server_add(config={'commitlog_sync': 'batch'})
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        rows = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        table_id = rows[0].id
+
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(100)])
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH ID = {table_id}")
+
+        logger.debug("Kill + restart the node")
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test")
+        assert not rows, f"Data of the dropped table was resurrected: {len(rows)} rows"
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
     """Drop a keyspace while the node is shutting down.
