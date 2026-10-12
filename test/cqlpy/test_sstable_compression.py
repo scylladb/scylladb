@@ -165,3 +165,4 @@ def test_chunk_length_limit_create_and_alter(cql, test_keyspace_vnodes, compress
         assert opts["chunk_length_in_kb"] == "64"
     finally:
         cql.execute(f"DROP TABLE {table}")
+
