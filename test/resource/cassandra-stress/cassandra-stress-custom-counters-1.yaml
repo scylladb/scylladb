@@ -1,0 +1,35 @@
+keyspace: ks
+
+keyspace_definition: |
+  CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};
+
+table: counter_cf
+
+table_definition: |
+  CREATE TABLE counter_cf (
+    id INT,
+    name text,
+    counter_one COUNTER,
+    counter_two COUNTER,
+    PRIMARY KEY(id, name)
+  )
+
+columnspec:
+  - name: id
+    size: uniform(1..8)
+  - name: name
+    size: uniform(4..16)
+  - name: counter_one
+    population: fixed(1)
+  - name: counter_two
+    population: fixed(1)
+
+insert:
+  partitions: fixed(1)
+  batchtype: LOGGED
+  select: fixed(1)/1
+
+queries:
+  read1:
+    cql: select * from counter_cf where id = ? and name = ?
+    fields: multirow
