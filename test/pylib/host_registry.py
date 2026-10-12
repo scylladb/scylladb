@@ -4,16 +4,29 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
-import errno
 import fcntl
 import os
 import random
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NewType, Optional
+from typing import NewType
 
 
 Host = NewType('Host', str)
+
+
+def _open_lock_file(path: Path) -> int:
+    """Read-only is enough for flock(), and lets us lock a file another user left behind.
+    O_EXCL: the chmod below must only ever touch a file we just created, never whatever a symlink
+    planted at this path points at. An existing file is opened without O_CREAT, which the kernel
+    refuses on another user's file in a sticky directory (fs.protected_regular), and without
+    following symlinks. O_NONBLOCK: a FIFO planted there must not hang us."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        return os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    os.fchmod(fd, 0o644)  # the mode above went through the umask
+    return fd
 
 
 class HostRegistry:
@@ -27,6 +40,7 @@ class HostRegistry:
     X.Y.Z is unique for each test.py invocation, and W is unique
     across all hosts in a single run.
     """
+    LOCK_DIR = Path("/tmp/scylla-test")
     _instance = None
     _initialized = False
 
@@ -57,7 +71,19 @@ class HostRegistry:
         # locked, there is another process running with this subnet and
         # we should try again with another subnet. If the file isn't
         # locked, it remains from some previous invocation and can be
-        # locked and reused.
+        # locked and reused. The lock is held until the process exits, so
+        # the subnet is ours for as long as anything of ours may be on it.
+        #
+        # The directory is shared by every run on the host, whoever started
+        # it and from whatever container: dbuild bind-mounts it from the host,
+        # as the rest of a container's /tmp is private to it. Anyone may
+        # create a lock file in it (1777) and lock one another user left
+        # behind (see _open_lock_file).
+        try:
+            self.LOCK_DIR.mkdir(0o1777)
+            self.LOCK_DIR.chmod(0o1777)  # mkdir's mode went through the umask
+        except FileExistsError:
+            pass
 
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
         second_octet = int(worker_id[2:]) + 1
@@ -65,24 +91,26 @@ class HostRegistry:
         # however, when there are several users using the same machine for testing, they can overlap,
         # so this simple retry should help to eliminate the overlap and just find another random IP
         max_attempts = 20
+        last_error = None
         for attempt in range(max_attempts):
             # Avoid 127.0.*.* since CCM (a different test framework)
             # assumes it will be available for it to run Scylla
             # instances. 127.255.255.255 is also illegal.
             subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
-            self._lock_filename: Optional[Path] = Path("/tmp") / f"scylla-{subnet}"
-            self._lock_file = self._lock_filename.open("w")
             try:
-                fcntl.lockf(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._lock_fd = _open_lock_file(self.LOCK_DIR / f"subnet-{subnet}")
+            except OSError as e:  # someone else's 0600 file, a symlink, or a LOCK_DIR we cannot write
+                last_error = e
+                continue
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except OSError as e:
-                self._lock_file.close()
-                if e.errno not in (errno.EACCES, errno.EAGAIN):
-                    raise
+            except BlockingIOError:
+                os.close(self._lock_fd)
         else:
             raise RuntimeError(
                 f"Failed to acquire a subnet lock after {max_attempts} attempts"
-            )
+            ) from last_error
 
         # Never-yet-leased hosts, minted on demand: one for each of the 254 usable 4th-octet values.
         self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{host_id}") for host_id in range(1, 255))
@@ -92,11 +120,6 @@ class HostRegistry:
 
         # Limits the number of leased hosts to the number of usable 4th-octet values: lease #255 waits for a release.
         self._semaphore = asyncio.Semaphore(254)
-
-    async def cleanup(self) -> None:
-        if self._lock_filename:
-            self._lock_filename.unlink()
-            self._lock_filename = None
 
     async def lease_host(self) -> Host:
         await self._semaphore.acquire()
