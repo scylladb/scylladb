@@ -251,9 +251,19 @@ using seg_ptr = lw_shared_ptr<writeable_segment>;
 // disk with the reads of that traffic, which wait behind whatever request is in flight.
 static constexpr uint64_t max_format_write_size = 1024 * 1024;
 
-class file_manager {
-    uint64_t _segments_per_file;
+// The configuration of the segment files of one shard.
+struct file_manager_config {
+    std::filesystem::path base_dir;
+    uint64_t file_size;
+    // The file count of the configuration. A new file is allocated only below it.
+    uint64_t file_count;
+    // The scheduling group of the file formats.
+    seastar::scheduling_group format_sg;
+    bool format_on_startup;
+    bool sparse_files;
+};
 
+class file_manager {
     // configured: file count allowed by the current configuration; new file ids
     // are allocated only below this limit.
     // actual: file count currently present on disk. Recovery may raise this
@@ -291,12 +301,11 @@ class file_manager {
     future<> allocate_file(file_id_t);
 
 public:
-    file_manager(segment_manager_config cfg)
-        : _segments_per_file(cfg.file_size / cfg.segment_size)
-        , _max_files{cfg.disk_size / cfg.file_size, cfg.disk_size / cfg.file_size}
+    file_manager(file_manager_config cfg)
+        : _max_files{cfg.file_count, cfg.file_count}
         , _file_size(cfg.file_size)
-        , _base_dir(cfg.base_dir)
-        , _sched_group(cfg.compaction_sg)
+        , _base_dir(std::move(cfg.base_dir))
+        , _sched_group(cfg.format_sg)
         , _format_on_startup(cfg.format_on_startup)
         , _sparse_files(cfg.sparse_files)
         , _open_files(static_cast<size_t>(_max_files.actual))
@@ -336,7 +345,6 @@ public:
 
     uint64_t allocated_file_count() const noexcept { return _next_file_id; }
 
-    uint64_t segments_per_file() const noexcept { return _segments_per_file; }
     uint64_t configured_max_files() const noexcept { return _max_files.configured; }
     uint64_t actual_max_files() const noexcept { return _max_files.actual; }
 
@@ -1307,8 +1315,20 @@ static const segment_manager_config& validated_geometry(const segment_manager_co
     return config;
 }
 
+static file_manager_config make_file_manager_config(const segment_manager_config& config) {
+    return file_manager_config{
+        .base_dir = config.base_dir,
+        .file_size = config.file_size,
+        .file_count = config.disk_size / config.file_size,
+        // The format of a file is background work of the store, not of a write.
+        .format_sg = config.compaction_sg,
+        .format_on_startup = config.format_on_startup,
+        .sparse_files = config.sparse_files,
+    };
+}
+
 segment_manager_impl::segment_manager_impl(segment_manager_config config)
-    : _file_mgr(validated_geometry(config))
+    : _file_mgr(make_file_manager_config(validated_geometry(config)))
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
