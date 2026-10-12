@@ -7,6 +7,8 @@
 # Tests for configuration of compressed sstables
 #############################################################################
 
+import os
+import time
 import pytest
 from . import nodetool
 from .util import new_test_table, new_materialized_view, is_scylla
@@ -135,6 +137,27 @@ def test_aux_tables_compression_parity(cql, test_keyspace):
                 assert view_compression == cdc_compression
             assert base_compression == view_compression
 
+# Ported from scylla-dtest sstable_generation_loading_test.py::TestSSTableGenerationAndLoading::test_incompressible_data_in_compressed_table.
+# Incompressible data (10 cells of 10000 random hex characters) written with
+# UPDATEs to a Deflate-compressed table - where a "compressed" chunk is larger
+# than the original data - is flushed to an sstable and a clustering-range
+# read of the partition returns rows. Reproduces CASSANDRA-3370.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_incompressible_data(cql, test_keyspace):
+    # The dtests' create_cf("cf", compression="Deflate").
+    option = 'sstable_compression' if is_scylla(cql) else 'class'
+    with new_test_table(cql, test_keyspace, "key varchar, c varchar, v varchar, PRIMARY KEY(key, c)",
+                        "WITH comment='test cf' AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'true'} "
+                        f"AND compression = {{ '{option}': 'DeflateCompressor' }}") as table:
+        for col in range(10):
+            col_val = os.urandom(5000).hex()
+            cql.execute(f"UPDATE {table} SET v='{col_val}' WHERE KEY='0' AND c='{col}';")
+        # The dtest's node1.flush(): "nodetool flush" of every table.
+        nodetool.flush_all(cql)
+        time.sleep(2)
+        rows = list(cql.execute(f"SELECT * FROM {table} WHERE KEY = '0' AND c < '8';"))
+        assert rows
 
 # chunk_length_in_kb above 128 is rejected by CREATE and ALTER TABLE, for
 # each compressor; 128 and 64 are accepted and show up in the table's

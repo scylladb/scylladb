@@ -134,6 +134,28 @@ async def test_persist_small_columns(manager: ScyllaClusterManager):
 
 
 ############################################################################
+# Ported from sstable_generation_loading_test.py.
+
+# A small partition with a static row followed by a large one (#1567): with
+# the cache off, the large partition's promoted index, written by the
+# shutdown flush, serves a read of its first row after a restart.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_promoted_index_generation_with_small_partition_followed_by_a_large_partition(manager: ScyllaClusterManager):
+    server = await manager.server_add(config={**CONFIG, 'enable_cache': False})
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE ks {ks_opts(1)}")
+    await cql.run_async("CREATE TABLE ks.test (pk int, ck text, s1 int static, v int, PRIMARY KEY (pk, ck));")
+    await cql.run_async("insert into ks.test (pk, s1) values (1, 7);")
+    await cql.run_async("insert into ks.test (pk, s1) values (0, 7);")
+    for idx in range(2000):
+        await cql.run_async(f"insert into ks.test  (pk, ck, v) values (0, 'ck_{idx}', {idx});")
+    await restart(manager, server)
+    rows = list(await manager.get_cql().run_async("select * from ks.test where pk = 0 and ck = 'ck_0';"))
+    assert len(rows) == 1
+    assert list(rows[0]) == [0, "ck_0", 7, 0]
+
+
+############################################################################
 
 
 ############################################################################
