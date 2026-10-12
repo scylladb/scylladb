@@ -2658,12 +2658,17 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
 
     // #25709 ensure we don't free any segment until after prune.
     {
-        auto tmp = _segments; 
-        std::erase_if(_segments, [=](sseg_ptr s) {
-            if (s->can_delete()) {
-                clogger.debug("Segment {} is unused", *s);
-                return true;
-            }
+        // Only a prefix is removed, so segments are released in id order.
+        auto end = std::ranges::find_if_not(_segments, [] (const sseg_ptr& s) {
+            return s->can_delete();
+        });
+        std::vector<sseg_ptr> tmp(std::make_move_iterator(_segments.begin()), std::make_move_iterator(end));
+        _segments.erase(_segments.begin(), end);
+        for (auto& s : tmp) {
+            clogger.debug("Segment {} is unused", *s);
+        }
+        if (!_segments.empty()) {
+            auto& s = _segments.front();
             if (s->is_still_allocating()) {
                 clogger.debug("Not safe to delete segment {}; still allocating.", *s);
             } else if (!s->is_clean()) {
@@ -2671,8 +2676,7 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
             } else {
                 clogger.debug("Not safe to delete segment {}; disk ops pending", *s);
             }
-            return false;
-        });
+        }
     }
 
     // launch in background, but guard with gate so this deletion is

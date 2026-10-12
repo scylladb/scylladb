@@ -263,6 +263,76 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
         });
 }
 
+namespace {
+
+struct record_deletes_extension : public db::commitlog_file_extension {
+    std::vector<std::string> deleted;
+
+    seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
+        co_return f;
+    }
+    seastar::future<> before_delete(const seastar::sstring& filename) override {
+        deleted.emplace_back(filename);
+        co_return;
+    }
+};
+
+std::vector<segment_id_type> segment_ids(const std::vector<std::string>& names) {
+    return names | std::views::transform([] (const std::string& name) {
+        return commitlog::descriptor(name).id;
+    }) | std::ranges::to<std::vector>();
+}
+
+future<> deletes_segments_in_order(commitlog& log, record_deletes_extension& ex) {
+    sstring data(100 * 1024, 'x');
+    auto write = [&] (table_id id) {
+        return log.add_mutation(id, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        });
+    };
+
+    auto old_uuid = make_table_id();
+    auto uuid = make_table_id();
+    rp_set old_rps, rps;
+    old_rps.put(co_await write(old_uuid));
+    while (log.get_active_segment_names().size() < 4) {
+        rps.put(co_await write(uuid));
+    }
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    auto names = log.get_active_segment_names();
+
+    // The oldest segment is still dirty, so nothing may be deleted.
+    log.discard_completed_segments(uuid, rps);
+    co_await log.wait_for_pending_deletes();
+    BOOST_REQUIRE(ex.deleted.empty());
+
+    log.discard_completed_segments(old_uuid, old_rps);
+    co_await log.wait_for_pending_deletes();
+    BOOST_REQUIRE(log.get_active_segment_names().empty());
+    BOOST_REQUIRE_EQUAL(ex.deleted.size(), names.size());
+    BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+}
+
+}
+
+// A clean segment must not be deleted while an older segment is still dirty,
+// and segments must be deleted in id order.
+SEASTAR_TEST_CASE(test_commitlog_deletes_segments_in_order) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return deletes_segments_in_order(log, ex);
+    });
+}
+
 SEASTAR_TEST_CASE(test_equal_record_limit){
     return cl_test([](commitlog& log) {
             auto size = log.max_record_size();
