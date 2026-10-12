@@ -731,6 +731,7 @@ def normalized_images(preimage_enable, postimage_enable):
     preimage = 'full' if preimage_enable == 'full' else ('true' if preimage_enable else 'false')
     return preimage, 'true' if postimage_enable else 'false'
 
+
 # cdc_static_row_test.py's check_single_row_static(): the dtest's INSERT,
 # UPDATE, DELETE and UPDATE again of the static columns (only) of each row
 # of the data set (num_of_partitions partitions of one row), one statement
@@ -763,6 +764,7 @@ def check_single_row_static(cql, keyspace, typ, num_of_partitions=1, num_of_rows
         assert actual == expected
         upd = data.generate(num_of_static)
         check_cdc_statements(cql, table, model, [(pk, None, statics(upd), False) for pk, _ in rows], times, lists)
+
 
 # cdc_static_row_test.py's check_static_common_field(): INSERT, UPDATE,
 # UPDATE to null and UPDATE again of all static and regular columns of each
@@ -801,6 +803,8 @@ STATIC_ROW_GATE = pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it
 @pytest.mark.parametrize('typ', static_row_types)
 def test_single_static_row(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_preimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
@@ -808,12 +812,15 @@ def test_single_static_row(scylla_only, cql, test_keyspace_vnodes, typ):
 def test_single_static_row_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, preimage_enable=True)
 
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_postimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_single_static_row_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_preimage_postimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
