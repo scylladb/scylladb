@@ -779,6 +779,8 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     bool _terminated = false;
     // Removed from _segments; the file goes through _released_segments.
     bool _released = false;
+    // Keep the file on disk even if clean, because an older segment is kept.
+    bool _keep_on_disk = false;
 
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
@@ -875,14 +877,14 @@ public:
     ~segment() {
         dispose_mode mode = dispose_mode::Keep;
 
-        if (is_clean()) {
+        if (is_clean() && !_keep_on_disk) {
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
             _segment_manager->totals.bytes_released += file_position();
             _segment_manager->totals.wasted_size_on_disk -= _waste;
             mode = dispose_mode::Delete;
-        } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
+        } else if (!is_clean() && _segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
             for (auto& [rp, h] : _extended_segments) {
                 h.release(); // do not clear out sequential seqments either.
@@ -3041,8 +3043,17 @@ future<> db::commitlog::segment_manager::orphan_all() {
     // #25709. the actual process of destroying the elements here
     // might cause a call into discard_unused_segments.
     // ensure the target vector is empty when we get to destructors
-    auto tmp = std::exchange(_segments, {});
-    return clear_reserve_segments();
+    {
+        auto tmp = std::exchange(_segments, {});
+        // Segments newer than a kept (dirty) one must be kept as well.
+        bool keep = false;
+        for (auto& s : tmp) {
+            keep = keep || !s->is_clean();
+            s->_keep_on_disk = keep;
+            release_segment(*s);
+        }
+    }
+    co_await clear_reserve_segments();
 }
 
 /*
