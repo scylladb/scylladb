@@ -16,7 +16,7 @@ from uuid import UUID
 
 import pytest
 from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest, SyntaxException, Unauthorized
+from cassandra.protocol import FunctionFailure, InvalidRequest, SyntaxException, Unauthorized
 from cassandra.util import Date, Duration
 
 from .util import new_test_table, new_type, new_function, unique_name
@@ -501,6 +501,22 @@ def test_lua_error(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
         with pytest.raises(InvalidRequest, match=re.escape("attempt to perform arithmetic on a nil value (field 'bar')")):
             call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "return 2 * bar")
+
+# A Lua function may raise an error whose value isn't a string or a number,
+# e.g., error({}) raises a table. Check that this is reported as a failure
+# of the function, describing the error value's type, and doesn't crash.
+# The error used to be reported as an InvalidRequest, and SCYLLADB-5159
+# changes it to a FunctionFailure, so this test accepts either.
+# Reproduces SCYLLADB-5271 (Scylla crashed on such an error).
+# A table with a __tostring metamethod which itself raises an error must not
+# be converted with that metamethod.
+@pytest.mark.parametrize('error,description', [('error({})', 'table'), ('error(nil)', 'nil'), ('error()', 'nil'), ('error(true)', 'boolean'),
+    ('error(setmetatable({}, {__tostring = function() error("x") end}))', 'table')])
+def test_lua_error_not_string(cql, test_keyspace, scylla_only, error, description):
+    with new_test_table(cql, test_keyspace, 'key text PRIMARY KEY, val int') as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
+        with pytest.raises((InvalidRequest, FunctionFailure), match=re.escape(f'(error object is a {description} value)')):
+            call_lua(cql, test_keyspace, table, '(val int) RETURNS NULL ON NULL INPUT RETURNS int', error)
 
 # This test relies on the server being configured with a UDF time limit
 # (user_defined_function_time_limit_ms) that isn't too long.
