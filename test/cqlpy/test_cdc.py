@@ -828,6 +828,8 @@ def test_single_static_row_postimage(scylla_only, cql, test_keyspace_vnodes, typ
 @pytest.mark.parametrize('typ', static_row_types)
 def test_single_static_row_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, preimage_enable=True, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_preimage_postimage.
 # The same with five partitions.
 @pytest.mark.tier3
@@ -835,6 +837,8 @@ def test_single_static_row_preimage_postimage(scylla_only, cql, test_keyspace_vn
 @pytest.mark.parametrize('typ', static_row_types)
 def test_several_partitions_with_single_static_row_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=5, preimage_enable=True, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row.
 # Ten partitions, without images.
 @pytest.mark.tier3
@@ -842,18 +846,24 @@ def test_several_partitions_with_single_static_row_preimage_postimage(scylla_onl
 @pytest.mark.parametrize('typ', static_row_types)
 def test_several_partitions_with_single_static_row(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=10)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_preimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_several_partitions_with_single_static_row_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=5, preimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_postimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_several_partitions_with_single_static_row_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=3, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_full_postimage.
 # Three partitions, with full preimage and postimage.
 @pytest.mark.tier3
@@ -861,6 +871,8 @@ def test_several_partitions_with_single_static_row_postimage(scylla_only, cql, t
 @pytest.mark.parametrize('typ', static_row_types)
 def test_several_partitions_with_single_static_row_full_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=3, preimage_enable='full', postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_preimage_postimage.
 # Writes of two static and two regular columns of three rows in each of
 # three partitions, with preimage and postimage.
@@ -869,24 +881,32 @@ def test_several_partitions_with_single_static_row_full_postimage(scylla_only, c
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_static_row_and_regular_columns_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, preimage_enable=True, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_preimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_static_row_and_regular_columns_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, preimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_postimage.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_static_row_and_regular_columns_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_static_row_and_regular_columns(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_large_number_of_static_and_regular_columns_postimage_preimage.
 # Ten static and ten regular columns, with preimage and postimage.
 @pytest.mark.tier3
@@ -894,16 +914,22 @@ def test_operations_with_static_row_and_regular_columns(scylla_only, cql, test_k
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_large_number_of_static_and_regular_columns_postimage_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 10, num_of_static=10, preimage_enable=True, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_large_number_of_static_and_regular_columns.
 @pytest.mark.tier3
 @STATIC_ROW_GATE
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_large_number_of_static_and_regular_columns(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 10, num_of_static=10)
+
+
 # The column types of cdc_batch_test.py, in the dtest's spelling.
 batch_types = [pytest.param(t, id=mkident(t)) for t in
                ['int', 'bigint', 'text', 'varchar', 'frozen<set<int>>', 'frozen<set<text>>', 'frozen<list<int>>',
                 'list<int>', 'set<int>', 'map<int,int>', 'map<text,blob>']]
+
+
 # cdc_batch_test.py's run_batch_checks(): logged batches - driver batch
 # messages with the values formatted into the statements - with one INSERT
 # or UPDATE per row and column, of three rows in each of five partitions of
@@ -946,42 +972,59 @@ def run_batch_checks(cql, keyspace, typ, preimage_enable, postimage_enable, num_
         run_batch(range(1, num_of_columns, 2))
         run_batch(range(num_of_columns), null=True)
         run_batch(range(num_of_columns))
+
+
 BATCH_GATE = pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_delta_batch_only.
 # Batches without images.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_delta_batch_only(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=False, postimage_enable=False)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_true_delta_batch.
 # With preimage, given as 'True'.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_preimage_true_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=True, postimage_enable=False)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_on_delta_batch.
 # With preimage, given as 'true'.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_preimage_on_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='true', postimage_enable=False)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_full_delta_batch.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_preimage_full_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='full', postimage_enable=False)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_delta_postimage_batch.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_delta_postimage_batch(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=False, postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_full_delta_postimage.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_preimage_full_delta_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='full', postimage_enable=True)
+
+
 # Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_on_delta_postimage.
 @BATCH_GATE
 @pytest.mark.parametrize('typ', batch_types)
 def test_preimage_on_delta_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='true', postimage_enable=True)
+
