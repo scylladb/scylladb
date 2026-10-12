@@ -869,6 +869,11 @@ class ScyllaServer:
             # Any other exception may indicate a problem, and is passed to the caller.
             return None
 
+    def forget_host_id(self) -> None:
+        """Forget the cached host id, e.g. after the node's data was wiped: it
+        gets a new one when it starts again."""
+        self.__dict__.pop("_host_id", None)
+
     async def get_host_id(self, api: ScyllaRESTAPIClient) -> HostID:
         result = await self.try_get_host_id(api)
         if result is None:
