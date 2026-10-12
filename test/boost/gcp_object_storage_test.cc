@@ -669,6 +669,64 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrap
 
 }
 
+// A download source keeps its position across calls, whatever else is happening on
+// the shard. hold_state gave the state back only when std::uncaught_exceptions()
+// was zero, and that count is per OS thread: a seastar::thread that blocks while
+// unwinding - a compaction stopped for tablet cleanup, closing its writer in
+// ~mc::writer - makes it non-zero for every task on the shard. A get() that
+// succeeded in that window dropped the position, and the next one started the
+// object again from zero.
+//
+// https://scylladb.atlassian.net/browse/SCYLLADB-5259
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_keeps_position_while_unwinding, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    // Each get(read_size) is its own ranged GET, so a few of them cover the object.
+    constexpr size_t object_size = 4096;
+    constexpr size_t read_size = 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+    auto [expected, total] = stream_from_buffers(std::move(written));
+    auto src = c.create_download_source(bucket, name);
+
+    co_await seastar::async([&] {
+        // A reply can come back in several buffers, so each check compares whatever
+        // get() returned against the same length of the reference stream.
+        auto check_next = [&] (temporary_buffer<char> buf) {
+            BOOST_REQUIRE(!buf.empty());
+            BOOST_REQUIRE_EQUAL(buf, expected.read_exactly(buf.size()).get());
+        };
+
+        check_next(src.get(read_size).get());
+
+        // Blocks in a destructor while the exception unwinds past it, as
+        // ~mc::writer does, so this get() runs with std::uncaught_exceptions() == 1.
+        struct get_while_unwinding {
+            seekable_data_source& src;
+            size_t limit;
+            temporary_buffer<char>& out;
+            ~get_while_unwinding() {
+                out = src.get(limit).get();
+            }
+        };
+        temporary_buffer<char> unwinding_read;
+        try {
+            get_while_unwinding g{src, read_size, unwinding_read};
+            throw std::runtime_error("unwinding");
+        } catch (const std::runtime_error&) {
+        }
+        check_next(std::move(unwinding_read));
+
+        // The next read continues from there, not from the start of the object.
+        check_next(src.get(read_size).get());
+    });
+
+    co_await src.close();
+    co_await expected.close();
+}
+
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_in_parallel, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     auto& c = client();
     auto name = make_name();
