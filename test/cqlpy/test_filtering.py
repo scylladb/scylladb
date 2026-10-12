@@ -560,3 +560,4 @@ def test_multi_column_slice_with_filtering_on_indexed_column(cql, test_keyspace)
             cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES (1, {i}, {i}, {i % 2})")
         assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) < (4, 4) AND v = 1 ALLOW FILTERING")) == {(3, 3), (1, 1)}
         assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) > (2, 2) AND v = 1 ALLOW FILTERING")) == {(5, 5), (3, 3)}
+
