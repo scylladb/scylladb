@@ -329,7 +329,9 @@ public:
             bool enabled = true;
         };
         // Must have at least one element. No two tenants should have the same
-        // scheduling group. [0] is the default tenant, that all unknown
+        // scheduling group, but two tenants may have the same name. Then both
+        // use the same RPC tenant, and the peer runs the requests of both in
+        // the same scheduling group. [0] is the default tenant, that all unknown
         // scheduling groups will fall back to. The default tenant should use
         // the statement scheduling group, for backward compatibility. In fact
         // any other scheduling group would be dropped as the default tenant,
