@@ -378,6 +378,26 @@ class keyspace_stats:
 def test_plain_text_output(nodetool, command, args, tables_to_print, human_readable):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
+    check_plain_text_output(nodetool, command, args, tables, tables_to_print, human_readable)
+
+
+# Alternator keyspace and table names may contain dots, so a trailing slash
+# ("ks.with.dots/") selects a whole keyspace, and a slash also separates a
+# keyspace from a table ("ks.with.dots/table.with.dots"). Without a slash,
+# the argument is split at the first dot, so it names another keyspace.
+@pytest.mark.parametrize('args,tables_to_print',
+                         [
+                             (['alternator_.tbl/'], ['alternator_.tbl..tbl']),
+                             (['alternator_.tbl/.tbl'], ['alternator_.tbl..tbl']),
+                             (['alternator_.tbl'], []),
+                         ])
+def test_plain_text_output_dotted_keyspace(nodetool, args, tables_to_print):
+    tables = [Table('alternator_.tbl', '.tbl', 'ColumnFamilies'),
+              Table('system', 'local', 'ColumnFamilies')]
+    check_plain_text_output(nodetool, 'tablestats', args, tables, tables_to_print, False)
+
+
+def check_plain_text_output(nodetool, command, args, tables, tables_to_print, human_readable):
     expected_requests = [expected_request(
         'GET', '/column_family/',
         multiple=expected_request.MULTIPLE,

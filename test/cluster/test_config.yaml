@@ -38,7 +38,6 @@ run_in_dev:
   - test_zero_token_nodes_no_replication
   - test_not_enough_token_owners
   - test_replace_alive_node
-  - dtest/alternator_tests
   - dtest/audit_test
   - audit/test_audit
   - dtest/rebuild_test
