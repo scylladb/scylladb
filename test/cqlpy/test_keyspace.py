@@ -422,6 +422,3 @@ def test_create_keyspace_no_warn_tablets(cql, scylla_only, skip_without_tablets)
     finally:
         cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
 
-# TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
-# TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
-# TODO: confirm case insensitivity without quotes, and case sensitivity with them.
