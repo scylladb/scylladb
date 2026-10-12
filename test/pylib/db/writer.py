@@ -128,7 +128,6 @@ create_table = [
         mem_booked INTEGER,
         mem_forecast_growth INTEGER,
         workers INTEGER,
-        draining INTEGER,
         spawning INTEGER,
         running INTEGER,
         held INTEGER,

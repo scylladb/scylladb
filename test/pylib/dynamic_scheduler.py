@@ -88,7 +88,6 @@ PROFILE_VERSION = 4       # bumped when the recorded format changes; older files
 TAIL_SECONDS = 20.0       # below this a test is too short to be worth holding capacity for
 HELD_RESERVE_SECONDS = 60.0  # a test held this long without fitting gets room kept for it
 LOOKAHEAD_TRIES = 3        # tests an idle worker's pick asks admission about before it waits
-MEM_SHORT_SECONDS = 60.0   # memory counts as short this long after it last kept a test from starting
 REFRESH_SECONDS = 0.5      # measurements, forecasts, pressure and the pool are looked at this often at most
 # A reservation is a test's *peak* memory held for its whole life, and
 # peaks rarely coincide.  Measured on a run with no profile: 34 GB
@@ -160,11 +159,7 @@ STATIC_MEM_MODE_ALIAS = {"sanitize": "debug", "coverage": "debug"}
 # the machine, and a 70% ceiling) only cost parallelism: on a 33 GB
 # machine with 22 GB free it left 17 GB for debug cluster tests that
 # take 7-11 GB each.  Admission watches RAM itself: a test starts only
-# while the machine has its predicted peak available.  When no waiting
-# test fits in what is available, idle workers -- each holding its
-# last module's cluster -- are sent home, one per this many seconds,
-# so that one retirement is visible before the next.
-RETIRE_COOLDOWN = 10.0
+# while the machine has its predicted peak available.
 # Admission checks every test against the RAM the machine reports, and
 # swap is not read at all: the kernel pages cold anonymous memory out
 # as ordinary reclaim, with gigabytes free.  Measured on a healthy
@@ -178,39 +173,43 @@ RETIRE_COOLDOWN = 10.0
 # 4.6% for seconds; the run that filled swap and stalled the machine
 # sat at 15-21% for a quarter of an hour.
 MEM_STALL_LIMIT = 10.0
-# The pool starts at one worker per CPU and grows while every worker is
-# busy and the machine has CPU and memory to spare.  Starting 64
-# workers at once had half of them holding a test and their last
-# module's memory for most of the run: the run kept 33-36 tests going
-# on average.  So it grows by what the gap to the CPU target asks for,
-# at the load a busy worker puts on the machine now: one when the
-# workers run long tests and the gap is small; many where they run
-# sub-second tests and each keeps a fraction of a core busy -- at most
-# half as many again as there are, so a burst never doubles the pool on
-# a reading that came out low.  One at a
-# time, ten seconds apart, a release run ended with 10-19 cores busy
-# against a target of 27-30 while the pool grew by one worker every ten
-# seconds.  A new worker imports the framework and collects the whole
-# suite, about a core and a quarter of a gigabyte for some ten seconds,
-# so the next growth waits until those have collected, and at least
+# The pool starts at one worker per CPU and is then sized by what
+# admission does, by two rules over the last POOL_WINDOW seconds:
+#  - starved: every worker runs a test and admission would start the
+#    next one, had it a worker.  The pool grows by as many tests as
+#    admission would start one after another, at most half as many
+#    again as there are.
+#  - short of memory: admission kept a test from starting for want of
+#    memory -- a worker holds one it refused, or an idle worker found
+#    none it would start -- while at least two workers had nothing
+#    running.  One of those goes home, one per RETIRE_COOLDOWN: a worker
+#    keeps its heap and whatever its last module left behind.  Refused
+#    for CPU, the pool only stops growing: an idle worker costs no CPU,
+#    and one holding its next test starts it the moment there is room.
+# Either has to hold for POOL_SHARE of the window, and the window
+# starts over after each change, so it sees what the change did.
+# Estimating instead from the load each worker puts on the machine
+# grew the pool in bursts wherever tests were short: a sub-second
+# test barely shows on the load, and a snapshot of busy workers caught
+# them between tests.  A debug run grew 29 -> 43 at its CPU target
+# and by 52 in its last three minutes, the new workers waiting on
+# admission like the old ones.
+POOL_WINDOW = 10.0
+POOL_SHARE = 0.8
+RETIRE_COOLDOWN = 10.0
+# A new worker imports the framework and collects the whole suite,
+# about a core and a quarter of a gigabyte for some ten seconds, so the
+# next growth waits until those have collected, and at least
 # POOL_GROW_SECONDS.  Until then their expected overhead is charged to
 # the forecast, so admission cannot hand that memory to a test.  A
 # worker's overhead is measured, not assumed: what its cgroup holds the
-# moment each test starts.
+# moment each test starts.  The pool grows only while the work left
+# outlasts POOL_PAYBACK worker starts, measured as they come up.
 POOL_GROW_SECONDS = 5.0
 POOL_SPAWN_TIMEOUT = 120.0      # a spawned worker that has not collected by then is written off
 POOL_WORKER_PRIOR = 0.25 * 10**9
-# An idle worker holding this much more than its peers is sent home,
-# its held test running on the way out, and the pool grows a fresh one
-# if there is room: a worker keeps whatever its tests left behind, and
-# one that keeps a lot is memory no test can use.
-POOL_BLOAT_MIN = 1.5 * 10**9
-POOL_BLOAT_FACTOR = 3.0
-# A worker with nothing running for this long is drained: when its
-# held test starts it gets the shutdown marker instead of a successor,
-# and it exits after that test.  A held test cannot be recalled, so
-# this is the only way to take a worker out without losing its test.
-POOL_IDLE_SECONDS = 60.0
+POOL_START_PRIOR = 10.0
+POOL_PAYBACK = 3.0
 # The pool never goes below this share of the one it started with.
 # Holding the starting pool kept 32 workers through the tail of a
 # release run while 2 to 13 tests ran: 19 to 30 idle workers, 0.25-0.5
@@ -960,9 +959,11 @@ class DynamicScheduling:
         self._spawning_ids: set[str] = set()      # workers this scheduler started that have not collected yet
         self._last_spawn = -math.inf
         self._idle_mem: dict[str, float] = {}     # worker id -> what its cgroup held when its last test started
-        self._idle_since: dict[WorkerController, float] = {}    # worker -> since when nothing runs on it
         self._last_file_done: dict[WorkerController, str] = {}  # worker -> file of the last test it finished
-        self._draining: set[WorkerController] = set()          # workers to shut down after their held test
+        self._pool_signal: deque[tuple[float, str | None, int]] = deque()  # (when, starved/bound/None, spare workers)
+        self._refused = False                     # admission kept a test from starting since the last sample
+        self._mem_refused = False                 # ... for want of memory
+        self._spawn_seconds = POOL_START_PRIOR    # how long a new worker takes to collect
         self._evicted: dict[WorkerController, int] = {}         # workers sent home told to skip their held test
         self._pool_floor = 0                      # fewest workers the pool keeps: a share of its start
         self._pool_start = 0                      # workers the run started with
@@ -993,7 +994,6 @@ class DynamicScheduling:
         self.refresh = refresh
         self._refreshed_at = -math.inf             # when measurements etc. were last looked at
         self._pressure_now = False                 # the pressure guard's last verdict
-        self._mem_refused_at = -math.inf           # when memory last kept a test from starting
         self._in_pass = False                      # inside a scheduling pass: what it computes once may be kept
         self._estimate_cache: float | None = None  # this pass's load estimate, until a test is admitted
         self._held_cache: dict | None = None       # this pass's held tests: worker -> (test, cores, memory)
@@ -1154,6 +1154,9 @@ class DynamicScheduling:
         # Only a worker this scheduler spawned: xdist also brings up a
         # clone of a crashed worker, and counting that one would write
         # off a spawn still under way.
+        if node.gateway.id in self._spawning_ids:
+            self._spawn_seconds = 0.5 * self._spawn_seconds + 0.5 * (self.now() - self._last_spawn)
+            self._pool_signal.clear()            # judge the pool anew with this worker in it
         self._spawning_ids.discard(node.gateway.id)
         if self.collection_is_completed and self.collection is not None:
             if list(collection) != self.collection:
@@ -1166,9 +1169,7 @@ class DynamicScheduling:
     def remove_node(self, node: WorkerController) -> str | None:
         queued = self.node2pending.pop(node, [])
         self._idle_mem.pop(node.gateway.id, None)
-        self._idle_since.pop(node, None)
         self._last_file_done.pop(node, None)
-        self._draining.discard(node)
         # A worker that goes before it has collected is no longer a
         # spawn in flight.
         self._spawning_ids.discard(node.gateway.id)
@@ -1343,9 +1344,6 @@ class DynamicScheduling:
             self.live.refresh(n.gateway.id for n in nodes)
             self._refresh_measurement()
             self._refresh_forecasts()
-            self._ram_guard()
-            self._recycle_bloated_worker()
-            self._maybe_shrink_pool()
             self._pressure_now = self._pressure_guard()
         pressure = self._pressure_now
         was = self.hold_for
@@ -1435,15 +1433,7 @@ class DynamicScheduling:
                             self.log(f"reserving room for {self.collection[held]} on {node.gateway.id}: held "
                                       f"{waited:.0f}s without fitting")
                         self.stats["held_waiting"] += 1
-                        break
-                    if held is not None and node in self._draining:
-                        # Draining: shutdown is the successor, so the
-                        # held test runs and the worker exits.
-                        self._commit(held, node)
-                        admitted_any = True
-                        node.shutdown()
-                        self.shutdown_sent.add(node)
-                        self._draining.discard(node)
+                        self._refused = True
                         break
                     # An idle worker is given only a test that can start
                     # now: one that cannot would sit on it, off the
@@ -1461,6 +1451,8 @@ class DynamicScheduling:
                         elif not self.pending_set and not self.node2pending[node]:
                             node.shutdown()
                             self.shutdown_sent.add(node)
+                        elif not self.node2pending[node]:
+                            self._refused = True        # an idle worker that admission gave nothing
                         break
                     if held is not None:
                         self._commit(held, node)
@@ -1498,7 +1490,7 @@ class DynamicScheduling:
                 else:
                     self._send(node, cand)
         if refreshing:
-            self._maybe_grow_pool(pressure)
+            self._resize_pool(pressure)
         self._record_state(all_nodes)
 
     def _record_state(self, nodes: list[WorkerController]) -> None:
@@ -1523,7 +1515,6 @@ class DynamicScheduling:
             mem_booked=int(sum(self.res_mem.values())),
             mem_forecast_growth=int(self._fc_mean),
             workers=len(self._live_workers()),
-            draining=len(self._draining),
             spawning=len(self._spawning_ids),
             running=len(self.committed_at),
             held=sum(1 for n in nodes if self._held(n) is not None),
@@ -1557,8 +1548,8 @@ class DynamicScheduling:
         if why is None:
             return True
         self.stats[f"rejected_{why}"] += 1
-        if why == "mem":
-            self._mem_refused_at = self.now()
+        if why in ("mem", "mem_stall"):
+            self._mem_refused = True
         return False
 
     def _admits(self, idx: int, node: WorkerController | None, pressure: bool,
@@ -1784,48 +1775,66 @@ class DynamicScheduling:
     def _live_workers(self) -> list[WorkerController]:
         return [n for n in self.node2pending if n not in self.shutdown_sent and not n.shutting_down]
 
-    def _maybe_grow_pool(self, pressure: bool) -> None:
-        """Add workers when every worker is busy and the machine has CPU
-        and memory to spare: as many as the gap to the CPU target asks
-        for, between one and half the workers there are."""
-        if self.max_workers <= 0 or not self.pending_set or self._spawning:
-            return
+    def _heads(self) -> list[int]:
+        """Each module's next test that may start, in the order picks
+        take modules in."""
+        order = [f for f in self._pass_order if f in self.files] if self._pass_order is not None else list(self.files)
+        return [idx for f in order if not self._waits_for_first_run(idx := self.files[f][0])]
+
+    def _spare_workers(self) -> list[WorkerController]:
+        """Workers with nothing running, but for one parked on a repeat
+        of a test whose first run has not reported: that one waits on
+        the test, not on admission."""
+        return [n for n in self._live_workers() if not self._committed(n)
+                and ((held := self._held(n)) is None or held not in self.committed_at and not self._waits_for_first_run(held))]
+
+    def _resize_pool(self, pressure: bool) -> None:
+        """Sample whether the pool is what holds the run back, or
+        admission is, and grow or shrink it on that (see POOL_WINDOW)."""
         now = self.now()
-        if now - self._last_spawn < POOL_GROW_SECONDS:
-            return
         live = self._live_workers()
-        if len(live) >= self.max_workers:
+        spare = self._spare_workers()
+        state = None
+        if self._mem_refused:
+            state = "short"
+        elif self._refused:
+            state = "bound"
+        elif self.pending_set and not spare and any(
+                self._admits(idx, None, pressure) is None for idx in self._heads()[:LOOKAHEAD_TRIES]):
+            state = "starved"
+        self._refused = self._mem_refused = False
+        signal = self._pool_signal
+        signal.append((now, state, len(spare)))
+        while now - signal[0][0] > POOL_WINDOW:
+            signal.popleft()
+        if self.max_workers <= 0 or now - signal[0][0] < POOL_SHARE * POOL_WINDOW:
             return
-        # A worker with nothing running is free, or blocked on a test
-        # that does not fit; either way another worker would not start
-        # anything more -- unless the pool is below its floor (a
-        # bloated worker was recycled): then it is refilled.
-        refill = len(live) < self._pool_floor
-        if not refill and any(not self._committed(n) for n in live):
+        span = now - signal[0][0]
+        share = lambda which: sum(t - p for (p, _, _), (t, s, _) in zip(signal, list(signal)[1:]) if s == which) / span
+        if share("starved") >= POOL_SHARE:
+            self._grow_pool(pressure, live)
+        elif share("short") >= POOL_SHARE and min(n for _, _, n in signal) >= 2:
+            self._shrink_pool(live, spare)
+
+    def _grow_pool(self, pressure: bool, live: list[WorkerController]) -> None:
+        """Add a worker for each test admission would start now, one
+        after another, between one and half the workers there are."""
+        now = self.now()
+        if self._spawning or now - self._last_spawn < POOL_GROW_SECONDS or len(live) >= self.max_workers:
             return
-        load = self._estimate_now(now)
-        if pressure or load + 1.0 > self.cpu_target:
+        if self._time_left() < POOL_PAYBACK * self._spawn_seconds:
             return
-        # Low CPU load is not idle capacity when the tests are stalled
-        # on memory: a test waiting for its pages to come back from
-        # swap burns no CPU.  Measured, the pool grew from 12 to 33
-        # workers in four minutes on a load of 1-5 cores while swap
-        # filled.
-        if self._stalled():
-            return
-        head = next((lst[0] for lst in self.files.values() if lst and not self._waits_for_first_run(lst[0])), None)
-        if head is None:
-            return
-        # How many: the gap to the target, at the load one busy worker
-        # puts on the machine now.
-        per_worker = max(0.1, load / max(1, len(live)))
-        want = 1 if refill else math.ceil((self.cpu_target - load) / per_worker)
-        want = max(1, min(want, len(live) // 2, self.max_workers - len(live)))
-        fc = self._forecast(head, 0.0, self._file_held.get(self._file_of(head), 0.0))
         cost = self.worker_cost()
-        headroom = self._mem_headroom()
+        cap = max(1, min(len(live) // 2, self.max_workers - len(live)))
+        want, cores, mem = 0, 0.0, 0.0
+        for idx in self._heads():
+            if want >= cap or self._admits(idx, None, pressure, ahead=(cores, mem + (want + 1) * cost)) is not None:
+                break
+            cores += self._costs_for(idx).cores + self._setup_for(idx, None)
+            mem += self._forecast_new(idx)
+            want += 1
         started = 0
-        while started < want and headroom - started * cost >= cost + fc:
+        while started < want:
             wid = self._spawn_worker()
             if not wid:
                 break
@@ -1835,9 +1844,48 @@ class DynamicScheduling:
         if not started:
             return
         self._last_spawn = now
+        self._pool_signal.clear()
         self.stats["pool_grown"] += started
-        self.log(f"pool: {len(live)} -> {len(live) + started} workers ({'refilling' if refill else 'all busy'}, load {load:.1f}/"
-                 f"{self.cpu_target:.1f} cores, {per_worker:.2f} a worker, {headroom / GB:.1f}G headroom, a worker holds {cost / GB:.2f}G)")
+        self.log(f"pool: {len(live)} -> {len(live) + started} workers (every worker busy and admission would start "
+                 f"{want} more; {self._time_left():.0f}s of work left, a worker starts in {self._spawn_seconds:.0f}s, "
+                 f"holds {cost / GB:.2f}G)")
+
+    def _shrink_pool(self, live: list[WorkerController], spare: list[WorkerController]) -> None:
+        """Send home one of the workers that admission leaves without a
+        test: one that holds none, the most memory first, else the one
+        whose held test has waited least.  Never one going on with its
+        module, nor one holding a test room is or will be kept for (the
+        critical path, HELD_RESERVE_SECONDS): sent home, that test would
+        wait all over again on its next worker."""
+        now = self.now()
+        if now - self._last_retire < RETIRE_COOLDOWN or len(live) <= max(1, self._pool_floor):
+            return
+
+        def waited(n: WorkerController) -> float:
+            held = self._held(n)
+            return -1.0 if held is None else now - self.held_since.get(held, now)
+        cands = [n for n in spare if n not in self.shutdown_sent and not self._continues_module(n)
+                 and ((held := self._held(n)) is None or held not in (self.hold_for, self.reserve_for))
+                 and waited(n) < HELD_RESERVE_SECONDS]
+        if not cands:
+            return
+        node = min(cands, key=lambda n: (waited(n) >= 0, waited(n), -(self.live.memory(n.gateway.id) or 0.0)))
+        held = self._held(node)
+        mem = self.live.memory(node.gateway.id) or 0.0
+        if held is None:
+            node.shutdown()
+            self.shutdown_sent.add(node)
+            self.stats["retired"] += 1
+        elif self._send_home(node, held):
+            self.stats["evicted"] += 1
+        else:
+            return
+        self._last_retire = now
+        self._pool_signal.clear()
+        self.stats["pool_shrunk"] += 1
+        self.log(f"pool: sending {node.gateway.id} home, holding {mem / GB:.1f}G"
+                 + (f" and {self.collection[held]}, queued again" if held is not None else "")
+                 + f" (short of memory with {len(spare)} workers idle); {len(live) - 1} workers left")
 
     def _send_home(self, node: WorkerController, held: int) -> bool:
         """Shut a worker down without it running the test it holds,
@@ -1849,44 +1897,7 @@ class DynamicScheduling:
         self.held_since.pop(held, None)
         node.shutdown()
         self.shutdown_sent.add(node)
-        self._draining.discard(node)
-        self._idle_since.pop(node, None)
         return True
-
-    def _maybe_shrink_pool(self) -> None:
-        """Drain one worker that has had nothing running for
-        POOL_IDLE_SECONDS, while the pool is above its start."""
-        now = self.now()
-        live = self._live_workers()
-        for node in live:
-            if self._committed(node):
-                self._idle_since.pop(node, None)
-            else:
-                self._idle_since.setdefault(node, now)
-        if self.max_workers <= 0 or now - self._last_retire < RETIRE_COOLDOWN:
-            return
-        if len(live) - len(self._draining) <= self._pool_floor:
-            return
-        idle = [n for n in live if n not in self._draining and now - self._idle_since.get(n, now) >= POOL_IDLE_SECONDS
-                and not self._continues_module(n)]
-        if not idle:
-            return
-        node = min(idle, key=lambda n: self._idle_since[n])
-        self._draining.add(node)
-        self._last_retire = now
-        self.stats["pool_drained"] += 1
-        self.log(f"pool: draining {node.gateway.id} (nothing running for {now - self._idle_since[node]:.0f}s); "
-                  f"{len(live) - len(self._draining)} workers will remain")
-        held = self._held(node)
-        if held is None:
-            node.shutdown()
-            self.shutdown_sent.add(node)
-            self._draining.discard(node)
-        elif self._send_home(node, held):
-            # Not in the middle of a module (see above): its held test
-            # needs a setup wherever it runs, so it goes back to the
-            # queue instead of starting here past admission.
-            self.stats["evicted"] += 1
 
     def _spawn_xdist_worker(self) -> str | None:
         """Start one more xdist worker, the way xdist replaces a
@@ -1902,48 +1913,6 @@ class DynamicScheduling:
         clone = dsession.nodemanager.setup_node(spec, dsession.queue.put)
         dsession._active_nodes.add(clone)
         return spec.id
-
-    def _recycle_bloated_worker(self) -> None:
-        """Send home a worker holding far more between tests than its
-        peers; the pool may grow a fresh one.
-
-        Only while memory is short: when it last kept a test from
-        starting under MEM_SHORT_SECONDS ago, or the tests stall on it.
-        Otherwise what a worker holds costs nothing, and replacing it
-        costs a worker start: on a 62 GB host 27 workers were replaced
-        in a debug run, 14 of them within ten minutes.
-
-        Its held test goes back to the queue (see request_eviction): it
-        was chosen for this worker, and starting it on the way out would
-        start it past admission.
-        """
-        now = self.now()
-        # Only a pool that can grow back may send a worker home for
-        # this: with a fixed pool (-j) every recycled worker is one
-        # lost for the rest of the run.
-        if self.max_workers <= 0 or now - self._last_retire < RETIRE_COOLDOWN or len(self._idle_mem) < 3:
-            return
-        if now - self._mem_refused_at >= MEM_SHORT_SECONDS and not self._stalled():
-            return
-        limit = max(POOL_BLOAT_MIN, POOL_BLOAT_FACTOR * self.worker_cost())
-        for node in self._live_workers():
-            overhead = self._idle_mem.get(node.gateway.id, 0.0)
-            if overhead <= limit:
-                continue
-            held = self._held(node)
-            if held is not None and held not in self.committed_at:
-                if not self._send_home(node, held):
-                    continue        # it could not be told to skip it: leave it be
-                self.stats["evicted"] += 1
-            else:
-                node.shutdown()
-                self.shutdown_sent.add(node)
-            self._idle_mem.pop(node.gateway.id, None)
-            self._last_retire = now
-            self.stats["recycled"] += 1
-            self.log(f"recycling {node.gateway.id}: it held {overhead / GB:.2f}G when its last test started, "
-                      f"against {self.worker_cost() / GB:.2f}G for a typical worker")
-            return
 
     def _forecast_new(self, idx: int, node: WorkerController | None = None) -> float:
         """What a test that has not started will add, conditioned on
@@ -2069,72 +2038,6 @@ class DynamicScheduling:
             self.log(f"memory: the tests stall on memory {stall:.1f}% of the time"
                       + ("; nothing more is admitted until it falls below "
                          f"{MEM_STALL_LIMIT:.0f}%" if not was else "; admitting again"))
-
-    def _ram_guard(self) -> None:
-        """Send home an idle worker while the run is stalled on
-        memory.
-
-        Idle workers keep their heap and whatever their last module
-        left behind, memory no test can use.  When no held test fits
-        the forecast, one such worker goes per cooldown.  An idle
-        worker usually holds its next test, and a shutdown alone would
-        start it, so that worker is told to skip it first (see
-        request_eviction): it exits without running the test, and the
-        test goes back to the queue for a worker that has room.
-        """
-        now = self.now()
-        if now - self._last_retire < RETIRE_COOLDOWN:
-            return
-        room = self._available() - self.mem_reserve
-        waiting = [(n, i) for n in self._live_workers() if (i := self._held(n)) is not None
-                   and i not in self.committed_at]
-        if not waiting:
-            return
-        needs = [self._forecast_need(i, n) + self._hold_reservation(i)[1] for n, i in waiting]
-        if min(needs) <= room:
-            return
-        why = (f"{self._available() / GB:.1f}G available, {max(0.0, room) / GB:.1f}G after the reserve; "
-               f"the smallest of {len(waiting)} held tests needs {min(needs) / GB:.1f}G")
-        if self._retire_idle_worker(why):
-            self._last_retire = now
-
-    def _retire_idle_worker(self, why: str) -> bool:
-        """Send home the idle worker holding the most memory, if the
-        pool may shrink.
-
-        A worker holding no test goes first, as nothing has to be
-        queued again.  Never below the pool's floor, and with a fixed
-        pool (-j), which cannot grow back, never below the size it
-        started with.  The worker exits cleanly, so xdist neither
-        replaces it nor counts it as a crash.
-        """
-        live = self._live_workers()
-        floor = self._pool_floor if self.max_workers > 0 else max(self._pool_floor, self._pool_start)
-        if len(live) <= max(1, floor):
-            return False
-        idle = [n for n in live if not self._committed(n)]
-        if not idle:
-            return False
-        node = max(idle, key=lambda n: (self._held(n) is None, self.live.memory(n.gateway.id) or 0.0))
-        held = self._held(node)
-        wid = node.gateway.id
-        if held is None:
-            node.shutdown()
-            self.shutdown_sent.add(node)
-            self._draining.discard(node)
-            self._idle_since.pop(node, None)
-        elif not self._send_home(node, held):
-            return False
-        mem = self.live.memory(wid) or 0.0
-        if held is None:
-            self.stats["retired"] += 1
-            self.log(f"retiring {wid}, holding {mem / GB:.1f}G ({why}); {len(live) - 1} workers left")
-        else:
-            self.stats["evicted"] += 1
-            self.log(f"evicting {wid}, holding {mem / GB:.1f}G, on purpose: it holds {self.collection[held]}, "
-                      f"which cannot start ({why}); the worker exits without running it and the test is "
-                      f"queued again; {len(live) - 1} workers left")
-        return True
 
     def _pressure_guard(self) -> bool:
         """Set the CPU target from the pressure: a PI controller.
@@ -2886,7 +2789,7 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
 
     xdist tears the worker processes down only when the session ends,
     which is fine while workers only ever finish then.  The pool
-    drains, recycles and retires workers mid-run, and each one
+    sends workers home mid-run, and each one
     finished its session but kept its process: idle in execnet's serve
     loop, with its heap and a multiprocessing resource tracker.
     Measured on a debug run, 82 of them held 11.3 GB while the

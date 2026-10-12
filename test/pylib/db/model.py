@@ -102,7 +102,6 @@ class SchedulerMetric:
     mem_booked: int
     mem_forecast_growth: int
     workers: int
-    draining: int
     spawning: int
     running: int
     held: int

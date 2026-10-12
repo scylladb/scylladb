@@ -21,6 +21,9 @@ from test.pylib.db.model import HostInfo
 from test.pylib.db.writer import DEFAULT_DB_NAME, HOST_INFO_TABLE, SQLiteWriter
 from test.pylib.dynamic_scheduler import (
     POOL_GROW_SECONDS,
+    POOL_PAYBACK,
+    POOL_START_PRIOR,
+    POOL_WINDOW,
     HELD_RESERVE_SECONDS,
     MEM_RESERVE,
     MEM_STALL_LIMIT,
@@ -501,49 +504,112 @@ def arrive(sched: DynamicScheduling, nodes: list[FakeNode], col: list[str]) -> F
     return node
 
 
-def test_the_pool_grows_one_worker_at_a_time_while_the_gap_is_small(tmp_path):
-    """Workers on heavy tests, a little under the target: one worker at a time, only after the
-    last one has collected, POOL_GROW_SECONDS apart."""
-    clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, cores=3.0, max_workers=8)
-    sched._estimate_now = lambda now: 12.5          # 4 workers at ~3 cores, 1.9 under the target
-    sched.check_schedule()
-    assert len(spawned) == 1, "the gap is under one worker's load: grow by one"
-    clock["t"] = 3 * POOL_GROW_SECONDS
-    sched.check_schedule()
-    assert len(spawned) == 1, "the new worker has not collected yet"
-    arrive(sched, nodes, col)
-    sched.check_schedule()
-    assert len(spawned) == 2, "collected and past the cooldown: the next one"
-    clock["t"] += 1.0
-    arrive(sched, nodes, col)
-    sched.check_schedule()
-    assert len(spawned) == 2, "within POOL_GROW_SECONDS of the last spawn"
+
+def run_for(sched: DynamicScheduling, clock: dict, seconds: float, step: float = 0.5) -> None:
+    """Let time pass, a scheduling pass every `step` seconds."""
+    end = clock["t"] + seconds
+    while clock["t"] < end:
+        clock["t"] += step
+        sched.check_schedule()
 
 
-def test_the_pool_grows_by_the_gap_to_the_target_up_to_half_the_workers(tmp_path):
-    """Workers each keeping a fraction of a core busy far under the target: as many as the gap
-    asks for, at most half the workers there are, and only once the last ones have collected."""
+def test_the_pool_grows_once_every_worker_has_been_busy_for_a_window(tmp_path):
+    """Every worker runs a test and admission would start more: starved.  It grows only
+    once that has held for most of POOL_WINDOW, by at most half the workers, never while
+    the last ones are still starting, and the window starts over after each growth."""
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=6, max_workers=20)
-    sched._estimate_now = lambda now: 3.0           # 6 workers at half a core, 11.4 under the target
-    spawned.clear(); sched._spawning_ids.clear(); sched._last_spawn = -1e9
-    sched.check_schedule()
-    assert len(spawned) == 3, "the gap asks for 23; half of six workers is the most"
-    clock["t"] = 3 * POOL_GROW_SECONDS
-    sched.check_schedule()
-    assert len(spawned) == 3, "no more while those are starting"
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=20, one_file=False)
+    run_for(sched, clock, 0.6 * POOL_WINDOW)
+    assert spawned == [], "not starved for long enough yet"
+    run_for(sched, clock, 0.5 * POOL_WINDOW)
+    assert len(spawned) == 2, "admission would start dozens; half of four workers is the most"
+    run_for(sched, clock, 3 * POOL_WINDOW)
+    assert len(spawned) == 2, "no more while those are starting"
     while sched._spawning:
         arrive(sched, nodes, col)
-    sched.check_schedule()
-    assert len(spawned) == 7, "nine workers now: four more"
-    for _ in range(10):
-        clock["t"] += 2 * POOL_GROW_SECONDS
-        while sched._spawning:
-            arrive(sched, nodes, col)
-        sched.check_schedule()
-    assert len(sched._live_workers()) + sched._spawning <= 20, "never past max_workers"
+    run_for(sched, clock, 0.6 * POOL_WINDOW)
+    assert len(spawned) == 2, "a new window after the growth"
+    run_for(sched, clock, 0.5 * POOL_WINDOW)
+    assert len(spawned) == 5, "six workers now: three more"
 
+
+def test_the_pool_grows_by_what_admission_would_start(tmp_path):
+    """Four tests of 0.5 GB run; room is left for one more and the worker to run it, not two."""
+    clock, avail = {"t": 0.0}, {"v": MEM_RESERVE + 3.0 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=20, one_file=False)
+    assert len(committed(sched)) == 4
+    run_for(sched, clock, 1.5 * POOL_WINDOW)
+    assert len(spawned) == 1
+
+
+def test_the_pool_does_not_grow_without_memory_for_a_worker_and_a_test(tmp_path):
+    clock, avail = {"t": 0.0}, {"v": 1.3 * GB + MEM_RESERVE}   # two 0.5 GB tests fit, a worker and a third do not
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
+    run_for(sched, clock, 3 * POOL_WINDOW)
+    assert len(committed(sched)) == 2
+    assert spawned == [], "no room for a worker and the test it would run"
+
+
+def test_the_pool_does_not_grow_while_admission_keeps_tests_waiting(tmp_path):
+    """Room for four tests and five workers: one idles because admission gives it nothing,
+    so a sixth worker would add nothing."""
+    clock, avail = {"t": 0.0}, {"v": MEM_RESERVE + 2.2 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=5, max_workers=20, one_file=False)
+    assert len(committed(sched)) == 4
+    run_for(sched, clock, 5 * POOL_WINDOW)
+    assert spawned == [] and not any(n._shutdown_sent for n in nodes), "bound, but only one worker spare"
+
+
+def test_the_pool_does_not_grow_when_little_work_is_left(tmp_path):
+    """A worker pays off only if the work left outlasts its start."""
+    clock, avail = {"t": 0.0}, {"v": 40 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=20, n_tests=12,
+                                                 wall=2.0, one_file=False)
+    assert sched._time_left() < POOL_PAYBACK * sched._spawn_seconds
+    run_for(sched, clock, 3 * POOL_WINDOW)
+    assert spawned == []
+
+
+def test_a_new_workers_start_is_measured(tmp_path):
+    clock, avail = {"t": 0.0}, {"v": 40 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, one_file=False)
+    run_for(sched, clock, 1.5 * POOL_WINDOW)
+    assert sched._spawning == 1
+    clock["t"] = sched._last_spawn + 20.0
+    arrive(sched, nodes, col)
+    assert sched._spawn_seconds == pytest.approx(0.5 * POOL_START_PRIOR + 0.5 * 20.0)
+
+
+def test_the_pool_does_not_shrink_while_tests_wait_only_for_cpu(tmp_path):
+    """Two 8-core tests fill 16 CPUs and four workers idle: they cost no CPU, and memory is plentiful."""
+    clock, avail = {"t": 0.0}, {"v": 40 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=6, max_workers=20, cores=8.0,
+                                                 one_file=False)
+    assert len(committed(sched)) == 2
+    run_for(sched, clock, 10 * POOL_WINDOW)
+    assert spawned == [] and not any(n._shutdown_sent for n in nodes)
+
+
+def test_the_pool_shrinks_while_short_of_memory(tmp_path):
+    """Room for two tests and six workers: the four idle ones go, one per RETIRE_COOLDOWN, until
+    only one is left spare.  A fixed pool (-j) neither grows nor shrinks."""
+    clock, avail = {"t": 0.0}, {"v": MEM_RESERVE + 1.2 * GB}
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=6, max_workers=20, one_file=False)
+    sched._growth_weight = lambda idx, now: 1.0       # the two keep growing: no room ever frees up
+    assert len(committed(sched)) == 2
+    run_for(sched, clock, 0.6 * POOL_WINDOW)
+    assert not any(n._shutdown_sent for n in nodes), "not bound for long enough yet"
+    run_for(sched, clock, 0.5 * POOL_WINDOW)
+    assert sum(n._shutdown_sent for n in nodes) == 1
+    run_for(sched, clock, 10 * POOL_WINDOW)
+    gone = [n for n in nodes if n._shutdown_sent]
+    assert len(gone) == 3 and len(sched._spare_workers()) == 1, "one spare kept"
+    assert all(not sched.node2pending[n] for n in gone), "the ones holding nothing went"
+    assert spawned == [] and sched.stats["retired"] == 3 and sched.stats["pool_shrunk"] == 3
+    (tmp_path / "j").mkdir()
+    sched, nodes, col, spawned = make_pool_sched(tmp_path / "j", clock, avail, n_start=6, max_workers=0, one_file=False)
+    run_for(sched, clock, 5 * POOL_WINDOW)
+    assert not any(n._shutdown_sent for n in nodes)
 def test_the_pool_does_not_grow_without_memory_for_a_worker_and_a_test(tmp_path):
     clock, avail = {"t": 0.0}, {"v": 1.3 * GB + MEM_RESERVE}   # two 0.5 GB tests fit, a worker and a third do not
     sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
@@ -593,23 +659,22 @@ def test_the_tests_stalling_on_memory_stops_admission_until_it_falls_back(tmp_pa
 
 
 def test_the_pool_does_not_grow_while_the_tests_stall_on_memory(tmp_path):
-    """A test waiting for its pages burns no CPU; low load then is not spare capacity."""
+    """A test waiting for its pages burns no CPU, and admission starts nothing more."""
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
-    arrive(sched, nodes, col)
-    before = len(spawned)
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, one_file=False)
     sched.mem_stall = MEM_STALL_LIMIT
-    clock["t"] = 30.0
-    sched._maybe_grow_pool(pressure=False)
-    assert len(spawned) == before, "all busy, but stalled on memory"
+    sched._refresh_measurement = lambda: None
+    run_for(sched, clock, 3 * POOL_WINDOW)
+    assert spawned == [], "all busy, but stalled on memory"
     sched.mem_stall = MEM_STALL_LIMIT - 1.0
-    sched._maybe_grow_pool(pressure=False)
-    assert len(spawned) == before + 1, "below the limit it grows as before"
+    run_for(sched, clock, 1.5 * POOL_WINDOW)
+    assert len(spawned) == 1, "below the limit it grows as before"
 
 
 def test_a_worker_that_is_starting_is_charged_to_the_forecast(tmp_path):
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, one_file=False)
+    run_for(sched, clock, 1.5 * POOL_WINDOW)
     assert sched._spawning == 1
     sched._refresh_forecasts()
     starting = sched._mem_headroom()
@@ -625,72 +690,6 @@ def test_the_pool_floor_is_a_quarter_of_its_start(tmp_path):
         (tmp_path / str(start)).mkdir()
         sched, *_ = make_pool_sched(tmp_path / str(start), {"t": 0.0}, {"v": 40 * GB}, n_start=start, n_tests=4 * start)
         assert sched._pool_floor == floor, start
-
-
-def test_the_pool_shrinks_back_when_workers_sit_idle(tmp_path):
-    """Workers with nothing running for POOL_IDLE_SECONDS are drained, one per cooldown, down to the start size.
-
-    One file per test, so a worker that waits holds the first test of a module it
-    has not started (see test_a_worker_in_the_middle_of_a_module_is_not_drained)."""
-    clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=2, max_workers=6, n_tests=60,
-                                                 one_file=False)
-    for _ in range(20):                                  # grow to 6 workers, each arriving as it is spawned
-        if len(sched._live_workers()) == 6:
-            break
-        clock["t"] += 11.0
-        if sched._spawning:
-            arrive(sched, nodes, col)
-        sched.check_schedule()
-    assert len(sched._live_workers()) == 6 and len(spawned) == 4
-    # memory runs short: the running tests finish and nothing more fits, so the workers idle
-    avail["v"] = 0.3 * GB + MEM_RESERVE
-    for node in nodes:
-        for idx in [i for i in sched.node2pending[node] if i in sched.committed_at]:
-            sched.mark_test_complete(node, idx)
-    assert len(committed(sched)) <= 1, "only the progress rule's one test keeps running"
-    clock["t"] += 30.0
-    sched.check_schedule()
-    assert sched.stats["pool_drained"] == 0, "not idle long enough yet"
-    for _ in range(10):
-        clock["t"] += 61.0
-        sched.check_schedule()
-    assert len(sched._draining) + sum(n._shutdown_sent for n in nodes) == 4, "down to the two it started with"
-    # memory comes back: a draining worker runs its held test and exits
-    avail["v"] = 40 * GB
-    sched.check_schedule()
-    draining_done = [n for n in nodes if n._shutdown_sent]
-    assert draining_done and all(any(i in sched.committed_at for i in sched.node2pending[n]) for n in draining_done)
-
-
-def test_a_drained_worker_gives_its_held_test_back(tmp_path, monkeypatch):
-    """A worker drained for sitting idle is told to skip the test it holds, which goes
-    back to the queue: run on the way out, it would start past admission, and it needs
-    a fresh setup wherever it runs."""
-    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
-    clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=2, max_workers=4, n_tests=40,
-                                                 one_file=False)
-    for _ in range(20):
-        if len(sched._live_workers()) == 4:
-            break
-        clock["t"] += 11.0
-        if sched._spawning:
-            arrive(sched, nodes, col)
-        sched.check_schedule()
-    avail["v"] = 0.3 * GB + MEM_RESERVE                  # nothing more fits: the workers idle
-    for node in nodes:
-        for idx in [i for i in sched.node2pending[node] if i in sched.committed_at]:
-            sched.mark_test_complete(node, idx)
-    for _ in range(5):
-        clock["t"] += 61.0
-        sched.check_schedule()
-    evicted = [n for n in nodes if n in sched._evicted]
-    assert evicted and sched.stats["evicted"] == len(evicted)
-    for node in evicted:
-        held = sched._evicted[node]
-        assert node._shutdown_sent and held not in sched.committed_at, "sent home without running it"
-        assert (tmp_path / "sched" / "evictions" / node.gateway.id).read_text() == col[held]
 
 
 def test_a_test_held_too_long_gets_room_kept_instead_of_being_forced(tmp_path):
@@ -733,9 +732,9 @@ def test_a_test_held_too_long_gets_room_kept_instead_of_being_forced(tmp_path):
         "it starts once the small ones running when room was kept for it are done"
 
 
-def test_a_worker_in_the_middle_of_a_module_is_not_drained(tmp_path):
-    """However long admission keeps the next test of its module waiting: draining
-    would start that test regardless and send the rest of the module elsewhere."""
+def test_a_worker_in_the_middle_of_a_module_is_not_sent_home(tmp_path):
+    """However long admission keeps the next test of its module waiting: the rest of
+    the module would go to another worker, which sets it up again."""
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
     sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=2, max_workers=6, n_tests=10)
     sched._pool_floor = 0
@@ -747,62 +746,8 @@ def test_a_worker_in_the_middle_of_a_module_is_not_drained(tmp_path):
     assert sched._continues_module(node)
     for _ in range(10):
         clock["t"] += 61.0
-        sched._maybe_shrink_pool()
-    assert node not in sched._draining and not node._shutdown_sent
-
-
-def test_a_bloated_worker_is_recycled(tmp_path, monkeypatch):
-    """While memory is short, a worker that holds 3 GB when its tests start, against 0.3 GB
-    for its peers, is sent home, and the test it held goes back to the queue."""
-    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
-    clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=4, n_tests=20,
-                                                 one_file=False)
-    sched._pool_floor = 4                              # no draining in the way: this is about recycling
-    sched.live.memory = lambda wid: live.get(wid, 0.0)
-    for i, node in enumerate(nodes):
-        live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
-    # every worker finishes its test; the next ones start with the leftovers measured
-    clock["t"] = 100.0
-    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
-    for node in nodes:
-        running = next(i for i in sched.node2pending[node] if i in sched.committed_at)
-        sched.mark_test_complete(node, running)
-    assert sched.worker_cost() == pytest.approx(0.3 * GB)
-    assert sched.stats["recycled"] == 1
-    assert nodes[0]._shutdown_sent and not any(n._shutdown_sent for n in nodes[1:])
-    held = sched._evicted.get(nodes[0])
-    assert held is None or held not in sched.committed_at, "its held test is not started on the way out"
-
-
-def test_a_bloated_worker_is_kept_while_memory_is_not_short(tmp_path):
-    """What a worker holds costs nothing while memory keeps no test from starting, and
-    replacing it costs a worker start."""
-    clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=4, n_tests=20,
-                                                 one_file=False)
-    sched._pool_floor = 4
-    sched.live.memory = lambda wid: live.get(wid, 0.0)
-    for i, node in enumerate(nodes):
-        live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
-    clock["t"] = 100.0
-    for node in nodes:
-        sched.mark_test_complete(node, next(i for i in sched.node2pending[node] if i in sched.committed_at))
-    assert sched.stats["recycled"] == 0 and not any(n._shutdown_sent for n in nodes)
-
-
-def test_a_fixed_pool_never_recycles(tmp_path):
-    """With -j the pool cannot grow back, so a recycled worker would be lost for the rest of the run."""
-    clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=0, n_tests=20,
-                                                 one_file=False)
-    sched.live.memory = lambda wid: live.get(wid, 0.0)
-    for i, node in enumerate(nodes):
-        live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
-    clock["t"] = 100.0
-    for node in nodes:
-        sched.mark_test_complete(node, next(i for i in sched.node2pending[node] if i in sched.committed_at))
-    assert sched.stats["recycled"] == 0
+        sched._shrink_pool(sched._live_workers(), [node])
+    assert not node._shutdown_sent
 
 
 def test_a_module_cluster_kept_for_the_next_test_is_not_worker_overhead(tmp_path):
@@ -836,28 +781,6 @@ def test_a_worker_holding_its_modules_cluster_adds_only_what_the_test_takes_beyo
     sched.schedule()
     # 10 GB available less a 1 GB reserve: at 2.2 GB each, four would fit; at 0.2 GB each, all eight do
     assert len(committed(sched)) == 8
-
-
-def test_a_recycled_worker_is_replaced_to_keep_the_pool_at_its_floor(tmp_path, monkeypatch):
-    """The pool never stays below its floor: a recycled worker is refilled at once."""
-    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
-    clock, avail, live = {"t": 0.0}, {"v": 40 * GB}, {}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, n_start=4, max_workers=8, n_tests=40,
-                                                 cores=4.0, one_file=False)   # 4 x 4 cores: the CPU is full, no growth
-    sched._pool_floor = 4                              # a floor of four, so that recycling one drops below it
-    sched.live.memory = lambda wid: live.get(wid, 0.0)
-    assert spawned == []
-    for i, node in enumerate(nodes):
-        live[node.gateway.id] = 3 * GB if i == 0 else 0.3 * GB
-    clock["t"] = 100.0
-    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
-    for node in nodes:
-        running = next(i for i in sched.node2pending[node] if i in sched.committed_at)
-        sched.mark_test_complete(node, running)
-    assert sched.stats["recycled"] == 1
-    clock["t"] = 200.0
-    sched.check_schedule()
-    assert spawned, "below the floor: refilled even though the CPU is busy"
 
 
 def test_a_merged_samples_file_is_not_merged_again(tmp_path):
@@ -912,25 +835,25 @@ def _scout_and_held_sched(tmp_path, clock, avail, live, ready_running=False):
     return sched, nodes
 
 
-def test_retiring_a_worker_never_starts_its_held_test(tmp_path):
+def test_sending_a_worker_home_never_starts_its_held_test(tmp_path):
     """Without a way to tell it to skip its test, a worker holding one is never sent home:
     the shutdown would start the test, waiting or not."""
     clock, avail = {"t": 5.0}, {"v": 0.2 * GB}          # short: nothing held fits
     live = {"gw1": 2 * GB, "gw2": 1 * GB}
     sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, live)
-    sched._ram_guard()
-    assert sched.stats["retired"] == 0
+    sched._shrink_pool(sched._live_workers(), sched._spare_workers())
+    assert sched.stats["retired"] == 0 and sched.stats["evicted"] == 0
     assert not any(n._shutdown_sent for n in nodes) and 1 not in sched.committed_at and 2 not in sched.committed_at
 
 
-def test_a_stalled_run_sends_home_an_idle_worker_that_holds_nothing(tmp_path):
-    """Its heap and leftovers are memory no test can use, and nothing starts when it goes."""
+def test_a_worker_that_holds_nothing_is_sent_home_first(tmp_path):
+    """Nothing has to be queued again when it goes."""
     clock, avail = {"t": 5.0}, {"v": 0.2 * GB}
     live = {"gw1": 2 * GB, "gw2": 1 * GB, "gw3": 1.5 * GB}
     sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, live)
     spare = FakeNode("gw3")
     sched.add_node(spare)
-    sched._ram_guard()
+    sched._shrink_pool(sched._live_workers(), sched._spare_workers())
     assert sched.stats["retired"] == 1 and spare._shutdown_sent
     assert not any(n._shutdown_sent for n in nodes)
 
@@ -941,39 +864,58 @@ def _evicting_sched(tmp_path, monkeypatch):
     clock, avail = {"t": 5.0}, {"v": 0.2 * GB}          # short: nothing held fits
     live = {"gw1": 2 * GB, "gw2": 1 * GB}
     sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, live)
-    sched._ram_guard()
+    sched._shrink_pool(sched._live_workers(), sched._spare_workers())
     return sched, nodes, evictions
 
 
-def test_a_stalled_run_evicts_the_idle_worker_holding_most_without_starting_its_test(tmp_path, monkeypatch, caplog):
-    """A held test cannot be recalled, so its worker is told to skip it, then sent home."""
+def test_a_worker_sent_home_skips_its_held_test(tmp_path, monkeypatch, caplog):
+    """A held test cannot be recalled, so its worker is told to skip it, then sent home.
+    Not gw1: it waits on its file's first run, not on admission."""
     caplog.set_level(logging.DEBUG, logger="test.pylib.dynamic_scheduler")
     sched, nodes, evictions = _evicting_sched(tmp_path, monkeypatch)
     assert sched.stats["evicted"] == 1 and sched.stats["retired"] == 0
-    assert nodes[1]._shutdown_sent and not nodes[0]._shutdown_sent and not nodes[2]._shutdown_sent
-    assert (evictions / "gw1").read_text() == sched.collection[1]
-    assert 1 not in sched.committed_at and 1 not in sched.pending_set
+    assert nodes[2]._shutdown_sent and not nodes[0]._shutdown_sent and not nodes[1]._shutdown_sent
+    assert (evictions / "gw2").read_text() == sched.collection[2]
+    assert 2 not in sched.committed_at and 2 not in sched.pending_set
     assert not sched.tests_finished, "the evicted test is still to be run"
-    assert sched._committed(nodes[1]) == [], "a test it skips is not running on it"
-    text = caplog.text
-    assert "evicting gw1" in text and "on purpose" in text and "cannot start" in text
+    assert sched._committed(nodes[2]) == [], "a test it skips is not running on it"
+    assert "sending gw2 home" in caplog.text and "queued again" in caplog.text
+
+
+def test_the_held_test_that_waited_longest_keeps_its_worker(tmp_path, monkeypatch):
+    """Sent home, a held test waits all over again on its next worker: the one that
+    waited least goes, and one past HELD_RESERVE_SECONDS, which room is kept for, never."""
+    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
+    clock, avail = {"t": 5.0}, {"v": 0.2 * GB}
+    sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, {})
+    other = FakeNode("gw3")
+    sched.add_node(other); sched.add_node_collection(other, sched.collection)
+    sched._take(sched._file_of(3), 3)
+    sched._send(other, 3)
+    sched.held_since[2] = clock["t"] - 20.0
+    sched.held_since[3] = clock["t"] - 5.0
+    sched._shrink_pool(sched._live_workers(), sched._spare_workers())
+    assert other._shutdown_sent and not nodes[2]._shutdown_sent
+    clock["t"] += HELD_RESERVE_SECONDS
+    sched._shrink_pool(sched._live_workers(), sched._spare_workers())
+    assert not nodes[2]._shutdown_sent, "waited past HELD_RESERVE_SECONDS"
 
 
 def test_an_evicted_test_is_queued_again_once_its_worker_skipped_it(tmp_path, monkeypatch):
     sched, nodes, evictions = _evicting_sched(tmp_path, monkeypatch)
-    assert take_eviction("gw1", sched.collection[1]), "what the worker's runner sees"
+    assert take_eviction("gw2", sched.collection[2]), "what the worker's runner sees"
     completed = sched.stats["completed"]
-    sched.mark_test_complete(nodes[1], 1)
+    sched.mark_test_complete(nodes[2], 2)
     assert sched.stats["completed"] == completed, "skipped, not completed"
-    assert sched.stats["evicted_requeued"] == 1 and 1 in sched.pending_set
-    assert sched.remove_node(nodes[1]) is None, "xdist asserts a clean exit leaves no crashed test"
-    assert sched.collection[1] in [sched.collection[i] for i in sched.pending_set]
+    assert sched.stats["evicted_requeued"] == 1 and 2 in sched.pending_set
+    assert sched.remove_node(nodes[2]) is None, "xdist asserts a clean exit leaves no crashed test"
+    assert sched.collection[2] in [sched.collection[i] for i in sched.pending_set]
 
 
 def test_an_evicted_worker_that_dies_first_crashes_nothing(tmp_path, monkeypatch):
     sched, nodes, _ = _evicting_sched(tmp_path, monkeypatch)
-    assert sched.remove_node(nodes[1]) is None
-    assert 1 in sched.pending_set and not sched._evicted
+    assert sched.remove_node(nodes[2]) is None
+    assert 2 in sched.pending_set and not sched._evicted
 
 
 def test_a_worker_skips_only_the_test_it_was_told_to(tmp_path, monkeypatch):
@@ -987,24 +929,6 @@ def test_a_worker_skips_only_the_test_it_was_told_to(tmp_path, monkeypatch):
     assert not take_eviction("gw3", "a.py::t1"), "the flag is consumed"
     monkeypatch.setattr(sched_dir, "_root", None)
     assert not take_eviction("gw3", "a.py::t1")
-
-
-def test_a_recycled_worker_gives_its_held_test_back(tmp_path, monkeypatch):
-    """A bloated worker is told to skip the test it holds, which goes back to the queue:
-    started on the way out it would go in past admission.  Without a way to tell it, it
-    is left alone."""
-    clock, avail = {"t": 5.0}, {"v": 10 * GB}
-    sched, nodes = _scout_and_held_sched(tmp_path, clock, avail, {})
-    sched._mem_refused_at = clock["t"]                 # memory just kept a test from starting
-    # gw1 and gw2 both bloated against typical workers at 0.3 GB
-    sched._idle_mem = {"gw0": 0.3 * GB, "gwA": 0.3 * GB, "gwB": 0.3 * GB, "gw1": 3 * GB, "gw2": 3 * GB}
-    sched._recycle_bloated_worker()
-    assert sched.stats["recycled"] == 0 and not any(n._shutdown_sent for n in nodes), "no way to tell it"
-    monkeypatch.setattr(sched_dir, "_root", tmp_path / "sched")
-    sched._recycle_bloated_worker()
-    assert sched.stats["recycled"] == 1 and sched.stats["evicted"] == 1
-    assert nodes[1]._shutdown_sent and sched._evicted[nodes[1]] == 1
-    assert 1 not in sched.committed_at, "its held test is not started"
 
 
 def test_a_first_in_file_sample_still_teaches_the_peak(tmp_path):
@@ -1030,7 +954,8 @@ def test_each_test_is_priced_for_its_own_build_mode(tmp_path):
 def test_a_crash_clone_does_not_finish_a_spawn(tmp_path):
     """xdist replaces a crashed worker on its own; only the worker we spawned ends our spawn."""
     clock, avail = {"t": 0.0}, {"v": 40 * GB}
-    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail)
+    sched, nodes, col, spawned = make_pool_sched(tmp_path, clock, avail, one_file=False)
+    run_for(sched, clock, 1.5 * POOL_WINDOW)
     assert sched._spawning == 1                       # gw2 is on its way
     clone = FakeNode("gw9")
     sched.add_node(clone)
@@ -1604,45 +1529,6 @@ def test_the_budget_follows_ram_not_swap(tmp_path):
     sched.schedule()
     assert sched.mem_target == before == 30 * GB
     assert committed(sched) == {0, 1}
-
-
-def test_a_short_machine_sends_idle_workers_home(tmp_path):
-    """Idle workers hold their last module's cluster; when short, the pool is the lever.
-
-    When no held test fits, an idle worker that holds no test goes, one per cooldown,
-    never below the floor -- and with a fixed pool, never below its start.
-    """
-    col = [f"a.py::t{i}.dev.1" for i in range(12)]
-    model = make_model(tmp_path, 8, {profile_key(n): (0.2, 10 * GB, 300.0) for n in col})
-    clock, avail = {"t": 1000.0}, {"b": 64 * GB}
-    sched = new_sched(FakeConfig(tmp_path, 4), max_workers=12, model=model, ncpus=8,
-                             mem_total=64 * GB, cgroup_tests=NO_CGROUP, available_fn=lambda: avail["b"],
-                             now=lambda: clock["t"])
-    fake = [FakeNode(f"gw{i}") for i in range(4)]
-    for n in fake:
-        sched.add_node(n); sched.add_node_collection(n, col)
-    sched.schedule()
-    # two workers that have just come up and hold nothing yet
-    empty = [FakeNode("gw4"), FakeNode("gw5")]
-    for n in empty:
-        sched.add_node(n)
-    fake += empty
-    assert all(sched.node2pending[n] for n in fake[:4])
-    sched._ram_guard()
-    assert sched.stats["retired"] == 0, "a held test fits: it will be admitted, nobody goes"
-    avail["b"] = 5 * GB                                # no held 10 GB test can start any more
-    sched._ram_guard()
-    assert sched.stats["retired"] == 1
-    gone = [n for n in fake if n._shutdown_sent]
-    assert len(gone) == 1 and gone[0] in empty, "only a worker holding nothing goes"
-    # a fixed pool cannot grow back: it keeps what it started with (4), however low its floor
-    sched.max_workers = 0
-    clock["t"] += 60
-    sched._ram_guard()
-    assert sched.stats["retired"] == 2                 # 5 workers -> 4
-    clock["t"] += 60
-    sched._ram_guard()
-    assert sched.stats["retired"] == 2, "never below the four it started with"
 
 
 def test_debug_mode_guesses_more_memory_than_release(tmp_path):
