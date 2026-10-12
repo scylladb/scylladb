@@ -644,6 +644,19 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 }
 }
 
+// A function's name as CQL text, with its keyspace and name quoted when
+// needed (e.g., a case-sensitive name). In debug mode, the name is printed
+// as is.
+static sstring function_name_to_cql_string(const cql3::functions::function_name& name, bool debug_mode) {
+    if (debug_mode) {
+        return fmt::to_string(name);
+    }
+    if (name.has_keyspace()) {
+        return fmt::format("{}.{}", cql3::util::maybe_quote(name.keyspace), cql3::util::maybe_quote(name.name));
+    }
+    return cql3::util::maybe_quote(name.name);
+}
+
 template <typename FormatContext>
 auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::expression::printer& pr, FormatContext& ctx) const
         -> decltype(ctx.out()) {
@@ -738,14 +751,14 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                 } else {
                     std::visit(overloaded_functor{
                         [&] (const cql3::functions::function_name& named) {
-                            out = fmt::format_to(out, "{}({})", named, fmt::join(fc.args | std::views::transform(to_printer), ", "));
+                            out = fmt::format_to(out, "{}({})", function_name_to_cql_string(named, pr.debug_mode), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                         },
                         [&] (const shared_ptr<cql3::functions::function>& fn) {
                             if (!pr.debug_mode && fn->name() == cql3::functions::aggregate_fcts::first_function_name()) {
                                 // The "first" function is artificial, don't emit it
                                 out = fmt::format_to(out, "{}", to_printer(fc.args[0]));
                             } else if (!pr.for_metadata) {
-                                out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | std::views::transform(to_printer), ", "));
+                                out = fmt::format_to(out, "{}({})", function_name_to_cql_string(fn->name(), pr.debug_mode), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
                                 if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
@@ -844,7 +857,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                         out = fmt::format_to(out, ", ");
                     }
                     first = false;
-                    out = fmt::format_to(out, "{}:{}", k, to_printer(v));
+                    // Quote a field name which needs it (e.g., a case-sensitive
+                    // name), as we do for column names.
+                    out = fmt::format_to(out, "{}:{}", k.to_cql_string(), to_printer(v));
                 }
                 out = fmt::format_to(out, "}}");
             },

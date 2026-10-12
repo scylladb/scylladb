@@ -341,9 +341,12 @@ BOOST_AUTO_TEST_CASE(expr_printer_in_test) {
 }
 
 
-// To easily test how many expressions work with expression::printer
-// We can use a function that parses a string to expression and then
-// print it using another function that uses printer
+// Test that the user-oriented output of expression::printer ({:user}, which
+// relations_to_where_clause() uses) is CQL text which can be parsed back to the
+// same expression: Each test case is parsed, and printing the parsed expression
+// must give back the same text. This is relied upon for saving a view's WHERE
+// clause in the schema, which is parsed again whenever the view is used. So
+// identifiers which need quoting (e.g., case-sensitive names) must be quoted.
 BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
     auto tests = {
         "col = 1234",
@@ -364,7 +367,12 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
         "(col1, col2) < (1, 2)",
         "(c1, c2) IN ((1, 2), (3, 4))",
         "col > ?",
-        "col IN (1, 2, 3, ?, 4, null)"
+        "col IN (1, 2, 3, ?, 4, null)",
+        "col = {a:1}",
+        "col = {\"A\":1}",
+        "col = f(1)",
+        "col = \"FUN\"()",
+        "col = ks.\"Fun\"(1, 2)"
     };
 
     for(const char* test : tests) {
