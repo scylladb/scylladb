@@ -7,15 +7,15 @@ import pytest
 import logging
 from collections import defaultdict
 
+from cassandra import ConsistencyLevel
+from cassandra.cluster import EXEC_PROFILE_DEFAULT
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ConfigurationException
 
 from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerUpState
-from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
-from cassandra import ConsistencyLevel
-from cassandra.cluster import EXEC_PROFILE_DEFAULT
+from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count, stop_servers_gracefully
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
@@ -121,12 +121,24 @@ async def test_create_keyspace_with_default_replication_factor(manager: ScyllaCl
 # rf_rack_valid_keyspaces, which test.py turns on.
 DTEST_CONFIG = {"tablets_mode_for_new_keyspaces": "disabled", "rf_rack_valid_keyspaces": False}
 NTS = "org.apache.cassandra.locator.NetworkTopologyStrategy"
+
+
+@pytest.fixture
+async def stop_nodes_gracefully(manager: ScyllaClusterManager):
+    """Like the dtests' teardown, stop the nodes gracefully at the end of
+    the test: shutdown flushes the memtables and closes the sstables."""
+    yield
+    await stop_servers_gracefully(manager)
+
+
 def connect(manager: ScyllaClusterManager, server):
     """A session to the node, like the dtests' patient_cql_connection():
     statements default to consistency level ONE."""
     cql = manager.con_gen([server.ip_addr]).connect()
     cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
     return cql
+
+
 def create_ks(cql, name, rf, replication_class="NetworkTopologyStrategy", tablets=None):
     """Like the dtests' create_ks(): an int rf is the replication_factor
     option, a dict gives the factor per DC."""
@@ -139,6 +151,77 @@ def create_ks(cql, name, rf, replication_class="NetworkTopologyStrategy", tablet
         query += f" and tablets={{'initial':{tablets}}}" if tablets else " and tablets={'enabled':false}"
     cql.execute(query)
     cql.execute(f"USE {name}")
+
+
+def replication(cql, ks):
+    [row] = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+    return dict(row.replication)
+
+
+def mk_replication(dcs):
+    return {"class": NTS} | {dc: str(rf) for dc, rf in dcs.items()}
+
+
+async def start_three_dcs(manager: ScyllaClusterManager):
+    """One node in each of dc1, dc2 and dc3, all in rack1, like the dtests'
+    populate([1, 1, 1]) and generate_cluster_topology(dc_num=3, dc_name_prefix="dc")."""
+    servers = await manager.servers_add(3, config=DTEST_CONFIG,
+                                        property_file=[{"dc": dc, "rack": "rack1"} for dc in ["dc1", "dc2", "dc3"]])
+    return connect(manager, servers[0])
+
+
+# Ported from scylla-dtest replication_test.py::TestRFAutoExpand::test_rf_expand.
+# 'replication_factor' in NetworkTopologyStrategy options of CREATE KEYSPACE
+# is expanded to every DC the cluster knows, without overriding the DCs given
+# explicitly, and an ALTER KEYSPACE with it does not change existing factors.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.usefixtures("stop_nodes_gracefully")
+async def test_rf_expand(manager: ScyllaClusterManager):
+    cql = await start_three_dcs(manager)
+
+    create_ks(cql, "test_simple", {"replication_factor": 1})
+    # simple expansion to all dcs
+    assert replication(cql, "test_simple") == mk_replication({"dc1": 1, "dc2": 1, "dc3": 1})
+
+    create_ks(cql, "test_manual", {"replication_factor": 1, "dc3": 3})
+    # expand, but respect factors specified manually
+    assert replication(cql, "test_manual") == mk_replication({"dc1": 1, "dc2": 1, "dc3": 3})
+
+    # expansion doesn't change existing replication factors
+    cql.execute("ALTER KEYSPACE test_manual WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    assert replication(cql, "test_manual") == mk_replication({"dc1": 1, "dc2": 1, "dc3": 3})
+    cql.shutdown()
+
+
+# Ported from scylla-dtest replication_test.py::TestRFAutoExpand::test_rf_expand_on_switch.
+# Switching a keyspace from SimpleStrategy to NetworkTopologyStrategy without
+# options keeps its RF in every DC; with explicit DCs only those are kept, and
+# a later ALTER with 'replication_factor' only fills in the DCs not given.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.usefixtures("stop_nodes_gracefully")
+async def test_rf_expand_on_switch(manager: ScyllaClusterManager):
+    cql = await start_three_dcs(manager)
+
+    create_ks(cql, "test_switch", 3, replication_class="SimpleStrategy")
+    # expand when directly switching from SimpleStrategy to NetworkTopologyStrategy
+    cql.execute("ALTER KEYSPACE test_switch WITH replication = {'class': 'NetworkTopologyStrategy'}")
+    assert replication(cql, "test_switch") == mk_replication({"dc1": 3, "dc2": 3, "dc3": 3})
+
+    create_ks(cql, "test_switch_2", 3, replication_class="SimpleStrategy", tablets=0)
+    # don't expand when switching from SimpleStrategy to NTS with manually specified DCs
+    cql.execute("ALTER KEYSPACE test_switch_2 WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2}")
+    assert replication(cql, "test_switch_2") == mk_replication({"dc1": 2})
+    # expand non-specified factors
+    cql.execute("ALTER KEYSPACE test_switch_2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    assert replication(cql, "test_switch_2") == mk_replication({"dc1": 2, "dc2": 3, "dc3": 3})
+
+    # expand non-specified factors with NetworkTopologyStrategy
+    create_ks(cql, "test_switch_3", {"dc1": 1})
+    cql.execute("ALTER KEYSPACE test_switch_3 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    assert replication(cql, "test_switch_3") == mk_replication({"dc1": 1, "dc2": 3, "dc3": 3})
+    cql.shutdown()
+
+
 # Ported from scylla-dtest schema_test.py::TestSchema::test_alter_keyspace_then_table_with_udt.
 # Reproduces scylladb/scylla-enterprise#2989: after a keyspace with a UDT and
 # a table using it had its replication changed, altering the table failed on
