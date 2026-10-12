@@ -716,6 +716,43 @@ def test_query_paging_deleted_items(dynamodb, test_table_sn, scylla_only):
                 # ended on a deleted item.
                 assert any(c not in live for c in start_keys)
 
+# Alternator never writes range tombstones (deletions of a range of sort
+# keys), but they can be written through CQL. A page may end on a range
+# tombstone's boundary, a position between items, which a LastEvaluatedKey -
+# which only has the key attributes - can't represent. Check that paging such
+# a query doesn't get stuck - returning the same LastEvaluatedKey over and
+# over, as it used to - but either returns the right items or fails with a
+# clear error. The test is scylla_only because it uses CQL and lowers
+# Scylla's query_tombstone_page_limit.
+def test_query_paging_cql_range_tombstones(dynamodb, cql, test_table_ss, scylla_only):
+    p = random_string()
+    item = {'p': p, 'c': 'zz'}
+    test_table_ss.put_item(Item=item)
+    ks = 'alternator_' + test_table_ss.name
+    for low, high in [('a', 'x'), ('b', 'y'), ('c', 'w')]:
+        cql.execute(f'DELETE FROM "{ks}"."{test_table_ss.name}" WHERE p = %s AND c > %s AND c < %s',
+            [p, low, high])
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '1'):
+        for condition in [None, {'AttributeValueList': ['m'], 'ComparisonOperator': 'GT'}]:
+            key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+            if condition:
+                key_conditions['c'] = condition
+            try:
+                response = test_table_ss.query(ConsistentRead=True, KeyConditions=key_conditions)
+                items = response['Items']
+                start_keys = []
+                while 'LastEvaluatedKey' in response:
+                    start_key = response['LastEvaluatedKey']
+                    # If a LastEvaluatedKey repeats, paging is stuck in a loop.
+                    assert start_key not in start_keys, f'paging is stuck at {start_key}'
+                    start_keys.append(start_key)
+                    response = test_table_ss.query(ConsistentRead=True, KeyConditions=key_conditions,
+                        ExclusiveStartKey=start_key)
+                    items.extend(response['Items'])
+                assert items == [item]
+            except ClientError as e:
+                assert 'ValidationException' in str(e) and 'range tombstone' in str(e)
+
 # Test paging, in both directions, of a query with a sort key condition, when
 # a page ends with the last item in the condition's range: Paging must return
 # all the items. Such a page has no LastEvaluatedKey, because no item can
