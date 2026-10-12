@@ -263,6 +263,7 @@ def test_alter_keyspace_double_with(cql):
     with pytest.raises(SyntaxException):
         cql.execute('ALTER KEYSPACE ks WITH WITH DURABLE_WRITES = true')
 
+
 # Reproducer for issue #8968: We have two threads, one thread loops trying to
 # create a keyspace and a table in it, and the other thread loops trying to
 # delete this keyspace. Obviously some of these operations are expected to

@@ -7,6 +7,7 @@
 # Tests for various CQL statements, converted from test/boost/cql_query_test.cc.
 #############################################################################
 
+from test import DEBUG_MODES
 from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
@@ -3935,3 +3936,34 @@ def test_twcs_reversed_restricted_query_optimized(cql, test_keyspace, scylla_onl
 
 def test_twcs_reversed_restricted_query_regular(cql, test_keyspace, scylla_only):
     do_test_twcs_reversed_restricted_query(cql, test_keyspace, False)
+
+
+# A multi-column slice "(b, c, d, e) > (...)" or "<= (...)" compares the
+# tuples by their values, while the rows come back in clustering order. Check
+# this for many combinations of ASC and DESC clustering columns, computing
+# the expected result in Python. Reproduces CASSANDRA-7281.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("order", [
+    ("DESC", "ASC", "DESC", "ASC"), ("DESC", "DESC", "DESC", "ASC"),
+    ("ASC", "DESC", "DESC", "ASC"), ("DESC", "ASC", "ASC", "DESC"),
+    ("DESC", "DESC", "DESC", "DESC"), ("ASC", "ASC", "ASC", "ASC"),
+    ("DESC", "ASC", "DESC", "DESC")])
+def test_multi_column_slice_mixed_order(cql, test_keyspace, order):
+    columns = ["b", "c", "d", "e"]
+    clustering_order = ", ".join(f"{c} {o}" for c, o in zip(columns, order))
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d, e)",
+                        f"WITH CLUSTERING ORDER BY ({clustering_order})") as table:
+        data = [(2, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 0), (0, 1, 2, -1), (0, 1, 1, -1), (0, 1, 1, 0),
+                (0, 1, 1, 1), (0, 1, 0, 2), (0, 2, 1, -3), (0, 2, 0, 3), (-1, 2, 2, 2)]
+        for row in data:
+            cql.execute(f"INSERT INTO {table} (a, b, c, d, e) VALUES (0, {row[0]}, {row[1]}, {row[2]}, {row[3]})")
+        # Python's sort is stable, so sorting by the last column first gives
+        # the clustering order.
+        in_clustering_order = data
+        for i in reversed(range(4)):
+            in_clustering_order = sorted(in_clustering_order, key=lambda r: r[i], reverse=(order[i] == "DESC"))
+        bound = (0, 1, 1, 0)
+        for op, pred in [(">", lambda r: r > bound), ("<=", lambda r: r <= bound)]:
+            expected = [(0, *r) for r in in_clustering_order if pred(r)]
+            assert expected == list(cql.execute(f"SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) {op} {bound}"))
+
