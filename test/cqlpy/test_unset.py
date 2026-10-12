@@ -113,6 +113,26 @@ def test_unset_counter_increment(cql, test_keyspace):
         cql.execute(stmt, [UNSET_VALUE])
         assert [(3,)] == list(cql.execute(f'SELECT c FROM {table} WHERE p = {p}'))
 
+# Ported from scylla-dtest counter_tests.py::TestCounters::test_prepare_unset_value.
+# Since an UNSET_VALUE counter increment skips the write, a prepared
+# increment by UNSET_VALUE changes neither an existing counter nor creates
+# rows for keys which do not exist yet. As in the dtest, one counter is set
+# to 1, then 1000 keys (the first one being that counter's) are incremented
+# by UNSET_VALUE, the statement being prepared again for each, and a full
+# scan of the table (in a vnodes keyspace with RF=1) still returns only the
+# first counter, unchanged.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_prepare_unset_value(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, "t int, c counter, primary key(t)") as table:
+        cql.execute(f"UPDATE {table} SET c = c + 1 where t = 0")
+        assert list(cql.execute(f"SELECT * from {table}")) == [(0, 1)]
+        for key in range(1000):
+            statement = cql.prepare(f"update {table} set c = c + ? where t = ?")
+            cql.execute(statement.bind((UNSET_VALUE, key)))
+        rows = list(cql.execute(f"SELECT * from {table}"))
+        assert len(rows) == 1, "Update with UNSET_VALUE unexpectedly changed number of counters"
+        assert rows == [(0, 1)], "Update with UNSET_VALUE unexpectedly changed value of first counter"
+
 # Like the counter increment, a list append operation (li=li+?) is a primitive
 # operation and not expression, so we believe UNSET_VALUE should be able
 # to skip it, and Scylla indeed does as this test shows. Cassandra fails

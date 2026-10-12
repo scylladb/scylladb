@@ -84,6 +84,25 @@ def test_counter_negative_values(cql, test_keyspace):
             cql.execute(f"UPDATE {table} SET total = {update} WHERE p = 1 AND c = 'a'")
             assert list(cql.execute(f"SELECT total FROM {table} WHERE p = 1 AND c = 'a'")) == [(expected,)]
 
+# Ported from scylla-dtest counter_tests.py::TestCounters::test_int_rollover.
+# A counter is a 64-bit integer, and incrementing it past the maximum value
+# wraps around to the minimum value (and decrementing goes back), instead of
+# failing or saturating. This is documented behavior, see
+# https://github.com/scylladb/scylladb/issues/2225 (closed as WONTFIX).
+# As in the dtest, the table is in a vnodes keyspace with RF=1 and is read
+# with full scans after each update.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_int_rollover(cql, test_keyspace_vnodes):
+    int64_max = 2**63 - 1
+    int64_min = -2**63
+    with new_test_table(cql, test_keyspace_vnodes, "t int, c counter, primary key(t)") as table:
+        cql.execute(f"UPDATE {table} SET c = c + {int64_max} where t = 0")
+        assert list(cql.execute(f"SELECT * from {table}")) == [(0, int64_max)], "Failed to update counter to MAX_INT"
+        cql.execute(f"UPDATE {table} SET c = c + 1 where t = 0")
+        assert list(cql.execute(f"SELECT * from {table}")) == [(0, int64_min)], "Int counter isn't rollover"
+        cql.execute(f"UPDATE {table} SET c = c - 1 where t = 0")
+        assert list(cql.execute(f"SELECT * from {table}")) == [(0, int64_max)], "Int counter isn't recovered"
+
 
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes.
@@ -101,3 +120,16 @@ def test_collection_of_counters_rejected(cql, test_keyspace_vnodes):
     for column in ["l list<counter>", "s set<counter>", "m map<text, counter>"]:
         with pytest.raises((InvalidRequest, SyntaxException)):
             cql.execute(f"CREATE TABLE {test_keyspace_vnodes}.test (k int PRIMARY KEY, {column})")
+
+
+# Adding a counter column to a table without counters fails with a
+# configuration error, and does not crash the server (#7065). Ported from
+# dtest counter_tests.py, on a vnodes keyspace like the dtest.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_alter_non_counter_with_counter(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, 'a text, b text, PRIMARY KEY (a, b)', 'WITH CLUSTERING ORDER BY (b ASC)') as table:
+        with pytest.raises(ConfigurationException):
+            # The statement as the dtest wrote it, with the semicolon.
+            cql.execute(f'ALTER TABLE {table} ADD "c" counter;')
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES ('a', 'b')")
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [('a', 'b')]
