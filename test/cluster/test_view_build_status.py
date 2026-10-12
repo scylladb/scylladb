@@ -272,8 +272,11 @@ async def test_view_build_status_cleanup_on_drop_view(manager: ScyllaClusterMana
 # builder never starts. The other node's status must be gone right after the
 # DROP returns, and not remain forever.
 async def test_view_build_status_removed_on_drop_via_node_without_view_building(manager: ScyllaClusterManager):
-    await manager.server_add()
+    s1 = await manager.server_add()
     s2 = await manager.server_add(config={"view_building": False})
+    # The coordinator's commits for the system keyspaces' tablets can fail the DROP
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(s1.ip_addr)
     cql = manager.get_cql()
     cql2 = await manager.get_cql_exclusive(s2)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
