@@ -18,6 +18,7 @@ import asyncio
 import logging
 
 import pytest
+from cassandra import ConsistencyLevel
 
 from test import DEBUG_MODES
 from test.cluster.util import cassandra_stress
@@ -73,4 +74,81 @@ async def test_drop_row_cache(manager: ScyllaClusterManager):
         assert after[name] >= before[name], f"{name} should have increased after dropping cache"
     for name in decrease:
         assert after[name] <= before[name], f"{name} should have decreased after dropping cache"
+
+
+############################################################################
+# Ported from system_tables_test.py.
+
+TEST_KEYSPACE = "test_keyspace"
+
+
+async def create_tables_with_data(cql, number_of_tables: int, number_of_rows: int, replication_factor: int = 1) -> list[str]:
+    """The dtests' create_tables_with_data(): c1c2 tables (created as by
+    create_cf, read once) with number_of_rows rows each."""
+    await cql.run_async(f"CREATE KEYSPACE {TEST_KEYSPACE} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}")
+    tables = []
+    for i in range(number_of_tables):
+        table = f"{TEST_KEYSPACE}.table_{i + 1}"
+        await cql.run_async(f"CREATE COLUMNFAMILY {table} (key varchar PRIMARY KEY, c1 text, c2 text) WITH comment='test cf' "
+                            "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'true'} AND compression = {}")
+        await cql.run_async(f"SELECT * FROM {table} LIMIT 1")
+        insert = cql.prepare(f"INSERT INTO {table} (key, c1, c2) VALUES (?, 'value1', 'value2')")
+        insert.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*[cql.run_async(insert, [f"k{k}"]) for k in range(number_of_rows)])
+        tables.append(table)
+    return tables
+
+
+# Ported from scylla-dtest system_tables_test.py::TestProtocolServersTable::test_content.
+# system.protocol_servers lists the CQL server on the node's ports 9042 and
+# 19042 with the CQL version of system.local, and the alternator server with
+# its port only when it's configured. The dtest's "redis" variant is gone:
+# Scylla has no redis server any more.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("mode, scylla_yaml_options, port", [
+    ("default", None, None),
+    ("alternator", {"alternator_port": 8000, "alternator_write_isolation": "only_rmw_uses_lwt"}, "8000"),
+], ids=["default", "alternator"])
+async def test_protocol_servers_content(manager: ScyllaClusterManager, mode, scylla_yaml_options, port):
+    server = await manager.server_add(config={**CONFIG, **SIMPLE_SNITCH, **(scylla_yaml_options or {})})
+    log = await manager.server_open_log(server.server_id)
+    await log.wait_for("init - serving")
+    node_ip_address = server.ip_addr
+    cql = manager.get_cql()
+    table_content = list(await cql.run_async("select * from system.protocol_servers;"))
+    protocols = (await cql.run_async("select cql_version from system.local"))[0]
+
+    expected_content = {
+        "native transport": {"listen_addresses": [f"{node_ip_address}:9042", f"{node_ip_address}:19042"], "protocol": "cql", "protocol_version": protocols.cql_version},
+        "alternator": {"listen_addresses": [f"{node_ip_address}:{port}"] if mode == "alternator" else [], "protocol": "dynamodb"},
+        "redis": {"listen_addresses": [f"{node_ip_address}:{port}"] if mode == "redis" else [], "protocol": "RESP"},
+    }
+    for row in table_content:
+        if row.name == "rpc":
+            continue
+        expected_row = expected_content.get(row.name)
+        assert expected_row, f"Unexpected value in column 'name': {row.name}"
+        assert expected_row["listen_addresses"] == row.listen_addresses, f"Unexpected value in column 'listen_addresses': {row.listen_addresses}"
+        assert expected_row["protocol"] == row.protocol, f"Unexpected value in column 'protocol': {row.protocol}"
+        if row.name in ["native transport", "rpc"]:
+            assert expected_row["protocol_version"] == row.protocol_version, f"Unexpected value in column 'protocol': {row.protocol_version}"
+
+
+# Ported from scylla-dtest system_tables_test.py::TestSnapshotsTable::test_content_auto_snapshot.
+# On 3 nodes (datacenter1, one per rack) with auto_snapshot, truncating a
+# table of an RF=3 keyspace snapshots it on every node, and each node lists
+# that one snapshot in system.snapshots.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_content_auto_snapshot(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config={**CONFIG, "auto_snapshot": True},
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    cql = manager.get_cql()
+    table = (await create_tables_with_data(cql, 1, 10, replication_factor=3))[0]
+    await cql.run_async(f"truncate table {table};")
+    for server in servers:
+        session = await manager.get_cql_exclusive(server)
+        table_content = list(await session.run_async("select * from system.snapshots;"))
+        assert len(table_content) == 1, f"Expected to get 1 row from the table system.snapshots, but got {len(table_content)} rows!"
+        assert table == f"{table_content[0].keyspace_name}.{table_content[0].table_name}", \
+            f"Expected to get the snapshot information for the table {table}, but didn't get it!"
 

@@ -21,6 +21,7 @@ import time
 
 from collections import defaultdict
 
+from test import DEBUG_MODES
 from test.pylib.skip_types import skip_env
 
 def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_dir, expiry: int = None):
@@ -593,3 +594,27 @@ def test_system_config_update_value(scylla_only, cql):
             row = cql.execute(f"SELECT * FROM system.config WHERE name = '{name}'").one()
             assert row.value.strip('"') == value
             assert row.source == 'cql'
+
+
+# Check the exact set of items system.runtime_info reports in each group, and
+# the format of their values.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_runtime_info_content(scylla_only, cql):
+    info = _runtime_info(cql)
+    assert {group: set(items) for group, items in info.items()} == {
+        "cache": {"entries", "hit_rate_recent", "hit_rate_total", "hits", "memory_free", "memory_total",
+                  "memory_used", "misses", "requests_recent", "requests_total"},
+        "memory": {"free", "total", "used"},
+        "generic": {"gossip_active", "incremental_backup_enabled", "load", "trace_probability", "uptime"},
+        "memtable": {"entries", "memory_free", "memory_total", "memory_used"},
+    }
+    generic = info["generic"]
+    assert generic["gossip_active"] in ("true", "false")
+    assert generic["incremental_backup_enabled"] in ("true", "false")
+    assert re.fullmatch(r"\d+ seconds", generic["uptime"])
+    for group, items in info.items():
+        for item, value in items.items():
+            if item not in ("gossip_active", "incremental_backup_enabled", "uptime"):
+                float(value)  # must be a number
+    assert int(info["memory"]["total"]) > 0
+
