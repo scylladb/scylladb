@@ -12,7 +12,7 @@
 import pytest
 import re
 import random
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, FunctionFailure
 from .util import unique_name, unique_key_int, new_test_table
 
 @pytest.fixture(scope="module")
@@ -247,7 +247,7 @@ def test_validation_utf8_from_lua(scylla_only, cql, test_keyspace, table1):
         b_lua = ''.join([('\\x%02x' % c) for c in b])
         print(b_lua)
         cql.execute(f"CREATE FUNCTION {test_keyspace}.{fname}(k int) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return \"{b_lua}\"';")
-        with pytest.raises(InvalidRequest, match='value is not valid utf8'):
+        with pytest.raises(FunctionFailure, match='value is not valid utf8'):
             cql.execute(f"SELECT {fname}(k) FROM {table1} WHERE k=1")
         cql.execute(f"DROP FUNCTION {test_keyspace}.{fname}")
 
@@ -342,7 +342,7 @@ def test_validation_ascii_from_lua(scylla_only, cql, test_keyspace, table1):
     cql.execute(f"INSERT INTO {table1} (k, a) VALUES (1, 'hello')")
     fname = unique_name()
     cql.execute(f"CREATE FUNCTION {test_keyspace}.{fname}(k int) CALLED ON NULL INPUT RETURNS ascii LANGUAGE Lua AS 'return \"שלום\"';")
-    with pytest.raises(InvalidRequest, match='value is not valid ascii'):
+    with pytest.raises(FunctionFailure, match='value is not valid ascii'):
         cql.execute(f"SELECT {fname}(k) FROM {table1} WHERE k=1")
     cql.execute(f"DROP FUNCTION {test_keyspace}.{fname}")
     cql.execute(f"CREATE FUNCTION {test_keyspace}.{fname}(k int) CALLED ON NULL INPUT RETURNS ascii LANGUAGE Lua AS 'return \"hello\"';")
