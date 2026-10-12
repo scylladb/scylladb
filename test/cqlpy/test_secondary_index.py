@@ -3078,7 +3078,30 @@ def test_index_select_collection(cql, test_keyspace):
         res = cql.execute(f"SELECT blog_id, content FROM {table} WHERE author='foo'")
         assert [list(r) for r in res] == [[1, {'bar1', 'bar2'}], [1, {'bar2', 'bar3'}], [2, {'baz'}]]
 
-
+# Ported from scylla-dtest prepared_statements_test.py::TestPreparedStatements::test_dropped_index.
+# A prepared statement which used an index (created right before the rows,
+# without waiting for its build) is handled after DROP INDEX: executing it
+# again either works or fails with InvalidRequest, never anything else.
+# Scylla only: the keyspace uses vnodes, like the dtest's nodes.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_prepared_statement_after_drop_index(cql, scylla_only):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': '1' }} AND tablets = {{'enabled': false}}")
+    try:
+        cql.execute(f"CREATE TABLE IF NOT EXISTS {ks}.mytable (a int PRIMARY KEY, b int)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS bindex ON {ks}.mytable(b)")
+        insert_statement = cql.prepare(f"INSERT INTO {ks}.mytable (a, b) VALUES (?, ?)")
+        for i in range(10):
+            cql.execute(insert_statement, (i, 0))
+        query_statement = cql.prepare(f"SELECT * FROM {ks}.mytable WHERE b=?")
+        print("Number of matching rows:", len(list(cql.execute(query_statement, (0,)))))
+        cql.execute(f"DROP INDEX {ks}.bindex")
+        try:
+            cql.execute(query_statement, (0,))
+        except InvalidRequest as ir:
+            print(ir)
+    finally:
+        cql.execute(f"DROP KEYSPACE {ks}")
 
 # Wait until system_distributed.view_build_status says the view backing the
 # given index is built on this node, as the dtests waited for index builds.
