@@ -19,9 +19,12 @@ one session per target node, as the dtests' loader threads did.
 
 import asyncio
 import logging
+import os
 import random
+import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from cassandra import ConsistencyLevel
@@ -435,3 +438,180 @@ async def test_topology_change_in_presence_of_down_node(manager: ScyllaClusterMa
             await asyncio.to_thread(loader.stop)
     out, _, _ = await run_nodetool(manager, servers[0], "status")
     logger.debug("nodetool status is: %s", out)
+
+
+############################################################################
+# Ported from lwt_schema_modification_test.py: actions in threads, each
+# with its own session to the first node, for a number of rounds of
+# run_s seconds, as the dtest's _test_combine().
+
+KEYSPACE = "lwt_load_ks"
+
+
+def read_rows(session, stop, row_start, row_end, **_):
+    """The dtest's ReadRows: rows of a range read at ALL never change."""
+    select = session.prepare(f"SELECT pk, v FROM table1 WHERE pk > {row_start} AND pk < {row_end} ALLOW FILTERING")
+    select.consistency_level = ConsistencyLevel.ALL
+    expected = sorted(session.execute(select).current_rows)
+    while not stop.is_set():
+        assert sorted(session.execute(select).current_rows) == expected
+
+
+def lwt_load(session, stop, row_start, row_end, **_):
+    """The dtest's LWTLoad: random rows inserted IF NOT EXISTS and updated
+    with a condition, at serial LOCAL_SERIAL."""
+    insert = session.prepare("INSERT INTO table1 (pk, ck, v) VALUES (:pk, :ck, :v) IF NOT EXISTS")
+    update = session.prepare("UPDATE table1 SET v = :v WHERE pk = :pk AND ck = :ck IF v > 50 AND v < 1000")
+    insert.serial_consistency_level = update.serial_consistency_level = ConsistencyLevel.LOCAL_SERIAL
+    val = 0
+    while not stop.is_set():
+        pk = ck = random.randint(row_start, row_end)
+        session.execute(insert, (pk, ck, val))
+        session.execute(update, (val, pk, ck))
+        val += 1
+
+
+def lwt_load_check(session, stop, row_start, row_end, **_):
+    """The dtest's LWTLoadCheck: consecutive rows inserted IF NOT EXISTS at
+    LOCAL_QUORUM until stopped, then their sum(v) is the expected one."""
+    insert = session.prepare("INSERT INTO table1 (pk, ck, v) VALUES (:pk, :ck, :v)  IF NOT EXISTS")
+    insert.serial_consistency_level = ConsistencyLevel.LOCAL_SERIAL
+    insert.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+    i = row_start
+    while i <= row_end and not stop.is_set():
+        row = session.execute(insert, (i, i, i)).current_rows[0]
+        # An insert that timed out but was committed gets applied=False with
+        # our own row back when the driver retries it: a success too.
+        if row.applied or row.v == i:
+            i += 1
+    select = session.prepare(f"SELECT sum(v) FROM table1 WHERE pk >= {row_start} AND pk <= {row_end} ALLOW FILTERING")
+    select.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+    result = session.execute(select).current_rows[0][0]
+    n = i - row_start
+    assert result == (n / 2) * (row_start + i - 1)
+
+
+def index_drop_add(session, stop, inter_delay, _unused=None, **_):
+    """The dtest's IndexDropAdd: the index on v dropped, and after
+    inter_delay seconds created again."""
+    session.execute("DROP INDEX table1_v_idx")
+    time.sleep(inter_delay)
+    session.execute("CREATE INDEX table1_v_idx ON table1 (v)")
+
+
+def materialized_view(session, stop, row_max, _unused=None, node=None, **_):
+    """The dtest's MaterializedView: a view with synchronous updates created,
+    "nodetool viewbuildstatus" on the node retried until it has finished
+    building, its first row_max rows read at ALL until they are all there,
+    and then, until stopped, they never change."""
+    session.execute("""
+        CREATE MATERIALIZED VIEW table1_top_v_view AS
+            SELECT pk, ck, v FROM table1
+            WHERE ck IS NOT NULL
+            PRIMARY KEY (pk, ck)
+            WITH CLUSTERING ORDER BY (ck ASC) AND synchronous_updates = true
+        """)
+    exe, ip = node
+
+    def retry_till_success(fun, timeout=60):
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return fun()
+            except AssertionError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.25)
+
+    def wait_for_mv_created():
+        res = subprocess.run([exe, "nodetool", "-h", ip, "viewbuildstatus", KEYSPACE, "table1_top_v_view"], capture_output=True, text=True)
+        assert "has finished building" in res.stdout, res
+    retry_till_success(wait_for_mv_created)
+
+    select = session.prepare(f"SELECT pk, ck, v FROM table1_top_v_view LIMIT {row_max}")
+    select.consistency_level = ConsistencyLevel.ALL
+
+    def wait_for_row_max():
+        assert len(session.execute(select).current_rows) == row_max
+    retry_till_success(wait_for_row_max)
+    expected = sorted(session.execute(select).current_rows)
+    while not stop.is_set():
+        assert sorted(session.execute(select).current_rows) == expected
+
+
+async def lwt_combine(manager: ScyllaClusterManager, actions, nodes: int, rf: int, nrows: int, loops: int, run_s: int,
+                      smp: int | None = None) -> None:
+    """The dtest's _test_combine() with its _setup() (all LWT phases given 30 s,
+    rf racks) and _case_prologue() (table1 with an index on v, nrows rows).
+    The dtest ran the nodes with 8 shards (4 in debug); test.py's 2 are kept,
+    as eight nodes of eight shards would not fit test.py's machines."""
+    manager.ignore_log_patterns += ["exception during mutation write .*schema_mismatch_error",
+                                    "Error applying view update to .*: data_dictionary::no_such_column_family"]
+    config = {**CONFIG, "write_request_timeout_in_ms": 30000, "cas_contention_timeout_in_ms": 30000,
+              # Scylla's default, as on the dtest nodes; test.py turns it off.
+              "auto_snapshot": True}
+    servers = await manager.servers_add(nodes, config=config, property_file=rack_property_files(nodes, rf),
+                                        cmdline=["--smp", str(smp)] if smp else None)
+    node1 = (await manager.server_get_exe(servers[0].server_id), servers[0].ip_addr)
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE {KEYSPACE} WITH replication={{'class':'NetworkTopologyStrategy', 'replication_factor':{rf}}}")
+    await cql.run_async(f"CREATE TABLE {KEYSPACE}.table1 (pk int, ck int, v int, int_col int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"CREATE INDEX table1_v_idx ON {KEYSPACE}.table1 (v)")
+    insert = cql.prepare(f"INSERT INTO {KEYSPACE}.table1 (pk, ck, v, int_col) VALUES (?, ?, ?, ?)")
+    for i in range(nrows):
+        await cql.run_async(insert, (i, i, i, i))
+    for loop in range(loops):
+        logger.debug("loop %d/%d", loop, loops)
+        stop = threading.Event()
+
+        def run(action):
+            fn, row_start, row_end = action
+            session = node_session(manager, servers[0], request_timeout=1000)
+            session.execute(f"USE {KEYSPACE}")
+            fn(session, stop, row_start, row_end, node=node1)
+
+        with ThreadPoolExecutor(max_workers=len(actions)) as pool:
+            futures = [pool.submit(run, a) for a in actions]
+            await asyncio.sleep(run_s)
+            stop.set()
+            for f in futures:
+                await asyncio.wrap_future(f)
+        running = {s.server_id for s in await manager.running_servers()}
+        assert all(s.server_id in running for s in servers)
+
+
+# LWT load on rows 1001..9999 beside reads at ALL of the untouched rows
+# 0..1000, on eight nodes (RF=3), four rounds of 30 seconds.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.skip_mode(mode='debug', reason='too heavy for debug mode, as in the dtest')
+async def test_lwt_load(manager: ScyllaClusterManager):
+    await lwt_combine(manager, [(read_rows, 0, 1000), (lwt_load, 1001, 9999)], nodes=8, rf=3, nrows=10000, loops=4, run_s=30)
+
+
+# Conditional inserts of consecutive new keys beside other LWT load for 30
+# seconds, then the sum of the inserted values matches.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.skip_mode(mode='debug', reason='too heavy for debug mode, as in the dtest')
+async def test_lwt_load_check(manager: ScyllaClusterManager):
+    await lwt_combine(manager, [(lwt_load, 1, 99), (lwt_load_check, 100, 99999999)], nodes=8, rf=3, nrows=0, loops=1, run_s=30)
+
+
+# Ported from scylla-dtest lwt_schema_modification_test.py::TestLWTSchemaModification::test_index_drop_add.
+# On four nodes of four shards (RF=3, racks by RF), an LWT load on rows
+# 1001..9999 and reads at ALL of rows 0..1000 run while the index on v is
+# dropped and, 0.5 s later, created again; four rounds of 10 seconds.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_index_drop_add(manager: ScyllaClusterManager):
+    await lwt_combine(manager, [(lwt_load, 1001, 9999), (read_rows, 0, 1000), (index_drop_add, 0.5, None)],
+                      nodes=4, rf=3, nrows=10000, loops=4, run_s=10, smp=min(4, os.cpu_count() or 1))
+
+
+# Ported from scylla-dtest lwt_schema_modification_test.py::TestLWTSchemaModification::test_materialized_view.
+# On four nodes of four shards (RF=3), a materialized view with synchronous
+# updates is created during an LWT load on rows 1001..9999; once built, its
+# first 1000 rows (untouched by the load) read at ALL never change; one
+# round of 10 seconds.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_materialized_view(manager: ScyllaClusterManager):
+    await lwt_combine(manager, [(lwt_load, 1001, 9999), (materialized_view, 1000, None)],
+                      nodes=4, rf=3, nrows=10000, loops=1, run_s=10, smp=min(4, os.cpu_count() or 1))
