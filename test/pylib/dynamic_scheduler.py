@@ -1552,7 +1552,20 @@ class DynamicScheduling:
         self._ceiling_t = now
 
     def _fits(self, idx: int, node: WorkerController, pressure: bool, ahead: tuple[float, float] = (0.0, 0.0)) -> bool:
-        """Admission.
+        """Admission: whether the test may start now, counting why not."""
+        why = self._admits(idx, node, pressure, ahead)
+        if why is None:
+            return True
+        self.stats[f"rejected_{why}"] += 1
+        if why == "mem":
+            self._mem_refused_at = self.now()
+        return False
+
+    def _admits(self, idx: int, node: WorkerController | None, pressure: bool,
+                ahead: tuple[float, float] = (0.0, 0.0)) -> str | None:
+        """Admission, without side effects: None if the test may start
+        now, else what keeps it from starting.  On no worker (node None)
+        it pays a fresh setup and its whole peak.
 
         RAM: what the running tests are still forecast to take, plus
         this test's forecast peak, must fit what the machine has
@@ -1567,8 +1580,7 @@ class DynamicScheduling:
             # The tests are losing time to memory already: another
             # test only adds to it.  The progress rule still starts
             # one when nothing runs at all.
-            self.stats["rejected_mem_stall"] += 1
-            return False
+            return "mem_stall"
         cost = self._costs_for(idx)
         now = self.now()
         # --- RAM: the running tests' forecast growth plus this test
@@ -1576,9 +1588,7 @@ class DynamicScheduling:
         # room kept for the critical-path test).
         hold_cpu, hold_mem = self._hold_reservation(idx)
         if self._forecast_need(idx, node) + hold_mem + ahead[1] > self._available() - self.mem_reserve:
-            self.stats["rejected_mem"] += 1
-            self._mem_refused_at = now
-            return False
+            return "mem"
 
         # --- CPU: reservations with a controlled over-commit band
         # ---------------
@@ -1586,11 +1596,9 @@ class DynamicScheduling:
         req = cost.cores + setup_cores + ahead[0]
         reserved = sum(self.res_cpu.values()) + hold_cpu
         if reserved + req > self.cpu_ceiling:
-            self.stats["rejected_cpu_ceiling"] += 1
-            return False
+            return "cpu_ceiling"
         if self.burst_rate > 0 and reserved + req > self._ceiling:
-            self.stats["rejected_burst"] += 1
-            return False
+            return "burst"
         # Measured headroom, in both bands.  A reservation is the
         # test's *average* parallelism, and a test's first seconds are
         # its heaviest: process start, cluster start, compaction.
@@ -1614,20 +1622,17 @@ class DynamicScheduling:
         target = self.cpu_target
         headroom_limit = max(float(self.ncpus), full_target) * min(1.0, target / full_target)
         if self._estimate_now(now) + req + hold_cpu > headroom_limit:
-            self.stats["rejected_no_headroom"] += 1
-            return False
+            return "no_headroom"
         if reserved + req > self.ncpus:
             # over-commit band: only while the tests' own cgroup shows
             # no CPU pressure, and with evidence of real slack;
             # recently admitted tests count at full weight so one
             # stale reading cannot admit a wave.
             if pressure:
-                self.stats["rejected_pressure"] += 1
-                return False
+                return "pressure"
             if self._estimate_now(now) + req + hold_cpu > target:
-                self.stats["rejected_cpu_band"] += 1
-                return False
-        return True
+                return "cpu_band"
+        return None
 
     def _hold_reservation(self, idx: int | None) -> tuple[float, float]:
         """Capacity kept free for the critical-path test and for a test
