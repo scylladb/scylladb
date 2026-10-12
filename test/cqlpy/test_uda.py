@@ -9,7 +9,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type
+from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type, is_scylla
 
 # Test that computing an average by hand works the same as
 # the built-in function
@@ -281,3 +281,32 @@ def test_aggregate_with_udt_keyspace_isolation(cql, test_keyspace):
                 cql.execute(
                     f"CREATE AGGREGATE {other_ks}.suma ({test_keyspace}.{udt_name}) "
                     f"SFUNC plus STYPE int INITCOND 10")
+
+# Test an aggregate whose state type is a UDT with a case-sensitive field
+# name, with an initial condition. The initial condition is saved in the
+# schema as a CQL literal, which must quote this field name so it can be read
+# back. Cassandra has a similar bug, CASSANDRA-21747: CREATE AGGREGATE fails
+# with "Unknown field 'a'", so this test is marked cassandra_bug.
+# Reproduces SCYLLADB-5270 (the field name wasn't quoted, so reading the saved
+# literal back failed, which stopped group 0).
+def test_uda_initcond_udt_case_sensitive_field(cql, test_keyspace, cassandra_bug):
+    # A state function adding x to the UDT's only field.
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    if is_scylla(cql):
+        body = "LANGUAGE lua AS 'for k, v in pairs(s) do s[k] = v + x end return s'"
+    else:
+        body = "LANGUAGE java AS 's.setInt(0, s.getInt(0) + x); return s;'"
+    with new_type(cql, test_keyspace, '("A" int)') as udt:
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x int') as table:
+            cql.execute(f'INSERT INTO {table} (p, x) VALUES (1, 2)')
+            cql.execute(f'INSERT INTO {table} (p, x) VALUES (2, 3)')
+            with new_function(cql, test_keyspace, f'(s {udt}, x int) RETURNS NULL ON NULL INPUT RETURNS {udt} {body}') as sf:
+                with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE {udt} INITCOND {{"A": 10}}') as agg:
+                    select = f'SELECT {test_keyspace}.{agg}(x) FROM {table}'
+                    assert [tuple(r[0]) for r in cql.execute(select)] == [(15,)]
+                    # DESCRIBE AGGREGATE prints the initial condition in the
+                    # same way, and its output must re-create the aggregate.
+                    desc = cql.execute(f'DESCRIBE AGGREGATE {test_keyspace}.{agg}').one().create_statement
+                    cql.execute(f'DROP AGGREGATE {test_keyspace}.{agg}')
+                    cql.execute(desc)
+                    assert [tuple(r[0]) for r in cql.execute(select)] == [(15,)]
