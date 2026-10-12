@@ -1202,34 +1202,26 @@ class CQLAuditTester(AuditTester):
             await self.manager.server_update_config(srv.server_id, config_options=audit_settings)
             await self.manager.server_start(srv.server_id, expected_error=expected_error)
 
-    # compact storage is current required for all tests that call verify_table
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     async def _test_audit_table(self):
         await self.verify_table(audit_settings=AuditTester.audit_default_settings, table_prefix="test_audit_table")
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     async def _test_audit_table_extra_parameter(self):
         await self.verify_table(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, table_prefix="test_audit_table_extra_parameter")
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     async def _test_audit_table_audit_keyspaces_empty(self):
         await self.verify_table(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL"}, table_prefix="test_audit_table_audit_keyspaces_empty", overwrite_audit_tables=True)
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     async def _test_audit_table_no_ks(self):
         await self.verify_table(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL"}, table_prefix="test_audit_table_no_ks", overwrite_audit_tables=True)
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     async def _test_audit_categories_part1(self):
         await self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     # @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     async def _test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             await self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
-    @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
     # @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     async def _test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
