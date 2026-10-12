@@ -6,7 +6,7 @@ import collections.abc
 import contextlib
 import re
 from cassandra.cluster import ConsistencyLevel
-from cassandra.query import SimpleStatement
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 from cassandra.protocol import InvalidRequest
 from cassandra.util import SortedSet
 
@@ -542,6 +542,7 @@ def test_cdc_log_ttl_expiry(scylla_only, cql, test_keyspace):
 
 # CDC log operation codes, see cdc::operation.
 PREIMAGE, UPDATE, INSERT, POSTIMAGE = 0, 1, 2, 9
+
 # Expected CDC log of writes to a table whose regular columns are named
 # cval<i> and static columns stval<i>, all of one type, and of the clustering
 # key ck. The writes of one change of a partition - a statement, or the
@@ -725,9 +726,11 @@ def static_row_cdc_options(preimage_enable, postimage_enable):
         ret += f", 'postimage': '{postimage_enable}'"
     return ret
 
+
 def normalized_images(preimage_enable, postimage_enable):
     preimage = 'full' if preimage_enable == 'full' else ('true' if preimage_enable else 'false')
     return preimage, 'true' if postimage_enable else 'false'
+
 # cdc_static_row_test.py's check_single_row_static(): the dtest's INSERT,
 # UPDATE, DELETE and UPDATE again of the static columns (only) of each row
 # of the data set (num_of_partitions partitions of one row), one statement
@@ -889,3 +892,88 @@ def test_operations_with_large_number_of_static_and_regular_columns_postimage_pr
 @pytest.mark.parametrize('typ', static_row_types)
 def test_operations_with_large_number_of_static_and_regular_columns(scylla_only, cql, test_keyspace_vnodes, typ):
     check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 10, num_of_static=10)
+# The column types of cdc_batch_test.py, in the dtest's spelling.
+batch_types = [pytest.param(t, id=mkident(t)) for t in
+               ['int', 'bigint', 'text', 'varchar', 'frozen<set<int>>', 'frozen<set<text>>', 'frozen<list<int>>',
+                'list<int>', 'set<int>', 'map<int,int>', 'map<text,blob>']]
+# cdc_batch_test.py's run_batch_checks(): logged batches - driver batch
+# messages with the values formatted into the statements - with one INSERT
+# or UPDATE per row and column, of three rows in each of five partitions of
+# a table with ten columns: they insert the rows, update all columns, only
+# the even and only the odd columns, set all columns to null and update them
+# again. Each partition's change is logged with the preimages of all its
+# changed rows, then their deltas, then their postimages. The log is read
+# as the dtest did: whole, then the rows newer than the changes read last,
+# at consistency level ALL.
+def run_batch_checks(cql, keyspace, typ, preimage_enable, postimage_enable, num_of_partitions=5, num_of_rows=3, num_of_columns=10):
+    cdc_options = (f", 'preimage': '{preimage_enable}'" if preimage_enable else '') + (", 'postimage': true" if postimage_enable else '')
+    with contextlib.ExitStack() as stack:
+        table, model, lists = new_cdc_table_of_type(stack, cql, keyspace, typ, 0, num_of_columns, cdc_options,
+                                                    *normalized_images(preimage_enable, postimage_enable))
+        data = DataGenerator(typ)
+        times = []
+
+        def run_batch(columns, insert=False, null=False):
+            nonlocal times
+            data_set = None if null else data.generate(num_of_columns)
+            batch = BatchStatement(batch_type=BatchType.LOGGED)
+            writes = []
+            for pk in range(num_of_partitions):
+                for ck in range(num_of_rows):
+                    values = {f'cval{k}': None if null else data_set[k] for k in columns}
+                    for c, v in values.items():
+                        if insert:
+                            batch.add(f'INSERT INTO {table} (pk, ck, {c}) VALUES (%s, %s, %s)', [pk, ck, v])
+                        else:
+                            batch.add(f'UPDATE {table} SET {c} = %s WHERE pk = %s and ck = %s', [v, pk, ck])
+                    writes.append((pk, ck, values, insert))
+            cql.execute(batch)
+            actual, times = log_rows_after(cql, table, times, lists)
+            assert len(actual) == num_of_partitions
+            assert actual == model.change(writes)
+
+        run_batch(range(num_of_columns), insert=True)
+        run_batch(range(num_of_columns))
+        run_batch(range(0, num_of_columns, 2))
+        run_batch(range(1, num_of_columns, 2))
+        run_batch(range(num_of_columns), null=True)
+        run_batch(range(num_of_columns))
+BATCH_GATE = pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_delta_batch_only.
+# Batches without images.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_delta_batch_only(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=False, postimage_enable=False)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_true_delta_batch.
+# With preimage, given as 'True'.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_preimage_true_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=True, postimage_enable=False)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_on_delta_batch.
+# With preimage, given as 'true'.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_preimage_on_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='true', postimage_enable=False)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_full_delta_batch.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_preimage_full_delta_batch(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='full', postimage_enable=False)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_delta_postimage_batch.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_delta_postimage_batch(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable=False, postimage_enable=True)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_full_delta_postimage.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_preimage_full_delta_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='full', postimage_enable=True)
+# Ported from scylla-dtest cdc_batch_test.py::TestCDCBatchesSimple::test_preimage_on_delta_postimage.
+@BATCH_GATE
+@pytest.mark.parametrize('typ', batch_types)
+def test_preimage_on_delta_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='true', postimage_enable=True)
