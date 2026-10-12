@@ -25,7 +25,6 @@ from test.pylib import nodetool
 
 from test.pylib.encryption_provider import KeyProviderFactory, KeyProvider, make_key_provider_factory, KMSKeyProviderFactory, LocalFileSystemKeyProviderFactory
 from test.cluster.util import new_test_keyspace, new_test_table, FeatureConfig
-from test.cluster.dtest.tools.assertions import assert_one
 
 from typing import Callable, Coroutine
 
@@ -522,7 +521,7 @@ async def test_system_auth_encryption(manager: ScyllaClusterManager, tmpdir):
         user = f"user_{str(uuid.uuid4())}".replace('-','_')
         pwd = f"pwd_{str(uuid.uuid4())}"
         cql.execute(f"CREATE USER {user} WITH PASSWORD '{pwd}' NOSUPERUSER")
-        assert_one(cql, f"LIST ROLES of {user}", [user, False, True, {}])
+        assert [list(r) for r in cql.execute(f"LIST ROLES of {user}")] == [[user, False, True, {}]]
 
         logger.debug("Verify PART 1: check commitlogs -------------")
 
