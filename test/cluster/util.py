@@ -697,6 +697,11 @@ async def release_held_streaming(manager: ScyllaClusterManager, servers: list[Se
         await until
 
 
+async def select_set(cql: Session, query: str, cl: ConsistencyLevel) -> set:
+    """The rows a query returns, read at the given consistency level, as a set."""
+    return set(await cql.run_async(SimpleStatement(query, consistency_level=cl)))
+
+
 def vnodes_keyspace(replication: int | str) -> str:
     """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
     a replication factor, or the replication options as CQL ("'dc1': 1, 'dc2': 2")."""
