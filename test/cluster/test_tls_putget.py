@@ -19,14 +19,18 @@ import asyncio
 import logging
 import os
 import re
+import ssl
 
 import pytest
 from cassandra import ConsistencyLevel
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.cluster import Cluster
 from cassandra.query import SimpleStatement
 
 from test import DEBUG_MODES
 from test.cluster.util import run_nodetool, stop_servers_gracefully
 from test.pylib.certificates import CertificateAuthority
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
@@ -183,3 +187,62 @@ async def test_putget_with_internode_rack_ssl_with_dc_compression(manager: Scyll
 @pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
 async def test_putget_with_reloaded_certificates(manager: ScyllaClusterManager, tmp_path):
     await putget_with_internode_ssl(manager, tmp_path, "all", internode_encryption="all", reload_certs=True)
+
+
+############################################################################
+# Ported from native_transport_ssl_test.py.
+
+def connect(ip: str, port: int, use_ssl: bool, certs: dict | None = None, ca_certs_required: bool = False,
+            ssl_context: ssl.SSLContext | None = None):
+    """The dtests' _create_cluster_session(): a driver session to one node
+    (presenting the node's certificate when use_ssl, and verifying the
+    server's certificate and host name only if ca_certs_required), or one
+    over the given ssl_context."""
+    if use_ssl:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_context.load_cert_chain(certfile=certs["certificate"], keyfile=certs["keyfile"])
+        ssl_context.check_hostname = ca_certs_required
+        ssl_context.verify_mode = ssl.CERT_REQUIRED if ca_certs_required else ssl.CERT_NONE
+        ssl_context.load_verify_locations(cafile=certs["truststore"])
+    cluster = Cluster([ip], port=port, connect_timeout=90, control_connection_timeout=60, protocol_version=4, ssl_context=ssl_context,
+                      auth_provider=PlainTextAuthProvider(username="cassandra", password="cassandra"))
+    try:
+        return cluster, cluster.connect()
+    except BaseException:
+        safe_driver_shutdown(cluster)
+        raise
+
+
+# With client TLS on a custom native_transport_port_ssl (9666), writes and
+# reads work over the plain port and over the TLS one.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_use_custom_ssl_port(manager: ScyllaClusterManager, tmp_path):
+    certs = certificates(tmp_path)
+    config = {**CONFIG, "client_encryption_options": {"enabled": True, "certificate": certs["certificate"], "keyfile": certs["keyfile"]},
+              "native_transport_port": 9042, "native_transport_port_ssl": 9666}
+    server = await manager.server_add(config=config)
+    for port, use_ssl, ks in [(9042, False, "ks"), (9666, True, "ks2")]:
+        cluster, session = connect(server.ip_addr, port, use_ssl, certs)
+        try:
+            await create_ks_cf(session, ks, 1)
+            await putget(manager, session, ks, cl=ConsistencyLevel.ONE)
+        finally:
+            safe_driver_shutdown(cluster)
+
+
+# With internode TLS on two nodes, writes and reads work before and after
+# the first node is restarted twice (#14299).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_server_encryption_and_restart_node(manager: ScyllaClusterManager, tmp_path):
+    config = {**CONFIG, "server_encryption_options": {"internode_encryption": "all", "require_client_auth": False, **certificates(tmp_path)}}
+    servers = await manager.servers_add(2, config=config)
+    cluster, session = connect(servers[0].ip_addr, 9042, False)
+    try:
+        await create_ks_cf(session, "ks", 1)
+        await putget(manager, session, "ks", cl=ConsistencyLevel.ONE)
+        for _ in range(2):
+            await manager.server_stop_gracefully(servers[0].server_id)
+            await manager.server_start(servers[0].server_id)
+        await putget(manager, session, "ks")
+    finally:
+        safe_driver_shutdown(cluster)
