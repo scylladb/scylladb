@@ -2396,6 +2396,34 @@ def test_gsi_without_sort_key_query_paging_deleted_items(dynamodb, test_table_gs
                 ExclusiveStartKey=response['LastEvaluatedKey'])
         assert any({'p': p, 'x': x} not in live_items for p in start_keys)
 
+# In a table without a sort key, deleting an item (or its expiration by TTL)
+# writes a partition tombstone. Usually, a GSI gets row tombstones instead,
+# because a partition of the table is spread over many partitions of the GSI.
+# But if the GSI's partition key is the table's partition key (here, gsi_ss of
+# test_table_gsi_6 - even though it also has a sort key), each partition of
+# the GSI has only the items of the same partition of the table, so the GSI
+# gets a partition tombstone too. When a page ends after such a partition
+# tombstone (after reading query_tombstone_page_limit tombstones), there is no
+# item at the position where it ended, so its LastEvaluatedKey has just the
+# partition key, not the GSI's sort key - and it isn't accepted as the next
+# page's ExclusiveStartKey ("Key column s not found"). The test is
+# scylla_only because it lowers Scylla's query_tombstone_page_limit, to end a
+# page after a single tombstone. Reproduces SCYLLADB-5293.
+@pytest.mark.xfail(reason='SCYLLADB-5293')
+def test_gsi_query_paging_after_partition_tombstone(dynamodb, test_table_gsi_6, scylla_only):
+    p = random_string()
+    item = {'p': p, 's': random_string()}
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    test_table_gsi_6.put_item(Item=item)
+    # Wait for the item to appear in the GSI, delete it, and wait for it to
+    # disappear from the GSI.
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [item], KeyConditions=key_conditions)
+    test_table_gsi_6.delete_item(Key={'p': p})
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [], KeyConditions=key_conditions)
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '1'):
+        assert full_query(test_table_gsi_6, IndexName='gsi_ss', ConsistentRead=False,
+            KeyConditions=key_conditions) == []
+
 # Like test_gsi_query_paging, but the query also has a condition on the GSI's
 # range key. Each page's LastEvaluatedKey has the base table's key as well as
 # the GSI's key, and must be accepted as the next page's ExclusiveStartKey,
