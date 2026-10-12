@@ -108,6 +108,14 @@ private:
     }
 
 public:
+    // Forget this shard's last generated time, so the next time UUIDs follow
+    // the clock even if it moved backward. Only for the test-only clocks
+    // offset (see set_clocks_offset()), whose changes would otherwise leave
+    // the time UUIDs in the future after a test undoes a forward jump.
+    static void reset_last_used_time() {
+        _instance._last_used_time = decimicroseconds{0};
+    }
+
     // We have only 17 timeuuid bits available to store this
     // value.
     static constexpr int SUBMICRO_LIMIT = (1<<17);

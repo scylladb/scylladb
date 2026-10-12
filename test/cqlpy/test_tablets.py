@@ -222,12 +222,15 @@ def test_describe_tablets(cql, tablets_combinations, skip_without_tablets):
 
 
 def verify_tablets_presence(cql, keyspace_name, table_name, expected:bool=True):
-    res = cql.execute(f"SELECT * FROM system.tablets WHERE keyspace_name='{keyspace_name}' AND table_name='{table_name}' ALLOW FILTERING")
+    # We must read all pages, not just check the first one: this filtering
+    # scan may need to skip many tombstones left by previously dropped
+    # tables, so a page can be cut short - even to zero rows.
+    rows = list(cql.execute(f"SELECT * FROM system.tablets WHERE keyspace_name='{keyspace_name}' AND table_name='{table_name}' ALLOW FILTERING"))
     if expected:
-        assert res, f"{keyspace_name}.{table_name} not found in system.tablets"
-        assert res.one().tablet_count > 0, f"table {keyspace_name}.{table_name}: zero tablets allocated"
+        assert rows, f"{keyspace_name}.{table_name} not found in system.tablets"
+        assert rows[0].tablet_count > 0, f"table {keyspace_name}.{table_name}: zero tablets allocated"
     else:
-        assert not res, f"{keyspace_name}.{table_name} was found in system.tablets after it was dropped"
+        assert not rows, f"{keyspace_name}.{table_name} was found in system.tablets after it was dropped"
 
 # Test that when a tablets-enabled table is dropped, all of its tablets are dropped with it.
 def test_tablets_are_dropped_when_dropping_table(cql, test_keyspace, skip_without_tablets):

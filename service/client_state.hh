@@ -382,6 +382,14 @@ public:
         return _last_timestamp_micros;
     }
 
+    // Forget this shard's last generated timestamp, so the next ones follow
+    // the clock even if it moved backward. Only for the test-only clocks
+    // offset (see set_clocks_offset()), whose changes would otherwise leave
+    // the timestamps in the future after a test undoes a forward jump.
+    static void reset_last_timestamp() {
+        _last_timestamp_micros = 0;
+    }
+
 #if 0
     public SocketAddress getRemoteAddress()
     {

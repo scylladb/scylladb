@@ -69,20 +69,25 @@ def create_ks_and_assert_warnings_and_errors(cql, ks_opts, metric_name=None,
 
 
 def test_given_default_config_when_creating_ks_should_only_produce_warning_for_simple_strategy(cql, this_dc):
-    create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts('SimpleStrategy', 3),
-        metric_name='scylla_cql_replication_strategy_warn_list_violations',
-        warnings=[STRATEGY_WARN_RE.format(strategy='SimpleStrategy')])
+    # The test expects the minimum RF warning with Scylla's default threshold
+    # of 3, but the test environment may have changed it (test/cqlpy/run
+    # disables this warning), so set it explicitly.
+    with config_value_context(cql, 'minimum_replication_factor_warn_threshold', '3'):
+        create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts('SimpleStrategy', 3),
+            metric_name='scylla_cql_replication_strategy_warn_list_violations',
+            warnings=[STRATEGY_WARN_RE.format(strategy='SimpleStrategy')])
 
-    for strategy, dc in {'NetworkTopologyStrategy': this_dc, 'EverywhereStrategy': 'replication_factor',
-                         'LocalStrategy': 'replication_factor'}.items():
-        create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(strategy, 1, dc=dc),
-                        warnings=[MINIMUM_RF_WARN_RE.format(dc=re.escape(dc), rf=1, threshold=3)])
+        for strategy, dc in {'NetworkTopologyStrategy': this_dc, 'EverywhereStrategy': 'replication_factor',
+                             'LocalStrategy': 'replication_factor'}.items():
+            create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(strategy, 1, dc=dc),
+                            warnings=[MINIMUM_RF_WARN_RE.format(dc=re.escape(dc), rf=1, threshold=3)])
 
 
 def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_error(cql, this_dc):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list', '[]'))
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_fail_list', '[]'))
+        config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_warn_threshold', '3'))
 
         for strategy, dc in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                               'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
@@ -94,6 +99,7 @@ def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list',
                                                                 'SimpleStrategy,LocalStrategy,NetworkTopologyStrategy,EverywhereStrategy'))
+        config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_warn_threshold', '3'))
         for strategy, dc in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                               'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(strategy, 1, dc=dc),

@@ -13,6 +13,7 @@ import socket
 import os
 import requests
 import collections
+import json
 import ssl
 from contextlib import contextmanager
 
@@ -342,6 +343,11 @@ class config_value_context:
 
     def __enter__(self):
         self._original_value = self._cql.execute(self._select, (self._key,)).one().value
+        # system.config returns values in JSON, but an UPDATE of a string
+        # option takes the raw string, so to be able to restore the original
+        # value of a string option we need to decode it.
+        if self._original_value.startswith('"'):
+            self._original_value = json.loads(self._original_value)
         self._cql.execute(self._update, (self._value, self._key))
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
