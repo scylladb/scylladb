@@ -212,7 +212,3 @@ def test_nodetool_py_compact(cql, test_keyspace):
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
 
 
-STCS = 'SizeTieredCompactionStrategy'
-ICS = 'IncrementalCompactionStrategy'
-LCS = 'LeveledCompactionStrategy'
-TWCS = 'TimeWindowCompactionStrategy'

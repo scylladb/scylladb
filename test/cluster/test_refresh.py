@@ -532,6 +532,8 @@ async def test_refresh_invalidates_cache(manager: ScyllaClusterManager):
 
 
 
+
+
 async def table_with_flushed_rows(manager, server, ks, rows=100):
     cql = manager.get_cql()
     await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
