@@ -83,3 +83,12 @@ def test_parenthesized_value_is_tuple(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table}(p, t) VALUES ({p}, (3))")
         assert list(cql.execute(f"SELECT t FROM {table} WHERE p = {p}")) == [((3,),)]
         assert list(cql.execute(f"SELECT p FROM {table} WHERE p = {p} AND t = (3) ALLOW FILTERING")) == [(p,)]
+
+
+# Test a tuple with a very large number of components (16383): it can be
+# created, written and read back.
+def test_tuple_with_many_components(cql, test_keyspace):
+    n = 16383
+    with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, t frozen<tuple<{', '.join(['int'] * n)}>>") as table:
+        cql.execute(f"INSERT INTO {table} (p, t) VALUES (0, ({', '.join(str(i) for i in range(n))}))")
+        assert list(cql.execute(f"SELECT t FROM {table} WHERE p = 0")) == [(tuple(range(n)),)]
