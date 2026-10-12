@@ -441,6 +441,49 @@ async def test_non_existant_table_master_key(manager: ScyllaClusterManager, tmpd
         with pytest.raises(Exception):
             await _smoke_test(manager, kp, ciphers={"AES/CBC/PKCS5Padding": [128]})
 
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+async def test_kms_master_key_rotation(manager: ScyllaClusterManager, tmpdir, suite_log_dir):
+    """Test that after the KMS alias used as a table's master key is moved to
+    a new key, sstables written with the old key stay readable, and
+    upgradesstables (-a) rewrites them with the new key."""
+    alias_name = "alias/Scylla-test-rotation"
+
+    async with KMSKeyProviderFactory(tmpdir, suite_log_dir) as kp:
+        old_key_id = kp.create_master_key(alias_name=alias_name)
+        [server] = await manager.servers_add(config={**kp.configuration_parameters(), "tablets_mode_for_new_keyspaces": "disabled"})
+        cql = manager.cql
+
+        async def key_ids(table_name: str) -> list[str]:
+            keyspace, column_family = table_name.split(".")
+            async with nodetool.no_autocompaction_context(cql, table_name):
+                scylla_metadata = await get_sstable_metadata(manager, server, keyspace, column_family)
+            ids = [metadata["extension_attributes"]["scylla_key_id"]
+                   for metadata in scylla_metadata["sstables"].values()]
+            assert ids
+            return ids
+
+        async with await create_ks(manager) as ks:
+            options = kp.additional_cf_options() | {"master_key": alias_name}
+            async with await create_encrypted_cf(manager, ks, additional_options=options) as table_name:
+                keys = await prepare_write_workload(cql, table_name=table_name)
+                # AWS KMS key ids are encoded as encrypting key + encrypted
+                # data, so the master key id is visible in the sstable key id.
+                assert all(old_key_id in key_id for key_id in await key_ids(table_name))
+
+                new_key_id = kp.create_master_key(alias_name=alias_name)
+                await manager.server_restart(server.server_id)
+                cql, _ = await manager.get_ready_cql([server])
+                await read_verify_workload(cql, table_name=table_name, keys=keys)
+
+                await manager.api.keyspace_upgrade_sstables(server.ip_addr, ks)
+                assert all(new_key_id in key_id for key_id in await key_ids(table_name))
+                # Restart to read the rewritten sstables rather than cached rows.
+                await manager.server_restart(server.server_id)
+                cql, _ = await manager.get_ready_cql([server])
+                await read_verify_workload(cql, table_name=table_name, keys=keys)
+
+
 async def test_system_auth_encryption(manager: ScyllaClusterManager, tmpdir):
     cfg = {"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", 
                "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
