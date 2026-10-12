@@ -134,3 +134,4 @@ def test_aux_tables_compression_parity(cql, test_keyspace):
                 cdc_compression = r[0].compression
                 assert view_compression == cdc_compression
             assert base_compression == view_compression
+
