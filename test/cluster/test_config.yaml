@@ -39,7 +39,6 @@ run_in_dev:
   - test_not_enough_token_owners
   - test_replace_alive_node
   - dtest/alternator_tests
-  - dtest/bypass_cache_test
   - dtest/audit_test
   - audit/test_audit
   - dtest/rebuild_test
