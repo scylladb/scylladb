@@ -16,12 +16,13 @@ dtests' teardown did.
 
 import asyncio
 import logging
+import re
 
 import pytest
 from cassandra import ConsistencyLevel
 
 from test import DEBUG_MODES
-from test.cluster.util import cassandra_stress
+from test.cluster.util import cassandra_stress, run_nodetool
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
@@ -151,4 +152,91 @@ async def test_content_auto_snapshot(manager: ScyllaClusterManager):
         assert len(table_content) == 1, f"Expected to get 1 row from the table system.snapshots, but got {len(table_content)} rows!"
         assert table == f"{table_content[0].keyspace_name}.{table_content[0].table_name}", \
             f"Expected to get the snapshot information for the table {table}, but didn't get it!"
+
+
+############################################################################
+# Ported from updateable_config_test.py.
+
+async def change_and_verify_config(manager: ScyllaClusterManager, server, param: str, value, verify_response: str) -> None:
+    """Change the option in scylla.yaml, make the node re-read it (SIGHUP)
+    and check the new value over REST, as the dtests did."""
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    logger.info("value before: %s", await manager.api.client.get_text(f"/v2/config/{param}", host=server.ip_addr))
+    await manager.server_update_config(server.server_id, param, value)
+    await log.wait_for("completed re-reading configuration file", from_mark=mark)
+    response = await manager.api.client.get_text(f"/v2/config/{param}", host=server.ip_addr)
+    assert response == verify_response, f"response: {response}, expected: {verify_response}"
+
+
+# compaction_enforce_min_threshold is turned on and off by re-reading
+# scylla.yaml while cassandra-stress loads a table of STCS min_threshold 7.
+# The node logs compaction at debug level, as the dtest's.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_compaction_enforce_min_threshold(manager: ScyllaClusterManager):
+    server = await manager.server_add(config=CONFIG, cmdline=["--logger-log-level", "compaction=debug"])
+    await cassandra_stress(manager, server, "write", "n=10000", "-rate", "threads=8", create_keyspace=False)
+    await manager.get_cql().run_async("ALTER TABLE keyspace1.standard1 WITH compaction = {'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : 7 }")
+    await change_and_verify_config(manager, server, "compaction_enforce_min_threshold", True, "true")
+    await cassandra_stress(manager, server, "mixed", "n=10000", "-rate", "threads=8", create_keyspace=False)
+    await change_and_verify_config(manager, server, "compaction_enforce_min_threshold", False, "false")
+    await cassandra_stress(manager, server, "mixed", "n=10000", "-rate", "threads=8", create_keyspace=False)
+
+
+# Ported from scylla-dtest updateable_config_test.py::TestUpdateableConfig::test_verify_min_threshold.
+# With compaction_enforce_min_threshold turned on by re-reading scylla.yaml,
+# STCS with min_threshold 5 compacts ks.cf once it has 5 sstables (four
+# flushes of one row may or may not have compacted already, as the dtest
+# accepts either), and "nodetool compact" compacts it; turned off, one more
+# flushed row is enough for a compaction.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_verify_min_threshold(manager: ScyllaClusterManager):
+    server = await manager.server_add(config={**CONFIG, **SIMPLE_SNITCH}, cmdline=["--logger-log-level", "compaction=debug"])
+    cql = manager.get_cql()
+    log = await manager.server_open_log(server.server_id)
+    min_threshold = 5
+    insert_keys_num = 1
+
+    await cql.run_async("CREATE KEYSPACE ks WITH replication={'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+    cql.execute("USE ks")
+    await cql.run_async("CREATE COLUMNFAMILY cf (key varchar PRIMARY KEY, c1 text, c2 text) WITH comment='test cf' "
+                        "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'true'} AND compression = {}")
+    await cql.run_async("SELECT * FROM cf LIMIT 1")
+    await cql.run_async("ALTER TABLE ks.cf WITH compaction = {'class' : 'SizeTieredCompactionStrategy', 'min_threshold' : %d }" % min_threshold)
+
+    insert = cql.prepare("INSERT INTO ks.cf (key, c1, c2) VALUES (?, 'value1', 'value2')")
+    insert.consistency_level = ConsistencyLevel.QUORUM
+
+    async def insert_c1c2():
+        await asyncio.gather(*[cql.run_async(insert, [f"k{k}"]) for k in range(insert_keys_num)])
+
+    await change_and_verify_config(manager, server, "compaction_enforce_min_threshold", True, "true")
+    mark = await log.mark()
+    workdir = await manager.server_get_workdir(server.server_id)
+    compact_log = rf"compaction -.*Compacting \[{re.escape(workdir)}/data/ks/cf"
+
+    for _ in range(min_threshold - 1):
+        await insert_c1c2()
+        await run_nodetool(manager, server, "flush")
+    try:
+        await log.wait_for(compact_log, from_mark=mark, timeout=10)
+    except TimeoutError as ex:
+        logger.info("no compaction yet: %s", ex)
+
+    await insert_c1c2()
+    await run_nodetool(manager, server, "flush")
+    # Reached min_threshold: compaction is triggered.
+    await log.wait_for(compact_log, from_mark=mark, timeout=10)
+
+    mark = await log.mark()
+    # Compact, to clear the threshold counting.
+    await run_nodetool(manager, server, "compact")
+    await log.wait_for(compact_log, from_mark=mark, timeout=10)
+
+    await change_and_verify_config(manager, server, "compaction_enforce_min_threshold", False, "false")
+    mark = await log.mark()
+    await insert_c1c2()
+    await run_nodetool(manager, server, "flush")
+    # compaction_enforce_min_threshold is off: one insert triggers compaction.
+    await log.wait_for(compact_log, from_mark=mark, timeout=10)
 
