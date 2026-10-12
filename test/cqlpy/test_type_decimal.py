@@ -14,6 +14,7 @@ import sys
 from contextlib import contextmanager
 import pytest
 from cassandra.protocol import InvalidRequest, FunctionFailure
+from cassandra.cqltypes import DecimalType
 
 from . import nodetool
 from .util import new_test_table, unique_key_int, new_materialized_view, new_secondary_index
@@ -132,6 +133,48 @@ def test_decimal_clustering_key_inline_overflow_exponent(cql, table1, cassandra_
         # 1.1234e-2147483647 but what we read is 1.1234E+2147483649 - the
         # "scale" got wrapped around the 32 bit integer.
         assert list(cql.execute(f"SELECT c from {table1} where p = {p}")) == [(Decimal(n),)]
+
+# A decimal is a 4-byte scale followed by a varint unscaled value, and the
+# varint needs at least one byte, so a non-empty decimal shorter than 5 bytes
+# must be rejected. Such a clustering key used to be accepted and later failed
+# memtable flush, which crashed the node. The 4-byte case is tested
+# separately, because Cassandra accepts it.
+# Reproduces SCYLLADB-5221.
+def test_decimal_blob_validation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c decimal, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, c) VALUES ({p}, blobAsDecimal(0x0000000000))")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p}")) == [(Decimal(0),)]
+        for length in range(1, 4):
+            with pytest.raises(InvalidRequest, match='is not a valid binary'):
+                cql.execute(f"INSERT INTO {table} (p, c) VALUES ({unique_key_int()}, blobAsDecimal(0x{'00'*length}))")
+
+# Same as test_decimal_blob_validation, with the decimal sent as a bound
+# value. The driver always serializes a Decimal correctly, so its serializer
+# is patched to pass raw bytes through.
+# Reproduces SCYLLADB-5221.
+def test_decimal_bound_value_validation(cql, test_keyspace, monkeypatch):
+    monkeypatch.setattr(DecimalType, 'serialize', staticmethod(lambda val, protocol_version: val))
+    with new_test_table(cql, test_keyspace, "p int, c decimal, PRIMARY KEY (p, c)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, c) VALUES (?, ?)")
+        p = unique_key_int()
+        cql.execute(stmt, [p, b'\x00' * 5])
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = {p}")) == [(Decimal(0),)]
+        for length in range(1, 4):
+            with pytest.raises(InvalidRequest, match='Expected 0 or at least'):
+                cql.execute(stmt, [unique_key_int(), b'\x00' * length])
+
+# A 4-byte decimal holds the scale but no unscaled value. Cassandra accepts
+# it, both through blobAsDecimal() and as a bound value.
+# Reproduces SCYLLADB-5221.
+def test_decimal_scale_only_validation(cql, test_keyspace, cassandra_bug, monkeypatch):
+    monkeypatch.setattr(DecimalType, 'serialize', staticmethod(lambda val, protocol_version: val))
+    with new_test_table(cql, test_keyspace, "p int, c decimal, PRIMARY KEY (p, c)") as table:
+        with pytest.raises(InvalidRequest, match='is not a valid binary'):
+            cql.execute(f"INSERT INTO {table} (p, c) VALUES ({unique_key_int()}, blobAsDecimal(0x00000000))")
+        stmt = cql.prepare(f"INSERT INTO {table} (p, c) VALUES (?, ?)")
+        with pytest.raises(InvalidRequest, match='Expected 0 or at least'):
+            cql.execute(stmt, [unique_key_int(), b'\x00' * 4])
 
 # Verify that decimal partition keys and clustering keys have fundamentally
 # different identity semantics:

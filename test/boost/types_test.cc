@@ -726,6 +726,16 @@ BOOST_AUTO_TEST_CASE(test_long_type_validation) {
     test_validation_fails(long_type, from_hex("000000000000000000"));
 }
 
+// A decimal needs at least one byte of unscaled value after its scale - SCYLLADB-5221.
+BOOST_AUTO_TEST_CASE(test_decimal_type_validation) {
+    decimal_type->validate(bytes());
+    decimal_type->validate(from_hex("0000000000"));
+    test_validation_fails(decimal_type, from_hex("00"));
+    test_validation_fails(decimal_type, from_hex("0000"));
+    test_validation_fails(decimal_type, from_hex("000000"));
+    test_validation_fails(decimal_type, from_hex("00000002"));
+}
+
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
     auto now = utils::UUID_gen::get_time_UUID();
     timeuuid_type->validate(now.serialize());
