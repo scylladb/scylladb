@@ -191,6 +191,13 @@ async def flush_hints(client: TCPRESTClient, server_ip: IPAddress) -> None:
     await client.post("/hinted_handoff_test/flush", host=server_ip, port=10_000)
 
 
+async def wait_for_hints_replayed(manager: ScyllaClusterManager, servers: list[ServerInfo], timeout: int = 60) -> None:
+    """Wait until each of the servers has sent the hints it stored so far."""
+    for server in servers:
+        sync_point = await create_sync_point(manager.api.client, server.ip_addr)
+        assert await await_sync_point(manager.api.client, server.ip_addr, sync_point, timeout)
+
+
 async def update_hh_enabled_via_http_api(manager: ScyllaClusterManager, server: ServerInfo, new_value: str) -> None:
     """Change hint generation options at runtime and verify the change is visible."""
     if new_value in ("true", "false"):
