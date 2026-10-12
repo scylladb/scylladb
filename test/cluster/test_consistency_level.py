@@ -45,7 +45,38 @@ def simple_query_validate(session, read_keys: int, query: str, read_cls_pass, re
             list(session.execute(SimpleStatement(query, consistency_level=cl)))
 
 
+
+
+# Availability by consistency level as the nodes go down one by one, ported
+# from scylla-dtest consistency_test.py (TestAvailability): through each node
+# in turn, writes and reads of 100 users at each pair of consistency levels
+# succeed when enough replicas are alive and fail with Unavailable (or a
+# timeout or failure) otherwise; then that node is stopped. Writes with a
+# serial consistency level are lightweight transactions (IF NOT EXISTS).
+
+AVAILABILITY_CONFIG = {**DTEST_CONFIG, "cache_hit_rate_read_balancing": False, "hinted_handoff_enabled": False}
 UNAVAILABLE = (Unavailable, WriteTimeout, WriteFailure, ReadTimeout, ReadFailure)
+AVAILABILITY_COMBINATIONS = [
+    (CL.ALL, CL.ALL),
+    (CL.QUORUM, CL.QUORUM),
+    (CL.LOCAL_QUORUM, CL.LOCAL_QUORUM),
+    (CL.EACH_QUORUM, CL.LOCAL_QUORUM),
+    (CL.ONE, CL.ONE, None, False),
+    (CL.ONE, CL.ALL),
+    (CL.ALL, CL.ONE),
+    (CL.QUORUM, CL.TWO),
+    (CL.QUORUM, CL.THREE),
+    (CL.TWO, CL.TWO),
+    (CL.THREE, CL.ONE),
+    (CL.ANY, CL.ONE, None, False),
+    (CL.LOCAL_ONE, CL.LOCAL_ONE, None, False),
+    (CL.QUORUM, CL.SERIAL, CL.SERIAL),
+    (CL.LOCAL_QUORUM, CL.LOCAL_SERIAL, CL.LOCAL_SERIAL),
+    (CL.QUORUM, CL.LOCAL_SERIAL, CL.SERIAL),
+    (CL.LOCAL_QUORUM, CL.SERIAL, CL.LOCAL_SERIAL),
+]
+
+
 class FlakyRetryPolicy(RetryPolicy):
     """The dtests' retry policy: read and write timeouts are retried up to 5
     times, Unavailable up to 3 times."""
@@ -58,7 +89,97 @@ class FlakyRetryPolicy(RetryPolicy):
 
     def on_unavailable(self, *args, **kwargs):
         return (self.RETRY, None) if kwargs["retry_num"] < 3 else (self.RETHROW, None)
+
+
 FLAKY_RETRY_POLICY = FlakyRetryPolicy()
+
+
+def required_nodes(cl, rf_factors, dc):
+    """The number of nodes the consistency level needs in DC number dc,
+    given the replication factor of each DC."""
+    return {
+        CL.ANY: 1,
+        CL.ONE: 1,
+        CL.TWO: 2,
+        CL.THREE: 3,
+        CL.QUORUM: sum(rf_factors) // 2 + 1,
+        CL.ALL: sum(rf_factors),
+        CL.LOCAL_QUORUM: rf_factors[dc] // 2 + 1,
+        CL.EACH_QUORUM: rf_factors[dc] // 2 + 1,
+        CL.SERIAL: sum(rf_factors) // 2 + 1,
+        CL.LOCAL_SERIAL: rf_factors[dc] // 2 + 1,
+        CL.LOCAL_ONE: 1,
+    }[cl]
+
+
+def should_succeed(cl, rf_factors, num_nodes_alive, current):
+    """Whether an operation at the consistency level through a node of DC
+    number current succeeds with num_nodes_alive nodes alive in each DC."""
+    if cl in (CL.LOCAL_QUORUM, CL.LOCAL_ONE, CL.LOCAL_SERIAL):
+        return num_nodes_alive[current] >= required_nodes(cl, rf_factors, current)
+    if cl == CL.EACH_QUORUM:
+        return all(num_nodes_alive[i] >= required_nodes(cl, rf_factors, i) for i in range(len(rf_factors)))
+    return sum(num_nodes_alive) >= required_nodes(cl, rf_factors, current)
+
+
+def availability_statement(query, cl, serial_cl=None):
+    return SimpleStatement(query, consistency_level=cl, serial_consistency_level=serial_cl, retry_policy=FLAKY_RETRY_POLICY)
+
+
+def insert_user(cql, userid, age, cl, serial_cl=None):
+    if_not_exists = "IF NOT EXISTS" if serial_cl else ""
+    cql.execute(availability_statement(f"INSERT INTO mytestks.users (userid, firstname, lastname, age) "
+                                       f"VALUES ({userid}, 'first{userid}', 'last{userid}', {age}) {if_not_exists}", cl, serial_cl))
+
+
+def query_user(cql, userid, age, cl, check_ret=True):
+    res = [list(r) for r in cql.execute(availability_statement(f"SELECT userid, age FROM mytestks.users where userid = {userid}", cl))]
+    expected = [[userid, age]] if age else []
+    if check_ret:
+        assert res == expected, f"Got {res}, expected {expected} at {cl}"
+
+
+def insert_query_from_node(cql, dc_idx, rf_factors, num_nodes_alive, write_cl, read_cl, serial_cl=None, check_ret=True):
+    """The dtests' _test_insert_query_from_node(): write users 0..99 at
+    write_cl (with serial_cl, as IF NOT EXISTS), then read them at read_cl,
+    or check that one write or read is unavailable."""
+    start, end, age = 0, 100, 30
+    if should_succeed(write_cl, rf_factors, num_nodes_alive, dc_idx):
+        for userid in range(start, end):
+            insert_user(cql, userid, age, write_cl, serial_cl)
+    else:
+        with pytest.raises(UNAVAILABLE):
+            insert_user(cql, end, age, write_cl, serial_cl)
+    if should_succeed(read_cl, rf_factors, num_nodes_alive, dc_idx):
+        for userid in range(start, end):
+            query_user(cql, userid, age, read_cl, check_ret)
+    else:
+        with pytest.raises(UNAVAILABLE):
+            query_user(cql, end, age, read_cl, check_ret)
+
+
+async def start_availability_cluster(manager: ScyllaClusterManager, dcs, rf):
+    """The dtests' _start_cluster(): 3 nodes in rack1..rack3 of each DC, a
+    keyspace mytestks with the given RF, and the users and counters tables."""
+    property_files = [p for dc in dcs for p in topology({"rack1": 1, "rack2": 1, "rack3": 1}, dc=dc)]
+    servers = await manager.servers_add(len(property_files), config=AVAILABILITY_CONFIG, property_file=property_files)
+    cql = await exclusive_one(manager, servers[0])
+    create_ks(cql, "mytestks", rf)
+    cql.execute("CREATE TABLE mytestks.users (userid int PRIMARY KEY, firstname text, lastname text, age int)")
+    cql.execute("CREATE TABLE mytestks.counters (id int PRIMARY KEY, c counter)")
+    return servers
+
+
+async def stop_and_wait_other_notice(manager: ScyllaClusterManager, server):
+    await manager.server_stop_gracefully(server.server_id)
+    for other in await manager.running_servers():
+        await manager.server_not_sees_other_server(other.ip_addr, server.ip_addr)
+
+
+
+
+
+
 # Ported from scylla-dtest cql_tests.py::TestMiscellaneousCQL::test_query_failed_when_node_is_down.
 # With RF=2 on 2 nodes (rack1 and rack2 of datacenter1), 1000 rows flushed
 # and node2 stopped (gracefully or killed), a CL=ONE read through node1
