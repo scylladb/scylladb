@@ -1726,3 +1726,238 @@ def test_create_role_with_invalid_hashed_password(cql):
         cql.execute(f"DROP ROLE IF EXISTS {role}")
 
 
+# Dropping a user revokes the permissions granted to it: a new user with the
+# same name has none of them. Permissions that the dropped user granted to
+# others stay.
+def test_drop_user_revokes_its_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int primary key') as table, \
+            new_user(cql) as other, new_session(cql, other) as other_session:
+        user = unique_name()
+        cql.execute(f"CREATE USER {user} WITH PASSWORD '{user}'")
+        try:
+            with new_session(cql, user) as user_session:
+                grant(cql, 'SELECT', table, user)
+                grant(cql, 'AUTHORIZE', table, user)
+                eventually_authorized(lambda: user_session.execute(f"SELECT * FROM {table}"))
+                eventually_authorized(lambda: user_session.execute(f"GRANT SELECT ON {table} TO {other}"))
+        finally:
+            cql.execute(f"DROP USER {user}")
+        eventually_authorized(lambda: other_session.execute(f"SELECT * FROM {table}"))
+        cql.execute(f"CREATE USER {user} WITH PASSWORD '{user}'")
+        try:
+            with new_session(cql, user) as user_session:
+                eventually_unauthorized(lambda: user_session.execute(f"SELECT * FROM {table}"))
+                eventually_unauthorized(lambda: user_session.execute(f"GRANT SELECT ON {table} TO {other}"))
+        finally:
+            cql.execute(f"DROP USER {user}")
+
+# Dropping a keyspace revokes the permissions granted on its tables: they
+# don't apply to a new table with the same name in a recreated keyspace.
+def test_drop_keyspace_revokes_permissions_on_its_tables(cql):
+    ks = unique_name()
+    create_ks = f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}"
+    with new_user(cql) as user, new_session(cql, user) as user_session:
+        try:
+            cql.execute(create_ks)
+            cql.execute(f"CREATE TABLE {ks}.cf (id int primary key, val int)")
+            grant(cql, 'ALL', f'{ks}.cf', user)
+            eventually_authorized(lambda: user_session.execute(f"INSERT INTO {ks}.cf (id, val) VALUES (0, 0)"))
+            assert len(list(user_session.execute(f"SELECT * FROM {ks}.cf"))) == 1
+            cql.execute(f"DROP KEYSPACE {ks}")
+            cql.execute(create_ks)
+            cql.execute(f"CREATE TABLE {ks}.cf (id int primary key, val int)")
+            eventually_unauthorized(lambda: user_session.execute(f"INSERT INTO {ks}.cf (id, val) VALUES (0, 0)"))
+            eventually_unauthorized(lambda: user_session.execute(f"SELECT * FROM {ks}.cf"))
+        finally:
+            cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+# ALTER KEYSPACE requires the ALTER permission on the keyspace.
+def test_alter_keyspace_permission(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace, \
+            new_user(cql) as user, new_session(cql, user) as user_session:
+        check_enforced(cql, user, permission='ALTER', resource=f'KEYSPACE {keyspace}',
+                function=lambda: user_session.execute(f"ALTER KEYSPACE {keyspace} WITH durable_writes = true"))
+
+# CREATE INDEX and DROP INDEX require the ALTER permission on the base table.
+def test_index_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int primary key, val int') as table, \
+            new_user(cql) as user, new_session(cql, user) as user_session:
+        index = unique_name()
+        def create_index_idempotent():
+            user_session.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table}(val)")
+            cql.execute(f"DROP INDEX IF EXISTS {test_keyspace}.{index}")
+        def drop_index_idempotent():
+            user_session.execute(f"DROP INDEX IF EXISTS {test_keyspace}.{index}")
+            cql.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table}(val)")
+        check_enforced(cql, user, permission='ALTER', resource=table, function=create_index_idempotent)
+        cql.execute(f"CREATE INDEX {index} ON {table}(val)")
+        check_enforced(cql, user, permission='ALTER', resource=table, function=drop_index_idempotent)
+        cql.execute(f"DROP INDEX {test_keyspace}.{index}")
+
+# CREATE and DROP MATERIALIZED VIEW require the ALTER permission on the base
+# table. (SELECT from a view requiring SELECT on the base is checked by
+# test_view_permissions_from_base.)
+def test_materialized_view_ddl_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int primary key, value text') as table, \
+            new_user(cql) as user, new_session(cql, user) as user_session:
+        mv = f"{test_keyspace}.{unique_name()}"
+        create_mv = f"CREATE MATERIALIZED VIEW IF NOT EXISTS {mv} AS SELECT * FROM {table} WHERE id IS NOT NULL AND value IS NOT NULL PRIMARY KEY (value, id)"
+        def create_mv_idempotent():
+            user_session.execute(create_mv)
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+        def drop_mv_idempotent():
+            user_session.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+            cql.execute(create_mv)
+        try:
+            check_enforced(cql, user, permission='ALTER', resource=table, function=create_mv_idempotent)
+            cql.execute(create_mv)
+            check_enforced(cql, user, permission='ALTER', resource=table, function=drop_mv_idempotent)
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+
+# DROP KEYSPACE requires the DROP permission on the keyspace, and DROP TABLE
+# can be allowed by the DROP permission on the table itself.
+def test_drop_permission_on_keyspace_and_table(cql):
+    ks = unique_name()
+    with new_user(cql) as user, new_session(cql, user) as user_session:
+        try:
+            cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+            cql.execute(f"CREATE TABLE {ks}.cf (id int primary key)")
+            eventually_unauthorized(lambda: user_session.execute(f"DROP TABLE {ks}.cf"))
+            grant(cql, 'DROP', f'{ks}.cf', user)
+            eventually_authorized(lambda: user_session.execute(f"DROP TABLE {ks}.cf"))
+            eventually_unauthorized(lambda: user_session.execute(f"DROP KEYSPACE {ks}"))
+            grant(cql, 'DROP', f'KEYSPACE {ks}', user)
+            eventually_authorized(lambda: user_session.execute(f"DROP KEYSPACE {ks}"))
+        finally:
+            cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+# UPDATE, DELETE and TRUNCATE require the MODIFY permission (SELECT and
+# INSERT are checked by test_grant_revoke_data_permissions).
+def test_modify_permission_for_update_delete_truncate(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int primary key, val int') as table, \
+            new_user(cql) as user, new_session(cql, user) as user_session:
+        grant(cql, 'SELECT', table, user)
+        for stmt in [f"UPDATE {table} SET val = 1 WHERE id = 1",
+                     f"DELETE FROM {table} WHERE id = 1",
+                     f"TRUNCATE {table}"]:
+            check_enforced(cql, user, permission='MODIFY', resource=table,
+                    function=lambda: user_session.execute(stmt))
+        grant(cql, 'MODIFY', table, user)
+        eventually_authorized(lambda: user_session.execute(f"UPDATE {table} SET val = 1 WHERE id = 1"))
+        user_session.execute(f"UPDATE {table} SET val = 2 WHERE id = 2")
+        assert sorted(list(user_session.execute(f"SELECT * FROM {table}"))) == [(1, 1), (2, 2)]
+        user_session.execute(f"DELETE FROM {table} WHERE id = 1")
+        assert list(user_session.execute(f"SELECT * FROM {table}")) == [(2, 2)]
+        user_session.execute(f"TRUNCATE {table}")
+        assert list(user_session.execute(f"SELECT * FROM {table}")) == []
+
+# GRANT on a table name without a keyspace fails unless the session has
+# chosen a keyspace with USE.
+def test_grant_on_table_without_keyspace(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int primary key') as table, \
+            new_user(cql) as user, new_user(cql) as other, \
+            new_session(cql, user) as user_session, new_session(cql, other) as other_session:
+        cf = table.split('.')[1]
+        grant(cql, 'ALL', table, user)
+        with pytest.raises(InvalidRequest, match='No keyspace has been specified'):
+            user_session.execute(f"GRANT SELECT ON {cf} TO {other}")
+        eventually_unauthorized(lambda: other_session.execute(f"SELECT * FROM {table}"))
+        user_session.execute(f"USE {test_keyspace}")
+        eventually_authorized(lambda: user_session.execute(f"GRANT SELECT ON {cf} TO {other}"))
+        eventually_authorized(lambda: other_session.execute(f"SELECT * FROM {table}"))
+
+# To GRANT a permission, the grantor needs both AUTHORIZE and that permission.
+def test_grant_requires_authorize_and_the_granted_permission(cql):
+    with new_user(cql) as user, new_user(cql) as other, new_session(cql, user) as user_session:
+        do_grant = lambda: user_session.execute(f"GRANT SELECT ON ALL KEYSPACES TO {other}")
+        with pytest.raises(Unauthorized, match='AUTHORIZE'):
+            do_grant()
+        grant(cql, 'AUTHORIZE', 'ALL KEYSPACES', user)
+        ensure_updated_permissions(cql)
+        with pytest.raises(Unauthorized, match='SELECT'):
+            do_grant()
+        grant(cql, 'SELECT', 'ALL KEYSPACES', user)
+        eventually_authorized(do_grant)
+
+# GRANT and REVOKE on a nonexistent keyspace, or to a nonexistent role, fail.
+def test_grant_revoke_nonexistent_keyspace_or_role(cql, test_keyspace):
+    with new_user(cql) as user:
+        missing = unique_name()
+        for stmt in [f"GRANT ALL ON KEYSPACE {missing} TO {user}",
+                     f"GRANT ALL ON KEYSPACE {test_keyspace} TO {missing}",
+                     f"REVOKE ALL ON KEYSPACE {missing} FROM {user}",
+                     f"REVOKE ALL ON KEYSPACE {test_keyspace} FROM {missing}"]:
+            with pytest.raises(InvalidRequest, match="doesn't exist"):
+                cql.execute(stmt)
+
+# CREATE, ALTER and DROP TYPE require the CREATE, ALTER and DROP permissions
+# on the keyspace.
+def test_type_permissions_one_by_one(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace, \
+            new_user(cql) as user, new_session(cql, user) as user_session:
+        typ = f"{keyspace}.{unique_name()}"
+        for permission, stmt in [('CREATE', f"CREATE TYPE {typ} (street text, city text)"),
+                                 ('ALTER', f"ALTER TYPE {typ} ADD zip_code int"),
+                                 ('DROP', f"DROP TYPE {typ}")]:
+            eventually_unauthorized(lambda: user_session.execute(stmt))
+            grant(cql, permission, f'KEYSPACE {keyspace}', user)
+            eventually_authorized(lambda: user_session.execute(stmt))
+
+# LIST PERMISSIONS in its variants: of all roles or of one, on one resource
+# with or without the permissions inherited from its parents, and of one
+# permission. A non-superuser may only list its own permissions.
+def test_list_permissions_variants(cql):
+    ks = unique_name()
+    # Cassandra 5 also has the UNMASK and SELECT_MASKED table permissions,
+    # which Scylla doesn't have.
+    all_table_permissions = ['ALTER', 'AUTHORIZE', 'DROP', 'MODIFY', 'SELECT']
+    with new_user(cql) as cathy, new_user(cql) as bob, new_user(cql) as dave, \
+            new_user(cql) as anna, new_user(cql) as chuk:
+        users = {cathy, bob, dave, anna, chuk}
+        def listed(session, query):
+            return {(r.role, r.resource, r.permission) for r in session.execute(query)
+                    if r.role in users and r.permission in all_table_permissions + ['CREATE']}
+        try:
+            cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+            cql.execute(f"CREATE TABLE {ks}.cf (id int primary key, val int)")
+            cql.execute(f"CREATE TABLE {ks}.cf2 (id int primary key, val int)")
+            grant(cql, 'CREATE', 'ALL KEYSPACES', cathy)
+            grant(cql, 'ALTER', f'KEYSPACE {ks}', bob)
+            grant(cql, 'SELECT', 'ALL KEYSPACES', dave)
+            grant(cql, 'ALL', f'{ks}.cf', dave)
+            grant(cql, 'MODIFY', f'KEYSPACE {ks}', anna)
+            grant(cql, 'MODIFY', f'{ks}.cf', cathy)
+            grant(cql, 'DROP', f'{ks}.cf', bob)
+            grant(cql, 'MODIFY', f'{ks}.cf2', bob)
+            grant(cql, 'SELECT', f'{ks}.cf2', cathy)
+            grant(cql, 'ALL PERMISSIONS', f'{ks}.cf2', chuk)
+            all_permissions = {
+                (anna, f'<keyspace {ks}>', 'MODIFY'),
+                (bob, f'<keyspace {ks}>', 'ALTER'),
+                (bob, f'<table {ks}.cf>', 'DROP'),
+                (bob, f'<table {ks}.cf2>', 'MODIFY'),
+                (cathy, '<all keyspaces>', 'CREATE'),
+                (cathy, f'<table {ks}.cf>', 'MODIFY'),
+                (cathy, f'<table {ks}.cf2>', 'SELECT'),
+                (dave, '<all keyspaces>', 'SELECT'),
+            } | {(chuk, f'<table {ks}.cf2>', p) for p in all_table_permissions} \
+              | {(dave, f'<table {ks}.cf>', p) for p in all_table_permissions}
+            assert listed(cql, "LIST ALL PERMISSIONS") == all_permissions
+            assert listed(cql, f"LIST ALL PERMISSIONS OF {cathy}") == {p for p in all_permissions if p[0] == cathy}
+            assert listed(cql, f"LIST ALL PERMISSIONS ON {ks}.cf NORECURSIVE") == {p for p in all_permissions if p[1] == f'<table {ks}.cf>'}
+            assert listed(cql, f"LIST SELECT ON {ks}.cf2") == {
+                (cathy, f'<table {ks}.cf2>', 'SELECT'),
+                (chuk, f'<table {ks}.cf2>', 'SELECT'),
+                (dave, '<all keyspaces>', 'SELECT')}
+            assert listed(cql, f"LIST ALL ON {ks}.cf OF {cathy}") == {
+                (cathy, '<all keyspaces>', 'CREATE'),
+                (cathy, f'<table {ks}.cf>', 'MODIFY')}
+            with new_session(cql, bob) as bob_session:
+                assert listed(bob_session, f"LIST ALL PERMISSIONS OF {bob}") == {p for p in all_permissions if p[0] == bob}
+                with pytest.raises(Unauthorized):
+                    bob_session.execute("LIST ALL PERMISSIONS")
+                with pytest.raises(Unauthorized):
+                    bob_session.execute(f"LIST ALL PERMISSIONS OF {cathy}")
+        finally:
+            cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
