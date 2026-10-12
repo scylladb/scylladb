@@ -1709,3 +1709,5 @@ def test_create_role_with_invalid_hashed_password(cql):
             cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
     finally:
         cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+

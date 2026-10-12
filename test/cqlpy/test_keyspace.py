@@ -5,7 +5,7 @@
 # Tests for basic keyspace operations: CREATE KEYSPACE, DROP KEYSPACE,
 # ALTER KEYSPACE
 
-from .util import new_test_keyspace, unique_name
+from .util import new_test_keyspace, unique_name, new_cql
 from .conftest import has_tablets
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
@@ -425,3 +425,19 @@ def test_create_keyspace_no_warn_tablets(cql, scylla_only, skip_without_tablets)
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.
+
+# Ported from scylla-dtest user_types_test.py::TestUserTypes::test_keyspace_drop_with_table_containing_udt.
+# DROP KEYSPACE IF EXISTS must succeed when the keyspace still has a table
+# using one of its UDTs, i.e., without dropping the table and type first.
+# Reproduces #3068. As in the dtest, the keyspace has replication_factor 1
+# and vnodes, and the session USEs it.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_keyspace_drop_with_table_containing_udt(cql):
+    ks = unique_name()
+    with new_cql(cql) as session:
+        session.execute(f"CREATE KEYSPACE {ks} WITH replication={{'class':'NetworkTopologyStrategy', 'replication_factor':1}} AND TABLETS = {{'enabled': false}}")
+        session.cluster.control_connection.wait_for_schema_agreement(wait_time=120)
+        session.execute(f"USE {ks}")
+        session.execute("CREATE TYPE udt (first text, second int)")
+        session.execute("CREATE TABLE table1 (id uuid PRIMARY KEY, x frozen<udt>);")
+        session.execute(f"DROP KEYSPACE IF EXISTS {ks};")
