@@ -621,7 +621,6 @@ def testReplaceAllowNulls(cql):
 # check the protocol version used by the driver, where the error should be a
 # FunctionFailure.
 # Reproduces SCYLLADB-5159 (wrong error code for a failing function)
-@pytest.mark.xfail(reason="SCYLLADB-5159")
 def testFunctionExecutionExceptionNet(cql, test_keyspace):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, dval double)") as table:
         execute(cql, table, "INSERT INTO %s (key, dval) VALUES (?, ?)", 1, 1.0)
