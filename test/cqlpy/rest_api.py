@@ -27,9 +27,9 @@ def get_request(cql, *path):
 # Sends POST request to REST API. Response is returned as JSON or None
 # if the response body was empty (this is typical).
 # If API isn't available, `skip_env()` is called.
-def post_request(cql, *path):
+def post_request(cql, *path, json=None):
     if nodetool.has_rest_api(cql):
-        response = requests.post(f"{nodetool.rest_api_url(cql)}/{'/'.join(path)}")
+        response = requests.post(f"{nodetool.rest_api_url(cql)}/{'/'.join(path)}", json=json)
         if not response.text:
             return None
         return response.json()
@@ -68,9 +68,11 @@ def get_column_family_metric(cql, metric, table=None):
 # Scylla. Also, only works in specific build modes (dev, debug, sanitize).
 # When Cassandra or non-supporting build of Scylla is being tested, using
 # this function will cause the calling test to be skipped.
+# Some injections take parameters, which can be passed in a dict.
 @contextmanager
-def scylla_inject_error(cql, err, one_shot=False):
-    post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}')
+def scylla_inject_error(cql, err, one_shot=False, parameters=None):
+    post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}',
+                 json={k: str(v) for k, v in parameters.items()} if parameters else None)
     response = get_request(cql, f'v2/error_injection/injection')
     print("Enabled error injections:", response)
     if not err in response:
