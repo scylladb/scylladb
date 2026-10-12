@@ -11,6 +11,7 @@ import pytest
 from contextlib import contextmanager
 from cassandra.protocol import InvalidRequest, SyntaxException, ConfigurationException, Unauthorized
 from .util import unique_name, new_test_table, new_secondary_index, new_function, is_scylla
+from . import nodetool
 
 # This context manager is similar to new_test_table() - creating a table and
 # keeping it alive while the context manager is in scope - but allows the
@@ -173,6 +174,26 @@ def test_function_name_500(cql, test_keyspace):
 def test_column_name_500(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int primary key, " + padded_name(500) + " int"):
         pass
+
+# Column names are not limited by schema::NAME_LENGTH, but a column name is
+# part of the clustering key of system_schema.columns, together with the table
+# name, and keys are limited to 65535 bytes. Check that the longest column name
+# that fits works (including writing, flushing and reading the table), and
+# that one character more is rejected with a clean InvalidRequest.
+# This is scylla_only because the exact limit depends on the key encoding of
+# Scylla's schema tables.
+def test_column_name_max_length(cql, test_keyspace, scylla_only):
+    table_name = unique_name()
+    # The key is serialized as (2-byte length, table name, 2-byte length,
+    # column name).
+    max_length = 65535 - 2 - len(table_name) - 2
+    with pytest.raises(InvalidRequest, match='Key length of 65536 is longer than maximum of 65535'):
+        cql.execute(f'CREATE TABLE {test_keyspace}.{table_name} (p int, {"k" * (max_length + 1)} int, PRIMARY KEY (p))')
+    column = 'k' * max_length
+    with new_named_table(cql, test_keyspace, table_name, f'p int PRIMARY KEY, {column} int') as table:
+        cql.execute(f'INSERT INTO {table} (p, {column}) VALUES (1, 2)')
+        nodetool.flush(cql, table)
+        assert list(cql.execute(f'SELECT {column} FROM {table} WHERE p = 1')) == [(2,)]
 
 # Test that column names containing hyphens work when double-quoted.
 # Hyphens are not valid in unquoted identifiers (the '-' is parsed as
