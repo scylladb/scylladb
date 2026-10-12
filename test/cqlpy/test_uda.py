@@ -199,6 +199,28 @@ def test_collection_initcond(scylla_only, cql, test_keyspace):
                     result = cql.execute(f"SELECT {aggr_f}(id) AS result FROM {table}").one()
                     assert result.result == [1,2,3,4,5,6,7,8,9,12]
 
+# Test that an empty collection INITCOND is the aggregate's initial state,
+# not a null, also when the INITCOND has a type hint naming the STYPE, a
+# non-frozen collection. Such a hinted INITCOND, empty or not, must also be
+# accepted. The state function is declared RETURNS NULL ON NULL INPUT, so with
+# a null state it would never be called, and the final function would get null.
+# Reproduces #14404 (an empty collection INITCOND was null).
+@pytest.mark.parametrize('initcond,size', [('[]', 0), ('(list<text>)[]', 0), ("(list<text>)['a']", 1)],
+    ids=['empty', 'empty_with_type_hint', 'nonempty_with_type_hint'])
+def test_uda_collection_initcond_type_hint(cql, test_keyspace, initcond, size):
+    if is_scylla(cql):
+        state_body = "LANGUAGE lua AS 'return s'"
+        final_body = """LANGUAGE lua AS 'if s == nil then return "null" end return "size " .. #s'"""
+    else:
+        state_body = "LANGUAGE java AS 'return s;'"
+        final_body = """LANGUAGE java AS 'return s == null ? "null" : "size " + s.size();'"""
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x int') as table:
+        cql.execute(f'INSERT INTO {table} (p, x) VALUES (1, 1)')
+        with new_function(cql, test_keyspace, f'(s list<text>, x int) RETURNS NULL ON NULL INPUT RETURNS list<text> {state_body}') as state_f, \
+             new_function(cql, test_keyspace, f'(s list<text>) CALLED ON NULL INPUT RETURNS text {final_body}') as final_f:
+            with new_aggregate(cql, test_keyspace, f'(int) SFUNC {state_f} STYPE list<text> FINALFUNC {final_f} INITCOND {initcond}') as agg:
+                assert list(cql.execute(f'SELECT {test_keyspace}.{agg}(x) FROM {table}')) == [(f'size {size}',)]
+
 def test_nested_collection_initcond(scylla_only, cql, test_keyspace):
     with new_type(cql, test_keyspace, "(a int, b int)") as typ:
         schema = "id tuple<int,int,int> primary key"
