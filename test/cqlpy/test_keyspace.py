@@ -263,6 +263,20 @@ def test_alter_keyspace_double_with(cql):
     with pytest.raises(SyntaxException):
         cql.execute('ALTER KEYSPACE ks WITH WITH DURABLE_WRITES = true')
 
+# Each 'WITH WITH' statement is a syntax error (in Cassandra it used to be a
+# NullPointerException, CASSANDRA-9565), also right after DROP KEYSPACE IF
+# EXISTS dropped the keyspace it names, or found nothing to drop.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_double_with_after_drop_keyspace(cql, this_dc):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{'enabled': false}}")
+    for statement in ["ALTER KEYSPACE WITH WITH DURABLE_WRITES = true", f"ALTER KEYSPACE {ks} WITH WITH DURABLE_WRITES = true",
+                      "CREATE KEYSPACE WITH WITH DURABLE_WRITES = true", f"CREATE KEYSPACE {ks} WITH WITH DURABLE_WRITES = true"]:
+        cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+        with pytest.raises(SyntaxException) as exc:
+            cql.execute(statement)
+        assert "NullPointerException" not in str(exc.value)
+
 # Reproducer for issue #8968: We have two threads, one thread loops trying to
 # create a keyspace and a table in it, and the other thread loops trying to
 # delete this keyspace. Obviously some of these operations are expected to

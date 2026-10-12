@@ -436,6 +436,7 @@ def testCollectionAndRegularColumns(cql, test_keyspace):
                    [[1, 1, 2], 42]);
 
 # Migrated from cql_tests.py:TestCQL.multi_list_set_test()
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def testMultipleLists(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l1 list<int>, l2 list<int>)") as table:
         execute(cql, table, "INSERT INTO %s (k, l1, l2) VALUES (0, [1, 2, 3], [4, 5, 6])")

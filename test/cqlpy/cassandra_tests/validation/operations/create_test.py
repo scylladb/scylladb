@@ -392,6 +392,7 @@ def testTable(cql, test_keyspace):
     assertInvalidMessageRE(cql, test_keyspace, "Duplicate column 'k' declaration for table|Multiple definition of identifier k", f"CREATE TABLE %s.{table4} (k int PRIMARY KEY, c int, k text)")
 
 # Migrated from cql_tests.py:TestCQL.multiordering_validation_test()
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def testMultiOrderingValidation(cql, test_keyspace):
     tableName = test_keyspace + "." + unique_name()
     assertInvalid(cql, tableName, "CREATE TABLE %s (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c2 DESC)")

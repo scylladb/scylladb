@@ -1136,6 +1136,8 @@ async def flush_all_nodes(manager: ScyllaClusterManager) -> None:
     """ccm's cluster.flush()."""
     for s in await manager.running_servers():
         await run_nodetool(manager, s, "flush")
+
+
 async def simple_repair(manager: ScyllaClusterManager, metrics=()) -> dict:
     """TestRepair._simple_repair(): three nodes (rack1-3), node3 misses key
     1000, `nodetool repair ks` on node1 brings it; returns node1's metrics
@@ -1244,3 +1246,46 @@ async def test_repair_with_disabled_compaction(manager: ScyllaClusterManager):
     await run_nodetool(manager, node2, "repair", "ks")
     after = list_of_sstables(workdir)
     assert before < after, "Number of sstables should have increased because of the repair"
+# A node that missed an overwrite of a row whose other columns are null
+# (it was down) reads the old value alone at CL=ONE, and after a
+# "nodetool repair" on it reads the new value, again alone.
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_quorum_with_null;
+# like on the dtest's nodes, new keyspaces use vnodes.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_repair_fixes_overwritten_row_with_nulls(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config={'tablets_mode_for_new_keyspaces': 'disabled'}, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.test1"
+        await cql.run_async(f"CREATE TABLE {table} (k int, c1 int, v1 int, v2 int, v3 int, PRIMARY KEY (k, c1));")
+        # Every replica has the first value, and at least two the second.
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (k, c1,v3) VALUES (1, 123,456)", consistency_level=ConsistencyLevel.ALL))
+        # All tables of all nodes, as the dtest's cluster.flush().
+        for s in servers:
+            await manager.api.flush_all_keyspaces(s.ip_addr)
+        stale, updated = servers[0], servers[1:]
+        await manager.server_stop_gracefully(stale.server_id)
+        await manager.others_not_see_server(stale.ip_addr)
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (k, c1,v3) VALUES (1, 123,768)", consistency_level=ConsistencyLevel.QUORUM))
+        for s in updated:
+            await manager.server_stop_gracefully(s.server_id)
+        await manager.server_start(stale.server_id)
+        stale_cql = await manager.get_cql_exclusive(stale)
+        query = SimpleStatement(f"SELECT * FROM {table} WHERE k = 1 and c1=123", consistency_level=ConsistencyLevel.ONE)
+        assert [r.v3 for r in await stale_cql.run_async(query)] == [456]
+        for s in updated:
+            await manager.server_start(s.server_id)
+        await manager.servers_see_each_other(servers)
+        # "nodetool repair" of all keyspaces, as the dtest's node.repair().
+        exe = await manager.server_get_exe(stale.server_id)
+        proc = await asyncio.create_subprocess_exec(exe, "nodetool", "repair", "-h", stale.ip_addr)
+        assert await proc.wait() == 0
+        for s in updated:
+            await manager.server_stop_gracefully(s.server_id)
+        assert [r.v3 for r in await stale_cql.run_async(query)] == [768]
+        for s in updated:
+            await manager.server_start(s.server_id)
+        await manager.servers_see_each_other(servers)
+        # All nodes were down at some point; a new session drops the keyspace.
+        await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 60)

@@ -6,7 +6,7 @@
 # Test involving the "date" column type.
 #############################################################################
 
-from .util import unique_name, unique_key_int
+from .util import new_named_table, unique_name, unique_key_int
 from cassandra.util import Date
 from cassandra.protocol import InvalidRequest
 
@@ -87,3 +87,19 @@ def test_type_date_from_string_number_unprepared(cql, table1):
     ds = list(cql.execute(f"SELECT d from {table1} where p = {p}"))
     assert len(ds) == 1
     assert ds[0].d == -2**31 + 123
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# date values just outside the type's range are rejected; the range limits
+# and the epoch are accepted, and read back (the limits as day numbers).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_date_range_limits(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "t date, PRIMARY KEY (t)") as table:
+        for v in ['-5877641-06-22', '5881580-07-12']:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        for v in ['-5877641-06-23', '1970-01-01', '5881580-07-11']:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        assert [str(r.t) for r in cql.execute(f"SELECT * FROM {table}")] == ["-2147483648", "1970-01-01", "2147483647"]

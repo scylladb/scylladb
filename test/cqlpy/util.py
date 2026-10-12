@@ -207,6 +207,19 @@ def new_test_table(cql, keyspace, schema, extra=""):
         cql.execute("DROP TABLE " + table)
         previously_used_table_names.append(table_name)
 
+# Like new_test_table(), but the table gets the given name instead of a
+# unique one, for tests that need a specific table name (for example one
+# that is also a CQL keyword, like "users"). Each test keyspace belongs to one
+# test module, so the name only needs to be unique within the module.
+@contextmanager
+def new_named_table(cql, keyspace, name, schema, extra=""):
+    table = keyspace + "." + name
+    cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
+    try:
+        yield table
+    finally:
+        cql.execute("DROP TABLE " + table)
+
 # A utility function for creating a new temporary user-defined type.
 @contextmanager
 def new_type(cql, keyspace, cmd, name=None):

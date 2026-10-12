@@ -328,3 +328,11 @@ def test_empty_int_in_collection_prepared(cql, test_keyspace, cassandra_bug):
             assert list(cql.execute(f"SELECT * FROM {table} WHERE p={p}")) == [(p, [1, EMPTY])]
         finally:
             Int32Type.support_empty_values = False
+# The empty blob literal 0x can be stored in a blob column and is read back
+# as an empty blob (not null).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_empty_blob_literal(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, b blob") as table:
+        cql.execute(f"INSERT INTO {table} (k, b) VALUES (0, 0x)")
+        assert list(cql.execute(f"SELECT k, b FROM {table}")) == [(0, b'')]

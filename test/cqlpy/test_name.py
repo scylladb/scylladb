@@ -293,3 +293,32 @@ def test_access_table_forbidden_chars(cql, test_keyspace):
         cql.execute(f'SELECT * FROM {test_keyspace}."{bad_name}"')
     with pytest.raises(InvalidRequest, match='does not exist|doesn\'t exist|unconfigured table'):
         cql.execute(f'ALTER TABLE {test_keyspace}."{bad_name}" WITH COMMENT=\'hi\'')
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_identifier.
+# Unquoted column names are case-insensitive: a column created as "CoLuMn"
+# can be written as Column or COLUMN. Naming the same column twice in an
+# INSERT is an error even when the two spellings differ in case, for key
+# and regular columns alike. A reserved keyword cannot be a column name.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_unquoted_column_name_case_insensitive(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "key_23 int PRIMARY KEY, CoLuMn int") as table:
+        cql.execute(f"INSERT INTO {table} (Key_23, Column) VALUES (0, 0)")
+        cql.execute(f"INSERT INTO {table} (KEY_23, COLUMN) VALUES (0, 0)")
+        for cols in ["key_23, column, column", "key_23, column, COLUMN",
+                     "key_23, key_23, column", "key_23, KEY_23, column"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} ({cols}) VALUES (0, 0, 0)")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"CREATE TABLE {table} (select int PRIMARY KEY, column int)")
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_reserved_keyword.
+# An unreserved keyword ("count") can be an unquoted column name, here of a
+# counter column (with a trailing comma in the column list), but a reserved
+# one ("select") cannot.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_keyword_as_column_name(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, count counter,"):
+        with pytest.raises(SyntaxException):
+            cql.execute(f"CREATE TABLE {test_keyspace}.{unique_name()} ( select text PRIMARY KEY, x int)")

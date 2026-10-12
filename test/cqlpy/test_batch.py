@@ -5,13 +5,14 @@
 #############################################################################
 # Tests for batch operations
 #############################################################################
-from cassandra import InvalidRequest
+from cassandra import InvalidRequest, ConsistencyLevel
 from cassandra.cluster import NoHostAvailable
-from .util import new_test_table
+from .util import new_named_table, new_test_table
 from .rest_api import scylla_inject_error
 
 
 import pytest
+from cassandra.query import SimpleStatement
 
 
 @pytest.fixture(scope="module")
@@ -74,3 +75,48 @@ def test_batch_with_error(cql, table1):
         # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
         with pytest.raises(NoHostAvailable, match="Value too large"):
             cql.execute(generate_big_batch(table1, 100) + injection_key)
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# A logged batch of INSERTs, an UPDATE and a column DELETE on different
+# partitions, at CL=QUORUM, is applied.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_batch_of_mixed_statements(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "userid text PRIMARY KEY, name text, password text") as table:
+        cql.execute(SimpleStatement(f"""
+            BEGIN BATCH
+                INSERT INTO {table} (userid, password, name) VALUES ('user2', 'ch@ngem3b', 'second user');
+                UPDATE {table} SET password = 'ps22dhds' WHERE userid = 'user3';
+                INSERT INTO {table} (userid, password) VALUES ('user4', 'ch@ngem3c');
+                DELETE name FROM {table} WHERE userid = 'user1';
+            APPLY BATCH;""", consistency_level=ConsistencyLevel.QUORUM))
+        assert sorted(cql.execute(f"SELECT * FROM {table}")) == [
+            ("user2", "second user", "ch@ngem3b"), ("user3", None, "ps22dhds"), ("user4", None, "ch@ngem3c")]
+
+# List appends and prepends in one batch are applied in statement order.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_batch_of_list_appends_and_prepends(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, l list<int>") as table:
+        cql.execute(f"""BEGIN BATCH
+            UPDATE {table} SET l = l + [ 1 ] WHERE k = 0;
+            UPDATE {table} SET l = l + [ 2 ] WHERE k = 0;
+            UPDATE {table} SET l = l + [ 3 ] WHERE k = 0;
+          APPLY BATCH""")
+        assert list(cql.execute(f"SELECT l FROM {table} WHERE k = 0")) == [([1, 2, 3],)]
+        cql.execute(f"""BEGIN BATCH
+            UPDATE {table} SET l = [ 1 ] + l WHERE k = 1;
+            UPDATE {table} SET l = [ 2 ] + l WHERE k = 1;
+            UPDATE {table} SET l = [ 3 ] + l WHERE k = 1;
+          APPLY BATCH""")
+        assert list(cql.execute(f"SELECT l FROM {table} WHERE k = 1")) == [([3, 2, 1],)]
+
+# A batch deleting one row and inserting another of the same partition
+# (CASSANDRA-6115).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_batch_delete_one_row_insert_another(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, v int, PRIMARY KEY (k, v)") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (0, 1)")
+        cql.execute(f"BEGIN BATCH DELETE FROM {table} WHERE k=0 AND v=1; INSERT INTO {table} (k, v) VALUES (0, 2); APPLY BATCH")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 2)]

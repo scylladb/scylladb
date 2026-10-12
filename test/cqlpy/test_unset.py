@@ -10,9 +10,23 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table, unique_key_int
+from contextlib import contextmanager
+from .util import new_named_table, new_test_table, new_cql, unique_key_int
 from cassandra.query import UNSET_VALUE, BatchStatement
 from cassandra.protocol import InvalidRequest
+
+
+# The dtests' sessions USE their keyspace and create user types by their
+# unqualified name; this creates one so and yields its qualified name.
+@contextmanager
+def new_type_after_use(cql, keyspace, name, fields):
+    with new_cql(cql) as session:
+        session.execute(f"USE {keyspace}")
+        session.execute(f"CREATE TYPE {name} {fields}")
+    try:
+        yield f"{keyspace}.{name}"
+    finally:
+        cql.execute(f"DROP TYPE {keyspace}.{name}")
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -273,3 +287,23 @@ def test_unset_traced_batch(cql, table1, scylla_only):
     params = cql.execute(batch, trace=True).get_query_trace(max_wait_sec=60).parameters
     assert params["param[0][1]"] == "unset value"
     assert params["param[1][1]"] == "null"
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_unset_value_support.
+# Binding UNSET_VALUE to an int, list, set, map, tuple and frozen UDT column
+# in an UPDATE leaves the old values unchanged, also when another column in
+# the same UPDATE is set.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_unset_whole_tuple_and_udt(cql, test_keyspace):
+    with new_type_after_use(cql, test_keyspace, "simple_type", "(number int)") as typ, \
+         new_named_table(cql, test_keyspace, "test", f"key int, i int, l list<int>, s set<int>, m map<int,int>, t tuple<int,int>, u frozen<{typ}>, PRIMARY KEY (key)") as table:
+        def select():
+            return [(r.key, r.i, r.l, r.s, r.m, r.t, r.u.number) for r in cql.execute(f"SELECT key, i, l, s, m, t, u FROM {table}")]
+        cql.execute(f"INSERT INTO {table} (key, i, l, s, m, t, u) VALUES (0, 1, [1, 2, 3], {{1, 2, 3}}, {{1: 2}}, (1, 2), {{number: 1}})")
+        assert select() == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]
+        stmt = cql.prepare(f"UPDATE {table} SET i = ?, l = ?, s = ?, m = ?, t = ?, u = ? WHERE key = ?")
+        cql.execute(stmt, (UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, 0))
+        assert select() == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]
+        stmt = cql.prepare(f"UPDATE {table} SET i = ?, l = ?, s = ?, m = ?, t = ?, u = ? WHERE key = ?")
+        cql.execute(stmt, (2, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, 0))
+        assert select() == [(0, 2, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]

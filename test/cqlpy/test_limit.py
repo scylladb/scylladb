@@ -28,6 +28,7 @@
 #############################################################################
 
 import pytest
+from contextlib import contextmanager
 from .util import unique_key_int, new_test_table, new_function, new_aggregate
 from cassandra.protocol import InvalidRequest
 
@@ -199,3 +200,53 @@ def test_limit_aggregate_queries_with_uda(scylla_only, cql, table1, test_keyspac
             assert 362880 == list(result)[0][0]
             with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries."):
                 cql.execute(f"SELECT {myproduct}(c) FROM {table1} PER PARTITION LIMIT 1")
+
+# The clicks table of scylla-dtest cql_additional_tests.py, filled with
+# 100 partitions of 3 rows.
+@contextmanager
+def new_clicks_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "userid int, url text, time bigint, PRIMARY KEY (userid, url)") as table:
+        for _id in range(100):
+            for tld in ["com", "org", "net"]:
+                cql.execute(f"INSERT INTO {table} (userid, url, time) VALUES ({_id}, 'http://foo.{tld}', 42)")
+        yield table
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_limit_ranges.
+# LIMIT combined with a token() restriction on partitions with several rows:
+# the result starts at the first row of the first partition in the token
+# range, with ">=" including the bound's partition and ">" skipping it.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_limit_with_token_restriction(cql, test_keyspace):
+    with new_clicks_table(cql, test_keyspace) as table:
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE token(userid) >= token(2) LIMIT 1")) == [(2, "http://foo.com", 42)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE token(userid) > token(2) LIMIT 1")) == [(45, "http://foo.com", 42)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_limit_multiget.
+# With LIMIT on an IN restriction on the partition key, the result is the
+# first row in the token order of the partitions, not in the order of the
+# values in the IN list (48 is listed first, but 2 comes first).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_limit_and_in_unordered(cql, test_keyspace):
+    with new_clicks_table(cql, test_keyspace) as table:
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE userid IN (48, 2) LIMIT 1")) == [(2, "http://foo.com", 42)]
+
+# Check that LIMIT on a full table scan returns complete rows - including the
+# regular columns - and that a LIMIT larger than the number of rows returns
+# all of them. Reproduces CASSANDRA-4579, where the regular columns of the
+# last rows came back null, or too few rows were returned.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("schema", ["p int, c int, x int, y int, z int, PRIMARY KEY (p, c)",
+                                    "p int PRIMARY KEY, c int, x int, y int, z int"])
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_limit_full_table_scan_regular_columns(cql, test_keyspace, schema):
+    with new_test_table(cql, test_keyspace, schema) as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, x, y, z) VALUES (?, ?, ?, ?, ?)')
+        for i in range(4):
+            cql.execute(stmt, [i, i, i, i, i])
+        expected = list(cql.execute(f'SELECT * FROM {table}'))
+        assert len(expected) == 4
+        assert all(r.x == r.y == r.z == r.p for r in expected)
+        for limit in range(1, 6):
+            assert expected[0:limit] == list(cql.execute(f'SELECT * FROM {table} LIMIT {limit}'))

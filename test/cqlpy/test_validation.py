@@ -13,7 +13,7 @@ import pytest
 import re
 import random
 from cassandra.protocol import InvalidRequest
-from .util import unique_name, unique_key_int, new_test_table
+from .util import unique_name, unique_key_int, new_named_table, new_test_table
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -377,3 +377,63 @@ def test_validation_blob_as_int_len(cql, test_keyspace):
             if length - 1 != 0:
                 with pytest.raises(InvalidRequest, match='is not a valid binary'):
                     cql.execute(f"INSERT INTO {table} (k, {var}) VALUES ({k}, blobAs{typ}(0x{'00'*(length-1)}))")
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# tinyint values just outside the type's range are rejected, the range
+# limits are accepted.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_tinyint_range(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "t tinyint, PRIMARY KEY (t)") as table:
+        for v in [-129, 128]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} (t) VALUES ({v})")
+        cql.execute(f"INSERT INTO {table} (t) VALUES (-128);")
+        cql.execute(f"INSERT INTO {table} (t) VALUES (127);")
+        assert [r.t for r in cql.execute(f"SELECT * FROM {table}")] == [-128, 127]
+
+# smallint values just outside the type's range are rejected, the range
+# limits are accepted.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_smallint_range(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "t smallint, PRIMARY KEY (t)") as table:
+        for v in [-32769, 32768]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} (t) VALUES ({v})")
+        cql.execute(f"INSERT INTO {table} (t) VALUES (-32768);")
+        cql.execute(f"INSERT INTO {table} (t) VALUES (32767);")
+        assert [r.t for r in cql.execute(f"SELECT * FROM {table}")] == [-32768, 32767]
+
+# An empty partition key, an int too large for an int column and a
+# non-time-based uuid for a timeuuid column are rejected.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_invalid_key_and_column_values(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k text, c int, v timeuuid, PRIMARY KEY (k, c)") as table:
+        for stmt in [f"INSERT INTO {table}(k, c) VALUES ('', 0)",
+                     f"INSERT INTO {table}(k, c) VALUES (0, 10000000000)",
+                     f"INSERT INTO {table}(k, c, v) VALUES (0, 0, 550e8400-e29b-41d4-a716-446655440000)"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(stmt)
+
+# blobAsInt() of a blob that is not 4 bytes long is rejected.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_blob_as_int_wrong_length(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table}(k, v) VALUES (0, blobAsInt(0x01))")
+
+# An INSERT into a missing table, or into a missing column, with a
+# non-ASCII string literal fails with a plain InvalidRequest; a non-ASCII
+# literal for an ascii column is rejected (CASSANDRA-8101).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_non_ascii_string_literals(cql, test_keyspace_vnodes):
+    table = f"{test_keyspace_vnodes}.invalid_string_literals"
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"insert into {table} (k, a) VALUES (0, '\u038e\u0394\u03b4\u03e0')")
+    with new_named_table(cql, test_keyspace_vnodes, "invalid_string_literals", "k int primary key, a ascii, b text"):
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"insert into {table} (k, c) VALUES (0, '\u038e\u0394\u03b4\u03e0')")
+        with pytest.raises(InvalidRequest, match="(Invalid ASCII character in string literal|Value not compatible)"):
+            cql.execute(f"insert into {table} (k, a) VALUES (0, '\xe0\x80\x80')")

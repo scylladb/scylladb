@@ -28,3 +28,14 @@ def test_limit_empty(cql, table1):
 def test_json_empty(cql, table1):
     with pytest.raises(SyntaxException):
         cql.execute(f'INSERT INTO {table1} JSON')
+
+# A single quote inside a string literal must be doubled. An unescaped one
+# ends the literal early and leaves the rest of the statement unparsable.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_unescaped_quote_in_string(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k text PRIMARY KEY, c text") as table:
+        with pytest.raises(SyntaxException):
+            cql.execute(f"INSERT INTO {table} (k, c) VALUES ('foo', 'CQL is cassandra's best friend')")
+        cql.execute(f"INSERT INTO {table} (k, c) VALUES ('foo', 'CQL is cassandra''s best friend')")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE k = 'foo'")) == [("CQL is cassandra's best friend",)]
