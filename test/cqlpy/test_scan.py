@@ -11,8 +11,11 @@
 # using a secondary index.
 #############################################################################
 
+from test import DEBUG_MODES
 import pytest
-from .util import new_test_table
+import requests
+from .util import new_test_table, sleep_till_whole_second, is_scylla
+from . import nodetool
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
@@ -215,3 +218,37 @@ def test_scan_ending_with_static_row(cql, test_keyspace):
         # results. The success criteria for this test is the query finishing
         # without errors.
         res = list(cql.execute(statement))
+
+# Test that a full scan does not return "range ghosts" - partitions which
+# were deleted - when the live data is in an sstable and the partition
+# tombstones are still in the memtable, and also after the tombstones are
+# flushed and purged by a major compaction (gc_grace_seconds=0). The
+# all-in-memtable case is cassandra_tests' delete_test.py::testNoRangeGhost.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_no_range_ghosts(cql, test_keyspace):
+    rows = 100
+    # The 'timeout' mode makes Scylla purge the tombstones after gc_grace_seconds
+    # even at RF=1, where the default 'repair' mode may wait for a repair.
+    extra = "WITH gc_grace_seconds = 0" + (" AND tombstone_gc = {'mode': 'timeout'}" if is_scylla(cql) else "")
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v text", extra) as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, 'value')")
+        for i in range(rows):
+            cql.execute(stmt, [i])
+        # The dtest's node1.flush() and node1.compact(): every table and
+        # every keyspace.
+        nodetool.flush_all(cql)
+        stmt = cql.prepare(f"DELETE FROM {table} WHERE p = ?")
+        for i in range(rows // 2):
+            cql.execute(stmt, [i])
+        expected = set(range(rows // 2, rows))
+        assert {r.p for r in cql.execute(f"SELECT p FROM {table}")} == expected
+        nodetool.flush_all(cql)
+        # Tombstone deletion times have a one-second granularity, so wait
+        # until gc_grace_seconds=0 has really passed before compacting.
+        sleep_till_whole_second()
+        if nodetool.has_rest_api(cql):
+            requests.post(f'{nodetool.rest_api_url(cql)}/storage_service/compact').raise_for_status()
+        else:
+            nodetool.run_nodetool(cql, "compact", check=True)
+        assert {r.p for r in cql.execute(f"SELECT p FROM {table}")} == expected
