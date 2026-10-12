@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "packaging==26.3",
+    "ldap3==2.9.1",
     "urwid==3.0.5",
 ]
 
