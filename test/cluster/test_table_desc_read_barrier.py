@@ -34,6 +34,9 @@ async def test_table_desc_read_barrier(manager: ScyllaClusterManager) -> None:
         - the schema retrieved on both hosts matches
     """
     servers = await manager.servers_add(2)
+    # The coordinator's commits for the system keyspaces' tablets can fail the ALTER
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     logging.info("Waiting until driver connects to every server")
     cql, hosts = await manager.get_ready_cql(servers)

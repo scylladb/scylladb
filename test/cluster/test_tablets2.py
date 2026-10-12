@@ -2351,6 +2351,9 @@ async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterMana
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
     ])
+    # The coordinator's commits for the system keyspaces' tablets can fail the DDL
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     cql = manager.get_cql()
 
