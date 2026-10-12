@@ -136,3 +136,27 @@ async def test_restart_with_many_tables(manager: ScyllaClusterManager) -> None:
     await reconnect_driver(manager)
     tables = await describe_tables(servers[0], "veraminetest")
     assert len(tables) == 112, "created 100+ tables"
+
+
+# Ported from scylla-dtest persistence_test.py::TestPersistence::test_persist_simple.
+# One node (SimpleSnitch, vnodes): keyspace ks, a size-tiered table with two
+# rows; after the node restarts (stop, 0.5 s, start, 0.5 s) a new session
+# reads the same rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_data_survives_graceful_restart(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(config={"tablets_mode_for_new_keyspaces": "disabled", "num_tokens": 256, "endpoint_snitch": "SimpleSnitch"},
+                                      property_file={"dc": "datacenter1", "rack": "rack1"})
+    cql = manager.get_cql()
+    cql.execute("CREATE KEYSPACE ks WITH replication={'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+    cql.execute("CREATE COLUMNFAMILY ks.cf (p1 text, c1 text, r1 int, PRIMARY KEY (p1, c1)) WITH compaction={'class': 'SizeTieredCompactionStrategy'}")
+    cql.execute("INSERT INTO ks.cf (p1, c1, r1) VALUES ('key1', 'a', 1)")
+    cql.execute("INSERT INTO ks.cf (p1, c1, r1) VALUES ('key2', 'b', 1)")
+    res_before_restart = list(cql.execute("SELECT * FROM ks.cf"))
+    await manager.server_stop_gracefully(server.server_id)
+    await asyncio.sleep(0.5)
+    await manager.server_start(server.server_id)
+    await asyncio.sleep(0.5)
+    cql, _ = await manager.get_ready_cql([server])
+    res_after_restart = list(cql.execute("SELECT * FROM ks.cf"))
+    assert res_before_restart == res_after_restart, \
+        f"The data before restart ('{res_before_restart}') should be equal to data after restart ('{res_after_restart}')"
