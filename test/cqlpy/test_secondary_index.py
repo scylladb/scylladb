@@ -3103,6 +3103,7 @@ def test_prepared_statement_after_drop_index(cql, scylla_only):
     finally:
         cql.execute(f"DROP KEYSPACE {ks}")
 
+
 # Wait until system_distributed.view_build_status says the view backing the
 # given index is built on this node, as the dtests waited for index builds.
 def wait_for_index_view_built(cql, keyspace, index_name, timeout_sec=60):
@@ -3359,3 +3360,65 @@ def test_index_allow_filtering_required(cql, test_keyspace_vnodes, scylla_only):
         with pytest.raises(InvalidRequest, match="ALLOW FILTERING|allow filtering"):
             cql.execute(f"SELECT * FROM {table} WHERE a = 20 AND b = 200")
         assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 20 AND b = 200 ALLOW FILTERING")) == [(2, 20, 200)]
+
+# The tests below come from scylla-dtest secondary_indexes_test.py. Like the
+# dtests, they use a vnodes keyspace of their own with 'replication_factor': 1, and
+# the tables and index views use one compaction strategy, drawn at random
+# once per process like the dtests' random_compaction_strategy().
+DTEST_COMPACTION = random.choice(["LeveledCompactionStrategy", "SizeTieredCompactionStrategy",
+                                  "TimeWindowCompactionStrategy", "IncrementalCompactionStrategy"])
+
+
+def dtest_keyspace(cql):
+    return new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                  "AND tablets = {'enabled': false}")
+
+
+def dtest_create_cf(cql, table, key_type, columns, compact_storage=False):
+    cols = "".join(f", {k} {v}" for k, v in columns.items())
+    cql.execute(f"CREATE COLUMNFAMILY {table} (key {key_type} PRIMARY KEY{cols}) WITH comment='test cf' "
+                f"AND compaction={{'class': '{DTEST_COMPACTION}'}} AND compression = {{}}"
+                + (" AND COMPACT STORAGE" if compact_storage else ""))
+    # Like the dtests' create_cf(), check that the table exists by reading it.
+    cql.execute(f"SELECT * FROM {table} LIMIT 1")
+
+
+def dtest_create_index(cql, ks, table, column, name):
+    cql.execute(f"CREATE INDEX {name} ON {ks}.{table} ({column})")
+    cql.execute(f"ALTER MATERIALIZED VIEW {ks}.{name}_index WITH compaction={{'class': '{DTEST_COMPACTION}'}}")
+    # Like the dtests, make the index view's updates synchronous.
+    cql.execute(f"ALTER MATERIALIZED VIEW {ks}.{name}_index WITH synchronous_updates = true")
+    # Like the dtests, wait until view_build_status reports the index view
+    # built, and check that the index is in the schema.
+    deadline = time.time() + 60
+    status = SimpleStatement(f"SELECT host_id, status FROM system_distributed.view_build_status "
+                             f"WHERE keyspace_name = '{ks}' AND view_name = '{name}_index'", consistency_level=ConsistencyLevel.ONE)
+    while not [r for r in cql.execute(status) if r.status == "SUCCESS"]:
+        assert time.time() < deadline, f"index {ks}.{name} is not built"
+        time.sleep(0.1)
+    assert len(list(cql.execute(f"SELECT * FROM system_schema.indexes WHERE keyspace_name = '{ks}' "
+                                f"and table_name = '{table}' AND index_name = '{name}'"))) == 1
+
+
+# SELECT by an indexed column restricted twice, "c0 = X AND c0 = Y", finds
+# nothing. Reproduces #7772.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_index_same_key_twice(cql):
+    with dtest_keyspace(cql) as ks:
+        dtest_create_cf(cql, f"{ks}.tbl", "uuid", {"c0": "text", "c1": "text", "c2": "text"})
+        dtest_create_index(cql, ks, "tbl", "c0", "ix_tbl_c0")
+        for c0, c1, c2 in [("a", "b", "c"), ("a", "b", "c"), ("q", "b", "c"), ("a", "e", "f"), ("a", "e", "f")]:
+            cql.execute(f"INSERT INTO {ks}.tbl (key, c0, c1, c2) values (uuid(), '{c0}', '{c1}', '{c2}')")
+        assert list(cql.execute(f"SELECT count(*) FROM {ks}.tbl WHERE c0 = 'a' AND c0 = 'b'")) == [(0,)]
+
+
+# An index, global or local, can't be created on several columns.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("local", [False, True], ids=["global", "local"])
+def test_multi_column_index(cql, local):
+    with dtest_keyspace(cql) as ks:
+        for table, columns in [("cf", ["b", "c"]), ("cf_6columns", ["b", "c", "d", "e", "f", "g"])]:
+            dtest_create_cf(cql, f"{ks}.{table}", "int", {c: "int" for c in columns})
+            target = f"((key), {', '.join(columns)})" if local else f"({', '.join(columns)})"
+            with pytest.raises(InvalidRequest, match="Only CUSTOM indexes support multiple columns"):
+                cql.execute(f"CREATE INDEX idx_{table} ON {ks}.{table} {target}")
