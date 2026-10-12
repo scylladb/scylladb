@@ -2291,6 +2291,10 @@ async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterMana
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
     ])
+    # The coordinator balances the system keyspaces' tablets onto the second node, and its
+    # commits can make every retry of the DDL below fail with a group0 concurrent
+    # modification when the driver sends it to that node, a follower.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     cql = manager.get_cql()
 

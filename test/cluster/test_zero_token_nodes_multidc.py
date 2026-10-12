@@ -60,11 +60,20 @@ async def test_zero_token_nodes_multidc_basic(manager: ScyllaClusterManager, zer
             ks_name = await create_new_test_keyspace(dc2_cql, f"""WITH replication =
                                          {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2, 'dc2': {rf}}}
                                          AND tablets = {{ 'enabled': true }}""")
-            ks_names.append(ks_name)
-            await dc2_cql.run_async(
-                f'CREATE TABLE {ks_names[rf]}.tbl (cl int, zero_token boolean, v int, PRIMARY KEY (cl, zero_token))')
         except Exception:
             failed = True
+        if not failed:
+            ks_names.append(ks_name)
+            # The keyspace makes racks and DCs eligible for auto-RF. Its commits for extending the
+            # system keyspaces can make every retry of the DDL below fail with a group0
+            # concurrent modification when it is issued on a follower, so let them finish. Outside
+            # the try below: a failure of the wait itself must not pass for the expected one.
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+            try:
+                await dc2_cql.run_async(
+                    f'CREATE TABLE {ks_names[rf]}.tbl (cl int, zero_token boolean, v int, PRIMARY KEY (cl, zero_token))')
+            except Exception:
+                failed = True
         assert failed == (rf > normal_nodes_in_dc2)
 
     logging.info('Sending requests with different consistency levels')

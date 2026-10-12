@@ -323,6 +323,9 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
         "error_injections_at_startup": ["decrease_hints_flush_period"]
     })
     cql = manager.cql
+    # The coordinator splits the system keyspaces' tablets and balances them onto the
+    # new nodes; its commits can make the DDL below lose every attempt on a follower.
+    await manager.api.quiesce_topology(server1.ip_addr)
 
     logger.info("Creatting a keyspace with RF=1 and a table")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }") as ks:
@@ -386,6 +389,10 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
 
             logger.info("Wait until decomission finishes")
             await decommission_result
+
+        # The system keyspaces' tablets are still being moved off server3; let that
+        # finish before the DROP KEYSPACE on leaving the block.
+        await manager.api.quiesce_topology(server1.ip_addr)
 
         # Verify that no data has been lost - if the hints replay only sent the hints to the original destination (server3),
         # then they will be only present on server3 which already left the cluster

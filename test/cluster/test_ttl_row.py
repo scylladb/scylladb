@@ -240,6 +240,10 @@ async def test_row_ttl_upgrade(manager: ScyllaClusterManager):
     # feature, but we expect it to realize that not the entire cluster does.
     cql = await manager.get_cql_exclusive(servers[2])
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }")
+    # The keyspace makes the racks eligible for auto-RF. Its commits for extending the
+    # system keyspaces can make every retry of the DDL below fail with a group0
+    # concurrent modification when it is issued on a follower, so let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
     # If we now try create a table with a TTL column, it should fail because
     # one of the nodes (servers[0]) doesn't support the CQL_ROW_TTL feature.
     with pytest.raises(InvalidRequest, match='not yet supported by this cluster'):
