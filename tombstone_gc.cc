@@ -18,6 +18,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "db/config.hh"
 #include "gms/feature_service.hh"
 #include "compaction/compaction_manager.hh"
 #include <seastar/coroutine/maybe_yield.hh>
@@ -345,8 +346,14 @@ std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::databa
     }
 
     const auto ks = db.find_keyspace(ks_name);
+    if (is_local_replication_table(ks.get_replication_strategy())) {
+        return {{"mode", "timeout"}};
+    }
 
-    return get_default_tombstone_gc_mode(ks.get_replication_strategy(), supports_repair);
+    // A table which can use the repair mode gets the configured default
+    // mode, which is repair unless configured otherwise.
+    const tombstone_gc_mode mode = db.get_config().default_tombstone_gc_mode();
+    return {{"mode", fmt::format("{}", mode)}};
 }
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name) {

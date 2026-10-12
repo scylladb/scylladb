@@ -4,6 +4,14 @@ extra_scylla_config_options:
     enable_user_defined_functions: False
     rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled
+    # Many tests write tombstones and expect them to live on for the
+    # duration of the test, not to be garbage-collected in the middle of
+    # it at some random point that depends on timing. The "timeout" mode
+    # with the default gc_grace_seconds of 10 days guarantees that,
+    # unlike the default "repair" mode which with RF=1 can purge a
+    # tombstone as soon as the clock crosses a whole-second boundary and
+    # a compaction happens to run.
+    default_tombstone_gc_mode: timeout
     logstor_disk_size_in_mb: 8
     logstor_file_size_in_mb: 4
     force_effective_capacity_to_raw_disk_capacity: True

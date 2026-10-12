@@ -7,3 +7,15 @@ extra_scylla_cmdline_options:
   - '--tablets-initial-scale-factor=1'
   - '--logstor-disk-size-in-mb=8'
   - '--logstor-file-size-in-mb=4'
+extra_scylla_config_options:
+  # Many tests write tombstones and expect them to live on for the
+  # duration of the test, not to be garbage-collected in the middle of
+  # it at some random point that depends on timing. The "timeout" mode
+  # with the default gc_grace_seconds of 10 days guarantees that,
+  # unlike the default "repair" mode which with RF=1 can purge a
+  # tombstone as soon as the clock crosses a whole-second boundary and
+  # a compaction happens to run.
+  # This is a configuration option and not a command-line option, so
+  # that an older Scylla which doesn't know it only warns about it
+  # instead of refusing to start.
+  default_tombstone_gc_mode: timeout

@@ -22,5 +22,13 @@ extra_scylla_config_options:
     alternator_timeout_in_ms: 30000,
     alternator_ttl_period_in_seconds: 0.5,
     alternator_streams_time_window_s: 0,
-    tablets_mode_for_new_keyspaces: enabled
+    tablets_mode_for_new_keyspaces: enabled,
+    # Many tests write tombstones and expect them to live on for the
+    # duration of the test, not to be garbage-collected in the middle of
+    # it at some random point that depends on timing. The "timeout" mode
+    # with the default gc_grace_seconds of 10 days guarantees that,
+    # unlike the default "repair" mode which with RF=1 can purge a
+    # tombstone as soon as the clock crosses a whole-second boundary and
+    # a compaction happens to run.
+    default_tombstone_gc_mode: timeout
   }
