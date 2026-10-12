@@ -1628,6 +1628,30 @@ bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
 
+bool is_keyspace_under_tablets_migration(const keyspace_metadata& ksm, const locator::tablet_metadata& tablets) {
+    return !ksm.uses_tablets() && std::ranges::any_of(ksm.tables(), [&] (const schema_ptr& s) {
+        return tablets.has_tablet_map(s->id());
+    });
+}
+
+std::optional<service::intended_storage_mode> database::migrating_tables_storage_mode(const keyspace& ks, const locator::tablet_metadata& tablets) const {
+    if (ks.uses_tablets()) {
+        return std::nullopt;
+    }
+    // Base tables only, for the reason is_keyspace_under_tablets_migration() gives.
+    for (const auto& schema : ks.metadata()->tables()) {
+        if (!tablets.has_tablet_map(schema->id())) {
+            continue;
+        }
+        auto table = _tables_metadata.get_table_if_exists(schema->id());
+        if (!table) {
+            continue;
+        }
+        return table->uses_tablets() ? service::intended_storage_mode::tablets : service::intended_storage_mode::vnodes;
+    }
+    return std::nullopt;
+}
+
 locator::replication_strategy_ptr
 keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata, const locator::topology& topology) {
     using namespace locator;

@@ -999,19 +999,26 @@ void schema_applier::commit_tables_and_views() {
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
     }
 
-    for (auto& schema : cdc.created) {
+    // A table created in a keyspace under vnodes-to-tablets migration starts on the ERM
+    // flavour its siblings have on this node; prepare_token_metadata_change() picks the
+    // same one for the ERM that commit_token_metadata_change() installs next.
+    auto add = [&] (const schema_ptr& schema) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        auto storage_mode = db.migrating_tables_storage_mode(ks, _pending_token_metadata.local()->tablets());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes,
+                _pending_token_metadata.local(), storage_mode);
+    };
+
+    for (auto& schema : cdc.created) {
+        add(schema);
     }
 
     for (auto& schema : tables.created) {
-        auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        add(schema);
     }
 
     for (auto& schema : views.created) {
-        auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        add(schema);
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());

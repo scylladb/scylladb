@@ -2019,6 +2019,9 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
+    // `storage_mode`: the mode this node keeps tables under vnodes-to-tablets migration
+    // in - its intended mode at boot, migrating_tables_storage_mode() at runtime. A table
+    // of a vnode keyspace that has a tablet map gets a tablet ERM iff it is tablets.
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
     future<> make_column_family_directory(schema_ptr schema);
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
@@ -2041,6 +2044,12 @@ public:
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
+    // The ERM flavour this node holds the migrating tables of vnode keyspace `ks` on,
+    // read off one that has a tablet map: tablets once the node has restarted in tablets
+    // mode, vnodes before, whatever its intended mode says. std::nullopt if none has a
+    // map, or `ks` uses tablets. A table created at runtime takes this, so a node keeps
+    // every table of a keyspace on one flavour; the flavour changes only on restart.
+    std::optional<service::intended_storage_mode> migrating_tables_storage_mode(const keyspace& ks, const locator::tablet_metadata& tablets) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
     static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata);
@@ -2393,6 +2402,11 @@ public:
 // A helper function to parse the directory name back
 // into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
+
+// A vnode keyspace is under vnodes-to-tablets migration iff one of its base tables has
+// a tablet map. Views and CDC log tables get maps too, but a rollback finalized by an
+// older version left theirs behind, so they must not count.
+bool is_keyspace_under_tablets_migration(const keyspace_metadata& ksm, const locator::tablet_metadata& tablets);
 
 } // namespace replica
 
