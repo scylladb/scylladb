@@ -18,11 +18,11 @@ import asyncio
 import logging
 
 import pytest
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 
 from test.cluster.util import run_nodetool, stop_servers_gracefully
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from cassandra import ConsistencyLevel
-from cassandra.query import SimpleStatement
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,34 @@ async def test_promoted_index_generation_with_small_partition_followed_by_a_larg
 
 
 ############################################################################
+# Ported from schema_everywhere_test.py.
+
+EVERYWHERE_KS = "distributed_everywhere"
+
+
+# A table in an EverywhereStrategy keyspace on two nodes, written at ALL,
+# is read at ONE from each node while the other one is down.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_creating_new_table(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(2, config=CONFIG)
+    session = await manager.get_cql_exclusive(servers[0])
+    await session.run_async(f"CREATE KEYSPACE IF NOT EXISTS {EVERYWHERE_KS} WITH REPLICATION = {{'class': 'EverywhereStrategy'}} AND TABLETS = {{'enabled': false}}")
+    await session.run_async(f"CREATE TABLE {EVERYWHERE_KS}.test1 (key varchar PRIMARY KEY, c1 varchar, c2 varchar)")
+    await session.run_async(SimpleStatement(f"INSERT INTO {EVERYWHERE_KS}.test1 (key, c1, c2) VALUES ('key1', 'txt1', 'txt2')",
+                                            consistency_level=ConsistencyLevel.ALL))
+
+    async def verify(server):
+        session = await manager.get_cql_exclusive(server)
+        res = list(await session.run_async(SimpleStatement(f"Select * from {EVERYWHERE_KS}.test1;", consistency_level=ConsistencyLevel.ONE)))
+        assert len(res) == 1, f"Wrong number of rows: {res}"
+        assert res[0].c1 == "txt1" and res[0].c2 == "txt2", f"Row {res[0]} has wrong column values"
+
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.others_not_see_server(servers[0].ip_addr)
+    await verify(servers[1])
+    await manager.server_start(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await verify(servers[0])
 
 
 ############################################################################
