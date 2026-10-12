@@ -544,7 +544,3 @@ async def table_with_flushed_rows(manager, server, ks, rows=100):
     workdir = await manager.server_get_workdir(server.server_id)
     [table_dir] = glob.glob(os.path.join(workdir, 'data', ks, 't-*'))
     return table_dir
-
-
-
-
