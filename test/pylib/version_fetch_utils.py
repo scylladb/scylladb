@@ -137,6 +137,21 @@ def _get_version_url(major: Optional[int] = None, minor: Optional[int] = None,
     return f"https://{bucket_url}/{prefix_url}{filtered[0]}" if filtered else None
 
 
+MASTER_LATEST_PREFIX = "unstable/scylla/master/relocatable/latest"
+
+
+def _find_package_url(url: str, arch: str = "x86_64") -> Optional[str]:
+    """
+    Return `url` unchanged, unless it is `latest`: then return the URL of the latest
+    master build's unified package for `arch`, or `None` if there is none.
+    """
+    if url != "latest":
+        return url
+    bucket = "downloads.scylladb.com"
+    entries = [e for e in _list_scylla_release_entries(bucket, MASTER_LATEST_PREFIX, pack="unified") if f".{arch}." in e]
+    return f"https://{bucket}/{MASTER_LATEST_PREFIX}/{entries[0]}" if entries else None
+
+
 def get_file_name_and_url_from_url(major: Optional[int] = None, minor: Optional[int] = None,
                                    patch: Optional[int] = None, rc: Optional[int] = None, 
                                    arch: str = "x86_64", pack: str = "", url: str = None):
@@ -161,12 +176,15 @@ def get_file_name_and_url_from_url(major: Optional[int] = None, minor: Optional[
              If `url` is provided, it is downloaded directly. Otherwise, the version URL is
              resolved from the requested `major`, `minor`, `patch`, `rc`, `arch`, and `pack`
              components, using the latest available value for any missing component.
+             `url` may also be `latest`, see `_find_package_url()`.
     """
 
     if rc is not None:
         patch = 0
 
-    if not url:
+    if url:
+        url = _find_package_url(url, arch)
+    else:
         url = _get_version_url(major, minor, patch, rc, arch, pack)
     
     return (url, url.rsplit("/", 1)[-1]) if url else (None, None)
@@ -308,7 +326,12 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
                 unpacked_marker.touch()
             shutil.rmtree(install_dir, ignore_errors=True)
             install_dir.mkdir(exist_ok=True, parents=True)
-            subprocess.run(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", str(install_dir)], cwd=unpack_dir/"scylla", check=True)
+            # The server archive unpacks to scylla/, the unified one to scylla-<version>/.
+            install_script = next(unpack_dir.glob("*/install.sh"), None)
+            if install_script is None:
+                raise RuntimeError(f"No install.sh found in {archive_name}")
+            install_src = install_script.parent
+            subprocess.run(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", str(install_dir)], cwd=install_src, check=True)
             installed_marker.touch()
 
     return install_dir/"bin"/"scylla"

@@ -121,7 +121,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Path to the executable to run. Not working with `mode`")
     parser.addoption('--exe-url', default=False,
                      dest="exe_url", action="store",
-                     help="URL to download the relocatable executable. Not working with `mode`")
+                     help="URL of a relocatable server or unified package to download and run, "
+                          "or `latest` for the latest master build. Not working with `mode`")
 
 # Stores the per-phase test reports so that fixtures and hooks can inspect the
 # outcome of each phase (setup / call / teardown) independently.
@@ -579,7 +580,7 @@ def pytest_configure(config: pytest.Config) -> None:
     if exe_url := config.getoption("--exe-url"):
         if config.getoption("--exe-path"):
             raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
-        config.option.exe_path = fetch_and_install_scylla_version(url=exe_url)
+        config.option.exe_path = fetch_and_install_scylla_version(url=exe_url, arch=platform.machine())
 
     if config.getoption("--exe-path"):
         if config.getoption("--mode"):
