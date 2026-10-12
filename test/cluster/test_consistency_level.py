@@ -105,6 +105,8 @@ async def test_simple_rf_3_consistency_level(manager: ScyllaClusterManager):
     read_pass, read_fail = [CL.ONE], [CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
     write_pass, write_fail = [CL.ANY, CL.ONE], [CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
     simple_consistency_level_validate(session3, keys, read_pass, read_fail, range(601, 700), write_pass, write_fail)
+
+
 async def simple_query(manager: ScyllaClusterManager, ks_rf: int, read_cls_pass, read_cls_fail) -> None:
     """test_simple_rf_<n>_query(): 99 keys at ALL through node1, then a full
     scan and an IN query of 10 keys at each level through sessions to each
@@ -121,6 +123,8 @@ async def simple_query(manager: ScyllaClusterManager, ks_rf: int, read_cls_pass,
     finally:
         for c in clusters:
             c.shutdown()
+
+
 # Ported from scylla-dtest simple_cluster_driver_test.py::TestSimpleCluster::test_simple_rf_3_query.
 # RF 3 on three nodes: full scans and IN queries succeed at every level
 # through every node.
@@ -266,8 +270,38 @@ async def stop_and_wait_other_notice(manager: ScyllaClusterManager, server):
         await manager.server_not_sees_other_server(other.ip_addr, server.ip_addr)
 
 
+# Ported from scylla-dtest consistency_test.py::TestAvailability::test_simple_strategy.
+# One DC of 3 nodes, RF=3.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_strategy(manager: ScyllaClusterManager):
+    nodes, rf = 3, 3
+    servers = await start_availability_cluster(manager, ["dc1"], rf)
+    num_alive = nodes
+    for server in servers:
+        cql = await exclusive_one(manager, server)
+        for combination in AVAILABILITY_COMBINATIONS:
+            insert_query_from_node(cql, 0, [rf], [num_alive], *combination)
+        await stop_and_wait_other_notice(manager, server)
+        num_alive -= 1
 
 
+# Ported from scylla-dtest consistency_test.py::TestAvailability::test_network_topology_strategy.
+# Three DCs of 3 nodes, RF=3 in each; the nodes go down DC by DC.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_network_topology_strategy(manager: ScyllaClusterManager):
+    nodes = [3, 3, 3]
+    rf = {"dc1": 3, "dc2": 3, "dc3": 3}
+    servers = await start_availability_cluster(manager, list(rf), rf)
+    nodes_alive = list(nodes)
+    rf_factors = list(rf.values())
+    for i in range(len(nodes)):
+        for node_idx in range(nodes[i]):
+            server = servers[node_idx + sum(nodes[:i])]
+            cql = await exclusive_one(manager, server)
+            for combination in AVAILABILITY_COMBINATIONS:
+                insert_query_from_node(cql, i, rf_factors, nodes_alive, *combination)
+            await stop_and_wait_other_notice(manager, server)
+            nodes_alive[i] -= 1
 
 
 # Ported from scylla-dtest cql_tests.py::TestMiscellaneousCQL::test_query_failed_when_node_is_down.
