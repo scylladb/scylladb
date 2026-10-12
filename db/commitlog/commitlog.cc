@@ -3029,6 +3029,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
             co_await f.remove_file();
+            // make the removal durable before disposing of any newer segment.
+            co_await seastar::sync_directory(cfg.commit_log_location);
         } catch (...) {
             clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
         }
