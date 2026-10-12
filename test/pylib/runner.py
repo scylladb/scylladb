@@ -471,7 +471,6 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         return
 
     artifacts.init()
-    artifacts.add_exit_artifact(HostRegistry().cleanup)
 
     # Check if this is an xdist worker
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
