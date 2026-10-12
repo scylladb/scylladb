@@ -11,9 +11,8 @@
 import time
 import pytest
 from contextlib import contextmanager
-from cassandra import AuthenticationFailed
+from cassandra import AuthenticationFailed, InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest, Unauthorized
 from .util import unique_name, new_user, new_session, new_test_table, cql_session, is_scylla
 from .test_permissions import eventually_authorized, eventually_unauthorized
 
@@ -356,3 +355,92 @@ def test_drop_non_existent_role_should_not_update_cache(cql, test_keyspace):
             cql.execute(f"GRANT ALL ON {table} TO {mike}")
             with new_session(cql, mike) as mike_session:
                 mike_session.execute(f"SELECT * FROM {table}")
+
+def connect(cql, username, password):
+    endpoint = cql.hosts[0].endpoint
+    return cql_session(host=endpoint.address, port=endpoint.port,
+                       is_ssl=(cql.cluster.ssl_context is not None),
+                       username=username, password=password)
+
+def assert_login_fails(cql, username, password, match=''):
+    with pytest.raises(NoHostAvailable) as e:
+        with connect(cql, username, password):
+            pass
+    errors = list(e.value.errors.values())
+    assert errors and all(isinstance(err, AuthenticationFailed) for err in errors), errors
+    assert match in str(errors[0])
+
+# Logging in works only with the right password of an existing user.
+# The cql fixture itself logs in as the default superuser "cassandra".
+def test_login(cql):
+    with connect(cql, 'cassandra', 'cassandra') as session:
+        session.execute('SELECT * FROM system.local')
+    assert_login_fails(cql, 'cassandra', 'badpassword')
+    assert_login_fails(cql, 'doesntexist', 'doesntmatter')
+    # Scylla complains about the empty user name, Cassandra about the empty
+    # password first.
+    assert_login_fails(cql, '', '', match='must not be null')
+    assert_login_fails(cql, 'cassandra', '')
+
+# LIST USERS lists each user with its superuser flag.
+def test_list_users(cql):
+    with new_user(cql) as alice, new_user(cql, with_superuser_privileges=True) as bob:
+        users = {r[0]: r[1] for r in cql.execute('LIST USERS')}
+        assert users['cassandra']
+        assert not users[alice]
+        assert users[bob]
+
+# Error cases of CREATE/ALTER/DROP USER, and their IF [NOT] EXISTS variants.
+def test_user_ddl_errors(cql):
+    user = f"'{unique_name()}@example.com'"
+    cql.execute(f"CREATE USER {user} WITH PASSWORD '12345' NOSUPERUSER")
+    try:
+        with pytest.raises(InvalidRequest, match='already exists'):
+            cql.execute(f"CREATE USER {user} WITH PASSWORD '12345' NOSUPERUSER")
+        cql.execute(f"CREATE USER IF NOT EXISTS {user} WITH PASSWORD 'ignored'")
+    finally:
+        cql.execute(f"DROP USER {user}")
+    cql.execute(f"DROP USER IF EXISTS {user}")
+    with pytest.raises(InvalidRequest, match="doesn't exist"):
+        cql.execute(f"DROP USER {user}")
+    with pytest.raises(InvalidRequest, match="doesn't exist"):
+        cql.execute(f"ALTER USER {user} WITH PASSWORD 'doesn''tmatter'")
+    assert user.strip("'") not in [r[0] for r in cql.execute('LIST USERS')]
+
+# User names in CREATE/ALTER/DROP USER are case sensitive even when not
+# quoted (unlike other identifiers, they are strings).
+def test_user_names_are_case_sensitive(cql):
+    base = unique_name()
+    variants = [base.capitalize(), base, base.upper()]
+    for name in variants:
+        others = [n for n in variants if n != name]
+        cql.execute(f"CREATE USER {name} WITH PASSWORD '12345'")
+        try:
+            cql.execute(f"ALTER USER {name} WITH PASSWORD '54321'")
+            for other in others:
+                with pytest.raises(InvalidRequest):
+                    cql.execute(f"ALTER USER {other} WITH PASSWORD '12345'")
+                with pytest.raises(InvalidRequest):
+                    cql.execute(f"DROP USER {other}")
+        finally:
+            cql.execute(f"DROP USER {name}")
+        for n in variants:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"DROP USER {n}")
+
+# A regular user can change its own password, but not another user's.
+def test_user_can_alter_only_its_own_password(cql):
+    with new_user(cql) as alice, new_user(cql) as bob:
+        with connect(cql, alice, alice) as session:
+            session.execute(f"ALTER USER {alice} WITH PASSWORD 'new_{alice}'")
+        # Cassandra caches credentials for a while (credentials_validity),
+        # so the new password may not work immediately.
+        for _ in range(100):
+            try:
+                with connect(cql, alice, f'new_{alice}'):
+                    break
+            except NoHostAvailable:
+                time.sleep(0.1)
+        with connect(cql, alice, f'new_{alice}') as session:
+            with pytest.raises(Unauthorized):
+                session.execute(f"ALTER USER {bob} WITH PASSWORD 'cantchangeit'")

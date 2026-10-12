@@ -8,7 +8,7 @@
 from .util import new_test_keyspace, unique_name, new_cql
 from .conftest import has_tablets
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, Unauthorized
 from threading import Thread
 
 from test.cluster.util import get_replication, get_replica_count
@@ -455,3 +455,16 @@ def test_keyspace_drop_with_table_containing_udt(cql):
         session.execute("CREATE TYPE udt (first text, second int)")
         session.execute("CREATE TABLE table1 (id uuid PRIMARY KEY, x frozen<udt>);")
         session.execute(f"DROP KEYSPACE IF EXISTS {ks};")
+
+# System keyspaces can't be dropped, and their names (case-insensitive when
+# unquoted) can't be used for new keyspaces. Creating "system" itself is
+# checked by test_cql_query.py::test_validate_keyspace.
+def test_system_keyspaces_cannot_be_created_or_dropped(cql):
+    with pytest.raises(AlreadyExists):
+        cql.execute("CREATE KEYSPACE SYSTEM_tRaCeS WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    with pytest.raises(Unauthorized, match='system keyspace is not user-modifiable'):
+        cql.execute("DROP KEYSPACE system")
+    # With auth-v2, Scylla keeps roles in the "system" keyspace and
+    # "system_auth" may not exist at all, so either error is fine.
+    with pytest.raises((Unauthorized, InvalidRequest, ConfigurationException)):
+        cql.execute("DROP KEYSPACE system_auth")
