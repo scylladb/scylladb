@@ -192,3 +192,61 @@ def test_udf_returning_udt_after_alter_type(cql, test_keyspace, has_java_udf):
                 [result] = [r[0] for r in cql.execute(f'SELECT {test_keyspace}.{f}(p) FROM {table}')]
                 assert tuple(result) == (7,)
                 assert result._fields == ('c',)
+
+# Test that a prepared statement calling a function uses the new version of
+# the function after CREATE OR REPLACE FUNCTION replaced it.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old version).
+@pytest.mark.xfail(reason='SCYLLADB-5272')
+def test_udf_prepared_after_replace(cql, test_keyspace, has_java_udf):
+    def body(n):
+        return f"LANGUAGE java AS 'return {n};'" if has_java_udf else f"LANGUAGE lua AS 'return {n}'"
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        cql.execute(f'INSERT INTO {table} (p) VALUES (1)')
+        with new_function(cql, test_keyspace, f'(x int) CALLED ON NULL INPUT RETURNS int {body(10)}') as f:
+            stmt = cql.prepare(f'SELECT {test_keyspace}.{f}(p) FROM {table}')
+            assert [r[0] for r in cql.execute(stmt)] == [10]
+            cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{f}(x int) CALLED ON NULL INPUT RETURNS int {body(20)}')
+            assert [r[0] for r in cql.execute(stmt)] == [20]
+
+# Test that a prepared statement calling a function fails after the function
+# was dropped.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the dropped
+# function).
+@pytest.mark.xfail(reason='SCYLLADB-5272')
+def test_udf_prepared_after_drop(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return 10;'" if has_java_udf else "LANGUAGE lua AS 'return 10'"
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        cql.execute(f'INSERT INTO {table} (p) VALUES (1)')
+        fun = f'{test_keyspace}.{unique_name()}'
+        cql.execute(f'CREATE FUNCTION {fun}(x int) CALLED ON NULL INPUT RETURNS int {body}')
+        try:
+            stmt = cql.prepare(f'SELECT {fun}(p) FROM {table}')
+            assert [r[0] for r in cql.execute(stmt)] == [10]
+            cql.execute(f'DROP FUNCTION {fun}')
+            with pytest.raises(InvalidRequest, match='nknown function'):
+                cql.execute(stmt)
+        finally:
+            cql.execute(f'DROP FUNCTION IF EXISTS {fun}')
+
+# Test that after ALTER TYPE renames a field of a UDT which a function
+# returns, a prepared statement calling the function uses the new version of
+# the type. The statement's table has no column of this type, so altering the
+# type doesn't invalidate the statement because of the table.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old
+# version of the function, with the old version of the type).
+@pytest.mark.xfail(reason='SCYLLADB-5272')
+def test_udf_prepared_after_alter_type(cql, test_keyspace, has_java_udf):
+    if has_java_udf:
+        body = "LANGUAGE java AS 'UDTValue v = udfContext.newReturnUDTValue(); v.setInt(0, x); return v;'"
+    else:
+        # The function is only called after the field is renamed to c.
+        body = "LANGUAGE lua AS 'return {c = x}'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+            cql.execute(f'INSERT INTO {table} (p) VALUES (7)')
+            with new_function(cql, test_keyspace, f'(x int) CALLED ON NULL INPUT RETURNS {udt} {body}') as f:
+                stmt = cql.prepare(f'SELECT {test_keyspace}.{f}(p) FROM {table}')
+                cql.execute(f'ALTER TYPE {udt} RENAME a TO c')
+                [result] = [r[0] for r in cql.execute(stmt)]
+                assert tuple(result) == (7,)
+                assert result._fields == ('c',)
