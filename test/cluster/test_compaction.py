@@ -14,23 +14,27 @@ with "scylla sstable dump-data", as the dtests' node.dump_sstables() did.
 """
 
 import asyncio
+import datetime
+import glob
+import itertools
+import json
 import logging
+import os
+import random
 import re
+import shutil
+import string
 import time
+import uuid
 
 import pytest
 from cassandra import ConsistencyLevel
 
 from test import DEBUG_MODES
-from test.cluster.util import cassandra_stress, dump_sstables, get_table_dir, run_nodetool
-from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.node_helpers import dtest_session
-import glob
-import itertools
-import json
-import os
-import random
-import shutil
+from test.cluster.util import cassandra_stress, dump_sstables, get_table_dir, reconnect_driver, run_nodetool
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.skip_types import skip_env
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +78,20 @@ async def test_large_compaction_warning(manager: ScyllaClusterManager):
     assert row.partition_key == "user"
 
 
+############################################################################
+# Ported from compaction_additional_test.py.
+
 # The dtests' nodes validated sstable keys, and assumed one compaction
 # group per shard.
 ADD_CONFIG = {**CONFIG, 'enable_sstable_key_validation': True, 'tablets_initial_scale_factor': 1}
 SMP = 2  # test.py's nodes run with --smp 2
+RESOURCES = os.path.join(os.path.dirname(__file__), "..", "resource", "sstables")
+
+
 async def create_ks(cql, name: str, rf: int) -> None:
     await cql.run_async(f"CREATE KEYSPACE {name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+
+
 async def create_c1c2_cf(cql, ks: str, cf: str, compaction: dict | None = None, gc_grace: int | None = None,
                          tombstone_gc: str | None = None, default_ttl: int | None = None) -> None:
     """The dtests' create_cf() of a (key varchar PRIMARY KEY, c1 text, c2
@@ -94,6 +106,8 @@ async def create_c1c2_cf(cql, ks: str, cf: str, compaction: dict | None = None, 
         query += f" AND default_time_to_live={default_ttl}"
     await cql.run_async(query)
     await cql.run_async(f"SELECT * FROM {ks}.{cf} LIMIT 1")
+
+
 async def insert_c1c2(cql, keys=None, n=None, ks="ks", cf="cf", timestamp=None, consistency=ConsistencyLevel.QUORUM,
                       concurrency: int = 20) -> None:
     """The dtests' insert_c1c2(): prepared INSERTs of keys k<i>, `concurrency` at a time."""
@@ -103,6 +117,8 @@ async def insert_c1c2(cql, keys=None, n=None, ks="ks", cf="cf", timestamp=None, 
     stmt.consistency_level = consistency
     for i in range(0, len(keys), concurrency):
         await asyncio.gather(*[cql.run_async(stmt, [f"k{k}"]) for k in keys[i:i + concurrency]])
+
+
 async def wait_for_compactions(manager: ScyllaClusterManager, server, quiesce: float = 0.5, timeout: float = 600) -> None:
     """Like ccm's node.wait_for_compactions(): poll "nodetool compactionstats"
     until no compaction is pending or running for `quiesce` seconds."""
@@ -120,8 +136,143 @@ async def wait_for_compactions(manager: ScyllaClusterManager, server, quiesce: f
             idle_since = None
         await asyncio.sleep(0.1)
     raise TimeoutError("compactions did not finish")
+
+
 async def sstable_files(manager: ScyllaClusterManager, server, ks: str, cf: str, component: str = "Data") -> set[str]:
     return set(glob.glob(f"{await get_table_dir(manager, server, ks, cf)}/*-{component}.db"))
+
+
+async def sstable_stats(manager: ScyllaClusterManager, server, files) -> dict[str, dict]:
+    """The "stats" of the given sstables, as printed by "scylla sstable
+    dump-statistics" (the dtests' node.dump_sstable_stats())."""
+    files = list(files)
+    exe = await manager.server_get_exe(server.server_id)
+    proc = await asyncio.create_subprocess_exec(exe, "sstable", "dump-statistics", *files, cwd=os.path.dirname(files[0]),
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = await proc.communicate()
+    assert proc.returncode == 0, err.decode()
+    return {os.path.basename(f): v["stats"] for f, v in json.loads(out)["sstables"].items()}
+
+
+async def set_autocompaction(manager: ScyllaClusterManager, server, ks: str, cf: str, enabled: bool,
+                             balancing: bool = True) -> None:
+    """The dtests' disable_sstable_modifications() context: tablet load
+    balancing and the table's autocompaction off, or back on. With
+    balancing=False, the dtests' disable_autocompaction() context: the
+    table's autocompaction only."""
+    api = manager.api.client
+    if enabled:
+        await api.post(f"/storage_service/auto_compaction/{ks}", host=server.ip_addr, params={"cf": cf})
+        if balancing:
+            await api.post("/storage_service/tablets/balancing", host=server.ip_addr, params={"enabled": "true"})
+    else:
+        if balancing:
+            await api.post("/storage_service/tablets/balancing", host=server.ip_addr, params={"enabled": "false"})
+        assert await api.get_json(f"/column_family/autocompaction/{ks}:{cf}", host=server.ip_addr)
+        await api.delete(f"/storage_service/auto_compaction/{ks}", host=server.ip_addr, params={"cf": cf})
+
+
+async def memtable_tombstones_setup(cql, rf: int, rows_amount: int, deleted_keys: int) -> None:
+    await create_ks(cql, "ks", rf)
+    await cql.run_async("CREATE TABLE ks.test (i int PRIMARY KEY, t text)")
+    insert = cql.prepare("INSERT INTO ks.test (i, t) values(?, 'skdjhdskjh')")
+    await asyncio.gather(*[cql.run_async(insert, [k]) for k in range(rows_amount)])
+    delete = cql.prepare("DELETE FROM ks.test where i = ?")
+    await asyncio.gather(*[cql.run_async(delete, [k]) for k in range(deleted_keys)])
+
+
+async def check_flushed_tombstones(manager: ScyllaClusterManager, server) -> None:
+    """The deleted partitions are flushed as tombstones, without row data."""
+    partitions = await dump_sstables(manager, server, "ks", "test")
+    tombstones = [p for p in partitions if "tombstone" in p]
+    assert tombstones, "Tombstones were not found"
+    for p in tombstones:
+        assert "clustering_elements" not in p, f"Unexpectedly found row data in deleted partition: {p}"
+
+
+# The same on three nodes (one per rack) with the second one down; it is
+# repaired after it comes back.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_compact_tombstones_when_memtable_flush_one_node_stopped(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=CONFIG, cmdline=CMDLINE,
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    cql = manager.get_cql()
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await memtable_tombstones_setup(cql, 3, 100, 10)
+    for s in (servers[0], servers[2]):
+        await run_nodetool(manager, s, "flush")
+    for s in (servers[0], servers[2]):
+        await check_flushed_tombstones(manager, s)
+    await manager.server_start(servers[1].server_id)
+    await run_nodetool(manager, servers[1], "repair")
+    assert list(await cql.run_async("select count(*) from ks.test"))[0].count == 90
+
+
+def make_uuid_sstable_identifier() -> str:
+    """A new UUID sstable generation, like "3fw2_0tj4_46w3k2cpidnirvjy7k"."""
+    alphabet = string.digits + string.ascii_lowercase
+    def encode(n):
+        output = ""
+        while n:
+            n, index = divmod(n, len(alphabet))
+            output += alphabet[index]
+        return output[::-1]
+    timeuuid = uuid.uuid1()
+    seconds, decimicro = divmod(timeuuid.time, 10_000_000)
+    delta = datetime.timedelta(seconds=seconds)
+    lsb = int.from_bytes(timeuuid.bytes[8:])
+    return f"{encode(delta.days):0>4}_{encode(delta.seconds):0>4}_{encode(decimicro):0>5}{encode(lsb):0>13}"
+
+
+def copy_sstable_file(path: str, generation: str, strategy: str) -> None:
+    """Copy an sstable component under a new generation. For ICS, the
+    Scylla component is left out, to force a new run identifier."""
+    if strategy == "IncrementalCompactionStrategy" and "Scylla.db" in path:
+        return
+    parts = os.path.basename(path).split("-")
+    parts[1] = generation
+    dest = os.path.join(os.path.dirname(path), "-".join(parts))
+    if strategy == "IncrementalCompactionStrategy" and "TOC.txt" in path:
+        with open(path) as r, open(dest, "w") as w:
+            w.writelines(line for line in r if "Scylla.db" not in line)
+    else:
+        shutil.copy(path, dest)
+
+
+# Sstables found at boot (each sstable copied under 4 new generations, with
+# the commitlog removed) are compacted (resharded or reshaped) on boot.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("strategy", STRATEGIES)
+async def test_compaction_is_started_on_boot(manager: ScyllaClusterManager, strategy: str):
+    server = await manager.server_add(config=ADD_CONFIG, cmdline=CMDLINE)
+    cql = manager.get_cql()
+    await create_ks(cql, "ks", 1)
+    await cql.run_async(f"create table ks.cf (key int PRIMARY KEY, val int) with compaction = {{'class':'{strategy}'}};")
+    for x in range(100):
+        await cql.run_async(f"insert into ks.cf (key, val) values ({x},1)")
+    await run_nodetool(manager, server, "flush")
+    await run_nodetool(manager, server, "compact")
+    await manager.server_stop_gracefully(server.server_id)
+    workdir = await manager.server_get_workdir(server.server_id)
+    for f in glob.glob(os.path.join(workdir, "commitlog", "*")):
+        if os.path.isdir(f):
+            shutil.rmtree(f)
+        else:
+            os.remove(f)
+    table_dir = await get_table_dir(manager, server, "ks", "cf")
+    files = [f for f in glob.glob(f"{table_dir}/*") if os.path.isfile(f)]
+    generations = {os.path.basename(f).split("-")[1]: [make_uuid_sstable_identifier() for _ in range(4)] for f in files}
+    for f in files:
+        for gen in generations[os.path.basename(f).split("-")[1]]:
+            copy_sstable_file(f, gen, strategy)
+    before = await sstable_files(manager, server, "ks", "cf")
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    await manager.server_start(server.server_id)
+    await log.wait_for(r"compaction -.*(Compacted|Resharded|Reshaped) [0-9]+ sstables to \[.+/data/ks/cf-.+\]", from_mark=mark, timeout=120)
+    assert await sstable_files(manager, server, "ks", "cf") != before, "no compaction on boot"
+
+
 async def create_twcs_table(cql, rf: int = 1, window_unit: str = "MINUTES", window_size: int = 1, ttl: int = 1800,
                             gc_period: int = 1800) -> None:
     """The TWCS dtests' _create_ks_cl_with_twcs()."""
@@ -130,6 +281,8 @@ async def create_twcs_table(cql, rf: int = 1, window_unit: str = "MINUTES", wind
                         f"gc_grace_seconds = {gc_period} AND compaction = {{'class': 'TimeWindowCompactionStrategy', "
                         f"'compaction_window_unit': '{window_unit}', 'compaction_window_size': {window_size} }} AND "
                         "tombstone_gc = {'mode': 'timeout'}")
+
+
 async def pks_on_every_shard(manager: ScyllaClusterManager, server, num_pks: int, smp: int = SMP) -> list[int]:
     """The dtests' generate_int32_pks_for_vnodes(): a key owned by each shard
     of the node (found with "scylla types shardof"), and random others."""
@@ -150,6 +303,8 @@ async def pks_on_every_shard(manager: ScyllaClusterManager, server, num_pks: int
     while len(pks) < num_pks:
         pks.add(random.randint(-2147483647, 2147483647))
     return list(pks)
+
+
 async def simulate_writes_in_minutes(manager, servers, cql, pks: list[int], duration_minutes: int, start_from_minute: int = 0,
                                      flush_period_seconds: int = 30, size: int = 1) -> None:
     """The dtests' simulate_write_process_in_minutes(): a write to each pk
@@ -162,8 +317,148 @@ async def simulate_writes_in_minutes(manager, servers, cql, pks: list[int], dura
         if t % flush_period_seconds == 0:
             for s in servers:
                 await run_nodetool(manager, s, "flush")
+
+
+# With TWCS, a memtable holding 10 minutes of writes is flushed into one
+# sstable per window, on each of three nodes (RF=3, one per rack).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_memtable_flush(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=CONFIG, cmdline=CMDLINE,
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    cql = manager.get_cql()
+    await create_twcs_table(cql, rf=3)
+    pks = await pks_on_every_shard(manager, servers[0], 100)
+    await simulate_writes_in_minutes(manager, servers, cql, pks, duration_minutes=10, flush_period_seconds=999999999999)
+    for s in servers:
+        pre = await sstable_files(manager, s, "ks", "test", "Statistics")
+        await run_nodetool(manager, s, "flush")
+        await set_autocompaction(manager, s, "ks", "test", False)
+        post = await sstable_files(manager, s, "ks", "test", "Statistics")
+        assert len(post) - len(pre) > 1, f"expected more than one sstable after flush, lengths are {len(post)} {len(pre)}"
+        for sf, stats in (await sstable_stats(manager, s, post)).items():
+            lo, hi = stats["min_timestamp"] // 1_000_000, stats["max_timestamp"] // 1_000_000
+            assert lo - lo % 60 == hi - hi % 60, f"sstable {sf} spans more than one window: {lo}..{hi}"
+        await set_autocompaction(manager, s, "ks", "test", True)
+
+
+async def check_sstable_time_windows(manager, server, window_size: int, window_unit: str, balancing: bool = True) -> None:
+    """Each sstable spans no more than 1.5 windows (the TWCS dtests'
+    _check_sstable_timestamps())."""
+    await set_autocompaction(manager, server, "ks", "test", False, balancing)
+    await run_nodetool(manager, server, "flush", "system_schema")
+    files = await sstable_files(manager, server, "ks", "test", "Statistics")
+    assert files, "No statistics files"
+    margin = 1.5 * window_size * (60 if window_unit == "MINUTES" else 3600)
+    for sf, stats in (await sstable_stats(manager, server, files)).items():
+        tw = (stats["max_timestamp"] - stats["min_timestamp"]) // 1_000_000
+        assert tw <= margin, f"time window of {tw} s is greater than {margin} s: sstable={sf}"
+    await set_autocompaction(manager, server, "ks", "test", True, balancing)
+
+
+# After a TWCS window-size change, the reshape on boot compacts buckets of
+# similar-sized small sstables first, and the last bucket takes the rest;
+# a major compaction then leaves one sstable, within the new window.
+async def reshape_sstables_after_change_window_size(manager: ScyllaClusterManager, new_window_size, new_window_unit, distribution):
+    """The TWCS dtests' run_flow_generate_and_reshape_twcs_sstables()."""
+    small_file_size = 5_000
+    server = await manager.server_add(config=ADD_CONFIG, cmdline=CMDLINE)
+    cql = manager.get_cql()
+    await create_twcs_table(cql)
+    prev_min = 0
+    for duration, size in distribution:
+        await simulate_writes_in_minutes(manager, [server], cql, [1], duration_minutes=duration, start_from_minute=prev_min, size=size)
+        prev_min = duration
+    await run_nodetool(manager, server, "compact", "ks", "test")
+    await check_sstable_time_windows(manager, server, 1, "MINUTES")
+    small, large = set(), set()
+    for f in await sstable_files(manager, server, "ks", "test"):
+        (small if os.path.getsize(f) <= small_file_size else large).add(os.path.basename(f))
+    await run_nodetool(manager, server, "disableautocompaction", "ks", "test")
+    await cql.run_async("ALTER TABLE ks.test WITH compaction = {'class': 'TimeWindowCompactionStrategy',"
+                        f"'compaction_window_unit': '{new_window_unit}','compaction_window_size': {new_window_size} }}")
+    await manager.server_stop_gracefully(server.server_id)
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    await manager.server_start(server.server_id)
+    found = await log.grep(r"compaction - \[Reshape ks\.test .*\] Reshaping \[(.*)\]", from_mark=mark)
+    assert found, "Reshape was not run"
+    def reshaped(match):
+        return [os.path.basename(s.split(":")[0].strip()) for s in match.group(1).strip().split(",") if "origin=reshape" not in s]
+    for _, match in found[:-1]:
+        for sstable in reshaped(match):
+            assert sstable in small, f"sstable {sstable} (large: {sstable in large}) in a bucket of small sstables"
+            small.remove(sstable)
+    for sstable in reshaped(found[-1][1]):
+        assert sstable in small or sstable in large, f"sstable {sstable} is neither small nor large"
+    await run_nodetool(manager, server, "compact", "ks", "test")
+    await check_sstable_time_windows(manager, server, new_window_size, new_window_unit)
+    assert len(await sstable_files(manager, server, "ks", "test")) == 1
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_reshape_sstables_different_size_after_change_window_size.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reshape_sstables_different_size_after_change_window_size(manager: ScyllaClusterManager):
+    await reshape_sstables_after_change_window_size(manager, 64, "MINUTES", [(16, 10), (32, 1_000_000), (48, 10), (64, 1_000_000)])
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_reshape_sstables_after_change_window_size_when_small_files_more_than_large.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reshape_sstables_after_change_window_size_when_small_files_more_than_large(manager: ScyllaClusterManager):
+    await reshape_sstables_after_change_window_size(manager, 100, "MINUTES", [(32, 10), (40, 10), (72, 10), (80, 1_000_000), (96, 10)])
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_reshape_sstables_after_change_window_size_and_unit.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reshape_sstables_after_change_window_size_and_unit(manager: ScyllaClusterManager):
+    await reshape_sstables_after_change_window_size(manager, 2, "HOURS", [(32, 10), (40, 1_000_000), (72, 10), (80, 1_000_000), (96, 1)])
+
+
+VALIDATE_PK19 = r"\x19\x00\x00\x00 \(\{key:\s*pk\{000419000000\},\s*token:\s*-5674409923619649499\}\)"
+VALIDATE_PK06 = r"\x06\x00\x00\x00 \(\{key:\s*pk\{000406000000\},\s*token:\s*-5566252076597558760\}\)"
+VALIDATE_CK3 = r"\{position:\s*clustered,\s*ckp\{000400000003\},\s*0\}"
+VALIDATE_CK5 = r"\{position:\s*clustered,\s*ckp\{000400000005\},\s*0\}"
+VALIDATE_START = r"compaction - Scrubbing in validate mode"
+VALIDATE_INVALID_PARTITION = (rf"Invalid partition {VALIDATE_PK19},?\s*partition is out-of-order compared to previous partition {VALIDATE_PK06}"
+                              rf"|out-of-order partition key {VALIDATE_PK19},?\s*previous partition key was {VALIDATE_PK06}")
+VALIDATE_INVALID_ROW = (rf"Invalid clustering row fragment with key 3 \({VALIDATE_CK3}\) in partition {VALIDATE_PK06},?\s*"
+                        rf"fragment is out-of-order compared to previous clustered fragment with key 5 \({VALIDATE_CK5}\)"
+                        rf"|out-of-order clustering row at position {VALIDATE_CK3} in partition {VALIDATE_PK06},?\s*"
+                        rf"previous clustering element was {VALIDATE_CK5} at position clustering row")
+VALIDATE_FINISH_INVALID = r"Finished scrubbing in validate mode.*(sstable(\(s\)|s) are|sstable is) invalid"
+
+
+async def check_log_patterns(manager: ScyllaClusterManager, server, patterns: list[str]) -> None:
+    log = await manager.server_open_log(server.server_id)
+    missing = [p for p in patterns if not await log.grep(p)]
+    assert not missing, f"patterns not found in the log: {missing}"
+
+
 def files_in(path: str) -> list[str]:
     return sorted(f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))) if os.path.isdir(path) else []
+
+
+# A validate-mode scrub of an sstable with out-of-order partitions and rows
+# reports them and quarantines the sstable unchanged.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_validation_compaction_detects_sstable_corruption(manager: ScyllaClusterManager):
+    manager.ignore_log_patterns += ["([Ii]nvalid|out-of-order) clustering row", "([Ii]nvalid|out-of-order) partition", "(Sscrub) compaction ks.cf.*"]
+    server = await manager.server_add(config=ADD_CONFIG, cmdline=CMDLINE)
+    cql = manager.get_cql()
+    await create_ks(cql, "ks", 1)
+    await cql.run_async("CREATE COLUMNFAMILY ks.cf (pk text, ck int, s int, v int, PRIMARY KEY(pk, ck)) WITH comment='test cf' "
+                        "AND compaction = {'class': 'NullCompactionStrategy', 'enabled': 'true'} AND compression = {}")
+    await cql.run_async("SELECT * FROM ks.cf LIMIT 1")
+    await run_nodetool(manager, server, "flush")
+    table_dir = await get_table_dir(manager, server, "ks", "cf")
+    await manager.server_stop_gracefully(server.server_id)
+    src = os.path.join(RESOURCES, "sstable_with_invalid_fragment", "ks", "cf-test")
+    for f in os.listdir(src):
+        shutil.copy(os.path.join(src, f), table_dir)
+    await manager.server_start(server.server_id)
+    pre_scrub = files_in(table_dir)
+    await manager.api.keyspace_scrub_sstables(server.ip_addr, "ks", "VALIDATE", "cf")
+    assert files_in(os.path.join(table_dir, "quarantine")) == pre_scrub
+    await check_log_patterns(manager, server, [VALIDATE_START, VALIDATE_INVALID_PARTITION, VALIDATE_INVALID_ROW, VALIDATE_FINISH_INVALID])
 
 
 ############################################################################
@@ -253,6 +548,74 @@ async def dump_data_files(manager: ScyllaClusterManager, server, files: list[str
             await manager.api.enable_autocompaction(server.ip_addr, "system_schema")
 
 
+# Ported from scylla-dtest compaction_additional_test.py::TestCompactionAdditional::test_compaction_delete_with_smp_change.
+# Rows written with one shard, compacted into sstables the node shares
+# between its shards after a restart with two, and deleted then, are not
+# resurrected: after gc_grace_seconds compactions purge some of the
+# tombstones, then all of them.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_compaction_delete_with_smp_change(manager: ScyllaClusterManager):
+    [node1], cql = await prepare(manager, 1, cmdline=["--smp", "1"])
+    await create_ks(cql, "ks", 1)
+    gc_grace_seconds = 5
+    keys = 100
+    cql.execute("create table ks.cf (key int PRIMARY KEY, val int) with compaction = {'class':'SizeTieredCompactionStrategy'} "
+                f"and gc_grace_seconds = {gc_grace_seconds} and tombstone_gc = {{'mode': 'immediate'}};")
+    for x in range(keys):
+        cql.execute(f"insert into ks.cf (key, val) values ({x},1)")
+    await run_nodetool(manager, node1, "flush")
+    await run_nodetool(manager, node1, "compact")
+    await manager.server_stop_gracefully(node1.server_id)
+    await manager.server_update_cmdline(node1.server_id, ["--smp", "2"])
+    await manager.server_start(node1.server_id)
+    cql = dtest_session(await reconnect_driver(manager))
+
+    def compactions_count():
+        return cql.execute("select count(*) from system.compaction_history where keyspace_name='ks' and "
+                           "columnfamily_name='cf' allow filtering").one()[0]
+
+    compactions_1 = compactions_count()
+    compactions_2 = compactions_1
+    for x in range(keys):
+        cql.execute(f"delete from ks.cf where key = {x}")
+    await run_nodetool(manager, node1, "flush")
+    await asyncio.sleep(gc_grace_seconds + 1)
+    # Past gc_grace_seconds, writes and flushes until a compaction runs on a
+    # shard, removing data and tombstones.
+    while compactions_1 == compactions_2:
+        cql.execute(f"insert into ks.cf (key, val) values ({keys + 1},1);")
+        await run_nodetool(manager, node1, "flush")
+        compactions_2 = compactions_count()
+    await wait_for_compactions(manager, node1)
+    num_compactions = compactions_count() - compactions_1
+
+    await manager.server_stop(node1.server_id, convict=False)
+    # Only some tombstones are left: the files were resharded, and
+    # gc_grace_seconds passed before the compaction.
+    files = sorted(await sstable_files(manager, node1, "ks", "cf"))
+    partitions = await dump_data_files(manager, node1, files, running=False, ks="ks", cf="cf")
+    numfound = sum("tombstone" in p for p in partitions)
+    assert numfound <= keys, f"Number of found tombstones {numfound} greater than number of keys {keys}"
+    if num_compactions < 2:
+        assert numfound > 0, f"Number of found tombstones {numfound} != 0"
+
+    await manager.server_start(node1.server_id)
+    cql = dtest_session(await reconnect_driver(manager))
+    for x in range(keys):
+        assert list(cql.execute(f"select * from ks.cf where key = {x}")) == []
+    await wait_for_compactions(manager, node1)
+    compactions_1 = compactions_count()
+    compactions_2 = compactions_1
+    while compactions_1 + 2 > compactions_2:
+        await asyncio.sleep(gc_grace_seconds)
+        await run_nodetool(manager, node1, "flush")
+        await run_nodetool(manager, node1, "compact", "ks")
+        compactions_2 = compactions_count()
+    await wait_for_compactions(manager, node1)
+    partitions = await dump_sstables(manager, node1, "ks", "cf")
+    assert sum("tombstone" in p for p in partitions) == 0, "Not all tombstones were removed during compactions"
+
+
 STRATEGIES_UPGRADE = [
     {"class": "LeveledCompactionStrategy", "sstable_size_in_mb": 1, "min_threshold": 2},
     {"class": "TimeWindowCompactionStrategy", "compaction_window_size": 1, "compaction_window_unit": "MINUTES", "min_threshold": 2},
@@ -316,6 +679,250 @@ async def verify_data_by_cs(manager: ScyllaClusterManager, server) -> None:
                            create_keyspace=False)
 
 
+# Ported from scylla-dtest compaction_additional_test.py::TestCompactionAdditional::test_refresh_and_restart_after_compaction_strategy_change.
+# Sstables written under one compaction strategy are loaded under another,
+# by refresh from the upload directory and at restart from the staging
+# directory; they are reshaped if they do not fit the new strategy, and all
+# the data is read back.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@STRATEGY_PAIRS
+async def test_refresh_and_restart_after_compaction_strategy_change(manager: ScyllaClusterManager, strategy1, strategy2):
+    # Scylla's default, as on the dtest nodes; test.py turns it off.
+    node1 = await manager.server_add(config={**POPULATE_CONFIG, "auto_snapshot": True}, cmdline=CMDLINE, property_file=DC1)
+    cql = dtest_session(manager.get_cql())
+    cf_dir, backup_dir = await prepare_sstables_of_two_strategies(manager, node1, cql, strategy1, strategy2)
+    log = await manager.server_open_log(node1.server_id)
+
+    async def assert_reshape(srcdir, mark, verify_reshape=True, followed_by=None):
+        exprs = [r"(Reshape|Reshard) keyspace1.standard1"] + ([followed_by] if followed_by else [])
+        try:
+            await log.wait_for(*exprs, from_mark=mark, timeout=30)
+        except TimeoutError:
+            if strategy2["class"] != "SizeTieredCompactionStrategy" and verify_reshape and strategy2["class"] != strategy1["class"]:
+                pytest.fail(f"Reshape didn't occur in loading sstables from {srcdir} directory")
+
+    mark = await log.mark()
+    await run_nodetool(manager, node1, "refresh", "--", "keyspace1", "standard1")
+    await assert_reshape("upload/", mark, followed_by=r"Done loading new SSTables for keyspace=keyspace1.*table=standard1")
+    await verify_data_by_cs(manager, node1)
+
+    cql.execute("TRUNCATE keyspace1.standard1")
+    mark = await log.mark()
+    await manager.server_stop_gracefully(node1.server_id)
+    for f in files_in(backup_dir):
+        shutil.copy2(os.path.join(backup_dir, f), os.path.join(cf_dir, "staging"))
+    await manager.server_start(node1.server_id)
+    verify_reshape = not (strategy2["class"] == "LeveledCompactionStrategy" and strategy1["class"] != "LeveledCompactionStrategy")
+    await assert_reshape("staging/", mark, verify_reshape=verify_reshape, followed_by=r"Reshaped .* seconds")
+    await verify_data_by_cs(manager, node1)
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestCompactionAdditional::test_reshard_after_compaction_strategy_and_smp_change.
+# Sstables written by a node with one shard, under another compaction
+# strategy, are resharded when loaded by refresh after a restart with three
+# shards, and at a restart with two shards from the staging directory.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@STRATEGY_PAIRS
+async def test_reshard_after_compaction_strategy_and_smp_change(manager: ScyllaClusterManager, strategy1, strategy2):
+    if (os.cpu_count() or 1) < 3:
+        skip_env("This test requires a minimum of 3 cpus")
+    logging_args = ["--logger-log-level", "sstables_loader=debug", "--logger-log-level", "sstable_directory=trace",
+                    "--logger-log-level", "compaction=debug"]
+    # Scylla's default, as on the dtest nodes; test.py turns it off.
+    node1 = await manager.server_add(config={**POPULATE_CONFIG, "auto_snapshot": True}, cmdline=["--smp", "1", *logging_args], property_file=DC1)
+    cql = dtest_session(manager.get_cql())
+    cf_dir, backup_dir = await prepare_sstables_of_two_strategies(manager, node1, cql, strategy1, strategy2)
+    log = await manager.server_open_log(node1.server_id)
+
+    await manager.server_stop_gracefully(node1.server_id)
+    await manager.server_update_cmdline(node1.server_id, ["--smp", "3"])
+    await manager.server_start(node1.server_id)
+    cql = dtest_session(await reconnect_driver(manager))
+    mark = await log.mark()
+    await run_nodetool(manager, node1, "refresh", "--", "keyspace1", "standard1")
+    await log.wait_for(r"Reshard keyspace1.standard1", r"Done loading new SSTables for keyspace=keyspace1.*table=standard1",
+                       from_mark=mark, timeout=30)
+    await verify_data_by_cs(manager, node1)
+
+    cql.execute("TRUNCATE keyspace1.standard1")
+    mark = await log.mark()
+    await manager.server_stop_gracefully(node1.server_id)
+    for f in files_in(backup_dir):
+        shutil.copy2(os.path.join(backup_dir, f), os.path.join(cf_dir, "staging"))
+    await manager.server_update_cmdline(node1.server_id, ["--smp", "2"])
+    await manager.server_start(node1.server_id)
+    await log.wait_for(r"Reshard keyspace1.standard1", r"Resharded .* keyspace1.standard1", from_mark=mark, timeout=30)
+    await verify_data_by_cs(manager, node1)
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_streaming_during_adding_node_with_boostrap.
+# The data a node receives when it bootstraps into a TWCS table is
+# segregated by window, by one off-strategy compaction (reshape) per shard.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_streaming_during_adding_node_with_boostrap(manager: ScyllaClusterManager):
+    time_windows = 20
+    [node1], cql = await prepare(manager, 1)
+    await create_twcs_table(cql, rf=1)
+    pks = await pks_on_every_shard(manager, node1, 100)
+    await simulate(manager, [node1], cql, pks, duration_minutes=time_windows)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES")
+
+    node2 = await manager.server_add(config=PREPARE_CONFIG, cmdline=CMDLINE, property_file=DC1)
+    shard_count = SMP
+    log2 = await manager.server_open_log(node2.server_id)
+    await log2.wait_for(*[rf"\[shard {i}(?::\w+)?\].*Done with off-strategy compaction for ks.test" for i in range(shard_count)],
+                        timeout=60)
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES")
+    await sstable_count_is_close_to_time_windows(manager, node2, time_windows, shard_count)
+    reshapes = await log2.grep(r"compaction - \[Reshape ks.test .*\] Reshaped")
+    assert len(reshapes) == shard_count, "There should be only one table reshape per shard"
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_streaming_decommission.
+# The data a node receives from a decommissioned node is segregated by
+# window after off-strategy compaction.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_streaming_decommission(manager: ScyllaClusterManager):
+    [node1, node2], cql = await prepare(manager, 2)
+    await create_twcs_table(cql, rf=1)
+    pks = await pks_on_every_shard(manager, node1, 100)
+    await simulate(manager, [node1, node2], cql, pks, duration_minutes=20)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES")
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES")
+    await run_nodetool(manager, node1, "decommission")
+    await offstrategy_compaction(manager, node2)
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES")
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_streaming_on_repair.
+# The data a node missed while it was down, received by repair, is
+# segregated by window after off-strategy compaction.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_streaming_on_repair(manager: ScyllaClusterManager):
+    [node1, node2], cql = await populate_racks(manager, 2)
+    await create_twcs_table(cql, rf=2)
+    pks = await pks_on_every_shard(manager, node1, 100)
+    await manager.api.disable_tablet_balancing(node1.ip_addr)
+    await simulate(manager, [node1, node2], cql, pks, duration_minutes=10)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES", balancing=False)
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES", balancing=False)
+    await manager.server_stop_gracefully(node2.server_id)
+    await simulate(manager, [node1], cql, pks, duration_minutes=20, start_from_minute=10)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES", balancing=False)
+    await manager.server_start(node2.server_id)
+    await run_nodetool(manager, node2, "repair", "ks")
+    await run_nodetool(manager, node2, "flush")
+    await manager.api.enable_tablet_balancing(node1.ip_addr)
+    await offstrategy_compaction(manager, node2)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES")
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES")
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_data_is_segregated_during_off_strategy.
+# A repair-based bootstrap does not segregate the data it receives (#9199):
+# off-strategy compaction does, from a few sstables per shard.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_data_is_segregated_during_off_strategy(manager: ScyllaClusterManager):
+    rbno = {"enable_repair_based_node_ops": True, "allowed_repair_based_node_ops": "bootstrap"}
+    [node1], cql = await prepare(manager, 1, config=rbno)
+    await create_twcs_table(cql, rf=1)
+    duration_minutes = 5
+    pks = await pks_on_every_shard(manager, node1, 30)
+    await simulate(manager, [node1], cql, pks, duration_minutes=duration_minutes)
+
+    node2 = await manager.server_add(config={**PREPARE_CONFIG, **rbno}, cmdline=CMDLINE, property_file=DC1)
+    # There is a rare chance that all the rows of node2 end up in one shard.
+    matches = await wait_for_lines(manager, node2, r'stats: repair_reason=bootstrap, keyspace=ks, tables=\["test"\].*rx_row_nr=([\d]+),',
+                                   SMP)
+    shards_with_data = sum(int(m.group(1)) > 0 for _, m in matches)
+    assert shards_with_data > 0, "Expected data in at least one shard of node2, but rx_row_nr is 0 for both the shards"
+    await wait_for_lines(manager, node2, "Done with off-strategy compaction for ks.test", shards_with_data)
+    for line, m in await wait_for_lines(manager, node2, r"Starting off-strategy compaction for ks.test.*?([\d]+) candidates were found",
+                                        shards_with_data, timeout=0):
+        assert int(m.group(1)) <= 30, f"There were too many sstables for off-strategy compaction. #9199\n{line}"
+    await sstable_count_is_close_to_time_windows(manager, node2, duration_minutes, shards_with_data)
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_streaming_on_rebuild_multidc.
+# The data a node of a new DC receives by rebuild is segregated by window
+# after off-strategy compaction.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_streaming_on_rebuild_multidc(manager: ScyllaClusterManager):
+    config = {**CONFIG, "enable_sstable_key_validation": True}
+    node1 = await manager.server_add(config=config, cmdline=CMDLINE, property_file={"dc": "dc1", "rack": "rack1"})
+    cql1 = await manager.get_cql_exclusive(node1)
+    cql1.execute("CREATE KEYSPACE ks  WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1':1}")
+    cql1.execute("CREATE TABLE ks.test (pk int, ck int, v blob, PRIMARY KEY(pk, ck)) WITH compaction = {"
+                 "'class': 'TimeWindowCompactionStrategy','compaction_window_unit': 'MINUTES','compaction_window_size': 1}")
+    cql = dtest_session(manager.get_cql())
+    pks = await pks_on_every_shard(manager, node1, 100)
+    await simulate(manager, [node1], cql, pks, duration_minutes=10)
+    await check_sstable_time_windows(manager, node1, 1, "MINUTES")
+
+    node2 = await manager.server_add(config=config, cmdline=CMDLINE, property_file={"dc": "dc2", "rack": "rack1"})
+    await manager.server_sees_other_server(node1.ip_addr, node2.ip_addr)
+    log2 = await manager.server_open_log(node2.server_id)
+    await log2.wait_for("init - Scylla.*initialization completed")
+    cql2 = dtest_session(await manager.get_cql_exclusive(node2))
+    cql2.execute("ALTER KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'dc1':1, 'dc2':1};")
+    mark = await log2.mark()
+    res = await run_nodetool(manager, node2, "rebuild", "dc1", check=False)
+    assert res[2] == 0 or "rebuild is in progress" in res[1], f"unexpected rebuild errors: {res}"
+    await log2.wait_for("Streaming for rebuild successful|rebuild_with_repair: finished with keyspace=ks", from_mark=mark)
+    await offstrategy_compaction(manager, node2)
+    await log2.wait_for("Starting off-strategy compaction for ks.test", from_mark=mark)
+    await log2.wait_for("Done with off-strategy compaction for ks.test", from_mark=mark)
+    await wait_for_compactions(manager, node2)
+    await check_sstable_time_windows(manager, node2, 1, "MINUTES")
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_streaming_sstables_with_several_timewindows.
+# Sstables holding two windows each are streamed to two new nodes
+# (auto_bootstrap off), which segregate them by window.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_streaming_sstables_with_several_timewindows(manager: ScyllaClusterManager):
+    [node1, _], cql = await populate_racks(manager, 2)
+    await create_twcs_table(cql, rf=2)
+    pks = await pks_on_every_shard(manager, node1, 100)
+    await simulate(manager, await manager.running_servers(), cql, pks, duration_minutes=10, flush_period_seconds=120)
+    max_timewindow = 1.5 * 2 * 60
+    for sf, stats in (await sstable_stats(manager, node1, await statistics_files(manager, node1))).items():
+        tw = (stats["max_timestamp"] - stats["min_timestamp"]) // 1_000_000
+        assert tw <= max_timewindow, f"timewindow {tw} of {sf} is greater than {max_timewindow}"
+    new_nodes = [await manager.server_add(config={**CONFIG, "auto_bootstrap": False}, cmdline=CMDLINE,
+                                          property_file={"dc": "datacenter1", "rack": f"rack{i + 1}"}) for i in range(2)]
+    for new_node in new_nodes:
+        await check_sstable_time_windows(manager, new_node, 1, "MINUTES")
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_rebuild_node_streaming.
+# A node whose data was removed gets it back by rebuild, segregated by
+# window after off-strategy compaction.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_rebuild_node_streaming(manager: ScyllaClusterManager):
+    servers, cql = await prepare(manager, 3)
+    node3 = servers[2]
+    await create_twcs_table(cql, rf=3)
+    pks = await pks_on_every_shard(manager, servers[0], 100)
+    await simulate(manager, servers, cql, pks, duration_minutes=10, flush_period_seconds=20)
+    for s in servers:
+        await check_sstable_time_windows(manager, s, 1, "MINUTES")
+    await manager.server_stop_gracefully(node3.server_id)
+    shutil.rmtree(os.path.join(await manager.server_get_workdir(node3.server_id), "data", "ks"), ignore_errors=True)
+    await manager.server_start(node3.server_id)
+    for s in servers[:2]:
+        await manager.server_sees_other_server(s.ip_addr, node3.ip_addr)
+    log3 = await manager.server_open_log(node3.server_id)
+    mark = await log3.mark()
+    await run_nodetool(manager, node3, "rebuild")
+    await log3.wait_for("Streaming for rebuild successful|rebuild_with_repair: finished with keyspace=ks", from_mark=mark)
+    await offstrategy_compaction(manager, node3)
+    await log3.wait_for("Done with off-strategy compaction for ks", from_mark=mark)
+    await check_sstable_time_windows(manager, node3, 1, "MINUTES")
+
+
 def tw_query_results(cql, pks) -> list[dict]:
     """The TWCS dtest's get_tw_query_results()."""
     queries = [
@@ -327,6 +934,29 @@ def tw_query_results(cql, pks) -> list[dict]:
         "SELECT * FROM ks.test",
     ]
     return [{"query": q, "result": [row._asdict() for row in cql.execute(q)]} for q in queries]
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestTimeWindowDataSegregation::test_enable_disable_optimized_query_for_twcs.
+# Queries of a TWCS table return the same rows with
+# enable_optimized_twcs_queries on and off.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_enable_disable_optimized_query_for_twcs(manager: ScyllaClusterManager):
+    [node1, _], cql = await populate_racks(manager, 2)
+    await create_twcs_table(cql, rf=2, ttl=5 * 60 * 20, window_size=5)
+    pks = await pks_on_every_shard(manager, node1, 30)
+    await simulate(manager, await manager.running_servers(), cql, pks, duration_minutes=60, flush_period_seconds=100)
+
+    def set_optimized(enable: bool):
+        cql.execute("ALTER TABLE ks.test with compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES',"
+                    f"'compaction_window_size': 5,'enable_optimized_twcs_queries': {'true' if enable else 'false'} }}")
+
+    enabled = tw_query_results(cql, pks)
+    set_optimized(False)
+    disabled = tw_query_results(cql, pks)
+    assert enabled == disabled
+    set_optimized(True)
+    enabled = tw_query_results(cql, pks)
+    assert enabled == disabled
 
 
 LCS_OPTIONS = {"class": "LeveledCompactionStrategy", "sstable_size_in_mb": 1}
@@ -368,6 +998,42 @@ async def lcs_prepare(manager: ScyllaClusterManager, compaction: dict):
     await create_ks(cql, "ks", 1)
     await create_c1c2_cf(cql, "ks", "cf", compaction=compaction)
     return node, cql
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestLCSSSTablePromotion::test_lcs_sstable_promotion.
+# LCS promotes sstables only until a level is 10 times larger than the one
+# below it (Scylla commit 9de7abdc): space amplification stays bounded.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_lcs_sstable_promotion(manager: ScyllaClusterManager):
+    node, cql = await lcs_prepare(manager, LCS_OPTIONS)
+    await insert_c1c2(cql, n=50_000, concurrency=50)
+    await run_nodetool(manager, node, "flush")
+    await check_space_amplification(manager, node, await table_levels_after_convergence(manager, node))
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestLCSSSTablePromotion::test_lcs_table_promotion_major_compaction.
+# The same after a major compaction of data written with autocompaction off.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_lcs_table_promotion_major_compaction(manager: ScyllaClusterManager):
+    node, cql = await lcs_prepare(manager, LCS_OPTIONS)
+    await run_nodetool(manager, node, "disableautocompaction", "ks", "cf")
+    await insert_c1c2(cql, n=50_000, concurrency=50)
+    await run_nodetool(manager, node, "flush")
+    await manager.api.keyspace_compaction(node.ip_addr, "ks", "cf")
+    await check_space_amplification(manager, node, await table_levels_after_convergence(manager, node))
+
+
+# Ported from scylla-dtest compaction_additional_test.py::TestLCSSSTablePromotion::test_lcs_table_promotion_after_stcs_migration.
+# The same after a table written with STCS switches to LCS.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_lcs_table_promotion_after_stcs_migration(manager: ScyllaClusterManager):
+    node, cql = await lcs_prepare(manager, {"class": "SizeTieredCompactionStrategy"})
+    for n in [5_000, 15_000, 30_000, 50_000, 80_000]:
+        await insert_c1c2(cql, n=n, concurrency=50)
+        await run_nodetool(manager, node, "flush")
+    cql.execute(f"ALTER TABLE ks.cf WITH compaction={LCS_OPTIONS}")
+    await run_nodetool(manager, node, "refresh", "ks", "cf")
+    await check_space_amplification(manager, node, await table_levels_after_convergence(manager, node))
 
 
 ############################################################################
