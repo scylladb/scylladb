@@ -5,6 +5,7 @@
 # Tests for alter table statement
 
 import re
+from collections import Counter
 
 import pytest
 
@@ -264,6 +265,42 @@ def test_alter_column_type_text_to_blob(scylla_only, cql, test_keyspace):
         assert list(cql.execute(f"SELECT k, c, s, v FROM {table}")) == [(b, b, {x}, b)]
         cql.execute(f"ALTER TABLE {table} ALTER s TYPE set<blob>")
         assert list(cql.execute(f"SELECT k, c, s, v FROM {table}")) == [(b, b, {b}, b)]
+
+# ALTER TABLE ... DROP is not allowed on a COMPACT STORAGE table.
+# Scylla-only: Cassandra 4.0 and later no longer accept WITH COMPACT STORAGE.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_drop_column_compact_storage(scylla_only, cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, c1 int, c2 int", "WITH COMPACT STORAGE") as table:
+        with pytest.raises(InvalidRequest, match="Cannot drop columns from a"):
+            cql.execute(f"ALTER TABLE {table} DROP c1")
+
+# Ported from scylla-dtest schema_test.py::TestSchema::test_drop_column_queries.
+# Drop a column whose values are still in the memtable and re-add it: the old
+# values stay hidden and the new ones are returned. Unlike the drop tests in
+# cassandra_tests/.../alter_test.py, there is no explicit USING TIMESTAMP and
+# nothing was flushed before the drop.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_drop_column_queries(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, c1 int, c2 int") as table:
+        # insert some data.
+        cql.execute(f"INSERT INTO {table} (key, c1, c2) VALUES (0, 1, 2)")
+        cql.execute(f"INSERT INTO {table} (key, c1, c2) VALUES (1, 2, 3)")
+        cql.execute(f"INSERT INTO {table} (key, c1, c2) VALUES (2, 3, 4)")
+
+        # drop and readd c1.
+        cql.execute(f"ALTER TABLE {table} DROP c1")
+        cql.execute(f"ALTER TABLE {table} ADD c1 int")
+
+        # add another row.
+        cql.execute(f"INSERT INTO {table} (key, c1, c2) VALUES (3, 4, 5)")
+
+        # test that old (pre-drop) c1 values aren't returned and new ones are.
+        assert Counter(cql.execute(f"SELECT c1 FROM {table}")) == Counter([(None,), (None,), (None,), (4,)])
+        assert Counter(cql.execute(f"SELECT * FROM {table}")) == Counter([(0, None, 2), (1, None, 3), (2, None, 4), (3, 4, 5)])
+        assert list(cql.execute(f"SELECT c1 FROM {table} WHERE key = 0")) == [(None,)]
+        assert list(cql.execute(f"SELECT c1 FROM {table} WHERE key = 3")) == [(4,)]
 
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.
