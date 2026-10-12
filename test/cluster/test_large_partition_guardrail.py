@@ -56,6 +56,9 @@ async def test_large_data_guardrails_rolling_upgrade(manager: ScyllaClusterManag
     servers = []
     servers.append(await manager.server_add(config=cfg_old))   # "old" node
     servers.append(await manager.server_add(config=cfg_base))  # "new" node
+    # The coordinator's commits for the system keyspaces' tablets can fail the DDL
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     # Connect to the "new" node — it supports the feature but the cluster
     # as a whole does not (because the old node doesn't advertise it).
