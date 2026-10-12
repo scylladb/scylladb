@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 from test.cluster.util import new_test_keyspace, FeatureConfig, feature_configs, FeatureConfigurations
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -182,3 +183,26 @@ async def test_drop_table_during_load_and_stream(manager: ScyllaClusterManager, 
             await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
         except Exception:
             pass
+
+
+async def test_recreated_table_gets_new_directory(manager: ScyllaClusterManager):
+    """Every incarnation of a table, even one recreated under the same name,
+    gets its own data directory named <table>-<table id>. With auto_snapshot
+    the dropped incarnations' directories keep their snapshots, so after
+    creating, flushing and dropping the same table N times there must be
+    exactly N distinct directories."""
+    server = await manager.server_add(config={'auto_snapshot': True})
+    cql = manager.get_cql()
+    iterations = 3
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        for _ in range(iterations):
+            await cql.run_async(f"CREATE TABLE {ks}.cf (key int PRIMARY KEY, c1 int)")
+            await cql.run_async(f"INSERT INTO {ks}.cf (key, c1) VALUES (1, 1)")
+            await manager.api.keyspace_flush(server.ip_addr, ks, "cf")
+            await cql.run_async(f"DROP TABLE {ks}.cf")
+
+        workdir = await manager.server_get_workdir(server.server_id)
+        dirs = os.listdir(f"{workdir}/data/{ks}")
+        assert len(dirs) == iterations, dirs
+        for d in dirs:
+            assert re.fullmatch(r"cf-[0-9a-f]{32}", d), d
