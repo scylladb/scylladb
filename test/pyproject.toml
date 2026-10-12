@@ -45,13 +45,5 @@ dependencies = [
     "urwid==3.0.5",
 ]
 
-[dependency-groups]
-# Type stubs used only for local mypy/IDE type checking (e.g. the
-# TYPE_CHECKING-guarded mypy_boto3_dynamodb imports in
-# test/cluster/dtest/alternator_utils.py); tests don't import them at runtime.
-dev = [
-    "boto3-stubs[dynamodb]==1.43.89",
-]
-
 [tool.uv]
 package = false
