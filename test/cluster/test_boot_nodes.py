@@ -7,6 +7,9 @@
 import pytest
 import time
 import logging
+
+
+
 logger = logging.getLogger(__name__)
 
 async def test_boot(manager):
@@ -19,3 +22,5 @@ async def test_boot(manager):
         await manager.server_add(config=cfg)
         end = time.time()
         logger.info(f"node {i+1} took {end - start}ms to boot")
+
+

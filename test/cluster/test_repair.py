@@ -1162,6 +1162,8 @@ async def simple_repair(manager: ScyllaClusterManager, metrics=()) -> dict:
     data = {m: node1_metrics.get(m) or 0 for m in metrics}
     await check_rows_on_node(manager, node3, 2001, found=[1000], restart=False)
     return data
+
+
 # Ported from scylla-dtest repair_test.py::TestRepair::test_two_consecutive_repair.
 # The first repair of a node that missed a key transfers rows (node1's
 # scylla_repair_tx_row_bytes > 0); after the nodes restart, a second repair
