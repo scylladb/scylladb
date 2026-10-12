@@ -620,6 +620,45 @@ def test_filter_regular_column_types(cql, test_keyspace):
         check("where clmn_uuid = de5cba0d-41a2-4f39-8834-35130d8b5d86 ALLOW FILTERING", [expected[0], expected[2]], ConsistencyLevel.QUORUM)
         check(" where clmn_blob = textAsBlob('{}') ALLOW FILTERING".format("b" * 10), expected[1:3], ConsistencyLevel.QUORUM)
 
+# LIKE on a partition key still needs ALLOW FILTERING, and the pattern on the
+# right-hand side of LIKE must be a string: a function returning another type
+# (uuid, date, time) is rejected.
+# Currently, Cassandra only allows LIKE on a SASI index, not when filtering
+# (CASSANDRA-17198), see test_filter_like_on_desc_column.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filter_like_invalid(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "pk text, ck text, v text, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('teststring0', '0teststring', 'test0string')")
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f"SELECT * FROM {table} WHERE pk LIKE 'teststring%'")
+        for func in ['uuid()', 'currentDate()', 'currentTime()']:
+            with pytest.raises(InvalidRequest, match='cannot assign result of function'):
+                cql.execute(f"SELECT * FROM {table} WHERE ck LIKE {func} ALLOW FILTERING")
+
+# Ported from scylla-dtest like_operator_test.py::TestLikeOperatorForBaseTable::test_filtering_with_long_values.
+# On the dtest's text table, LIKE filtering on the partition key returns
+# all of its rows; then the rows get long (64 KB) values, and LIKE filtering
+# on them, read with paging, matches the pattern against the whole value,
+# both at its end and at its beginning.
+# Currently, Cassandra only allows LIKE on a SASI index, not when filtering
+# (CASSANDRA-17198), see test_filter_like_on_desc_column.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filter_like_long_values(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "pk text, ck text, test text, PRIMARY KEY (pk, ck)") as table:
+        all_data = [(f"teststring{i}", f"{i}teststring", f"test{i}string") for i in range(5)]
+        for data in all_data:
+            cql.execute(f"INSERT INTO {table} (pk, ck, test) VALUES ('{data[0]}', '{data[1]}', '{data[2]}')")
+        assert sorted(cql.execute(f"SELECT * FROM {table} WHERE pk LIKE 't%ts%g%' ALLOW FILTERING")) == sorted(all_data)
+        for i in range(5):
+            value = "a" * 65520 + "findme" if i % 2 == 0 else "findme" + "a" * 65520
+            cql.execute(f"INSERT INTO {table} (pk, ck, test) VALUES ('teststring{i}', '{i}teststring', '{value}')")
+        for pattern, expected in [("%me", ["teststring0", "teststring2", "teststring4"]), ("_indme%", ["teststring1", "teststring3"])]:
+            actual = [row.pk for row in cql.execute(SimpleStatement(f"SELECT pk FROM {table} WHERE test LIKE '{pattern}' ALLOW FILTERING"))]
+            for pk in expected:
+                assert pk in actual
+
 
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.
