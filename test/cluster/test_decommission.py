@@ -8,7 +8,7 @@ import time
 
 import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import wait_for_token_ring_and_group0_consistency
+from test.cluster.util import wait_for_token_ring_and_group0_consistency, run_nodetool
 
 logger = logging.getLogger(__name__)
 
@@ -32,3 +32,22 @@ async def test_decommissioned_node_cant_rejoin(request, manager: ScyllaClusterMa
     await manager.server_start(servers[1].server_id,
                                expected_error='This node was decommissioned and will not rejoin the ring')
     logger.info(f"Got the expected error")
+
+
+# Ported from scylla-dtest nodetool_test.py::TestNodetool::test_decommission_after_drain_is_invalid.
+# On three nodes (ccm's populate([3]): dc1, RAC1), "nodetool decommission"
+# of a node drained with "nodetool drain" fails with "Node in DRAINED state"
+# (CASSANDRA-8741).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_decommission_after_drain_is_rejected(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config={"tablets_mode_for_new_keyspaces": "disabled", "num_tokens": 256},
+                                        property_file={"dc": "dc1", "rack": "RAC1"})
+    node = servers[0]
+    log = await manager.server_open_log(node.server_id)
+    mark = await log.mark()
+    await run_nodetool(manager, node, "drain")
+    # ccm's drain(block_on_log=True).
+    await log.wait_for("DRAINED", from_mark=mark, timeout=60)
+    out, err, rc = await run_nodetool(manager, node, "decommission", check=False)
+    assert rc != 0
+    assert "Node in DRAINED state" in out or "Node in DRAINED state" in err
