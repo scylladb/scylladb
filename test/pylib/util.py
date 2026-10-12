@@ -109,6 +109,20 @@ async def wait_for(
             before_retry()
 
 
+def wait_for_sync(pred: Callable[[], T], timeout: float, period: float = 0.2, text: Optional[str] = None) -> T:
+    """Call pred every `period` seconds until it returns a true value, and
+    return that value. Fail after `timeout` seconds. For synchronous code;
+    asynchronous code uses wait_for()."""
+    deadline = time.time() + timeout
+    while True:
+        res = pred()
+        if res:
+            return res
+        if time.time() >= deadline:
+            raise AssertionError(f"wait_for_sync({text or getattr(pred, '__name__', 'unlabeled')}) timed out after {timeout}s")
+        time.sleep(period)
+
+
 async def wait_for_cql(cql: Session, deadline: float, host: Optional[Host] = None) -> None:
     async def cql_ready():
         try:
