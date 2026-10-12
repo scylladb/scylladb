@@ -10,10 +10,11 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 from cassandra.protocol import InvalidRequest
 from cassandra.util import SortedSet
 
-from .util import new_test_table, unique_name, keyspace_has_tablets
+from .util import new_test_table, unique_name, keyspace_has_tablets, run_cqlsh
 from .nodetool import flush
 import pytest
 import time
+import datetime
 
 # Waits until at least one CDC generation is published to system_distributed.cdc_generation_timestamps
 # and system_distributed.cdc_streams_descriptions_v2. It may happen after the first node bootstraps.
@@ -1027,3 +1028,134 @@ def test_preimage_full_delta_postimage(scylla_only, cql, test_keyspace_vnodes, t
 def test_preimage_on_delta_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
     run_batch_checks(cql, test_keyspace_vnodes, typ, preimage_enable='true', postimage_enable=True)
 
+
+# Each CQL write to a CDC-enabled table reports, in its tracing session, how
+# CDC generated the log mutations (cdc/log.cc): a start and a finish event,
+# and for every base partition touched, in order: the preimage select (or
+# that preimage is disabled), "Generating log mutations", whether the
+# mutation had to be split, and how many log mutations were generated.
+# Collection writes and partition deletes need splitting, other writes don't.
+# A write with only preimage or only postimage traces the same as with both,
+# so only "none" and "both" are checked.
+_cdc_trace_cases = [
+    # operation, value type, images (True for both, or "preimage" or
+    # "postimage" alone), batch, expect splitting
+    ("insert", "text", False, False, False),
+    ("insert", "text", "preimage", False, False),
+    ("insert", "text", "postimage", False, False),
+    ("insert", "text", True, False, False),
+    ("update", "text", False, False, False),
+    ("update", "text", True, False, False),
+    ("delete_partition", "text", False, False, True),
+    ("delete_partition", "text", True, False, True),
+    ("delete_row", "text", False, False, False),
+    ("insert", "list<text>", False, False, True),
+    ("insert", "list<text>", True, False, True),
+    ("update", "list<text>", False, False, False),
+    ("update", "list<text>", True, False, False),
+    ("delete_partition", "list<text>", False, False, True),
+    ("delete_partition", "list<text>", True, False, True),
+    ("delete_row", "list<text>", False, False, False),
+    ("delete_row", "list<text>", True, False, False),
+    ("delete_range_exclusive", "list<text>", False, False, False),
+    ("delete_range_exclusive", "list<text>", True, False, False),
+    ("insert", "text", False, True, False),
+    ("insert", "text", True, True, False),
+    ("insert", "list<text>", False, True, True),
+    ("insert", "list<text>", True, True, True),
+    ("update", "text", True, True, False),
+    ("update", "list<text>", True, True, False),
+    ("delete_partition", "text", True, True, True),
+    ("delete_partition", "list<text>", True, True, True),
+    ("delete_row", "text", True, True, False),
+    ("delete_row", "list<text>", True, True, False),
+    ("delete_range_exclusive", "text", True, True, False),
+    ("delete_range_exclusive", "list<text>", True, True, False),
+    ("delete_range_inclusive", "text", True, True, False),
+    ("delete_range_inclusive", "list<text>", True, True, False),
+]
+
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@pytest.mark.parametrize("operation,value_type,images,batch,splitting", _cdc_trace_cases,
+    ids=[f"{op}-{'list' if vt.startswith('list') else vt}{'' if not im else '-images' if im is True else '-' + im}{'-batch' if b else ''}"
+         for op, vt, im, b, _ in _cdc_trace_cases])
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_cdc_tracing(scylla_only, cql, test_keyspace, operation, value_type, images, batch, splitting):
+    # Like the dtest, wait until the newest CDC generation in the streams
+    # description table is active: read the whole table, and sleep until
+    # a second after the generation's timestamp.
+    descriptions = list(cql.execute(SimpleStatement("SELECT * FROM system_distributed.cdc_streams_descriptions_v2",
+                                                    consistency_level=ConsistencyLevel.ONE)))
+    assert descriptions, "No CDC generations"
+    last = max(d.time for d in descriptions)
+    time.sleep(max(0, (last + datetime.timedelta(seconds=1) - datetime.datetime.utcnow()).total_seconds()))
+    cdc = "{'enabled': true" + {False: "", True: ", 'preimage': true, 'postimage': true",
+                                "preimage": ", 'preimage': true", "postimage": ", 'postimage': true"}[images] + "}"
+    with new_test_table(cql, test_keyspace, f"pk int, ck int, v {value_type}, PRIMARY KEY (pk, ck)", f"WITH cdc = {cdc}") as table:
+        value = "['a', 'b']" if value_type.startswith("list") else "'a'"
+        if operation.startswith("delete"):
+            # Two partitions with 5 rows each, for the deletes to remove.
+            for pk in range(2):
+                for ck in range(5):
+                    cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, {ck}, {value})")
+        if not batch:
+            pks = [0]
+        elif operation in ("insert", "update"):
+            pks = range(5)
+        else:
+            pks = range(2)
+        statements = {
+            "insert": lambda pk: [f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 1, {value})"],
+            "update": lambda pk: [f"UPDATE {table} SET v = {value} WHERE pk = {pk} AND ck = 1"],
+            "delete_partition": lambda pk: [f"DELETE FROM {table} WHERE pk = {pk}"],
+            "delete_row": lambda pk: [f"DELETE FROM {table} WHERE pk = {pk} AND ck = {ck}" for ck in (range(5) if batch else [1])],
+            "delete_range_exclusive": lambda pk: [f"DELETE FROM {table} WHERE pk = {pk} AND ck > 1 AND ck < 4"],
+            "delete_range_inclusive": lambda pk: [f"DELETE FROM {table} WHERE pk = {pk} AND ck >= 1 AND ck <= 4"],
+        }[operation]
+        statements = [stmt for pk in pks for stmt in statements(pk)]
+        stmt = "BEGIN BATCH " + "; ".join(statements) + "; APPLY BATCH" if batch else statements[0]
+
+        if operation.startswith("delete"):
+            # Partition deletes leave nothing to read the tokens from afterwards.
+            expected_tokens = {r[0] for r in cql.execute(f"SELECT DISTINCT token(pk) FROM {table} WHERE pk IN ({', '.join(map(str, pks))})")}
+        # Like the dtest, run the statement with tracing through cqlsh, and
+        # check the CDC events of the trace it prints.
+        result = run_cqlsh(cql, f"TRACING ON; {stmt};")
+        assert result.returncode == 0, result.stderr
+        # cqlsh appends the shard and scheduling group to an activity.
+        events = [re.sub(r" \[shard \d+/[^\]]*\]$", "", line.split("|")[0].strip())
+                  for line in result.stdout.splitlines() if line.strip().startswith("CDC:")]
+        # Trace events are written asynchronously, so cqlsh may have printed the
+        # trace before CDC's last event: then read the session's events until it is in.
+        finished = "CDC: Finished generating all log mutations"
+        if finished not in events:
+            session_id = re.search(r"Tracing session: ([0-9a-f-]+)", result.stdout).group(1)
+            deadline = time.time() + 30
+            while finished not in events and time.time() < deadline:
+                time.sleep(0.1)
+                events = [row.activity for row in cql.execute(SimpleStatement(
+                    f"SELECT activity FROM system_traces.events WHERE session_id = {session_id}",
+                    consistency_level=ConsistencyLevel.ONE)) if row.activity.startswith("CDC:")]
+        if not operation.startswith("delete"):
+            expected_tokens = {r[0] for r in cql.execute(f"SELECT DISTINCT token(pk) FROM {table}")}
+        assert len(expected_tokens) == len(pks)
+
+        assert events[0] == "CDC: Started generating mutations for log rows"
+        assert events[-1] == finished
+        events = events[1:-1]
+        for token in expected_tokens:
+            key = rf"\{{key: pk\{{.*?\}}, token: {token}\}}"
+            expected = [
+                rf"CDC: Selecting preimage for {key}$" if images else
+                rf"CDC: Preimage not enabled for the table, not querying current value of {key}$",
+                rf"CDC: Generating log mutations for {key}$",
+                rf"CDC: Splitting {key}$" if splitting else rf"CDC: No need to split {key}$",
+                rf"CDC: Generated \d+ log mutations from {key}$",
+            ]
+            token_events = [e for e in events if re.search(rf"token: {token}\}}", e)]
+            assert len(token_events) == len(expected), token_events
+            for pattern, event in zip(expected, token_events):
+                assert re.match(pattern, event), (pattern, event)
+            events = [e for e in events if e not in token_events]
+        assert not events
