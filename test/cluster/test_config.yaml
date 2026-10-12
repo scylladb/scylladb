@@ -38,6 +38,5 @@ run_in_dev:
   - test_replace_alive_node
   - dtest/audit_test
   - audit/test_audit
-  - dtest/rebuild_test
 run_in_debug_modes:
   - random_failures/test_random_failures
