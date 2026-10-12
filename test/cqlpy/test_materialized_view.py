@@ -8,7 +8,7 @@ import time
 import pytest
 from . import rest_api
 
-from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index
+from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -1914,3 +1914,44 @@ def test_view_build_status_removed_on_drop_while_building(scylla_only, cql, test
                         message_injection(cql, injection)
         finally:
             cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {mv}')
+
+# A UDT literal with a case-sensitive field name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the field name must be saved with its quotes.
+# Reproduces SCYLLADB-5279 (the quotes were lost, so building the view, and
+# writes to the base table, failed with "Unknown field 'a'").
+def test_mv_where_udt_case_sensitive_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '("A" int, b int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p frozen<{udt}>, c int, v int, PRIMARY KEY (p, c)') as table:
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 3, 4)')
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 5, b: 2}}, 6, 7)')
+            with new_materialized_view(cql, table, '*', 'c, p', 'p = {"A": 1, b: 2} AND c IS NOT NULL') as mv:
+                wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({{"A": 1, b: 2}}, 8, 9)')
+                # The view update may be asynchronous, so wait for it.
+                expected = [(3, 4), (8, 9)]
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    rows = sorted((r.c, r.v) for r in cql.execute(f'SELECT c, v FROM {mv}'))
+                    if rows == expected:
+                        break
+                    time.sleep(0.1)
+                assert rows == expected
+
+# A call to a function with a case-sensitive name in a view's WHERE clause.
+# The view's WHERE clause is saved in the schema as text, and parsed again
+# when the view is used, so the function name must be saved with its quotes -
+# otherwise a different function (or none) would be called. The writes which
+# would call the function aren't checked here, because a user-defined function
+# in a view's WHERE clause can't be executed yet (#13746).
+# Reproduces SCYLLADB-5198.
+def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return 2'" if is_scylla(cql) else "LANGUAGE java AS 'return 2;'"
+    name = '"' + unique_name().upper() + '"'
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
+        with new_function(cql, test_keyspace, f'() CALLED ON NULL INPUT RETURNS int {body}', name=name):
+            with new_materialized_view(cql, table, '*', 'v, k', f'k = {test_keyspace}.{name}() AND v IS NOT NULL') as mv:
+                ks, view = mv.split('.')
+                [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
+                assert f'{name}()' in where_clause

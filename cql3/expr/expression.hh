@@ -566,7 +566,12 @@ data_type type_of(const expression& e);
 } // namespace cql3
 
 /// Custom formatter for an expression.  Supports multiple modes:
-///     {:user} for user-oriented output, suitable for error messages (default)
+///     {:user} for user-oriented output, suitable for error messages (default).
+///             The output is CQL text which can be parsed back to the same
+///             expression (as written by the user), so identifiers - e.g.,
+///             column names, the field names of a user-defined type
+///             literal, and function names - are quoted when needed. This is
+///             relied upon for saving a view's WHERE clause in the schema.
 ///     {:debug} for debug-oriented output
 ///     {:result_set_metadata} for stable output suitable for result set metadata (column headings)
 ///
