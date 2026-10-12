@@ -74,6 +74,10 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
         }));
 }
 
+sstring signature_type_name(const data_type& type) {
+    return type->is_collection() ? type->cql3_type_name() : type->cql3_type_name_without_frozen();
+}
+
 description user_function::describe(with_create_statement with_stmt) const {
     auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_stmt) {
@@ -82,7 +86,7 @@ description user_function::describe(with_create_statement with_stmt) const {
 
         fragmented_ostringstream stream;
 
-        auto arg_type_range = _arg_types | std::views::transform(std::mem_fn(&abstract_type::cql3_type_name_without_frozen));
+        auto arg_type_range = _arg_types | std::views::transform(signature_type_name);
         auto arg_range = std::views::zip(_arg_names, arg_type_range)
                 | std::views::transform([] (std::tuple<std::string_view, std::string_view> arg) {
                     const auto [name, type] = arg;
@@ -96,7 +100,7 @@ description user_function::describe(with_create_statement with_stmt) const {
                 "AS $${}$$;",
                 cql3::util::maybe_quote(name().keyspace), cql3::util::maybe_quote(name().name), fmt::join(arg_range, ", "),
                 _called_on_null_input ? "CALLED" : "RETURNS NULL",
-                _return_type->cql3_type_name_without_frozen(),
+                signature_type_name(_return_type),
                 _language,
                 _body);
 
