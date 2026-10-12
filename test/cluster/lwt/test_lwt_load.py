@@ -32,6 +32,8 @@ from cassandra.policies import DCAwareRoundRobinPolicy, TokenAwarePolicy, WhiteL
 from cassandra.query import SimpleStatement
 
 from test import DEBUG_MODES
+from test.cluster.lwt.test_lwt_basic import (assert_row_count, create_cf, create_ks, cql_timeout, lwt_insert_with_paxos_quorum,
+                                             patient_cql_connection, paxos_hosts, wait_for_paxos_expiry)
 from test.cluster.util import run_nodetool, stop_servers_gracefully
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -402,8 +404,19 @@ class PaxosLoadThread(threading.Thread):
 # beyond one per rack are stopped at once, then removed one by one from a
 # live node with "nodetool removenode", ignoring the other still-dead ones.
 @pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
-async def test_topology_change_in_presence_of_down_node(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(6, config=CONFIG, property_file=rack_property_files(6, 3))
+async def test_topology_change_in_presence_of_down_node(manager: ScyllaClusterManager, build_mode: str):
+    # The dtest's request timeouts: 10 s in release mode, 20 s in the other
+    # non-debug modes.
+    timeout = 10000 * (1 if build_mode == "release" else 2)
+    config = {**CONFIG,
+              "read_request_timeout_in_ms": timeout,
+              "range_request_timeout_in_ms": 3 * timeout,
+              "write_request_timeout_in_ms": timeout,
+              "truncate_request_timeout_in_ms": 3 * timeout,
+              "counter_write_request_timeout_in_ms": 2 * timeout,
+              "cas_contention_timeout_in_ms": timeout,
+              "request_timeout_in_ms": timeout}
+    servers = await manager.servers_add(6, config=config, property_file=rack_property_files(6, 3))
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE ks WITH replication={'class':'NetworkTopologyStrategy', 'replication_factor':3}")
     await cql.run_async("CREATE TABLE ks.test (k int PRIMARY KEY, v int)")
@@ -422,11 +435,13 @@ async def test_topology_change_in_presence_of_down_node(manager: ScyllaClusterMa
         removable = [s for s in servers if s not in reserved]
         random.shuffle(removable)
         host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in removable}
+        # As the dtest, wait for the others to see each node down before
+        # stopping its loader and the next node: meanwhile, coordinators keep
+        # sending writes to the stopped node.
         for s in removable:
             await manager.server_stop_gracefully(s.server_id)
-            await asyncio.to_thread(loaders.pop(s.server_id).stop)
-        for s in removable:
             await manager.others_not_see_server(s.ip_addr)
+            await asyncio.to_thread(loaders.pop(s.server_id).stop)
         alive = reserved[0]
         for i, s in enumerate(removable):
             others = [str(host_ids[o.server_id]) for o in removable[i + 1:]]
@@ -616,3 +631,56 @@ async def test_index_drop_add(manager: ScyllaClusterManager):
 async def test_materialized_view(manager: ScyllaClusterManager):
     await lwt_combine(manager, [(lwt_load, 1001, 9999), (materialized_view, 1000, None)],
                       nodes=4, rf=3, nrows=10000, loops=1, run_s=10, smp=min(4, os.cpu_count() or 1))
+
+
+############################################################################
+# Ported from lwt_test.py.
+
+# LWT INSERTs with uuid(), currentTimestamp() and currentDate() in the key,
+# unprepared and prepared, insert a new row every time.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_not_deterministic_function_in_pk(manager: ScyllaClusterManager):
+    await manager.server_add(config={**CONFIG, "hinted_handoff_enabled": False})
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE lwt WITH replication={'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+    await cql.run_async("CREATE TABLE IF NOT EXISTS lwt.test (pk1 uuid, pk2 timestamp, ck date, PRIMARY KEY((pk1, pk2), ck))")
+    insert_cql = "INSERT INTO lwt.test(pk1, pk2, ck) VALUES (uuid(), currentTimestamp(), currentDate()) IF NOT EXISTS"
+
+    async def count():
+        return list(await cql.run_async("SELECT COUNT(*) FROM lwt.test"))[0][0]
+    for _ in range(1000):
+        await cql.run_async(insert_cql)
+    assert await count() == 1000
+    prepared = cql.prepare(insert_cql)
+    for _ in range(1000):
+        await cql.run_async(prepared, [])
+    assert await count() == 2000
+
+
+# On three nodes (one per rack, RF=3), a table created with the default
+# paxos_grace_seconds is ALTERed to 3 s: the Paxos state of an LWT insert at
+# ALL is then in a quorum of the nodes' system.paxos, and is polled until it
+# is in none of them (it must be by the end of the 3 s), while the row
+# remains. As the dtest ran: vnodes (256 per node), so the state is read
+# from system.paxos by cf_id, at ONE through one session pinned to each
+# node's Host. That read needs filtering; the dtests' nodes run with
+# Scylla's default strict_allow_filtering (warn), test.py's with true, so
+# the port sets warn.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_paxos_grace_seconds_alter(manager: ScyllaClusterManager, build_mode: str):
+    config = {**CONFIG, "hinted_handoff_enabled": False, "strict_allow_filtering": "warn"}
+    servers = await manager.servers_add(3, config=config,
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    session = patient_cql_connection(manager, servers[0])
+    create_ks(session, "lwt", 3)
+    hosts = paxos_hosts(session, servers)
+    grace = cql_timeout(build_mode, 3)
+    cf_id_cache = {}
+    create_cf(session, "paxos_grace_seconds")
+    session.execute(f"ALTER TABLE lwt.paxos_grace_seconds WITH paxos_grace_seconds = {grace}")
+    assert session.cluster.control_connection.wait_for_schema_agreement(wait_time=120), "No schema agreement within 120s"
+
+    keys, expiry_deadline = await asyncio.to_thread(lwt_insert_with_paxos_quorum, session, hosts, "paxos_grace_seconds", grace, cf_id_cache)
+    await asyncio.to_thread(wait_for_paxos_expiry, session, hosts, "paxos_grace_seconds", keys, cf_id_cache, expiry_deadline)
+    assert_row_count(session, "paxos_grace_seconds", len(keys), cl=ConsistencyLevel.QUORUM)
+    session.cluster.shutdown()
