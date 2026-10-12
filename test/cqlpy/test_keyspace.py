@@ -480,3 +480,17 @@ def test_drop_keyspace_with_many_tables(cql):
             cql.execute(f"CREATE TABLE {keyspace}.test_{i} (k int PRIMARY KEY, c int)")
     with new_test_keyspace(cql, opts):
         pass
+
+# A keyspace created with Scylla's EverywhereStrategy keeps that strategy
+# in its schema and in DESC KEYSPACE.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_everywhere_strategy_keyspace(cql, scylla_only):
+    # The dtest's CREATE KEYSPACE IF NOT EXISTS.
+    keyspace = unique_name()
+    cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{'class': 'EverywhereStrategy'}} AND TABLETS = {{'enabled': false}}")
+    try:
+        assert get_replication(cql, keyspace)["class"] == "org.apache.cassandra.locator.EverywhereStrategy"
+        desc = cql.execute(f"DESC KEYSPACE {keyspace}").one().create_statement
+        assert "'class': 'org.apache.cassandra.locator.EverywhereStrategy'" in desc or "'class': 'EverywhereStrategy'" in desc
+    finally:
+        cql.execute(f"DROP KEYSPACE {keyspace}")
