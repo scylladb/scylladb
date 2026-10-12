@@ -25,7 +25,7 @@ import time
 
 import pytest
 from cassandra import ConsistencyLevel
-from cassandra.policies import WhiteListRoundRobinPolicy
+from cassandra.policies import DCAwareRoundRobinPolicy, TokenAwarePolicy, WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement
 
 from test import DEBUG_MODES
@@ -235,6 +235,8 @@ async def test_topology_grow(manager: ScyllaClusterManager):
         await stop_loader(server_id)
         loaders.pop(server_id).merge_result(expected)
     await validate_lwt_data(manager, expected)
+
+
 class RandomPaxosCluster:
     """The dsr ScyllaClusterTest the TestRandomPaxos dtests run: nodes in
     datacenter1/rack1 (keyspaces need not be RF-rack-valid), keyspace ks
@@ -344,3 +346,93 @@ async def test_topology_replace(manager: ScyllaClusterManager):
     await c.finish()
 
 
+############################################################################
+# Ported from paxos_tests.py.
+
+class PaxosLoadThread(threading.Thread):
+    """The dtest's LoadThread: inserts, then IF EXISTS increments, of keys
+    a thousand apart; errors are ignored. Like the dtest's session, which is
+    not exclusive, it connects through its node but routes each request to
+    the key's replicas (the driver's default token-aware policy)."""
+
+    def __init__(self, manager, server, shift):
+        super().__init__(daemon=True)
+        self.manager, self.server = manager, server
+        self.base = -2147483648 + shift
+        self.results = {}
+        self.stopping = threading.Event()
+
+    def run(self):
+        while not self.stopping.is_set():
+            try:
+                session = self.manager.con_gen([self.server.ip_addr],
+                                               load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy())).connect()
+                insert = session.prepare("INSERT INTO ks.test(k,v) VALUES (?, ?)")
+                update = session.prepare("UPDATE ks.test SET v = v + 1 WHERE k=? IF EXISTS")
+            except Exception:  # noqa: BLE001
+                time.sleep(1)
+                continue
+            # The dtest session's default consistency level.
+            insert.consistency_level = update.consistency_level = ConsistencyLevel.ONE
+            for n in range(self.base, 2147483647, 1000):
+                if self.stopping.is_set():
+                    return
+                i = (n - self.base) // 1000
+                if i not in self.results:
+                    try:
+                        session.execute(insert, (n, 0))
+                        self.results[i] = 0
+                    except Exception:  # noqa: BLE001
+                        self.results[i] = None
+                    continue
+                try:
+                    session.execute(update, (n,))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def stop(self):
+        self.stopping.set()
+        self.join()
+
+
+# Six nodes in three racks (RF=3) under LWT load from every node: the nodes
+# beyond one per rack are stopped at once, then removed one by one from a
+# live node with "nodetool removenode", ignoring the other still-dead ones.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_topology_change_in_presence_of_down_node(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(6, config=CONFIG, property_file=rack_property_files(6, 3))
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication={'class':'NetworkTopologyStrategy', 'replication_factor':3}")
+    await cql.run_async("CREATE TABLE ks.test (k int PRIMARY KEY, v int)")
+    loaders = {}
+    for n, s in enumerate(servers):
+        loaders[s.server_id] = PaxosLoadThread(manager, s, n)
+        loaders[s.server_id].start()
+    await asyncio.sleep(10)
+    try:
+        racks = [p["rack"] for p in rack_property_files(6, 3)]
+        reserved, seen = [], set()
+        for s, rack in zip(servers, racks):
+            if rack not in seen:
+                seen.add(rack)
+                reserved.append(s)
+        removable = [s for s in servers if s not in reserved]
+        random.shuffle(removable)
+        host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in removable}
+        for s in removable:
+            await manager.server_stop_gracefully(s.server_id)
+            await asyncio.to_thread(loaders.pop(s.server_id).stop)
+        for s in removable:
+            await manager.others_not_see_server(s.ip_addr)
+        alive = reserved[0]
+        for i, s in enumerate(removable):
+            others = [str(host_ids[o.server_id]) for o in removable[i + 1:]]
+            if others:
+                await run_nodetool(manager, alive, "removenode", "--ignore-dead-nodes", ",".join(others), str(host_ids[s.server_id]))
+            else:
+                await run_nodetool(manager, alive, "removenode", str(host_ids[s.server_id]))
+    finally:
+        for loader in loaders.values():
+            await asyncio.to_thread(loader.stop)
+    out, _, _ = await run_nodetool(manager, servers[0], "status")
+    logger.debug("nodetool status is: %s", out)
