@@ -135,6 +135,24 @@ def clock(cql):
     yield c
     c._restore()
 
+# Some tests below write to a row at a timestamp no newer than that of an
+# earlier deletion, and expect the deletion to win. That only works while the
+# base table still has the tombstone. But cqlpy's keyspace has RF=1 and
+# tablets, where tombstone_gc's default "repair" mode lets compaction purge a
+# tombstone once a second has passed since the deletion, after which the old
+# write comes back to life (SCYLLADB-5129). This happens when the test flushes,
+# so the tombstone is in an sstable which compaction can purge.
+#
+# no_tombstone_gc() takes the "extra" of new_test_table() - a "with ..."
+# clause, or an empty string - and adds to it disabling tombstone GC. Cassandra
+# has no tombstone_gc option, but its default gc_grace_seconds of 10 days
+# keeps the tombstone around anyway, so there "extra" is returned unchanged.
+def no_tombstone_gc(cql, extra):
+    if not is_scylla(cql):
+        return extra
+    no_gc = "tombstone_gc = {'mode': 'disabled'}"
+    return f"{extra} and {no_gc}" if extra else f"with {no_gc}"
+
 # CQL usually folds identifier names - keyspace, table and column names -
 # to lowercase. That is, unless the identifier is enclosed in double
 # quotation marks (") then the identifier becomes case sensitive.
@@ -1524,7 +1542,7 @@ def test_complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion(cql, tes
         if flush:
             nodetool.flush_all(cql)
     with new_test_table(cql, test_keyspace, 'p int primary key, v1 int, v2 int',
-            extra=no_cache) as table:
+            extra=no_tombstone_gc(cql, no_cache)) as table:
         with new_materialized_view(cql, table, '*', 'v1, p',
                 'p is not null and v1 is not null', extra=no_cache) as mv:
             # Set initial values TS=1
@@ -2760,7 +2778,7 @@ def test_update_column_not_in_view(cql, test_keyspace, flush, clock):
         if flush:
             nodetool.flush_all(cql)
     with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)',
-            extra=no_cache) as table:
+            extra=no_tombstone_gc(cql, no_cache)) as table:
         with new_materialized_view(cql, table, 'p, c', 'c, p',
                 'p is not null and c is not null', extra=no_cache) as mv:
             def check(expected):
