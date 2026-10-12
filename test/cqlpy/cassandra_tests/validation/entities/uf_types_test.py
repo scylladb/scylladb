@@ -227,7 +227,6 @@ def test_types_with_and_without_nulls(cql, test_keyspace):
     link="https://github.com/scylladb/scylladb/issues/13746",
     reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
 )
-@pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
 def test_function_with_frozen_set_type(cql, test_keyspace):
@@ -267,7 +266,6 @@ def test_function_with_frozen_set_type(cql, test_keyspace):
     link="https://github.com/scylladb/scylladb/issues/13746",
     reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
 )
-@pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
 def test_function_with_frozen_list_type(cql, test_keyspace):
@@ -307,7 +305,6 @@ def test_function_with_frozen_list_type(cql, test_keyspace):
     link="https://github.com/scylladb/scylladb/issues/13746",
     reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
 )
-@pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
 def test_function_with_frozen_map_type(cql, test_keyspace):
