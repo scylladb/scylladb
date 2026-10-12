@@ -428,4 +428,3 @@ async def test_refresh_invalidates_cache(manager: ScyllaClusterManager):
 
         assert list(await cql.run_async(f"SELECT pk, v FROM {ks}.cf")) == [('key1', 2)]
 
-
