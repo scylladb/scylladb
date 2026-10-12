@@ -79,3 +79,5 @@ async def test_cancel_mapreduce(manager: ScyllaClusterManager, build_mode: str):
                 async with asyncio.TaskGroup() as tg:
                     _ = tg.create_task(do_select())
                     _ = tg.create_task(wait_and_shutdown())
+
+
