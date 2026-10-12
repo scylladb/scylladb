@@ -19,7 +19,22 @@ if [ "$1" = configure ]; then
         addgroup --system scylla
         adduser scylla scylla
     fi
-    chown -R scylla:scylla /var/lib/scylla
+    # On upgrade Scylla may be running and keep creating/removing files and
+    # directories under /var/lib/scylla, so a recursive chown fails on entries
+    # that vanish mid-walk. Walk the tree only on a fresh install, or when the
+    # scylla user or group was just created (existing files carry a stale ID,
+    # and Scylla cannot be running). On upgrade, fix just the top-level data
+    # directories, like the RPM %attr list (plus saved_caches, which
+    # scylla_raid_setup also creates).
+    if [ -z "$2" ] || [ -n "$NOUSR" ] || [ -n "$NOGRP" ]; then
+        chown -R scylla:scylla /var/lib/scylla
+    else
+        for d in /var/lib/scylla /var/lib/scylla/{data,commitlog,hints,view_hints,coredump,saved_caches}; do
+            if [ -d "$d" ]; then
+                chown -h scylla:scylla "$d"
+            fi
+        done
+    fi
 fi
 
 if [ "$1" = configure ] && [ -n "$2" ]; then
