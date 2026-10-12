@@ -5,12 +5,11 @@
 #
 import asyncio
 import errno
-import fcntl
 import os
 import random
+import socket
 from collections.abc import Iterator
-from pathlib import Path
-from typing import NewType, Optional
+from typing import NewType
 
 
 Host = NewType('Host', str)
@@ -26,6 +25,8 @@ class HostRegistry:
     X.Y is unique for each test.py invocation, while Z and W together form
     a host counter that is unique across all hosts in a single run.
     """
+    # Abstract AF_UNIX socket name (leading NUL, see unix(7)) + the subnet, see __init__.
+    LOCK_PREFIX = "\0scylla-test/subnet-"
     _instance = None
     _initialized = False
 
@@ -50,11 +51,14 @@ class HostRegistry:
         # pid? The pid changes between restarts, and harness does start and
         # stops Scyllas.
         #
-        # A subnet is identified by a lock file placed into /tmp. If the file
-        # doesn't exist, the subnet is free. If it already exists and is
-        # locked, there is another process running with this subnet and we
-        # should try again with another subnet. If the file isn't locked, it
-        # remains from some previous invocation and can be locked and reused.
+        # A subnet is held by binding an abstract socket named after it. The name
+        # lives in the kernel, not on disk, and is scoped to the network namespace:
+        # exactly the runs that share our loopback, and so could collide on the
+        # subnet, see it, whichever user or container they run in (dbuild runs with
+        # --network host). bind() fails with EADDRINUSE while another run holds the
+        # name. The kernel drops it when this process exits, however it exits, so
+        # the subnet is ours for as long as this process runs; children that outlive
+        # it are on their own (see ldap_server.kill_leaked_toxiproxy).
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
         second_octet = int(worker_id[2:]) + 1
         # Try the worker-derived octet first, so xdist workers of the same run never clash, then
@@ -65,14 +69,13 @@ class HostRegistry:
         random.shuffle(other_octets)
         for octet in [second_octet, *other_octets]:
             subnet = f"127.{octet}"
-            self._lock_filename: Optional[Path] = Path("/tmp") / f"scylla-{subnet}"
-            self._lock_file = self._lock_filename.open("w")
+            self._lock = socket.socket(socket.AF_UNIX)
             try:
-                fcntl.lockf(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._lock.bind(self.LOCK_PREFIX + subnet)
                 break
             except OSError as e:
-                self._lock_file.close()
-                if e.errno not in (errno.EACCES, errno.EAGAIN):
+                self._lock.close()
+                if e.errno != errno.EADDRINUSE:
                     raise
         else:
             raise RuntimeError("Failed to acquire a subnet lock: all 127.<1..254> subnets are in use")
@@ -91,11 +94,6 @@ class HostRegistry:
         # Limits the number of leased hosts to the number of minted ones (256 3rd x 254 4th octets):
         # lease #65025 waits for a release.
         self._semaphore = asyncio.Semaphore(256 * 254)
-
-    async def cleanup(self) -> None:
-        if self._lock_filename:
-            self._lock_filename.unlink()
-            self._lock_filename = None
 
     async def lease_host(self) -> Host:
         await self._semaphore.acquire()
