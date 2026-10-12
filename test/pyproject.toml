@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "packaging==26.3",
+    "urwid==3.0.5",
 ]
 
 [dependency-groups]
