@@ -3111,4 +3111,76 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 32;
+
+    co_await cl_test(cfg, [](commitlog& log) -> future<> {
+        using force_sync = commitlog_mutation_entry_writer::force_sync;
+
+        constexpr auto n = 10;
+
+        utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+        utils::chunked_vector<frozen_mutation> mutations;
+        std::vector<replay_position> rps;
+
+        writers.reserve(n);
+        mutations.reserve(n);
+
+        // create multiple actual mutation writers
+        for (auto i = 0; i < n; ++i) {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            mutations.emplace_back(gen(1).front());
+            writers.emplace_back(gen.schema(), mutations.back(), force_sync(false));
+        }
+
+        db::replay_position first_rp, check_rp;
+        for (;;) {
+            auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 60s);
+            // we assume all entries goes into one single segment (no large entries)
+            auto i = std::ranges::adjacent_find(res, [](const db::replay_position& rp1, const db::replay_position& rp2) {
+                return rp1.base_id() != rp2.base_id();
+            });
+            if (i != res.end()) {
+                BOOST_ERROR("All entries should be in same segment");
+            }
+            db::replay_position new_rp;
+            for (auto& h : res) {
+                new_rp = h.release(); // keep data
+            }
+            if (first_rp == db::replay_position{}) {
+                first_rp = new_rp;
+            } else if (first_rp.base_id() != new_rp.base_id()) {
+                // we wrote into a new segment. This will almost
+                // certainly mean we first did a check into the previous one
+                BOOST_TEST_MESSAGE("Reached new segment");
+                check_rp = new_rp;
+                break;
+            }
+        }
+
+        co_await log.sync_all_segments();
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        bool found = false;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                commitlog_entry_reader r(buf_rp.buffer);
+                BOOST_REQUIRE(std::holds_alternative<mutation_entry>(r.entry().item));
+                const auto& mut_entry = std::get<mutation_entry>(r.entry().item);
+                auto& rp = buf_rp.position;
+                if (rp == check_rp) {
+                    // our (last) mutation entry in the new segment must have schema
+                    BOOST_REQUIRE(mut_entry.mapping().has_value());
+                    found = true;
+                }
+                co_return;
+            });
+        }
+        BOOST_REQUIRE(found);
+
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
