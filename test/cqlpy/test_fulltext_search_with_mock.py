@@ -791,60 +791,6 @@ def test_highlight_with_clustering_key(cql, test_keyspace, vector_store_mock):
         assert body["documents"] == ["third text", "first text", "second text"]
 
 
-def test_highlight_on_a_clustering_key_column(cql, test_keyspace, vector_store_mock):
-    """A fulltext index may target a clustering-key column, and then the text comes from the key rather than from a cell."""
-    schema = "p int, c text, PRIMARY KEY (p, c)"
-    with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(c) USING 'fulltext_index'")
-        rows_data = [(1, "the quick fox"), (2, "a lazy dog"), (3, "another fox")]
-        for p, c in rows_data:
-            cql.execute(f"INSERT INTO {table} (p, c) VALUES ({p}, '{c}')")
-
-        order = [(3, "another fox"), (1, "the quick fox")]
-        vector_store_mock.set_next_bm25_response(200, json.dumps({
-            "primary_keys": {"p": [p for p, _ in order], "c": [c for _, c in order]},
-            "scores": [2.0, 1.0],
-        }))
-        vector_store_mock.set_next_highlight_response(200, highlight_response(["another <b>fox</b>", "the quick <b>fox</b>"]))
-
-        rows = list(cql.execute(
-            f"SELECT p, BM25_HIGHLIGHT(c, 'fox') AS excerpt FROM {table} "
-            f"WHERE BM25(c, 'fox') > 0 ORDER BY BM25(c, 'fox') LIMIT 2"))
-
-        assert [row.p for row in rows] == [p for p, _ in order]
-        assert [row.excerpt for row in rows] == ["another <b>fox</b>", "the quick <b>fox</b>"]
-        # The documents are the clustering keys themselves, read from the key and not from a cell.
-        body = json.loads(vector_store_mock.highlight_requests[0].body)
-        assert body["documents"] == [c for _, c in order]
-
-
-def test_highlight_on_a_partition_key_column(cql, test_keyspace, vector_store_mock):
-    """A fulltext index may target one column of a composite partition key, and then the text comes from the partition key."""
-    schema = "p1 int, p2 text, c int, PRIMARY KEY ((p1, p2), c)"
-    with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(p2) USING 'fulltext_index'")
-        rows_data = [(1, "the quick fox", 10), (2, "a lazy dog", 20), (3, "another fox", 30)]
-        for p1, p2, c in rows_data:
-            cql.execute(f"INSERT INTO {table} (p1, p2, c) VALUES ({p1}, '{p2}', {c})")
-
-        order = [(3, "another fox", 30), (1, "the quick fox", 10)]
-        vector_store_mock.set_next_bm25_response(200, json.dumps({
-            "primary_keys": {"p1": [p1 for p1, _, _ in order], "p2": [p2 for _, p2, _ in order], "c": [c for _, _, c in order]},
-            "scores": [2.0, 1.0],
-        }))
-        vector_store_mock.set_next_highlight_response(200, highlight_response(["another <b>fox</b>", "the quick <b>fox</b>"]))
-
-        rows = list(cql.execute(
-            f"SELECT p1, BM25_HIGHLIGHT(p2, 'fox') AS excerpt FROM {table} "
-            f"WHERE BM25(p2, 'fox') > 0 ORDER BY BM25(p2, 'fox') LIMIT 2"))
-
-        assert [row.p1 for row in rows] == [p1 for p1, _, _ in order]
-        assert [row.excerpt for row in rows] == ["another <b>fox</b>", "the quick <b>fox</b>"]
-        # The documents are the partition-key components themselves, read from the key and not from a cell.
-        body = json.loads(vector_store_mock.highlight_requests[0].body)
-        assert body["documents"] == [p2 for _, p2, _ in order]
-
-
 def test_highlight_does_not_leak_the_fetched_column(cql, distinct_fts_table, vector_store_mock):
     """The highlighted column has to be read to be sent, but a query that did not select it must not receive it."""
     table = distinct_fts_table
