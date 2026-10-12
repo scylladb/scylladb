@@ -681,7 +681,6 @@ async def test_sstables_incrementally_released_during_streaming(manager: ScyllaC
                 logger.info(f"Workdir {workdir}")
 
                 decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
-                await manager.enable_tablet_balancing()
                 await manager.api.wait_for_injection_enter(servers[1].ip_addr, "tablet_stream_files_end_wait",
                                                            deadline=time.time() + 600.0)
 
