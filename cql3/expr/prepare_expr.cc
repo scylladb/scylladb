@@ -43,6 +43,14 @@ static expression coerce_to(expression e, const data_type& target, data_dictiona
 
 static bool is_widenable_to(const data_type& from, const data_type& to);
 
+// A frozen and a non-frozen collection or UDT of the same type have the same
+// serialized value, so a value of one can be used as the other (e.g., a
+// frozen collection column passed to a function whose parameter is a
+// non-frozen collection).
+static bool same_type_ignoring_frozen(const data_type& a, const data_type& b) {
+    return a->underlying_type()->freeze() == b->underlying_type()->freeze();
+}
+
 // Memoization that is active only for the duration of a single top-level prepare.
 //
 // Resolving an unresolved nested function call against a candidate parameter type
@@ -1468,6 +1476,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     // Still validate the return type: accepted if value-compatible with the receiver or
     // widenable to it (the caller then wraps the call via coerce_to).
     if (receiver && !receiver->type->is_value_compatible_with(*fun->return_type())
+            && !same_type_ignoring_frozen(receiver->type, fun->return_type())
             && !is_widenable_to(fun->return_type(), receiver->type)) {
         throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
                                                     fun->name(), fun->return_type()->as_cql3_type(),
@@ -1549,6 +1558,7 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
             if (fun && receiver.type == fun->return_type()) {
                 return assignment_testable::test_result::EXACT_MATCH;
             } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())
+                            || same_type_ignoring_frozen(receiver.type, fun->return_type())
                             || is_widenable_to(fun->return_type(), receiver.type)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             } else {
@@ -1570,6 +1580,8 @@ static assignment_testable::test_result expression_test_assignment(const data_ty
     if (receiver.type->underlying_type() == expr_type->underlying_type() || (receiver.type == long_type && expr_type->is_counter())) {
         return assignment_testable::test_result::EXACT_MATCH;
     } else if (receiver.type->is_value_compatible_with(*expr_type)) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    } else if (same_type_ignoring_frozen(receiver.type, expr_type)) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } else if (is_widenable_to(expr_type, receiver.type)) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
