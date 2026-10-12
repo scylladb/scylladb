@@ -456,22 +456,33 @@ class UnixSockerListener:
         self.sock.close()
 
 
+# Stopping a listener takes up to its 0.5 s poll interval, so each socket path keeps one listener for the whole module.
+syslog_listeners: dict[str, UnixSockerListener] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def stop_syslog_listeners():
+    yield
+    for socket_path, listener in syslog_listeners.items():
+        listener.shutdown()
+        if os.path.exists(socket_path):
+            os.remove(socket_path)
+    syslog_listeners.clear()
+
+
 class AuditBackendSyslog(AuditBackend):
     audit_default_settings = {"audit": "syslog", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
 
     def __init__(self, socket_path: str | None = None):
         super().__init__(socket_path=socket_path)
         self.socket_path = socket_path or tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socket")
-        self.unix_socket_listener = UnixSockerListener(self.socket_path)
+        if self.socket_path not in syslog_listeners:
+            syslog_listeners[self.socket_path] = UnixSockerListener(self.socket_path)
+        self.unix_socket_listener = syslog_listeners[self.socket_path]
         self.named_tuple_factory = namedtuple("Row", ["date", "node", "event_time", "category", "consistency", "error", "keyspace_name", "operation", "source", "table_name", "username"])
 
     def __enter__(self):
         return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.unix_socket_listener.shutdown()
-        if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
 
     @override
     def audit_mode(self) -> str:
