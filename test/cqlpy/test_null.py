@@ -10,7 +10,9 @@ import pytest
 import re
 from cassandra.protocol import InvalidRequest
 from cassandra.connection import DRIVER_NAME
-from .util import unique_name, unique_key_string, unique_key_int, new_test_table
+from .util import unique_name, unique_key_string, unique_key_int, new_test_table, new_named_table
+from .nodetool import flush_keyspace
+from test import DEBUG_MODES
 from test.pylib.skip_types import skip_env
 
 
@@ -344,3 +346,68 @@ def test_traced_null_int_in_collection(scylla_driver_only, cql, test_keyspace, c
         with pytest.raises(InvalidRequest, match='null|NULL'):
             fut.result()
         assert '41, null, 42' in fut.get_query_trace(max_wait=60).parameters.values()
+
+# Nulls written by INSERT, read back as missing values; a restriction
+# "k = null", the same key restricted twice (equal or different values) and
+# "v1 = null" on a regular column (indexed or filtered) match no rows; a null
+# element in a set literal is rejected. The same after a flush.
+def do_test_null_support(cql, keyspace, create_index):
+    with new_named_table(cql, keyspace, "test", "k int, c int, v1 int, v2 set<text>, PRIMARY KEY (k, c)") as table:
+        if create_index:
+            cql.execute(f"CREATE INDEX on {table}(v1)")
+            allow_filtering = ""
+        else:
+            allow_filtering = "ALLOW FILTERING"
+        cql.execute(f"INSERT INTO {table} (k, c, v1, v2) VALUES (0, 0, null, {{'1', '2'}})")
+        cql.execute(f"INSERT INTO {table} (k, c, v1) VALUES (0, 1, 1)")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 0, None, {"1", "2"}), (0, 1, 1, None)]
+        cql.execute(f"INSERT INTO {table} (k, c, v1) VALUES (0, 1, null)")
+        cql.execute(f"INSERT INTO {table} (k, c, v2) VALUES (0, 0, null)")
+        both = [(0, 0, None, None), (0, 1, None, None)]
+        assert list(cql.execute(f"SELECT * FROM {table}")) == both
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0")) == both
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = null")) == []
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 AND k = 0")) == both
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 AND k = 0 AND c = 1")) == [(0, 1, None, None)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 AND k = 1")) == []
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 AND v1 = null {allow_filtering}")) == []
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE v1 = null {allow_filtering}")) == []
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (k, c, v2) VALUES (0, 2, {{1, null}})")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (k, c, v2) VALUES (0, 0, {{ 'foo', 'bar', null }})")
+        # The rows (and the index) written to sstables read the same.
+        flush_keyspace(cql, keyspace)
+        assert list(cql.execute(f"SELECT * FROM {table}")) == both
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE v1 = null {allow_filtering}")) == []
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_null_support(cql, test_keyspace_vnodes):
+    do_test_null_support(cql, test_keyspace_vnodes, create_index=False)
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_null_support_with_index(cql, test_keyspace_vnodes):
+    do_test_null_support(cql, test_keyspace_vnodes, create_index=True)
+
+# Prepared UPDATEs binding null to one or both regular columns. An UPDATE
+# writes no row marker, so the one setting both columns to null leaves no
+# row, and a scan returns the other three.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_prepared_update_with_null_values(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "foobar", "key text PRIMARY KEY , val1 text , val2 float") as table:
+        update = cql.prepare(f"UPDATE {table} SET val1 = ?, val2 = ? WHERE key = ?;")
+        cql.execute(update.bind(("ccc", 1.0, "java1")))
+        cql.execute(update.bind((None, 1.0, "java2")))
+        cql.execute(update.bind((None, None, "java3")))
+        cql.execute(update.bind(("ddd", None, "java4")))
+        assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 3
+
+# A regular column never written reads as null, in a full scan and by key.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_unset_column_reads_null(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v1 int, v2 int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v1, v2) VALUES (0, 0, 0)")
+        cql.execute(f"INSERT INTO {table} (k, v1) VALUES (1, 1)")
+        cql.execute(f"INSERT INTO {table} (k, v1, v2) VALUES (2, 2, 2)")
+        assert list(cql.execute(f"SELECT v2 FROM {table}")) == [(None,), (0,), (2,)]
+        assert list(cql.execute(f"SELECT v2 FROM {table} WHERE k = 1")) == [(None,)]

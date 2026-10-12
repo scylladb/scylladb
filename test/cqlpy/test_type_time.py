@@ -6,7 +6,8 @@
 # Test involving the "time" column type.
 #############################################################################
 
-from .util import unique_name, unique_key_int
+from test import DEBUG_MODES
+from .util import unique_name, unique_key_int, new_test_table
 
 import pytest
 
@@ -63,3 +64,22 @@ def test_type_time_from_bad_string(cql, table1):
             cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '{bad}')")
         with pytest.raises(InvalidRequest):
             cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "t": "{bad}"}}'""")
+
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_cql_time_type.
+# A time string needs seconds, and at most 9 fractional digits; valid time
+# values, used as the partition key, read back with nanosecond precision.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_type_time_from_invalid_string(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "t time, PRIMARY KEY (t)") as table:
+        for t in ["14:53", "14:53:12.1234567890"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} (t) VALUES ('{t}')")
+        for t in ["14:53:12", "14:53:12.1234", "14:53:12.123456789"]:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{t}')")
+        res = list(cql.execute(f"SELECT * FROM {table}"))
+        assert len(res) == 3, res
+        assert "14:53:12.123400000" == str(res[0].t)
+        assert "14:53:12.000000000" == str(res[1].t)
+        assert "14:53:12.123456789" == str(res[2].t)

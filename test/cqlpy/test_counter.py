@@ -7,9 +7,10 @@
 # See also tests for casting involving counter columns in test_cast_data.py
 ###############################################################################
 
+from test import DEBUG_MODES
 import pytest
 from .util import new_test_table, unique_key_int
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from .rest_api import scylla_inject_error
 
 @pytest.fixture(scope="module")
@@ -73,3 +74,31 @@ def test_counter_update_while_table_dropped(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table, \
          scylla_inject_error(cql, "apply_counter_update_delay_5s", one_shot=True):
         cql.execute_async(f'UPDATE {table} SET c = c + 1 WHERE p = 0')
+
+# A counter can go negative and back: a sequence of increments and
+# decrements, including ones written without spaces ("total+1").
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_counter_negative_values(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c text, total counter, PRIMARY KEY (p, c)") as table:
+        for update, expected in [("total + 1", 1), ("total - 4", -3), ("total+1", -2), ("total -2", -4)]:
+            cql.execute(f"UPDATE {table} SET total = {update} WHERE p = 1 AND c = 'a'")
+            assert list(cql.execute(f"SELECT total FROM {table} WHERE p = 1 AND c = 'a'")) == [(expected,)]
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes.
+
+# A table cannot mix a counter column with a non-counter set column
+# (CASSANDRA-4706).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_counter_with_set_column_rejected(cql, test_keyspace_vnodes):
+    with pytest.raises(ConfigurationException, match=r"Cannot add a( non)? counter column"):
+        cql.execute(f"CREATE TABLE {test_keyspace_vnodes}.test (id bigint PRIMARY KEY, count counter, things set<text>)")
+
+# Collections of counters are rejected.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_collection_of_counters_rejected(cql, test_keyspace_vnodes):
+    for column in ["l list<counter>", "s set<counter>", "m map<text, counter>"]:
+        with pytest.raises((InvalidRequest, SyntaxException)):
+            cql.execute(f"CREATE TABLE {test_keyspace_vnodes}.test (k int PRIMARY KEY, {column})")

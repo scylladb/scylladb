@@ -7,11 +7,13 @@
 # Tests for various CQL statements, converted from test/boost/cql_query_test.cc.
 #############################################################################
 
+from test import DEBUG_MODES
 from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 import json
 import math
+import random
 import re
 import struct
 import time
@@ -27,9 +29,9 @@ from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
 
-from . import nodetool
+from . import nodetool, rest_api
 from .nodetool import flush, no_autocompaction_context
-from .util import ScyllaMetrics, config_value_context, is_scylla, new_aggregate, new_cql, new_function, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_aggregate, new_cql, new_function, new_session, new_named_table, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -3916,3 +3918,504 @@ def test_twcs_reversed_restricted_query_optimized(cql, test_keyspace, scylla_onl
 
 def test_twcs_reversed_restricted_query_regular(cql, test_keyspace, scylla_only):
     do_test_twcs_reversed_restricted_query(cql, test_keyspace, False)
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_select_duplicate_column.
+# Selecting the same column more than once must work. Reproduces #1367,
+# where it failed an assertion in result_set::add_row.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_select_duplicate_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "userid uuid, url text, time bigint, PRIMARY KEY (userid, url)") as table:
+        cql.execute(f"INSERT INTO {table} (userid, url, time) VALUES (550e8400-e29b-41d4-a716-446655440000, 'http://foo.bar', 42)")
+        cql.execute(f"INSERT INTO {table} (userid, url, time) VALUES (550e8400-e29b-41d4-a716-446655440000, 'http://foo-2.bar', 24)")
+        cql.execute(f"SELECT userid, userid FROM {table}")
+
+# A boolean can be the partition key, and both values can be looked up.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_boolean_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k boolean PRIMARY KEY, b boolean") as table:
+        cql.execute(f"INSERT INTO {table} (k, b) VALUES (true, false)")
+        cql.execute(f"INSERT INTO {table} (k, b) VALUES (false, true)")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = true")) == [(True, False)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = false")) == [(False, True)]
+
+# A prepared "c IN ?" with 100 clustering values, first against a single
+# existing row and then against a partition with many rows, of which only
+# some match. Reproduces CASSANDRA-8410.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_large_clustering_in(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, c, v) VALUES (?, ?, ?)")
+        select = cql.prepare(f"SELECT * FROM {table} WHERE k = ? AND c IN ?")
+        in_values = list(range(100))
+        cql.execute(insert, [0, 0, 0])
+        assert list(cql.execute(select, [0, in_values])) == [(0, 0, 0)]
+        clustering_values = range(0, 10000, 7)
+        execute_concurrent_with_args(cql, insert, [(0, c, c) for c in clustering_values])
+        expected = [(0, c, c) for c in clustering_values if c < 100]
+        assert list(cql.execute(select, [0, in_values])) == expected
+
+# Floating-point literals with an exponent, in the forms 3E+10, 3.E10 and
+# -23.44E-3, are accepted and give the right values.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_float_literal_with_exponent(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, d double, f float") as table:
+        cql.execute(f"INSERT INTO {table} (k, d, f) VALUES (0, 3E+10, 3.4E3)")
+        cql.execute(f"INSERT INTO {table} (k, d, f) VALUES (1, 3.E10, -23.44E-3)")
+        cql.execute(f"INSERT INTO {table} (k, d, f) VALUES (2, 3, -2)")
+        assert list(cql.execute(f"SELECT d, f FROM {table} WHERE k = 0")) == [(3e10, 3400.0)]
+        [(d, f)] = cql.execute(f"SELECT d, f FROM {table} WHERE k = 1")
+        assert d == 3e10
+        assert f == struct.unpack('f', struct.pack('f', -23.44e-3))[0]
+        assert list(cql.execute(f"SELECT d, f FROM {table} WHERE k = 2")) == [(3.0, -2.0)]
+
+# A blob produced by one type's conversion function can be read back as
+# another compatible type: blobAsVarint(bigintAsBlob(3)) is 3.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_blob_conversion_across_types(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, i varint, b blob") as table:
+        cql.execute(f"INSERT INTO {table} (k, i, b) VALUES (0, blobAsVarint(bigintAsBlob(3)), textAsBlob('foobar'))")
+        assert list(cql.execute(f"SELECT i, blobAsText(b) FROM {table} WHERE k = 0")) == [(3, 'foobar')]
+
+# NaN, -NaN, Infinity and -Infinity literals can be used as a float
+# partition key. NaN and -NaN are the same key.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_nan_infinity_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "f float PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (f, v) VALUES (NaN, 1)")
+        cql.execute(f"INSERT INTO {table} (f, v) VALUES (-NaN, 2)")
+        cql.execute(f"INSERT INTO {table} (f, v) VALUES (Infinity, 3)")
+        cql.execute(f"INSERT INTO {table} (f, v) VALUES (-Infinity, 4)")
+        assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 3
+        for nan in ["NaN", "-NaN"]:
+            [(f, v)] = cql.execute(f"SELECT f, v FROM {table} WHERE f = {nan}")
+            assert math.isnan(f) and v == 2
+        assert list(cql.execute(f"SELECT f, v FROM {table} WHERE f = Infinity")) == [(math.inf, 3)]
+        assert list(cql.execute(f"SELECT f, v FROM {table} WHERE f = -Infinity")) == [(-math.inf, 4)]
+
+# A multi-column slice "(b, c, d, e) > (...)" or "<= (...)" compares the
+# tuples by their values, while the rows come back in clustering order. Check
+# this for many combinations of ASC and DESC clustering columns, computing
+# the expected result in Python. Reproduces CASSANDRA-7281.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("order", [
+    ("DESC", "ASC", "DESC", "ASC"), ("DESC", "DESC", "DESC", "ASC"),
+    ("ASC", "DESC", "DESC", "ASC"), ("DESC", "ASC", "ASC", "DESC"),
+    ("DESC", "DESC", "DESC", "DESC"), ("ASC", "ASC", "ASC", "ASC"),
+    ("DESC", "ASC", "DESC", "DESC")])
+def test_multi_column_slice_mixed_order(cql, test_keyspace, order):
+    columns = ["b", "c", "d", "e"]
+    clustering_order = ", ".join(f"{c} {o}" for c, o in zip(columns, order))
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d, e)",
+                        f"WITH CLUSTERING ORDER BY ({clustering_order})") as table:
+        data = [(2, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 0), (0, 1, 2, -1), (0, 1, 1, -1), (0, 1, 1, 0),
+                (0, 1, 1, 1), (0, 1, 0, 2), (0, 2, 1, -3), (0, 2, 0, 3), (-1, 2, 2, 2)]
+        for row in data:
+            cql.execute(f"INSERT INTO {table} (a, b, c, d, e) VALUES (0, {row[0]}, {row[1]}, {row[2]}, {row[3]})")
+        # Python's sort is stable, so sorting by the last column first gives
+        # the clustering order.
+        in_clustering_order = data
+        for i in reversed(range(4)):
+            in_clustering_order = sorted(in_clustering_order, key=lambda r: r[i], reverse=(order[i] == "DESC"))
+        bound = (0, 1, 1, 0)
+        for op, pred in [(">", lambda r: r > bound), ("<=", lambda r: r <= bound)]:
+            expected = [(0, *r) for r in in_clustering_order if pred(r)]
+            assert expected == list(cql.execute(f"SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) {op} {bound}"))
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# Deleting one row of a partition by its full primary key leaves the other
+# (CASSANDRA-4193); a table with the value in the clustering key reads the
+# same rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_delete_row_by_full_key(cql, test_keyspace_vnodes):
+    rows = [("abc", 2, "rst", "some value"), ("abc", 4, "xyz", "some other value")]
+    with new_named_table(cql, test_keyspace_vnodes, "testcf", "username varchar, id int, name varchar, stuff varchar, PRIMARY KEY(username, id)") as table:
+        for row in rows:
+            cql.execute(f"INSERT INTO {table} (username, id, name, stuff) VALUES {row};")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == rows
+        cql.execute(f"DELETE FROM {table} WHERE username='abc' AND id=2")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == rows[1:]
+    with new_named_table(cql, test_keyspace_vnodes, "testcf2", "username varchar, id int, name varchar, stuff varchar, PRIMARY KEY(username, id, name)") as table:
+        for row in rows:
+            cql.execute(f"INSERT INTO {table} (username, id, name, stuff) VALUES {row};")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == rows
+
+# A deleted partition does not show up in a scan ("range ghost"). A table
+# created with CREATE COLUMNFAMILY, with a column named KEY, in a keyspace of
+# its own (CASSANDRA-3505): its row reads back, and after TRUNCATE neither a
+# scan nor a read by key finds it. Like on the dtest's node, auto_snapshot is
+# on, so TRUNCATE takes a snapshot; the test removes it.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_no_range_ghost(cql, test_keyspace_vnodes, this_dc, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int") as table:
+        for k in range(5):
+            cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, 0)")
+        assert sorted(cql.execute(f"SELECT k FROM {table}")) == [(k,) for k in range(5)]
+        cql.execute(f"DELETE FROM {table} WHERE k=2")
+        assert sorted(cql.execute(f"SELECT k FROM {table}")) == [(k,) for k in range(5) if k != 2]
+    with new_test_keyspace(cql, f"with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{'enabled': false}}") as ks:
+        cql.execute(f"CREATE COLUMNFAMILY {ks}.users (KEY varchar PRIMARY KEY, password varchar, gender varchar, birth_year bigint)")
+        cql.execute(f"INSERT INTO {ks}.users (KEY, password) VALUES ('user1', 'ch@ngem3a')")
+        cql.execute(f"UPDATE {ks}.users SET gender = 'm', birth_year = 1980 WHERE KEY = 'user1'")
+        assert list(cql.execute(f"SELECT * FROM {ks}.users WHERE KEY='user1'")) == [("user1", 1980, "m", "ch@ngem3a")]
+        try:
+            with config_value_context(cql, 'auto_snapshot', 'true'):
+                cql.execute(f"TRUNCATE {ks}.users")
+            assert list(cql.execute(f"SELECT * FROM {ks}.users")) == []
+            assert list(cql.execute(f"SELECT * FROM {ks}.users WHERE KEY='user1'")) == []
+        finally:
+            for snapshot in nodetool.list_snapshots(cql):
+                if any(s['ks'] == ks for s in snapshot['value']):
+                    nodetool.del_snapshot(cql, snapshot['key'], [ks])
+
+# A range tombstone (DELETE by a clustering prefix) in a partition written
+# to an sstable, compacted with that sstable by a node-wide flush and
+# compaction, deletes exactly the rows with that prefix.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_range_tombstone_after_compaction(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test1", "k int, c1 int, c2 int, v1 text, PRIMARY KEY (k, c1, c2)") as table:
+        for c1 in range(4):
+            for c2 in range(2):
+                cql.execute(f"INSERT INTO {table} (k, c1, c2, v1) VALUES (0, {c1}, {c2}, '{c1}{c2}')")
+        nodetool.flush_all(cql)
+        cql.execute(f"DELETE FROM {table} WHERE k = 0 AND c1 = 1")
+        nodetool.flush_all(cql)
+        rest_api.post_request(cql, "storage_service/compact")
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE k = 0")) == [(f"{c1}{c2}",) for c1 in range(4) for c2 in range(2) if c1 != 1]
+
+# Deleting a row by its full primary key leaves the other rows of the
+# partition.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_delete_one_row_of_partition(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c1 int, c2 int, v1 int, v2 int, PRIMARY KEY (k, c1, c2)") as table:
+        for row in [(0, 0, 0, 0, 0), (0, 0, 1, 1, 1), (0, 0, 2, 2, 2), (0, 1, 0, 3, 3)]:
+            cql.execute(f"INSERT INTO {table} (k, c1, c2, v1, v2) VALUES {row}")
+        cql.execute(f"DELETE FROM {table} WHERE k = 0 AND c1 = 0 AND c2 = 0")
+        assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 3
+
+# CQL row existence (CASSANDRA-4361): deleting a primary key column is
+# rejected; a row whose regular columns are all deleted still exists (it was
+# INSERTed), until the row itself is deleted; an INSERT of only the primary
+# key creates a row.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_row_existence(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c int, v1 int, v2 int, PRIMARY KEY (k, c)") as table:
+        cql.execute(f"INSERT INTO {table} (k, c, v1, v2) VALUES (1, 1, 1, 1)")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, 1, 1, 1)]
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DELETE c FROM {table} WHERE k = 1 AND c = 1")
+        cql.execute(f"DELETE v2 FROM {table} WHERE k = 1 AND c = 1")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, 1, 1, None)]
+        cql.execute(f"DELETE v1 FROM {table} WHERE k = 1 AND c = 1")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, 1, None, None)]
+        cql.execute(f"DELETE FROM {table} WHERE k = 1 AND c = 1")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == []
+        cql.execute(f"INSERT INTO {table} (k, c) VALUES (2, 2)")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(2, 2, None, None)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_bug_8558.
+# A row written to one sstable and deleted in another, both by node-wide
+# flushes, cannot be read (CASSANDRA-8558). Like the dtest, the test creates
+# its own NetworkTopologyStrategy keyspace with a 'replication_factor' option.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_row_deleted_in_newer_sstable(cql, has_tablets):
+    opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    if has_tablets:
+        opts += " AND tablets = {'enabled': false}"
+    with new_test_keyspace(cql, opts) as ks, new_named_table(cql, ks, "table1", "a int, b int, c text,primary key(a,b)") as table:
+        cql.execute(f"INSERT INTO {table}(a,b,c) VALUES(1,1,'1')")
+        nodetool.flush_all(cql)
+        cql.execute(f"DELETE FROM {table} where a=1 and b=1")
+        nodetool.flush_all(cql)
+        assert list(cql.execute(f"select * from {table} where a=1 and b=1")) == []
+
+# A deleted partition is skipped by a scan of a table without clustering
+# key.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_scan_skips_deleted_partition(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int") as table:
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table} (k, v) VALUES ({i}, {i})")
+        cql.execute(f"DELETE FROM {table} WHERE k = 1")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 0), (2, 2)]
+
+# A scan with LIMIT over partitions some of which were deleted returns
+# exactly LIMIT live rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_scan_limit_with_deleted_partitions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int") as table:
+        nb_keys, nb_deletes = 30, 5
+        for i in range(nb_keys):
+            cql.execute(f"INSERT INTO {table}(k, v) VALUES ({i}, {i})")
+        for i in random.sample(range(nb_keys), nb_deletes):
+            cql.execute(f"DELETE FROM {table} WHERE k = {i}")
+        assert len(list(cql.execute(f"SELECT * FROM {table} LIMIT {nb_keys // 2}"))) == nb_keys // 2
+
+# A scan with LIMIT of a table with 100 partitions of 3 rows each returns
+# exactly LIMIT rows, also when they come from several token ranges.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_limit_sparse_table(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "clicks", "userid int, url text, day int, month text, year int, PRIMARY KEY (userid, url)") as table:
+        for _id in range(100):
+            for tld in ["com", "org", "net"]:
+                cql.execute(f"INSERT INTO {table} (userid, url, day, month, year) VALUES ({_id}, 'http://foo.{tld}', 1, 'jan', 2012)")
+        assert len(list(cql.execute(f"SELECT * FROM {table} LIMIT 4"))) == 4
+        # The dtest's node had 256 vnodes, so even LIMIT 4 needed rows from
+        # several token ranges; with fewer vnodes, a larger LIMIT does.
+        assert len(list(cql.execute(f"SELECT * FROM {table} LIMIT 200"))) == 200
+
+# IN on a uuid partition key reads both partitions.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_select_partition_key_in(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "userid uuid PRIMARY KEY, firstname text, lastname text, age int") as table:
+        cql.execute(f"INSERT INTO {table} (userid, firstname, lastname, age) VALUES (550e8400-e29b-41d4-a716-446655440000, 'Frodo', 'Baggins', 32)")
+        cql.execute(f"INSERT INTO {table} (userid, firstname, lastname, age) VALUES (f47ac10b-58cc-4372-a567-0e02b2c3d479, 'Samwise', 'Gamgee', 33)")
+        res = list(cql.execute(f"SELECT firstname, lastname FROM {table} WHERE userid IN (550e8400-e29b-41d4-a716-446655440000, f47ac10b-58cc-4372-a567-0e02b2c3d479)"))
+        assert len(res) == 2
+
+# Inclusive and exclusive bounds of clustering slices, also with LIMIT and
+# with ORDER BY DESC and LIMIT.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_exclusive_and_inclusive_slices(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        for x in range(10):
+            cql.execute(f"INSERT INTO {table} (k, c, v) VALUES (0, {x}, {x})")
+        def select(where):
+            return [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE k = 0{where}")]
+        assert select("") == list(range(10))
+        assert select(" AND c >= 2 AND c <= 6") == [2, 3, 4, 5, 6]
+        assert select(" AND c > 2 AND c <= 6") == [3, 4, 5, 6]
+        assert select(" AND c >= 2 AND c < 6") == [2, 3, 4, 5]
+        assert select(" AND c > 2 AND c < 6") == [3, 4, 5]
+        assert select(" AND c > 2 AND c <= 6 LIMIT 2") == [3, 4]
+        assert select(" AND c >= 2 AND c < 6 ORDER BY c DESC LIMIT 2") == [5, 4]
+
+# A slice on the last of four clustering columns, with the others fixed
+# (CASSANDRA-4372).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_slice_on_last_clustering_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "a int, b int, c int, d int, e int, f text, PRIMARY KEY (a, b, c, d, e)") as table:
+        for row in [(1, 1, 1, 1, 2, '2'), (1, 1, 1, 1, 1, '1'), (1, 1, 1, 2, 1, '1'), (1, 1, 1, 1, 3, '3'), (1, 1, 1, 1, 5, '5')]:
+            cql.execute(f"INSERT INTO {table} (a, b, c, d, e, f) VALUES {row};")
+        assert list(cql.execute(f"SELECT a, b, c, d, e, f FROM {table} WHERE a = 1 AND b = 1 AND c = 1 AND d = 1 AND e >= 2;")) == [
+            (1, 1, 1, 1, 2, "2"), (1, 1, 1, 1, 3, "3"), (1, 1, 1, 1, 5, "5")]
+
+# A composite partition key: a scan in token order, IN on its last
+# component, token() equality and range; restricting only the last
+# component is rejected.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_composite_partition_key_queries(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k1 int, k2 int, c int, v int, PRIMARY KEY ((k1, k2), c)") as table:
+        for i in range(4):
+            cql.execute(f"INSERT INTO {table} (k1, k2, c, v) VALUES (0, {i}, {i}, {i})")
+        all_rows = [(0, 2, 2, 2), (0, 3, 3, 3), (0, 0, 0, 0), (0, 1, 1, 1)]
+        assert list(cql.execute(f"SELECT * FROM {table}")) == all_rows
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k1 = 0 and k2 IN (1, 3)")) == [(0, 1, 1, 1), (0, 3, 3, 3)]
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE k2 = 3")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE token(k1, k2) = token(0, 1)")) == [(0, 1, 1, 1)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE token(k1, k2) > {-((2**63) - 1)}")) == all_rows
+
+# token() restrictions: from the minimum token all 100 partitions are
+# returned, a comparison with an int literal works, and a range between the
+# tokens of two keys returns the partitions between them in scan order.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_token_range_restrictions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, c int, v int") as table:
+        c = 100
+        for i in range(c):
+            cql.execute(f"INSERT INTO {table} (k, c, v) VALUES ({i}, {i}, {i})")
+        in_order = [r.k for r in cql.execute(f"SELECT k FROM {table}")]
+        assert len(in_order) == c
+        assert len(list(cql.execute(f"SELECT k FROM {table} WHERE token(k) >= {-(2**63)}"))) == c
+        cql.execute(f"SELECT k FROM {table} WHERE token(k) >= 0")
+        assert [r.k for r in cql.execute(f"SELECT k FROM {table} WHERE token(k) >= token({in_order[32]}) AND token(k) < token({in_order[65]})")] == in_order[32:65]
+
+# A slice on the first clustering column combined with an equality on the
+# second one is rejected (CASSANDRA-4532).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_slice_then_eq_on_clustering_rejected(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "compositetest", "status ascii, ctime bigint, key ascii, nil ascii, PRIMARY KEY (status, ctime, key)") as table:
+        for ctime, key in [(12345678, 'key1'), (12345678, 'key2'), (12345679, 'key3'), (12345679, 'key4'), (12345679, 'key5'), (12345680, 'key6')]:
+            cql.execute(f"INSERT INTO {table}(status,ctime,key,nil) VALUES ('C',{ctime},'{key}','')")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE ctime>=12345679 AND key='key3' AND ctime<=12345680 LIMIT 3;")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE ctime=12345679  AND key='key3' AND ctime<=12345680 LIMIT 3")
+
+# An empty IN () in SELECT matches nothing, and in DELETE and UPDATE
+# changes nothing, on two tables.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_empty_in_restriction(cql, test_keyspace_vnodes):
+    for name in ["test", "test_compact"]:
+        with new_named_table(cql, test_keyspace_vnodes, name, "k1 int, k2 int, v int, PRIMARY KEY (k1, k2)") as table:
+            for i in range(2):
+                for j in range(2):
+                    cql.execute(f"INSERT INTO {table} (k1, k2, v) VALUES ({i}, {j}, {i + j})")
+            def assert_nothing_changed():
+                assert sorted(cql.execute(f"SELECT * FROM {table}")) == [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 2)]
+            assert list(cql.execute(f"SELECT v FROM {table} WHERE k1 IN ()")) == []
+            assert list(cql.execute(f"SELECT v FROM {table} WHERE k1 = 0 AND k2 IN ()")) == []
+            cql.execute(f"DELETE FROM {table} WHERE k1 IN ()")
+            assert_nothing_changed()
+            cql.execute(f"UPDATE {table} SET v = 3 WHERE k1 IN () AND k2 = 2")
+            assert_nothing_changed()
+
+# A table made only of primary key columns: rows written by INSERT are
+# returned by a scan (CASSANDRA-4361), for two such tables.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_table_with_only_primary_key(cql, test_keyspace_vnodes):
+    for name in ["test", "test2"]:
+        with new_named_table(cql, test_keyspace_vnodes, name, "k int, c int, PRIMARY KEY (k, c)") as table:
+            for k in range(2):
+                for c in range(2):
+                    cql.execute(f"INSERT INTO {table} (k, c) VALUES ({k}, {c})")
+            assert list(cql.execute(f"SELECT * FROM {table}")) == [(x, y) for x in range(1, -1, -1) for y in range(2)]
+
+# IN on a clustering column of a row in an sstable written by a node-wide
+# flush (CASSANDRA-6327).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_clustering_in_after_flush(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, v int, PRIMARY KEY (k, v)") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (0, 0)")
+        nodetool.flush_all(cql)
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE k=0 AND v IN (1, 0)")) == [(0,)]
+
+# IN on a text clustering column (CASSANDRA-5230).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_clustering_in_on_text_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "foo", "key text, c text, v text, PRIMARY KEY (key, c)") as table:
+        for i in ['1', '2', '3']:
+            cql.execute(f"INSERT INTO {table}(key, c, v) VALUES ('foo', '{i}', '{i}')")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE key = 'foo' AND c IN ('1', '2');")) == [("1",), ("2",)]
+
+# A composite partition key with a uuid column: a scan finds all rows, and
+# restricting only the first component is rejected (CASSANDRA-5122).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_composite_partition_key_validation(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "foo", "a int, b text, c uuid, PRIMARY KEY ((a, b))") as table:
+        cql.execute(f"INSERT INTO {table} (a, b , c ) VALUES (  1 , 'aze', 4d481800-4c5f-11e1-82e0-3f484de45426)")
+        cql.execute(f"INSERT INTO {table} (a, b , c ) VALUES (  1 , 'ert', 693f5800-8acb-11e3-82e0-3f484de45426)")
+        cql.execute(f"INSERT INTO {table} (a, b , c ) VALUES (  1 , 'opl', d4815800-2d8d-11e0-82e0-3f484de45426)")
+        assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 3
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE a=1")
+
+# Aliases (AS) of count(*), a column, writetime(), ttl() and a function name
+# the result columns; an alias cannot be used in WHERE or ORDER BY.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_select_with_alias(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "id int PRIMARY KEY, name text") as table:
+        ttl, num_keys = 100, 5
+        pre_insert = int(time.time())
+        for _id in range(num_keys):
+            cql.execute(f"INSERT INTO {table} (id, name) VALUES ({_id}, 'name{_id}') USING TTL {ttl} AND TIMESTAMP 0")
+        post_insert = int(time.time())
+        res = list(cql.execute(f"SELECT count(*) AS user_count FROM {table}"))
+        assert res[0]._fields[0] == "user_count" and res[0].user_count == num_keys
+        res = list(cql.execute(f"SELECT name AS user_name FROM {table} WHERE id = 0"))
+        assert res[0]._fields[0] == "user_name" and res[0].user_name == "name0"
+        res = list(cql.execute(f"SELECT writeTime(name) AS name_writetime FROM {table} WHERE id = 0"))
+        assert res[0]._fields[0] == "name_writetime" and res[0].name_writetime == 0
+        pre_select = int(time.time())
+        res = list(cql.execute(f"SELECT ttl(name) AS name_ttl FROM {table} WHERE id = 0"))
+        post_select = int(time.time())
+        assert res[0]._fields[0] == "name_ttl"
+        assert ttl - (post_select - pre_insert + 1) <= res[0].name_ttl <= ttl - (pre_select - post_insert - 1)
+        res = list(cql.execute(f"SELECT intAsBlob(id) AS id_blob FROM {table} WHERE id = 0"))
+        assert res[0]._fields[0] == "id_blob" and res[0].id_blob == b"\x00\x00\x00\x00"
+        with pytest.raises(InvalidRequest, match="Aliases aren't allowed in the WHERE clause"):
+            cql.execute(f"SELECT id AS user_id, name AS user_name FROM {table} WHERE user_id = 0")
+        with pytest.raises(InvalidRequest, match="Aliases are not allowed in order by clause"):
+            cql.execute(f"SELECT id AS user_id, name AS user_name FROM {table} WHERE id IN (0) ORDER BY user_name")
+
+# Partitions are returned in token order, not key order, and a range on the
+# partition key is rejected without ALLOW FILTERING.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_partition_key_range_rejected(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY") as table:
+        for k in [-1, 0, 1]:
+            cql.execute(f"INSERT INTO {table}(k) VALUES ({k})")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1,), (0,), (-1,)]
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE k >= -1 AND k < 1;")
+
+# TRUNCATE removes the rows also from the row cache, populated by a read
+# just before. Like on the dtest's node, auto_snapshot is on, so TRUNCATE
+# takes a snapshot; the test removes it.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_truncate_cleans_cache(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v1 int, v2 int",
+                         """WITH CACHING = '{"keys":"ALL","rows_per_partition":"ALL"}'""") as table:
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table}(k, v1, v2) VALUES ({i}, {i}, {i * 2})")
+        assert list(cql.execute(f"SELECT v1, v2 FROM {table} WHERE k IN (0, 1, 2)")) == [(0, 0), (1, 2), (2, 4)]
+        try:
+            with config_value_context(cql, 'auto_snapshot', 'true'):
+                cql.execute(f"TRUNCATE {table}")
+            assert list(cql.execute(f"SELECT v1, v2 FROM {table} WHERE k IN (0, 1, 2)")) == []
+        finally:
+            for snapshot in nodetool.list_snapshots(cql):
+                if any(s['ks'] == test_keyspace_vnodes and s['cf'] == 'test' for s in snapshot['value']):
+                    nodetool.del_snapshot(cql, snapshot['key'], [test_keyspace_vnodes])
+
+# ORDER BY ASC and DESC of a partition's rows restricted by a clustering
+# slice, in a table created with CREATE COLUMNFAMILY (#4160).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_more_order_by(cql, test_keyspace_vnodes):
+    table = f"{test_keyspace_vnodes}.{unique_name()}"
+    cql.execute(f"CREATE COLUMNFAMILY {table} (row text, number int, string text, PRIMARY KEY (row, number))")
+    try:
+        for number, string in ((1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')):
+            cql.execute(f"INSERT INTO {table} (row, number, string) VALUES ('row', {number}, '{string}');")
+        def numbers(where, order):
+            return [r.number for r in cql.execute(f"SELECT number FROM {table} WHERE row='row' AND {where} ORDER BY number {order};")]
+        assert numbers("number < 3", "ASC") == [1, 2]
+        assert numbers("number >= 3", "ASC") == [3, 4]
+        assert numbers("number < 3", "DESC") == [2, 1]
+        assert numbers("number >= 3", "DESC") == [4, 3]
+        assert numbers("number > 3", "DESC") == [4]
+        assert numbers("number <= 3", "DESC") == [3, 2, 1]
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+
+# IN on the clustering key of a wide partition returns the rows in clustering
+# order, also on the last of two clustering columns; IN on the first one with
+# the second restricted by equality finds nothing here.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_in_clause_wide_rows(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        for x in range(10):
+            cql.execute(f"INSERT INTO {table} (k, c, v) VALUES (0, {x}, {x})")
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE k = 0 AND c IN (5, 2, 8)")] == [2, 5, 8]
+    with new_test_table(cql, test_keyspace_vnodes, "k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)") as table:
+        for x in range(10):
+            cql.execute(f"INSERT INTO {table} (k, c1, c2, v) VALUES (0, 0, {x}, {x})")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE k = 0 AND c1 IN (5, 2, 8) AND c2 = 3")) == []
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE k = 0 AND c1 = 0 AND c2 IN (5, 2, 8)")] == [2, 5, 8]
+
+# ORDER BY of the rows of several partitions selected by IN, by one and by
+# two clustering columns, unpaged (#4612); ORDER BY without an IN or
+# equality restriction on the partition key is rejected.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_order_by_multikey(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, "my_id varchar, col1 int, col2 int, value varchar, PRIMARY KEY (my_id, col1, col2)") as table:
+        for my_id, col1, col2, value in (('key1', 1, 1, 'a'), ('key2', 3, 3, 'a'), ('key3', 2, 2, 'b'), ('key4', 2, 1, 'b')):
+            cql.execute(f"INSERT INTO {table}(my_id, col1, col2, value) VALUES ( '{my_id}', {col1}, {col2}, '{value}');")
+        def unpaged(query):
+            return [tuple(r) for r in cql.execute(SimpleStatement(query, fetch_size=0))]
+        assert unpaged(f"SELECT col1 FROM {table} WHERE my_id in('key1', 'key2', 'key3') ORDER BY col1;") == [(1,), (2,), (3,)]
+        assert unpaged(f"SELECT col1, value, my_id, col2 FROM {table} WHERE my_id in('key3', 'key4') ORDER BY col1, col2;") == \
+            [(2, 'b', 'key4', 1), (2, 'b', 'key3', 2)]
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT col1 FROM {table} ORDER BY col1;")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT col1 FROM {table} WHERE my_id > 'key1' ORDER BY col1;")

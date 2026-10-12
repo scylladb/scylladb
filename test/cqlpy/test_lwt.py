@@ -8,6 +8,7 @@
 # ../cql/lwt*_test.cql, ../cql/cassandra_cql_test.cql.
 #############################################################################
 
+from test import DEBUG_MODES
 import re
 import pytest
 import requests
@@ -15,8 +16,12 @@ from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import InvalidRequest, SyntaxException
 from cassandra.cluster import NoHostAvailable
 
-from .util import new_test_table, unique_key_int, new_user, new_session
+from .util import config_value_context, new_named_table, new_test_table, unique_key_int, new_user, new_session
 from .test_service_levels import new_service_level
+from .nodetool import del_snapshot, flush, list_snapshots
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
+import time
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -554,3 +559,364 @@ def test_lwt_reads_use_attached_service_level(scylla_only, cql, host, test_keysp
         assert default_delta == 0, (
             f"LWT reads leaked to sl:default: {default_delta} reads "
             f"accounted to sl:default vs {sl_delta} to {sl_class}")
+
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_list_item_conditional.
+# DELETE conditioned on a list element l[i] of a non-frozen and of a frozen
+# list: on l[null] and l[-2] (an index that can never exist; Scylla does not
+# reject it, the condition just never applies, so this is scylla_only), on a
+# null and on a wrong value of l[1], and finally on the right value of l[1].
+# As in the dtest, the table is recreated after DROP TABLE IF EXISTS;
+# auto_snapshot is on for the drops, as on the dtest's node, and the test
+# removes the snapshots.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_lwt_collection_element_null_or_negative_index(cql, test_keyspace, scylla_only):
+    table = f"{test_keyspace}.tlist"
+    value = ['foo', 'bar', 'foobar']
+    try:
+        for frozen in [False, True]:
+            with config_value_context(cql, 'auto_snapshot', 'true'):
+                cql.execute(f"DROP TABLE IF EXISTS {table}")
+            cql.execute("""
+                CREATE TABLE {} (
+                    k int PRIMARY KEY,
+                    l {},
+                )""".format(table, "frozen<list<text>>" if frozen else "list<text>"))
+            cql.execute(f"INSERT INTO {table}(k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+            for cond in ["l[null] = 'foobar'", "l[-2] = 'foobar'", "l[1] = null", "l[1] = 'foobar'"]:
+                assert [tuple(r) for r in cql.execute(f"DELETE FROM {table} WHERE k=0 IF {cond}")] == [(False, value)]
+            assert [tuple(r) for r in cql.execute(f"SELECT * FROM {table}")] == [(0, value)]
+            assert [tuple(r) for r in cql.execute(f"DELETE FROM {table} WHERE k=0 IF l[1] = 'bar'")] == [(True, value)]
+            assert list(cql.execute(f"SELECT * FROM {table}")) == []
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {table}")
+        for snapshot in list_snapshots(cql):
+            if any(s['ks'] == test_keyspace and s['cf'] == 'tlist' for s in snapshot['value']):
+                del_snapshot(cql, snapshot['key'], [test_keyspace])
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+def rows(cql, stmt):
+    return [tuple(r) for r in cql.execute(stmt)]
+
+# Conditional UPDATE, INSERT and DELETE on a row: IF on column values, IF
+# EXISTS and IF NOT EXISTS, conditions on several columns, on null, on a
+# missing row and with IN (null). The result has the [applied] flag and the
+# values the conditions read (CASSANDRA-5786 for the SET order).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_conditional_update_sequence(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v1 int, v2 text, v3 int") as table:
+        def check(stmt, expected):
+            assert rows(cql, stmt) == [tuple(expected)]
+        select = f"SELECT * FROM {table}"
+        check(f"UPDATE {table} SET v1 = 3, v2 = 'bar' WHERE k = 0 IF v1 = 4", [False, None])
+        check(f"UPDATE {table} SET v1 = 3, v2 = 'bar' WHERE k = 0 IF EXISTS", [False, None, None, None, None])
+        check(f"INSERT INTO {table} (k, v1, v2) VALUES (0, 2, 'foo') IF NOT EXISTS", [True, None, None, None, None])
+        check(f"INSERT INTO {table} (k, v1, v2) VALUES (0, 5, 'bar') IF NOT EXISTS", [False, 0, 2, "foo", None])
+        check(select, [0, 2, "foo", None])
+        check(f"UPDATE {table} SET v1 = 3, v2 = 'bar' WHERE k = 0 IF v1 = 4", [False, 2])
+        check(select, [0, 2, "foo", None])
+        check(f"UPDATE {table} SET v2 = 'bar', v1 = 3 WHERE k = 0 IF v1 = 2", [True, 2])
+        check(f"UPDATE {table} SET v2 = 'bar', v1 = 3 WHERE k = 0 IF EXISTS", [True, 0, 3, "bar", None])
+        check(select, [0, 3, "bar", None])
+        check(f"UPDATE {table} SET v1 = 5, v2 = 'foobar' WHERE k = 0 IF v1 = 3 AND v2 = 'foo'", [False, 3, "bar"])
+        check(select, [0, 3, "bar", None])
+        check(f"UPDATE {table} SET v1 = 5, v2 = 'foobar' WHERE k = 0 IF v1 = 3 AND v2 = 'bar'", [True, 3, "bar"])
+        check(select, [0, 5, "foobar", None])
+        check(f"DELETE v2 FROM {table} WHERE k = 0 IF v1 = 3", [False, 5])
+        check(select, [0, 5, "foobar", None])
+        check(f"DELETE v2 FROM {table} WHERE k = 0 IF v1 = null", [False, 5])
+        check(select, [0, 5, "foobar", None])
+        check(f"DELETE v2 FROM {table} WHERE k = 0 IF v1 = 5", [True, 5])
+        check(select, [0, 5, None, None])
+        check(f"DELETE v1 FROM {table} WHERE k = 0 IF v3 = 4", [False, None])
+        check(f"DELETE v1 FROM {table} WHERE k = 0 IF v3 = null", [True, None])
+        check(select, [0, None, None, None])
+        check(f"DELETE FROM {table} WHERE k = 0 IF v1 = null", [True, None])
+        assert rows(cql, select) == []
+        check(f"UPDATE {table} SET v1 = 3, v2 = 'bar' WHERE k = 0 IF EXISTS", [False, None, None, None, None])
+        check(f"DELETE FROM {table} WHERE k = 0 IF v1 IN (null)", [True, None])
+
+# Non-equality conditions: <, <=, >, >=, !=, IN and an empty IN.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_non_eq_conditional_update(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v1 int, v2 text, v3 int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v1, v2) VALUES (0, 2, 'foo')")
+        for condition, applied in [("v1 < 3", True), ("v1 <= 3", True), ("v1 > 1", True), ("v1 >= 1", True), ("v1 != 1", True),
+                                   ("v1 != 2", False), ("v1 IN (0, 1, 2)", True), ("v1 IN (142, 276)", False), ("v1 IN ()", False)]:
+            assert rows(cql, f"UPDATE {table} SET v2 = 'bar' WHERE k = 0 IF {condition}") == [(applied, 2)]
+
+# Wait until a read of the row finds nothing, as its TTL expired.
+def wait_for_expiry(cql, select, timeout=30):
+    start = time.time()
+    while rows(cql, select):
+        assert time.time() < start + timeout, f"row not expired: {select}"
+        time.sleep(0.1)
+
+# DELETE ... IF EXISTS of a missing, an existing and an expired row (TTL
+# set by UPDATE and by INSERT), and of a single column; on a table with a
+# static column, of a row and of its regular column. The expired rows stay
+# invisible after a flush. DELETE IF of a whole
+# partition, without the full primary key, or with a clustering range, is
+# rejected (CASSANDRA-6430).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_conditional_delete_if_exists(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v1 int") as table:
+        def check(stmt, expected):
+            assert rows(cql, stmt) == [tuple(expected)]
+        check(f"DELETE FROM {table} WHERE k=1 IF EXISTS", [False, None, None])
+        cql.execute(f"INSERT INTO {table} (k, v1) VALUES (1, 2)")
+        check(f"DELETE FROM {table} WHERE k=1 IF EXISTS", [True, 1, 2])
+        assert rows(cql, f"SELECT * FROM {table} WHERE k=1") == []
+        check(f"DELETE FROM {table} WHERE k=1 IF EXISTS", [False, None, None])
+        cql.execute(f"UPDATE {table} USING TTL 1 SET v1=2 WHERE k=1")
+        wait_for_expiry(cql, f"SELECT * FROM {table} WHERE k=1")
+        check(f"DELETE FROM {table} WHERE k=1 IF EXISTS", [False, None, None])
+        assert rows(cql, f"SELECT * FROM {table} WHERE k=1") == []
+        cql.execute(f"INSERT INTO {table} (k, v1) VALUES (2, 2) USING TTL 1")
+        wait_for_expiry(cql, f"SELECT * FROM {table} WHERE k=2")
+        check(f"DELETE FROM {table} WHERE k=2 IF EXISTS", [False, None, None])
+        assert rows(cql, f"SELECT * FROM {table} WHERE k=2") == []
+        # The expired rows written to an sstable stay invisible; the dtest's
+        # node flushed them at shutdown.
+        flush(cql, table)
+        assert rows(cql, f"SELECT * FROM {table} WHERE k IN (1, 2)") == []
+        cql.execute(f"INSERT INTO {table} (k, v1) VALUES (3, 2)")
+        check(f"DELETE v1 FROM {table} WHERE k=3 IF EXISTS", [True, 3, 2])
+        check(f"SELECT * FROM {table} WHERE k=3", [3, None])
+        check(f"DELETE v1 FROM {table} WHERE k=3 IF EXISTS", [True, 3, None])
+        check(f"DELETE FROM {table} WHERE k=3 IF EXISTS", [True, 3, None])
+    with new_named_table(cql, test_keyspace_vnodes, "test2", "k text, s text static, i int, v text, PRIMARY KEY (k, i)") as table:
+        def check(stmt, expected):
+            assert rows(cql, stmt) == [tuple(expected)]
+        cql.execute(f"INSERT INTO {table} (k, s, i, v) VALUES ('k', 's', 0, 'v')")
+        check(f"DELETE v FROM {table} WHERE k='k' AND i=0 IF EXISTS", [True, "k", 0, "s", "v"])
+        check(f"DELETE FROM {table} WHERE k='k' AND i=0 IF EXISTS", [True, "k", 0, "s", None])
+        check(f"DELETE v FROM {table} WHERE k='k' AND i=0 IF EXISTS", [False, None, None, None, None])
+        check(f"DELETE FROM {table} WHERE k='k' AND i=0 IF EXISTS", [False, None, None, None, None])
+        for where in ["k = 'k' IF EXISTS", "k = 'k' IF v = 'foo'", "i = 0 IF EXISTS", "k = 0 AND i > 0 IF EXISTS", "k = 0 AND i > 0 IF v = 'foo'"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"DELETE FROM {table} WHERE {where}")
+
+# INSERT IF NOT EXISTS of a row with a set (CASSANDRA-6069).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_insert_set_if_not_exists(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, s set<int>") as table:
+        assert rows(cql, f"INSERT INTO {table}(k, s) VALUES (0, {{1, 2, 3}}) IF NOT EXISTS") == [(True, None, None)]
+        assert rows(cql, f"SELECT * FROM {table}") == [(0, {1, 2, 3})]
+
+# A condition "IF lock = null" applies once the column's TTL expired.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_condition_on_expired_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int, lock boolean") as table:
+        cql.execute(f"INSERT INTO {table} (k, v, lock) VALUES (0, 0, false)")
+        cql.execute(f"UPDATE {table} USING TTL 1 SET lock=true WHERE k=0")
+        wait_for_expiry(cql, f"SELECT lock FROM {table} WHERE k=0 AND lock = true ALLOW FILTERING")
+        assert rows(cql, f"UPDATE {table} SET v = 1 WHERE k = 0 IF lock = null") == [(True, None)]
+
+# Conditions on a list element l[i] of a non-frozen and of a frozen list:
+# comparisons, IN, past the end of the list, and invalid conditions
+# (CASSANDRA-6839).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_list_item_conditions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "tlist", "k int PRIMARY KEY, l list<text>") as tlist, \
+         new_named_table(cql, test_keyspace_vnodes, "frozentlist", "k int PRIMARY KEY, l frozen<list<text>>") as frozentlist:
+        value = ["foo", "bar", "foobar"]
+        for table in [tlist, frozentlist]:
+            cql.execute(f"INSERT INTO {table}(k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+            update = f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k=0 IF "
+            def check(condition, applied):
+                assert rows(cql, update + condition) == [(applied, value)]
+                assert rows(cql, f"SELECT * FROM {table}") == [(0, value)]
+            for condition in ["l[1] < 'zzz'", "l[1] <= 'bar'", "l[1] > 'aaa'", "l[1] >= 'bar'", "l[1] != 'xxx'", "l[1] != null",
+                              "l[1] IN (null, 'xxx', 'bar')", "l[1] > 'aaa' AND l[1] < 'zzz'", "l[3] = null", "l[3] IN (null, 'xxx', 'bar')"]:
+                check(condition, True)
+            for condition in ["l[1] < 'aaa'", "l[1] <= 'aaa'", "l[1] > 'zzz'", "l[1] >= 'zzz'", "l[1] != 'bar'", "l[1] IN (null, 'xxx')",
+                              "l[1] IN ()", "l[1] != null AND l[1] IN ()", "l[3] != null", "l[3] = 'xxx'"]:
+                check(condition, False)
+            for condition, exception in [("l[1] < null", InvalidRequest), ("l[1] <= null", InvalidRequest), ("l[1] > null", InvalidRequest),
+                                         ("l[1] >= null", InvalidRequest), ("l[1] IN null", SyntaxException), ("l[1] IN 367", SyntaxException),
+                                         ("l[1] IN (1, 2, 3)", InvalidRequest), ("l[1] CONTAINS 367", SyntaxException),
+                                         ("l[1] CONTAINS KEY 367", SyntaxException)]:
+                with pytest.raises(exception):
+                    cql.execute(update + condition)
+                assert rows(cql, f"SELECT * FROM {table}") == [(0, value)]
+            check("l[null] = null", True)
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_whole_list_conditional.
+# Conditions on a whole non-frozen and frozen list: comparisons, IN, several
+# conditions, and invalid ones. "l = [null]" is not rejected by Scylla, it
+# just does not apply, and CONTAINS conditions are a syntax error, so this
+# is scylla_only. The row is read back at the default consistency level.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_whole_list_conditions(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "tlist", "k int PRIMARY KEY, l list<text>") as tlist, \
+         new_named_table(cql, test_keyspace_vnodes, "frozentlist", "k int PRIMARY KEY, l frozen<list<text>>") as frozentlist:
+        value = ["foo", "bar", "foobar"]
+        for table in [tlist, frozentlist]:
+            cql.execute(f"INSERT INTO {table}(k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+            update = f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k=0 IF "
+            def check(condition, applied):
+                assert rows(cql, update + condition) == [(applied, value)]
+                assert rows(cql, f"SELECT * FROM {table}") == [(0, value)]
+            for condition in ["l = ['foo', 'bar', 'foobar']", "l != ['baz']", "l > ['a']", "l >= ['a']", "l < ['z']", "l <= ['z']",
+                              "l IN (null, ['foo', 'bar', 'foobar'], ['a'])", "l > ['aaa', 'bbb'] AND l > ['aaa']",
+                              "l != null AND l IN (['foo', 'bar', 'foobar'])"]:
+                check(condition, True)
+            for condition in ["l = ['baz']", "l != ['foo', 'bar', 'foobar']", "l > ['z']", "l >= ['z']", "l < ['a']", "l <= ['a']",
+                              "l IN (['a'], null)", "l IN ()", "l IN () AND l IN (['foo', 'bar', 'foobar'])", "l > ['zzz'] AND l < ['zzz']"]:
+                check(condition, False)
+            check("l = [null]", False)
+            for condition, exception in [("l < null", InvalidRequest), ("l <= null", InvalidRequest), ("l > null", InvalidRequest),
+                                         ("l >= null", InvalidRequest), ("l IN null", SyntaxException), ("l IN 367", SyntaxException),
+                                         ("l CONTAINS KEY 123", SyntaxException), ("m CONTAINS 'bar'", SyntaxException)]:
+                with pytest.raises(exception):
+                    cql.execute(update + condition)
+                assert rows(cql, f"SELECT * FROM {table}") == [(0, value)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_whole_set_conditional.
+# Conditions on a whole non-frozen and frozen set, written by INSERT IF NOT
+# EXISTS: comparisons, IN, several conditions, and invalid ones (a set with
+# a null, a comparison with null, CONTAINS). The row is read back at QUORUM,
+# as in the dtest.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_whole_set_conditions(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "tset", "k int PRIMARY KEY, s set<text>") as tset, \
+         new_named_table(cql, test_keyspace_vnodes, "frozentset", "k int PRIMARY KEY, s frozen<set<text>>") as frozentset:
+        value = {"bar", "foo"}
+        for table in [tset, frozentset]:
+            assert rows(cql, f"INSERT INTO {table}(k, s) VALUES (0, {{'bar', 'foo'}}) IF NOT EXISTS") == [(True, None, None)]
+            update = f"UPDATE {table} SET s = {{'bar', 'foo'}} WHERE k=0 IF "
+            select = SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.QUORUM)
+            def check(condition, applied):
+                assert rows(cql, update + condition) == [(applied, value)]
+                assert rows(cql, select) == [(0, value)]
+            for condition in ["s = {'bar', 'foo'}", "s = {'foo', 'bar'}", "s != {'baz'}", "s > {'a'}", "s >= {'a'}", "s < {'z'}", "s <= {'z'}",
+                              "s IN (null, {'bar', 'foo'}, {'a'})", "s > {'a'} AND s < {'z'}",
+                              "s IN (null, {'bar', 'foo'}, {'a'}) AND s IN ({'a'}, {'bar', 'foo'}, null)"]:
+                check(condition, True)
+            for condition in ["s = {'baz'}", "s != {'bar', 'foo'}", "s > {'z'}", "s >= {'z'}", "s < {'a'}", "s <= {'a'}",
+                              "s IN ({'a'}, null)", "s IN ()", "s != null AND s IN ()"]:
+                check(condition, False)
+            for condition, exception in [("s = {null}", InvalidRequest), ("s < null", InvalidRequest), ("s <= null", InvalidRequest),
+                                         ("s > null", InvalidRequest), ("s >= null", InvalidRequest), ("s IN null", SyntaxException),
+                                         ("s IN 367", SyntaxException), ("s CONTAINS KEY 123", SyntaxException),
+                                         ("m CONTAINS 'bar'", SyntaxException)]:
+                with pytest.raises(exception):
+                    cql.execute(update + condition)
+                assert rows(cql, select) == [(0, value)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_whole_map_conditional.
+# Conditions on a whole non-frozen and frozen map: comparisons, IN, several
+# conditions, and invalid ones (a map with a null key or value, a comparison
+# with null, CONTAINS and CONTAINS KEY). The row is read back at QUORUM, as
+# in the dtest.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_whole_map_conditions(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "tmap", "k int PRIMARY KEY, m map<text, text>") as tmap, \
+         new_named_table(cql, test_keyspace_vnodes, "frozentmap", "k int PRIMARY KEY, m frozen<map<text, text>>") as frozentmap:
+        value = {"foo": "bar"}
+        for table in [tmap, frozentmap]:
+            cql.execute(f"INSERT INTO {table}(k, m) VALUES (0, {{'foo' : 'bar'}})")
+            update = f"UPDATE {table} SET m = {{'foo': 'bar'}} WHERE k=0 IF "
+            select = SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.QUORUM)
+            def check(condition, applied):
+                assert rows(cql, update + condition) == [(applied, value)]
+                assert rows(cql, select) == [(0, value)]
+            for condition in ["m = {'foo': 'bar'}", "m > {'a': 'a'}", "m >= {'a': 'a'}", "m < {'z': 'z'}", "m <= {'z': 'z'}", "m != {'a': 'a'}",
+                              "m IN (null, {'a': 'a'}, {'foo': 'bar'})", "m > {'a': 'a'} AND m < {'z': 'z'}",
+                              "m != null AND m IN (null, {'a': 'a'}, {'foo': 'bar'})"]:
+                check(condition, True)
+            for condition in ["m = {'a': 'a'}", "m > {'z': 'z'}", "m >= {'z': 'z'}", "m < {'a': 'a'}", "m <= {'a': 'a'}", "m != {'foo': 'bar'}",
+                              "m IN ({'a': 'a'}, null)", "m IN ()", "m = null AND m != null"]:
+                check(condition, False)
+            for condition, exception in [("m = {null: null}", InvalidRequest), ("m = {'a': null}", InvalidRequest),
+                                         ("m = {null: 'a'}", InvalidRequest), ("m < null", InvalidRequest), ("m IN null", SyntaxException),
+                                         ("m CONTAINS 'bar'", SyntaxException), ("m CONTAINS KEY 'foo'", SyntaxException),
+                                         ("m CONTAINS null", SyntaxException), ("m CONTAINS KEY null", SyntaxException)]:
+                with pytest.raises(exception):
+                    cql.execute(update + condition)
+                assert rows(cql, select) == [(0, value)]
+
+# DELETE conditioned on a map element m[key] of a non-frozen and of a frozen
+# map, also with a null key; an UPDATE of map elements conditioned on
+# m['foo'] IN (..., null) applies to a null map, but is rejected for a
+# frozen map. As in the dtest, the table is recreated after DROP TABLE IF
+# EXISTS; auto_snapshot is on for the drops, as on the dtest's node, and
+# the test removes the snapshots.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_map_item_conditions_on_delete(cql, test_keyspace_vnodes, scylla_only):
+    table = f"{test_keyspace_vnodes}.tmap"
+    try:
+        for frozen in [False, True]:
+            with config_value_context(cql, 'auto_snapshot', 'true'):
+                cql.execute(f"DROP TABLE IF EXISTS {table}")
+            mtype = "frozen<map<text, text>>" if frozen else "map<text, text>"
+            cql.execute(f"CREATE TABLE {table} (k int PRIMARY KEY, m {mtype})")
+            cql.execute(f"INSERT INTO {table}(k, m) VALUES (0, {{'foo' : 'bar'}})")
+            for condition in ["m[null] = 'foo'", "m['foo'] = 'foo'", "m['foo'] = null"]:
+                assert rows(cql, f"DELETE FROM {table} WHERE k=0 IF {condition}") == [(False, {"foo": "bar"})]
+            assert rows(cql, f"SELECT * FROM {table}") == [(0, {"foo": "bar"})]
+            assert rows(cql, f"DELETE FROM {table} WHERE k=0 IF m['foo'] = 'bar'") == [(True, {"foo": "bar"})]
+            assert rows(cql, f"SELECT * FROM {table}") == []
+            cql.execute(f"INSERT INTO {table}(k, m) VALUES (1, null)")
+            update = f"UPDATE {table} set m['foo'] = 'bar', m['bar'] = 'foo' WHERE k = 1 IF m['foo'] IN ('blah', null)"
+            if frozen:
+                with pytest.raises(InvalidRequest):
+                    cql.execute(update)
+            else:
+                assert rows(cql, update) == [(True, None)]
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {table}")
+        for snapshot in list_snapshots(cql):
+            if any(s['ks'] == test_keyspace_vnodes and s['cf'] == 'tmap' for s in snapshot['value']):
+                del_snapshot(cql, snapshot['key'], [test_keyspace_vnodes])
+
+# Conditions on a map element m[key] of a non-frozen and of a frozen map:
+# comparisons, IN, a missing key, and invalid conditions (CASSANDRA-6839).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_map_item_conditions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "tmap", "k int PRIMARY KEY, m map<text, text>") as tmap, \
+         new_named_table(cql, test_keyspace_vnodes, "frozentmap", "k int PRIMARY KEY, m frozen<map<text, text>>") as frozentmap:
+        value = {"foo": "bar"}
+        for table in [tmap, frozentmap]:
+            cql.execute(f"INSERT INTO {table} (k, m) VALUES (0, {{'foo' : 'bar'}})")
+            update = f"UPDATE {table} SET m = {{'foo': 'bar'}} WHERE k=0 IF "
+            def check(condition, applied):
+                assert rows(cql, update + condition) == [(applied, value)]
+                assert rows(cql, SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.QUORUM)) == [(0, value)]
+            for condition in ["m['xxx'] = null", "m['foo'] < 'zzz'", "m['foo'] <= 'bar'", "m['foo'] > 'aaa'", "m['foo'] >= 'bar'",
+                              "m['foo'] != 'xxx'", "m['foo'] != null", "m['foo'] IN (null, 'xxx', 'bar')", "m['xxx'] IN (null, 'xxx', 'bar')",
+                              "m['foo'] < 'zzz' AND m['foo'] > 'aaa'"]:
+                check(condition, True)
+            for condition in ["m['foo'] < 'aaa'", "m['foo'] <= 'aaa'", "m['foo'] > 'zzz'", "m['foo'] >= 'zzz'", "m['foo'] != 'bar'",
+                              "m['xxx'] != null", "m['foo'] IN (null, 'xxx')", "m['foo'] IN ()", "m['foo'] != null AND m['foo'] = null"]:
+                check(condition, False)
+            for condition, exception in [("m['foo'] < null", InvalidRequest), ("m['foo'] <= null", InvalidRequest), ("m['foo'] > null", InvalidRequest),
+                                         ("m['foo'] >= null", InvalidRequest), ("m['foo'] IN null", SyntaxException), ("m['foo'] IN 367", SyntaxException),
+                                         ("m['foo'] IN (1, 2, 3)", InvalidRequest), ("m['foo'] CONTAINS 367", SyntaxException),
+                                         ("m['foo'] CONTAINS KEY 367", SyntaxException)]:
+                with pytest.raises(exception):
+                    cql.execute(update + condition)
+                assert rows(cql, f"SELECT * FROM {table}") == [(0, value)]
+            check("m[null] = null", True)
+
+# A conditional UPDATE setting a list element by index (CASSANDRA-7499).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_conditional_update_of_list_element(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v text, l list<text>") as table:
+        cql.execute(f"INSERT INTO {table}(k, v, l) VALUES(0, 'foobar', ['foi', 'bar'])")
+        assert rows(cql, f"UPDATE {table} SET l[0] = 'foo' WHERE k = 0 IF v = 'barfoo'") == [(False, "foobar")]
+        assert rows(cql, f"UPDATE {table} SET l[0] = 'foo' WHERE k = 0 IF v = 'foobar'") == [(True, "foobar")]
+        # The LWT wrote at SERIAL, so read at QUORUM, as the dtest.
+        assert rows(cql, SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.QUORUM)) == [(0, ["foo", "bar"], "foobar")]
+
+# A second INSERT IF NOT EXISTS of the same key does not change the row.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_insert_if_not_exists_twice(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "login text, email text, name text, PRIMARY KEY (login)") as table:
+        cql.execute(f"INSERT INTO {table} (login, email, name) values ('bcanet', 'benoit@scylladb.com', 'Benoit Canet') IF NOT EXISTS")
+        cql.execute(f"INSERT INTO {table} (login, email, name) values ('bcanet', 'disabled@scylladb.com', 'disabled') IF NOT EXISTS")
+        assert rows(cql, f"SELECT * FROM {table}") == [("bcanet", "benoit@scylladb.com", "Benoit Canet")]

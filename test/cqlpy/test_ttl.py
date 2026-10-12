@@ -6,7 +6,9 @@
 # Various tests for Scylla's ttl feature - USING TTL and DEFAULT_TIME_TO_LIVE
 #############################################################################
 
-from .util import new_test_table, unique_key_int
+from test import DEBUG_MODES
+from .util import new_named_table, new_test_table, unique_key_int
+from cassandra.protocol import InvalidRequest
 from cassandra.query import UNSET_VALUE
 import pytest
 import time
@@ -68,3 +70,30 @@ def test_default_ttl_unset_override(cql, table_ttl_100):
     # possible in case of delays to be somewhat lower. But it wouldn't
     # be None - which would mean that the item will never expire.
     assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) != [(None,)]
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# writetime() and ttl() of a column with and without TTL, also wrapped in
+# other functions (CASSANDRA-8451); writetime() of a key column is rejected,
+# and of a missing value is null.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_writetime_and_ttl_functions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, c text, d text") as table:
+        cql.execute(f"INSERT INTO {table} (k, c) VALUES (1, 'test')")
+        cql.execute(f"INSERT INTO {table} (k, c) VALUES (2, 'test') USING TTL 400")
+        for select in [f"SELECT k, c, writetime(c), ttl(c) FROM {table}",
+                       f"SELECT k, c, blobAsBigint(bigintAsBlob(writetime(c))), ttl(c) FROM {table}",
+                       f"SELECT k, c, writetime(c), blobAsInt(intAsBlob(ttl(c))) FROM {table}"]:
+            res = list(cql.execute(select))
+            assert len(res) == 2
+            for r in res:
+                assert isinstance(r[2], int)
+                if r[0] == 1:
+                    assert r[3] is None
+                else:
+                    assert isinstance(r[3], int)
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT k, c, writetime(k) FROM {table}")
+        assert list(cql.execute(f"SELECT k, d, writetime(d) FROM {table} WHERE k = 1")) == [(1, None, None)]

@@ -9,10 +9,12 @@
 # allow running tests with debatable behavior on Cassandra as well.
 #############################################################################
 
+from test import DEBUG_MODES
 import pytest
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.query import SimpleStatement
-from .util import new_test_table, new_secondary_index, unique_key_int
+from .util import new_named_table, new_test_table, new_secondary_index, unique_key_int
+from .nodetool import flush
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -133,3 +135,67 @@ def test_static_column_via_regular_index_multiple_partitions(cql, test_keyspace)
                 assert sorted(cql.execute(stmt)) == [(11,), (22,), (22,)]
                 stmt = SimpleStatement(f'SELECT p, s FROM {table} WHERE v = 7', fetch_size=fetch_size)
                 assert sorted(cql.execute(stmt)) == [(1, 11), (2, 22), (2, 22)]
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# A static column: written without rows, with writetime (#7081), shared by
+# all rows of the partition, read with slices, IN (#6769), DISTINCT and with
+# or without other columns; not deleted with a row, deleted on its own; a
+# static column added and dropped by ALTER TABLE.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_static_column_operations(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, p int, s int static, v int, PRIMARY KEY (k, p)") as table:
+        def check(stmt, expected):
+            assert [tuple(r) for r in cql.execute(stmt)] == [tuple(e) for e in expected]
+        cql.execute(f"INSERT INTO {table}(k, s) VALUES (0, 42)")
+        check(f"SELECT * FROM {table}", [[0, None, 42, None]])
+        [row] = list(cql.execute(f"SELECT s, writetime(s) FROM {table} WHERE k=0"))
+        assert row[0] == 42 and row[1] > 0
+        cql.execute(f"INSERT INTO {table}(k, p, s, v) VALUES (0, 0, 12, 0)")
+        cql.execute(f"INSERT INTO {table}(k, p, s, v) VALUES (0, 1, 24, 1)")
+        check(f"SELECT * FROM {table}", [[0, 0, 24, 0], [0, 1, 24, 1]])
+        check(f"SELECT * FROM {table} WHERE k=0 AND p=0", [[0, 0, 24, 0]])
+        check(f"SELECT * FROM {table} WHERE k=0 AND p=1", [[0, 1, 24, 1]])
+        check(f"SELECT * FROM {table} WHERE k=0 AND p IN (0, 1)", [[0, 0, 24, 0], [0, 1, 24, 1]])
+        check(f"SELECT p, v FROM {table} WHERE k=0 AND p=1", [[1, 1]])
+        check(f"SELECT DISTINCT s FROM {table} WHERE k=0", [[24]])
+        check(f"SELECT s FROM {table} WHERE k=0", [[24], [24]])
+        check(f"SELECT s, v FROM {table} WHERE k=0", [[24, 0], [24, 1]])
+        check(f"SELECT s, v FROM {table} WHERE k=0 AND p=1", [[24, 1]])
+        check(f"SELECT p, s FROM {table} WHERE k=0 AND p=1", [[1, 24]])
+        check(f"SELECT k, p, s FROM {table} WHERE k=0 AND p=1", [[0, 1, 24]])
+        cql.execute(f"DELETE FROM {table} WHERE k=0 AND p=0")
+        check(f"SELECT * FROM {table}", [[0, 1, 24, 1]])
+        cql.execute(f"DELETE s FROM {table} WHERE k=0")
+        check(f"SELECT * FROM {table}", [[0, 1, None, 1]])
+        cql.execute(f"ALTER TABLE {table} ADD s2 int static")
+        check(f"SELECT * FROM {table}", [[0, 1, None, None, 1]])
+        cql.execute(f"INSERT INTO {table.upper()} (k, p, s2, v) VALUES(0, 2, 42, 2)")
+        check(f"SELECT * FROM {table}", [[0, 1, None, 42, 1], [0, 2, None, 42, 2]])
+        cql.execute(f"ALTER TABLE {table} DROP s2")
+        check(f"SELECT * FROM {table}", [[0, 1, None, 1], [0, 2, None, 2]])
+
+# LIMIT on a partition with a static column counts rows, not the static row
+# (CASSANDRA-6956).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_static_column_with_limit(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, s int static, v int, PRIMARY KEY (k, v)") as table:
+        cql.execute(f"INSERT INTO {table}(k, s) VALUES(0, 42)")
+        for i in range(4):
+            cql.execute(f"INSERT INTO {table}(k, v) VALUES(0, {i})")
+        for limit in [1, 2, 3]:
+            assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 LIMIT {limit}")) == [(0, i, 42) for i in range(limit)]
+
+# A row with an empty clustering key in a partition with a static column
+# (CASSANDRA-7455), read from a memtable and from an sstable.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_static_column_with_empty_clustering_key(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "pkey text, ckey text, value text, static_value text static, PRIMARY KEY(pkey, ckey)") as table:
+        cql.execute(f"INSERT INTO {table}(pkey, static_value) VALUES ('partition1', 'static value')")
+        cql.execute(f"INSERT INTO {table}(pkey, ckey, value) VALUES('partition1', '', 'value')")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [("partition1", "", "static value", "value")]
+        # The same read from an sstable; the dtest's node flushed at shutdown.
+        flush(cql, table)
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [("partition1", "", "static value", "value")]
