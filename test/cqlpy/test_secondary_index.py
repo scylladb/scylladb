@@ -3057,3 +3057,5 @@ def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
                     inj_disable(err)
                 except Exception:
                     pass
+
+
