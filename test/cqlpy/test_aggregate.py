@@ -9,10 +9,24 @@
 import pytest
 import math
 from decimal import Decimal
-from .util import new_test_table, unique_key_int, project, new_type
+from .util import new_test_table, unique_key_int, project, new_type, new_cql
 from cassandra.util import Date
 from cassandra.protocol import InvalidRequest, SyntaxException
 from .cassandra_tests.porting import assert_invalid_message
+from contextlib import contextmanager
+
+
+# The dtests' sessions USE their keyspace and create user types by their
+# unqualified name; this creates one so and yields its qualified name.
+@contextmanager
+def new_type_after_use(cql, keyspace, name, fields):
+    with new_cql(cql) as session:
+        session.execute(f"USE {keyspace}")
+        session.execute(f"CREATE TYPE {name} {fields}")
+    try:
+        yield f"{keyspace}.{name}"
+    finally:
+        cql.execute(f"DROP TYPE {keyspace}.{name}")
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
