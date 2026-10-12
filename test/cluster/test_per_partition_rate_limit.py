@@ -19,8 +19,9 @@ from cassandra.policies import RoundRobinPolicy, TokenAwarePolicy
 from cassandra.protocol import RateLimitReached
 
 from test import DEBUG_MODES
-from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.dtest_helpers import create_ks, dtest_session, topology
+from test.cluster.util import new_test_keyspace, new_test_table
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
@@ -350,3 +351,67 @@ async def test_multidc_accuracy(manager: ScyllaClusterManager):
         # EACH_QUORUM is only allowed for writes.
         validate_limited_writes(session, limit, CL.EACH_QUORUM, rf=5)
     await check_both_policies(manager, node1, check_multidc)
+
+
+async def get_metric_sum(manager: ScyllaClusterManager, servers, name: str) -> float:
+    metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+    return sum(m.get(name) or 0 for m in metrics)
+
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='measures the achieved request rate, too slow in debug mode')
+async def test_per_partition_rate_limit(manager: ScyllaClusterManager):
+    """
+    Hammer a single partition of a table with per_partition_rate_limit, first
+    with writes then with reads, and check that:
+      - the accepted rate is roughly the configured limit,
+      - the replica counted rate-limited operations,
+      - the coordinators' rate-limited metric equals the number of rejections
+        the client saw.
+    There are two nodes and RF=1, and the requests alternate between them, so
+    half of them go through a coordinator that is not the replica, and the
+    rejection has to be propagated back to it.
+    """
+    servers = await manager.servers_add(2, config={"tablets_mode_for_new_keyspaces": "disabled"})
+    cql, hosts = await manager.get_ready_cql(servers)
+    limit = 10
+    duration = 5
+    # The limiter lets through far more than the limit in the first seconds
+    # of a burst (its per-second counters start from zero), and converges to
+    # the limit after that. So warm up before measuring.
+    warmup = 3
+
+    async def hammer(stmt, duration) -> tuple[int, int]:
+        sent = 0
+        rejected = 0
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            try:
+                await cql.run_async(stmt, host=hosts[sent % 2])
+            except RateLimitReached:
+                rejected += 1
+            sent += 1
+        return sent, rejected
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        async with new_test_table(manager, ks, "a int PRIMARY KEY, b int",
+                                  f" WITH per_partition_rate_limit = {{'max_reads_per_second': {limit}, 'max_writes_per_second': {limit}}}") as table:
+            for op, stmt in [("write", f"INSERT INTO {table} (a, b) VALUES (1, 1)"),
+                             ("read", f"SELECT * FROM {table} WHERE a = 1")]:
+                replica_metric = f"scylla_database_total_{op}s_rate_limited"
+                coordinator_metric = f"scylla_storage_proxy_coordinator_{op}_rate_limited"
+                await hammer(stmt, warmup)
+                replica_before = await get_metric_sum(manager, servers, replica_metric)
+                coordinator_before = await get_metric_sum(manager, servers, coordinator_metric)
+
+                sent, rejected = await hammer(stmt, duration)
+
+                replica_rejected = await get_metric_sum(manager, servers, replica_metric) - replica_before
+                coordinator_rejected = await get_metric_sum(manager, servers, coordinator_metric) - coordinator_before
+                accepted_rate = (sent - rejected) / duration
+                assert rejected > 0
+                assert replica_rejected > 0
+                assert coordinator_rejected == rejected, f"{op}s: coordinator metric {coordinator_rejected} != {rejected} rejections seen by the client"
+                # The limiter is probabilistic, and over a few seconds the accepted
+                # rate fluctuates noticeably around the limit, so the bounds are loose.
+                assert 0.5 * limit < accepted_rate < 2 * limit, f"{op}s: accepted rate {accepted_rate}/s, limit {limit}/s"
