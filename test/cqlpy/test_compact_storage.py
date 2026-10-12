@@ -12,8 +12,8 @@ from uuid import UUID
 from cassandra.protocol import InvalidRequest
 
 from .util import new_test_table, new_named_table
-import pytest
 from .nodetool import flush
+import pytest
 
 # In a COMPACT STORAGE table with two clustering columns, a row can be
 # written with only the first clustering column (c2 is then null). Such a

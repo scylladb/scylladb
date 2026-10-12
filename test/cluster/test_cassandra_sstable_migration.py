@@ -73,6 +73,8 @@ def get_sstable_version(cf_dir, assert_only_one_version=True):
     if assert_only_one_version:
         assert len(versions) == 1, versions
     return versions[0] if versions else None
+
+
 async def nodetool(manager: ScyllaClusterManager, server, *args):
     """Runs "scylla nodetool" against the node, like ccm's node.nodetool()."""
     exe = await manager.server_get_exe(server.server_id)
