@@ -3129,8 +3129,15 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
 future<utils::chunked_vector<db::rp_handle>>
 db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
     class cl_entries_writer final : public entry_writer {
+<<<<<<< HEAD
         utils::chunked_vector<commitlog_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;
+||||||| parent of e06c0c4f0c (commitlog: Don't cache schema known across segment checks in add_entries)
+        utils::chunked_vector<commitlog_mutation_entry_writer> _writers;
+        std::unordered_set<table_schema_version> _known;
+=======
+        utils::chunked_vector<commitlog_mutation_entry_writer> _writers;
+>>>>>>> e06c0c4f0c (commitlog: Don't cache schema known across segment checks in add_entries)
         const segment* _sizes_computed = nullptr;
     public:
         utils::chunked_vector<rp_handle> res;
@@ -3145,13 +3152,14 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
         }
         size_t size(segment& seg) override {
             size_t res = 0;
+            std::unordered_set<table_schema_version> all_known;
             for (auto i = _writers.begin(), e = _writers.end(); i != e; ++i) {
                 auto known = seg.is_schema_version_known(i->schema());
                 if (!known) {
-                    known = _known.contains(i->schema()->version());
+                    known = all_known.contains(i->schema()->version());
                 }
                 if (!known) {
-                    _known.emplace(i->schema()->version());
+                    all_known.emplace(i->schema()->version());
                 }
                 i->set_with_schema(!known);
                 res += i->size();
