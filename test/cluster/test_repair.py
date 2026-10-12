@@ -1248,6 +1248,8 @@ async def test_repair_with_disabled_compaction(manager: ScyllaClusterManager):
     await run_nodetool(manager, node2, "repair", "ks")
     after = list_of_sstables(workdir)
     assert before < after, "Number of sstables should have increased because of the repair"
+
+
 # A node that missed an overwrite of a row whose other columns are null
 # (it was down) reads the old value alone at CL=ONE, and after a
 # "nodetool repair" on it reads the new value, again alone.
