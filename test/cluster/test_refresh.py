@@ -270,6 +270,106 @@ async def test_refresh_generates_view_updates(manager: ScyllaClusterManager, tab
             await wait_for_row_count_on_host(cql, host, ks, f'{idx}_index', expected_rows)
 
 
+
+# The value types of the CDC snapshot dtests for each kind of value, per
+# (preimage, postimage) option of the table.
+cdc_refresh_types = {
+    'native': {(False, False): 'text', (True, False): 'varchar', (False, True): 'varchar', (True, True): 'ascii'},
+    'list': {(False, False): 'list<text>', (True, False): 'list<varchar>', (False, True): 'list<varchar>', (True, True): 'list<ascii>'},
+    'set': {(False, False): 'set<text>', (True, False): 'set<varchar>', (False, True): 'set<varchar>', (True, True): 'set<ascii>'},
+    'map': {(False, False): 'map<int,text>', (True, False): 'map<bigint,varchar>', (False, True): 'map<smallint,varchar>', (True, True): 'map<tinyint,ascii>'},
+}
+
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("value_kind", list(cdc_refresh_types))
+async def test_refresh_cdc_table_and_log(manager: ScyllaClusterManager, value_kind):
+    '''
+    Restore a CDC-enabled table and its CDC log table from a snapshot with refresh.
+
+    Refreshing the base table's sstables must not generate CDC log entries (the
+    log stays empty), and refreshing the log table's sstables then restores the
+    log exactly. The rows are inserted, updated, (optionally) deleted and updated
+    again, with every combination of the preimage and postimage options, so that
+    the log holds every kind of entry. Like the dtests, the values are formatted
+    into the statements, the node is flushed before the snapshot, and the
+    snapshot and refresh requests are those of nodetool. As on a dtest node,
+    which runs with conf/scylla.yaml, auto_snapshot is on, with its 10-day TTL,
+    so the keyspace is snapshotted (and its expiry scheduled) when dropped too.
+    '''
+    server = await manager.server_add(config={'auto_snapshot': True, 'auto_snapshot_ttl': 864000})
+    cql = manager.get_cql()
+    cf = 'cf'
+    log = f'{cf}_scylla_cdc_log'
+
+    for (preimage, postimage), value_type in cdc_refresh_types[value_kind].items():
+        for with_delete in [False, True]:
+            ks = unique_name('ks_')
+
+            async def create_schema():
+                cdc = "'enabled': true" + (", 'preimage': true" if preimage else "") + (", 'postimage': true" if postimage else "")
+                await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
+                                    " AND tablets = {'enabled': false}")
+                await cql.run_async(f"CREATE TABLE {ks}.{cf} (pkey int, ckey int, value {value_type}, PRIMARY KEY (pkey, ckey))"
+                                    f" WITH cdc = {{{cdc}}}")
+
+            async def table_dir(table):
+                workdir = await manager.server_get_workdir(server.server_id)
+                return glob.glob(os.path.join(workdir, 'data', ks, f'{table}-*'))[0]
+
+            def value(s):
+                return {'native': s, 'list': [s], 'set': set(s), 'map': {0: s}}[value_kind]
+
+            async def select_all(table):
+                return sorted(await cql.run_async(f"SELECT * FROM {ks}.{table}"))
+
+            async def run_all(stmt, values):
+                await asyncio.gather(*(cql.run_async(SimpleStatement(stmt), v) for v in values))
+
+            await create_schema()
+            insert = f"INSERT INTO {ks}.{cf} (pkey, ckey, value) VALUES (%(pkey)s, %(ckey)s, %(value)s)"
+            update = f"UPDATE {ks}.{cf} SET value = %(value)s WHERE pkey = %(pkey)s AND ckey = %(ckey)s"
+            delete = f"DELETE FROM {ks}.{cf} WHERE pkey = %(pkey)s AND ckey = %(ckey)s"
+            keys = [(i % 10, i) for i in range(100)]
+            await run_all(insert, [{'pkey': pk, 'ckey': ck, 'value': value(str(ck))} for pk, ck in keys])
+            await run_all(update, [{'pkey': pk, 'ckey': ck, 'value': value(f'new_{ck}')} for pk, ck in keys])
+            if with_delete:
+                await run_all(delete, [{'pkey': pk, 'ckey': ck} for pk, ck in keys])
+            await run_all(update, [{'pkey': pk, 'ckey': ck, 'value': value(f'new_{ck}')} for pk, ck in keys])
+            await manager.api.flush_all_keyspaces(server.ip_addr)
+            base_rows = await select_all(cf)
+            log_rows = await select_all(log)
+            assert len(base_rows) == len(keys) and log_rows
+
+            snap_name = unique_name('snap_')
+            await manager.api.take_snapshot(server.ip_addr, ks, snap_name, ttl='0')
+            tmpdir = os.path.join(await manager.server_get_workdir(server.server_id), '..', unique_name('tmpbackup_'))
+            # The whole snapshot directory is copied, as the dtest did: the
+            # refresh skips the manifest.json and schema.cql files.
+            for table in [cf, log]:
+                shutil.copytree(os.path.join(await table_dir(table), 'snapshots', snap_name), os.path.join(tmpdir, table))
+
+            # Remove the dropped tables' directories (kept for the auto-snapshot), so
+            # that only the directories of the recreated tables are left.
+            await cql.run_async(f"DROP KEYSPACE {ks}")
+            shutil.rmtree(os.path.join(await manager.server_get_workdir(server.server_id), 'data', ks))
+            await create_schema()
+
+            async def refresh(table):
+                shutil.copytree(os.path.join(tmpdir, table), os.path.join(await table_dir(table), 'upload'), dirs_exist_ok=True)
+                await manager.api.load_new_sstables(server.ip_addr, ks, table)
+
+            await refresh(cf)
+            assert await select_all(cf) == base_rows
+            assert await select_all(log) == []
+
+            await refresh(log)
+            assert await select_all(log) == log_rows
+
+            await cql.run_async(f"DROP KEYSPACE {ks}")
+            shutil.rmtree(tmpdir)
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_refresh_does_not_claim_sstables_created_by_another_shard(manager: ScyllaClusterManager):
     '''
