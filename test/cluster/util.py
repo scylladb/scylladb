@@ -16,6 +16,8 @@ import math
 import operator
 import os
 import struct
+import pathlib
+import shutil
 import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -27,7 +29,7 @@ import pytest
 from cassandra import AlreadyExists
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
-from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.internal_types import ServerInfo, HostID, ServerNum
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
@@ -634,6 +636,23 @@ async def wait_new_coordinator_elected(manager: ScyllaClusterManager, previous_c
                        previous_coordinator_id, coordinators_ids)
 
     await wait_for(new_coordinator_elected, deadline=deadline)
+
+async def wipe_server_data(manager: ScyllaClusterManager, server_id: ServerNum) -> None:
+    """Delete everything a stopped server has stored, except its configuration,
+    so that it starts again as a new node with the same IP address and a new
+    host ID, which the manager then asks the node for again.
+    """
+    assert server_id not in {s.server_id for s in await manager.running_servers()}, \
+        f"server {server_id} must be stopped before its data is wiped"
+    workdir = pathlib.Path(await manager.server_get_workdir(server_id))
+    for entry in workdir.iterdir():
+        if entry.name == "conf":
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    manager.cluster.servers[server_id].forget_host_id()
 
 def vnodes_keyspace(replication: int | str) -> str:
     """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
