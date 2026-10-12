@@ -271,10 +271,12 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
             }
         }
         ~hold_state() {
+            // Given back on the exception path too: the position always matches the
+            // buffers held, so the caller resumes from where the call got to. Do not
+            // gate this on std::uncaught_exceptions(): it is per OS thread, so it is
+            // non-zero whenever another seastar::thread on the shard blocks while unwinding.
             _state->adjust_lease();
-            if (!std::uncaught_exceptions()) {
-                _src._state = std::move(_state);
-            }
+            _src._state = std::move(_state);
         }
         operator state&() const {
             return *_state;
@@ -1140,9 +1142,13 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     }
                     auto old = s.position;
                     for (auto&& buf : bufs) {
-                        s.position += buf.size();
-                        _impl->count_read_bytes(buf.size());
+                        // deque's push is strongly exception safe, so either the
+                        // state takes the bytes and the position moves, or neither
+                        // happens.
+                        auto n = buf.size();
                         s.buffers.emplace_back(std::move(buf));
+                        s.position += n;
+                        _impl->count_read_bytes(n);
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
                 }
