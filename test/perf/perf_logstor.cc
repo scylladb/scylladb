@@ -848,7 +848,7 @@ public:
     // dataset against the memory of the shard, which nothing here bounds.
     future<> warm_cache_and_find_cached_keys() {
         co_await max_concurrent_for_each(_keys, _cfg.concurrency, [this] (const dht::decorated_key& key) {
-            return _logstor->read(_schema, index(), key, _slice).discard_result();
+            return do_query(key, _slice);
         });
         _cached_keys.clear();
         _cached_keys.reserve(_keys.size());
