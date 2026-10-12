@@ -8,7 +8,7 @@
 from .util import new_test_keyspace, unique_name
 from .conftest import has_tablets
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
+from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, Unauthorized
 from threading import Thread
 
 from test.cluster.util import get_replication, get_replica_count
@@ -422,4 +422,22 @@ def test_create_keyspace_no_warn_tablets(cql, scylla_only, skip_without_tablets)
         cql.execute(f"DROP KEYSPACE {keyspace}")
     finally:
         cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
+
+# TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
+# TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
+# TODO: confirm case insensitivity without quotes, and case sensitivity with them.
+
+
+# System keyspaces can't be dropped, and their names (case-insensitive when
+# unquoted) can't be used for new keyspaces. Creating "system" itself is
+# checked by test_cql_query.py::test_validate_keyspace.
+def test_system_keyspaces_cannot_be_created_or_dropped(cql):
+    with pytest.raises(AlreadyExists):
+        cql.execute("CREATE KEYSPACE SYSTEM_tRaCeS WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    with pytest.raises(Unauthorized, match='system keyspace is not user-modifiable'):
+        cql.execute("DROP KEYSPACE system")
+    # With auth-v2, Scylla keeps roles in the "system" keyspace and
+    # "system_auth" may not exist at all, so either error is fine.
+    with pytest.raises((Unauthorized, InvalidRequest, ConfigurationException)):
+        cql.execute("DROP KEYSPACE system_auth")
 
