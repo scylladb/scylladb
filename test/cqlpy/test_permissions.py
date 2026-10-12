@@ -39,8 +39,8 @@ def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandr
     schema = "a int primary key"
     user = "cassandra"
     with new_test_table(cql, test_keyspace, schema) as table:
-        # EXECUTE is not listed, as it only applies to functions, which aren't covered in this test case
-        all_permissions = set(['create', 'alter', 'drop', 'select', 'modify', 'authorize', 'describe'])
+        # EXECUTE only applies to functions, so it is refused on all these resources
+        all_permissions = set(['create', 'alter', 'drop', 'select', 'modify', 'authorize', 'describe', 'execute'])
         applicable_permissions = {
             'all keyspaces': ['create', 'alter', 'drop', 'select', 'modify', 'authorize'],
             f'keyspace {test_keyspace}': ['create', 'alter', 'drop', 'select', 'modify', 'authorize'],
@@ -674,6 +674,8 @@ def test_native_functions_always_executable(cql):
                     assert list(user_session.execute(f"SELECT max(a) FROM {table}")) == [(84,)]
                     assert list(user_session.execute(f"SELECT min(a) FROM {table}")) == [(3,)]
                     assert list(user_session.execute(f"SELECT sum(a) FROM {table}")) == [(102,)]
+                    # scalar native functions, here in the WHERE clause
+                    assert list(user_session.execute(f"SELECT a FROM {table} WHERE a = blobasint(intasblob(15))")) == [(15,)]
 
 @contextmanager
 def eventually_new_named_table(cql, table, schema, extra=""):
@@ -1014,6 +1016,163 @@ def test_batch_prepared_auth_cache_bypass(cql, test_keyspace):
                 # happens and this succeeds.
                 with pytest.raises(Unauthorized):
                     user_session.execute(user_prepared, [42, "hacked"])
+
+# Return the rows of a LIST ... PERMISSIONS statement as a set of
+# (role, resource, permission) tuples. If "resource" is given, rows of other
+# resources are ignored: LIST ... ON a resource also lists the permissions on
+# its parents, which other tests sharing the server may have granted.
+def list_permissions(cql, stmt, resource=None):
+    return {(r.role, r.resource, r.permission) for r in cql.execute(stmt) if resource is None or r.resource == resource}
+
+# Test that dropping a role also removes the permissions granted to other
+# roles ON the dropped role (as a resource).
+def test_drop_role_revokes_permissions_granted_on_it(cql):
+    with new_user(cql) as mike:
+        role1 = unique_name()
+        role2 = unique_name()
+        cql.execute(f"CREATE ROLE {role1}")
+        cql.execute(f"CREATE ROLE {role2}")
+        try:
+            grant(cql, 'ALTER', f'ROLE {role1}', mike)
+            grant(cql, 'AUTHORIZE', f'ROLE {role2}', mike)
+            assert list_permissions(cql, f"LIST ALL PERMISSIONS OF {mike}") == {
+                (mike, f"<role {role1}>", "ALTER"), (mike, f"<role {role2}>", "AUTHORIZE")}
+        finally:
+            cql.execute(f"DROP ROLE IF EXISTS {role1}")
+            cql.execute(f"DROP ROLE IF EXISTS {role2}")
+        assert list_permissions(cql, f"LIST ALL PERMISSIONS OF {mike}") == set()
+
+# Test that table permissions granted to a role apply to a user the role is
+# granted to, and stop applying after the role is revoked from the user, or
+# the permissions are revoked from the role.
+def test_grant_revoke_permissions_through_role(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, val int") as table, \
+         new_user(cql) as mike:
+        role1 = unique_name()
+        cql.execute(f"CREATE ROLE {role1}")
+        try:
+            grant(cql, 'ALL', table, role1)
+            cql.execute(f"GRANT {role1} TO {mike}")
+            with new_session(cql, mike) as mike_session:
+                insert = lambda: mike_session.execute(f"INSERT INTO {table} (id, val) VALUES (0, 0)")
+                eventually_authorized(insert)
+                assert list(mike_session.execute(f"SELECT * FROM {table}")) == [(0, 0)]
+
+                cql.execute(f"REVOKE {role1} FROM {mike}")
+                eventually_unauthorized(insert)
+
+                cql.execute(f"GRANT {role1} TO {mike}")
+                eventually_authorized(insert)
+                revoke(cql, 'ALL', table, role1)
+                eventually_unauthorized(insert)
+        finally:
+            cql.execute(f"DROP ROLE {role1}")
+
+# Test that permissions on builtin functions cannot be granted or revoked.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+def test_grant_revoke_on_builtin_functions_refused(cql):
+    with new_user(cql) as mike:
+        for stmt in [f"GRANT EXECUTE ON FUNCTION system.intasblob(int) TO {mike}",
+                     f"REVOKE ALL PERMISSIONS ON FUNCTION system.intasblob(int) FROM {mike}",
+                     f"GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE system TO {mike}",
+                     f"REVOKE ALL PERMISSIONS ON ALL FUNCTIONS IN KEYSPACE system FROM {mike}"]:
+            with pytest.raises(InvalidRequest, match="Altering permissions on builtin functions is not supported"):
+                cql.execute(stmt)
+
+# Test that TRUNCATE needs MODIFY permission on the table, here granted
+# through a role: SELECT is not enough.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+def test_truncate_requires_modify_permission(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table, \
+         new_user(cql) as mike:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1)")
+        readonly = unique_name()
+        readwrite = unique_name()
+        cql.execute(f"CREATE ROLE {readonly}")
+        cql.execute(f"CREATE ROLE {readwrite}")
+        try:
+            grant(cql, 'SELECT', table, readonly)
+            grant(cql, 'ALL', table, readwrite)
+            cql.execute(f"GRANT {readonly} TO {mike}")
+            statements = [f"TRUNCATE TABLE {table}"]
+            if is_scylla(cql):
+                statements.append(f"TRUNCATE TABLE {table} USING TIMEOUT 5m")
+            with new_session(cql, mike) as mike_session:
+                for stmt in statements:
+                    with pytest.raises(Unauthorized, match="MODIFY"):
+                        mike_session.execute(stmt)
+                cql.execute(f"GRANT {readwrite} TO {mike}")
+                for stmt in statements:
+                    eventually_authorized(lambda: mike_session.execute(stmt))
+            assert list(cql.execute(f"SELECT * FROM {table}")) == []
+        finally:
+            cql.execute(f"DROP ROLE {readonly}")
+            cql.execute(f"DROP ROLE {readwrite}")
+
+
+# Test LIST [ALL | <permission>] PERMISSIONS [ON <resource>] [OF <role>]:
+# OF includes the permissions inherited from granted roles, ON shows also the
+# permissions of the resource's creator, and a non-superuser can list the
+# permissions of itself and of the roles granted to it, but not of others.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_list_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, val int") as table, \
+         new_user(cql) as mike, new_user(cql) as john:
+        t = f"<table {table}>"
+        role1 = unique_name()
+        role2 = unique_name()
+        role3 = unique_name()
+        for role in [role1, role2, role3]:
+            cql.execute(f"CREATE ROLE {role}")
+        try:
+            r1 = f"<role {role1}>"
+            grant(cql, 'SELECT', table, role1)
+            grant(cql, 'ALTER', table, role2)
+            grant(cql, 'MODIFY', table, mike)
+            grant(cql, 'MODIFY', table, john)
+            grant(cql, 'ALTER', f'ROLE {role1}', role2)
+            cql.execute(f"GRANT {role1} TO {role2}")
+            cql.execute(f"GRANT {role2} TO {mike}")
+
+            # LIST ALL PERMISSIONS lists everybody's permissions, also those
+            # of other tests, so look only at this test's roles.
+            all_perms = list_permissions(cql, "LIST ALL PERMISSIONS")
+            assert {p for p in all_perms if p[0] in [mike, role1, role2, role3]} == {
+                (mike, t, "MODIFY"), (role1, t, "SELECT"), (role2, t, "ALTER"), (role2, r1, "ALTER")}
+            assert {("cassandra", r1, p) for p in ["ALTER", "DROP", "AUTHORIZE"]} <= all_perms
+
+            assert list_permissions(cql, f"LIST ALL PERMISSIONS OF {role1}") == {(role1, t, "SELECT")}
+            assert list_permissions(cql, f"LIST ALL PERMISSIONS OF {role2}") == {
+                (role1, t, "SELECT"), (role2, t, "ALTER"), (role2, r1, "ALTER")}
+            # the creator's permissions (Cassandra also gives it DESCRIBE)
+            # and the ones granted
+            on_role1 = list_permissions(cql, f"LIST ALL PERMISSIONS ON ROLE {role1}", r1)
+            assert {("cassandra", r1, p) for p in ["ALTER", "DROP", "AUTHORIZE"]} <= on_role1
+            assert {p for p in on_role1 if p[0] != "cassandra"} == {(role2, r1, "ALTER")}
+            # only the creator was given DROP
+            assert list_permissions(cql, f"LIST DROP PERMISSION ON ROLE {role1}", r1) == {("cassandra", r1, "DROP")}
+            assert list_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1}", r1) == {
+                ("cassandra", r1, "ALTER"), (role2, r1, "ALTER")}
+            assert list_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1} OF {role2}", r1) == {(role2, r1, "ALTER")}
+            assert list_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1} OF {role3}", r1) == set()
+
+            with new_session(cql, mike) as mike_session:
+                assert list_permissions(mike_session, f"LIST ALL PERMISSIONS OF {mike}") == {
+                    (mike, t, "MODIFY"), (role1, t, "SELECT"), (role2, t, "ALTER"), (role2, r1, "ALTER")}
+                assert list_permissions(mike_session, f"LIST ALL PERMISSIONS OF {role2}") == {
+                    (role1, t, "SELECT"), (role2, t, "ALTER"), (role2, r1, "ALTER")}
+                assert list_permissions(mike_session, f"LIST ALL PERMISSIONS OF {role1}") == {(role1, t, "SELECT")}
+                with pytest.raises(Unauthorized):
+                    mike_session.execute("LIST ALL PERMISSIONS")
+                with pytest.raises(Unauthorized):
+                    mike_session.execute(f"LIST ALL PERMISSIONS OF {john}")
+        finally:
+            for role in [role1, role2, role3]:
+                cql.execute(f"DROP ROLE {role}")
 
 # ============================================================================
 # UDF permission tests (migrated from scylla-dtest auth_roles_test.py DTEST-12)
