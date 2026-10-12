@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import asyncio
 import json
 import logging
 import pytest
@@ -15,10 +16,11 @@ from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.pool import Host  # type: ignore
 
+from test import DEBUG_MODES
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, run_nodetool
 
 
 logger = logging.getLogger(__name__)
@@ -363,3 +365,99 @@ async def test_read_repair_with_trace_logging(request, manager):
             found_read_repair |= "digest mismatch, starting read repair" == event.description
 
         assert found_read_repair
+
+
+async def read_repair_prepare_cluster(manager: ScyllaClusterManager, dc: str, racks: list[int]) -> list[ServerInfo]:
+    """TestReadRepair.prepare_cluster(): racks of the given sizes in dc, no
+    hinted handoff, the GossipingPropertyFileSnitch with prefer_local, no
+    dynamic snitch; vnodes."""
+    config = {"hinted_handoff_enabled": False, "endpoint_snitch": "GossipingPropertyFileSnitch", "dynamic_snitch": False,
+              "tablets_mode_for_new_keyspaces": "disabled", "num_tokens": 256}
+    property_files = [{"dc": dc, "rack": f"rack{i + 1}", "prefer_local": "true"} for i, count in enumerate(racks) for _ in range(count)]
+    return await manager.servers_add(len(property_files), config=config, property_file=property_files)
+
+
+# Ported from scylla-dtest read_repair_test.py::TestReadRepair::test_alter_rf_and_run_read_repair.
+# A row written at RF=1 (dc1 of rack1 x2 and rack2, its replica flushed) is
+# read at ONE through every node; after RF is raised to 2 without repair, a
+# read at ALL of one column through a node that is not the original replica
+# returns only that column and read-repairs the whole row: every node then
+# reads all of it at ONE (CASSANDRA-10655).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_read_repair_of_column_subset_after_rf_increase(manager: ScyllaClusterManager):
+    dc = "dc1"
+    servers = await read_repair_prepare_cluster(manager, dc, [2, 1])
+    node1 = servers[0]
+    session = manager.get_cql()
+    session.execute(f"CREATE KEYSPACE alter_rf_test WITH replication = {{'class': 'NetworkTopologyStrategy', '{dc}': 1}};")
+    session.execute("CREATE TABLE alter_rf_test.t1 (k int PRIMARY KEY, a int, b int);")
+    session.execute("INSERT INTO alter_rf_test.t1 (k, a, b) VALUES (1, 1, 1);")
+    cl_one_stmt = SimpleStatement("SELECT * FROM alter_rf_test.t1 WHERE k=1", consistency_level=ConsistencyLevel.ONE)
+
+    # identify_initial_placement(): the replica per "nodetool getendpoints".
+    out, _, _ = await run_nodetool(manager, node1, "getendpoints", "alter_rf_test", "t1", "1")
+    address = out.split("\n")[-2]
+    initial_replica = next(s for s in servers if s.ip_addr == address)
+    non_replicas = [s for s in servers if s.ip_addr != address]
+    await run_nodetool(manager, initial_replica, "flush")
+
+    async def check_all_nodes():
+        for s in servers:
+            node_session = await manager.get_cql_exclusive(s)
+            try:
+                res = [list(r) for r in node_session.execute(cl_one_stmt)]
+            finally:
+                node_session.cluster.shutdown()
+            assert res == [[1, 1, 1]], res
+
+    await check_all_nodes()
+    rf = session.execute("SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = 'alter_rf_test'").one().replication[dc]
+    rf = "['rack1', 'rack2']" if rf.startswith("[") else "2"
+    session.execute(f"ALTER KEYSPACE alter_rf_test WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{dc}' : {rf} }};")
+    session.cluster.control_connection.wait_for_schema_agreement(wait_time=120)
+    read_repair_session = await manager.get_cql_exclusive(non_replicas[0])
+    try:
+        res = [list(r) for r in read_repair_session.execute(SimpleStatement("SELECT a FROM alter_rf_test.t1 WHERE k=1", consistency_level=ConsistencyLevel.ALL))]
+    finally:
+        read_repair_session.cluster.shutdown()
+    assert res == [[1]], res
+    await check_all_nodes()
+
+
+# Ported from scylla-dtest read_repair_test.py::TestReadRepair::test_range_slice_query_with_tombstones.
+# 2499 rows on dc1 (rack1 x2, rack2) with RF 2, flushed, the cluster
+# restarted, 999 of them deleted and node1 flushed: a traced LOCAL_QUORUM
+# range read of 100 rows through node1 writes nothing (no read repair;
+# CASSANDRA-8989, CASSANDRA-9502).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_range_scan_over_consistent_tombstones_does_not_read_repair(manager: ScyllaClusterManager):
+    servers = await read_repair_prepare_cluster(manager, "dc1", [2, 1])
+    node1 = servers[0]
+    session1 = await manager.get_cql_exclusive(node1)
+    session1.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2}")
+    session1.execute("CREATE TABLE ks.cf (key int primary key, value double, txt text);")
+    for n in range(1, 2500):
+        session1.execute(f"INSERT INTO ks.cf (key, value, txt) VALUES ({n}, {n}, 'foo bar {n} iuhiu iuhiu ihi')")
+    session1.cluster.shutdown()
+    for s in servers:
+        await run_nodetool(manager, s, "flush")
+    await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
+    for s in servers:
+        await manager.server_start(s.server_id)
+    session1 = await manager.get_cql_exclusive(node1)
+    try:
+        for n in range(1, 1000):
+            session1.execute(f"DELETE FROM ks.cf WHERE key = {n}")
+        await asyncio.sleep(1)
+        await run_nodetool(manager, node1, "flush")
+        await asyncio.sleep(1)
+        future = session1.execute_async(SimpleStatement("SELECT * FROM ks.cf LIMIT 100", consistency_level=ConsistencyLevel.LOCAL_QUORUM), trace=True)
+        future.result()
+        trace = future.get_query_trace(max_wait=120)
+    finally:
+        session1.cluster.shutdown()
+    for event in trace.events:
+        activity = event.description
+        assert "Appending to commitlog" not in activity
+        assert "Adding to cf memtable" not in activity
+        assert "Acquiring switchLock read lock" not in activity
