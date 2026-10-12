@@ -384,3 +384,48 @@ async def test_refresh_does_not_claim_sstables_created_by_another_shard(manager:
 
         assert {row.pk for row in cql.execute(f"SELECT pk FROM {ks}.{cf}")} == set(keys)
         await wait_for_upload_dir_empty(upload_dir)
+
+
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+async def test_refresh_invalidates_cache(manager: ScyllaClusterManager):
+    '''
+    Check that a refresh evicts the cached rows its sstables cover: a row read
+    (and so cached) before the refresh must show the value from the loaded
+    sstables, which is newer, afterwards.
+
+    Reproduces https://github.com/scylladb/scylla/issues/1212
+
+    Tablets are disabled: with tablets, refresh is auto-promoted to
+    load-and-stream, which writes the data through the regular write path.
+    '''
+    server = await manager.server_add()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                          "'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        # The newer value is written to a table of its own, whose sstables
+        # are then loaded into the table under test.
+        for cf in ('cf', 'src'):
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.cf (pk, v) VALUES ('key1', 1)")
+        await manager.api.keyspace_flush(server.ip_addr, ks, 'cf')
+        assert list(await cql.run_async(f"SELECT pk, v FROM {ks}.cf")) == [('key1', 1)]
+
+        await cql.run_async(f"INSERT INTO {ks}.src (pk, v) VALUES ('key1', 2)")
+        snap_name = unique_name('refresh_')
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.take_snapshot(server.ip_addr, ks, snap_name, tables=['src'])
+
+        workdir = await manager.server_get_workdir(server.server_id)
+        snapshot_dir = glob.glob(os.path.join(workdir, 'data', ks, 'src-*', 'snapshots', snap_name))[0]
+        upload_dir = os.path.join(glob.glob(os.path.join(workdir, 'data', ks, 'cf-*'))[0], 'upload')
+        os.makedirs(upload_dir, exist_ok=True)
+        for item in os.listdir(snapshot_dir):
+            if item not in ('manifest.json', 'schema.cql'):
+                shutil.copy2(os.path.join(snapshot_dir, item), os.path.join(upload_dir, item))
+        await manager.api.load_new_sstables(server.ip_addr, ks, 'cf')
+
+        assert list(await cql.run_async(f"SELECT pk, v FROM {ks}.cf")) == [('key1', 2)]
+
+
