@@ -147,4 +147,3 @@ async def test_replace_after_full_cluster_restart(manager: ScyllaClusterManager)
     replace_cfg = ReplaceConfig(replaced_id=servers[2].server_id, reuse_ip_addr=False, use_host_id=True)
     await manager.server_add(replace_cfg, property_file=servers[2].property_file())
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
