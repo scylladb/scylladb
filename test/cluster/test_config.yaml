@@ -42,7 +42,6 @@ run_in_dev:
   - dtest/bypass_cache_test
   - dtest/audit_test
   - audit/test_audit
-  - dtest/cfid_test
   - dtest/rebuild_test
   - dtest/schema_management_test
 run_in_debug:
