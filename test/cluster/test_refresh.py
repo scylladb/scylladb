@@ -429,3 +429,17 @@ async def test_refresh_invalidates_cache(manager: ScyllaClusterManager):
         assert list(await cql.run_async(f"SELECT pk, v FROM {ks}.cf")) == [('key1', 2)]
 
 
+
+
+async def table_with_flushed_rows(manager, server, ks, rows=100):
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k})") for k in range(rows)])
+    await manager.api.keyspace_flush(server.ip_addr, ks, 't')
+    workdir = await manager.server_get_workdir(server.server_id)
+    [table_dir] = glob.glob(os.path.join(workdir, 'data', ks, 't-*'))
+    return table_dir
+
+
+
+

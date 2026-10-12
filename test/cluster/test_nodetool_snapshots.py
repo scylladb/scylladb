@@ -18,16 +18,18 @@ import re
 import pytest
 
 from test import DEBUG_MODES
-from test.cluster.util import run_nodetool, stop_servers_gracefully
+from test.cluster.util import cassandra_stress, run_nodetool, stop_servers_gracefully
+from test.cluster.dtest_helpers import cql_one
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import asyncio
-from test.cluster.dtest_helpers import cql_one
 
 logger = logging.getLogger(__name__)
 
 # Like the dtests' nodes, new keyspaces use vnodes by default, 256 per node, and dropped or
 # truncated tables are snapshotted (test.py turns auto_snapshot off).
 CONFIG = {'tablets_mode_for_new_keyspaces': 'disabled', 'num_tokens': 256, 'tablets_initial_scale_factor': 1, 'auto_snapshot': True}
+# The nodetool dtests ran with compaction debug logging.
+CMDLINE = ["--logger-log-level", "compaction=debug"]
 # Like the dtests' ccm populate(1): the SimpleSnitch, the node in datacenter1/rack1.
 SNAPSHOT_CONFIG = {**CONFIG, "endpoint_snitch": "SimpleSnitch"}
 
@@ -140,6 +142,7 @@ async def test_listsnapshots_several_keyspaces(manager: ScyllaClusterManager):
         await run_nodetool(manager, server, "snapshot", ks)
     listed = await check_listsnapshots(manager, server)
     assert sorted((ks, cf) for _, ks, cf, _, _ in listed) == [(ks, cf) for ks in kses for cf in cfs]
+
 # Ported from scylla-dtest listsnapshots_test.py::TestNodetoolListSnapshots::test_snapshots_of_system_ks.
 # A snapshot of the system keyspace is listed with the sizes of its files.
 @pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
@@ -173,3 +176,129 @@ async def insert_rows(cql, ks: str, tables: list[str], start: int, end: int) -> 
     for t in tables:
         insert = cql.prepare(f"INSERT INTO {ks}.{t} (key, val) VALUES (?, 'asdf')")
         await asyncio.gather(*[cql.run_async(insert, [r]) for r in range(start, end)])
+############################################################################
+# Ported from nodetool_additional_test.py: "nodetool snapshot" of all
+# keyspaces, a keyspace or a table, with and without a tag, checked against
+# the snapshot directories and "nodetool listsnapshots", and cleared.
+
+# Keyspace directories that are not keyspaces.
+RESERVED_NAMES = ["view_pending_updates"]
+
+
+async def snapshot_listed(manager: ScyllaClusterManager, server, ks: str, snapshot: str) -> bool:
+    out, _, _ = await run_nodetool(manager, server, "listsnapshots")
+    return bool(re.findall(snapshot + r"\s+" + ks, out, re.MULTILINE))
+
+
+async def listed_snapshots(manager: ScyllaClusterManager, server) -> list:
+    out, _, _ = await run_nodetool(manager, server, "listsnapshots")
+    return re.findall(r"^\s*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([\d]+\s[^\s]+)\s+([\d]+\s[^\s]+)\s*$", out, re.MULTILINE)
+
+
+def check_snapshot_dirs(data_dir: str, snapshot: str, keyspace: str | None = None, column_family: str | None = None) -> None:
+    """Every table of the snapshotted keyspaces (all, or the given one, or
+    just the given table) has the snapshot directory with a manifest.json,
+    and no other table has one. The system schema tables are skipped, as in
+    the dtests."""
+    for ks in os.listdir(data_dir):
+        if not os.path.isdir(os.path.join(data_dir, ks)) or ks in RESERVED_NAMES:
+            continue
+        for c in os.listdir(os.path.join(data_dir, ks)):
+            if ks.startswith("system") and c.startswith("schema"):
+                continue
+            snapshot_dir = os.path.join(data_dir, ks, c, "snapshots", snapshot)
+            if not keyspace or (keyspace == ks and (not column_family or c.startswith(column_family))):
+                assert os.path.isdir(snapshot_dir), f"missing {snapshot_dir}"
+                assert "manifest.json" in os.listdir(snapshot_dir), f"missing manifest.json in {snapshot_dir}"
+            else:
+                assert not os.path.isdir(snapshot_dir), f"unexpected {snapshot_dir}"
+
+
+# A snapshot of all keyspaces, after 1000 stress writes, has a directory
+# with a manifest.json in every table and is listed for keyspace1 and
+# system; "nodetool clearsnapshot" removes it.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_global_snapshot(manager: ScyllaClusterManager):
+    server = await manager.server_add(config=CONFIG, cmdline=CMDLINE)
+    await cassandra_stress(manager, server, "write", "cl=ALL", "no-warmup", "n=1000")
+    assert await listed_snapshots(manager, server) == []
+    out, _, _ = await run_nodetool(manager, server, "snapshot")
+    [snapshot] = re.findall(r"Snapshot directory:\s+(\d+)", out, re.MULTILINE)
+    check_snapshot_dirs(os.path.join(await manager.server_get_workdir(server.server_id), "data"), snapshot)
+    assert await snapshot_listed(manager, server, "keyspace1", snapshot)
+    assert await snapshot_listed(manager, server, "system", snapshot)
+    await run_nodetool(manager, server, "clearsnapshot")
+    assert not await snapshot_listed(manager, server, "keyspace1", snapshot)
+
+
+# A tagged snapshot of all keyspaces, of keyspace1, of
+# system_schema.tables given with -cf, or of system_schema.tables given
+# with -kc, after 1000 stress writes: nodetool prints the tag, exactly the
+# snapshotted tables have its directory, it is listed, and "nodetool
+# clearsnapshot -t" removes it.
+async def snapshot_tag(manager: ScyllaClusterManager, keyspace=None, kc=None, column_family=None):
+    """The dtests' tst_snapshot("snaptag", ...)."""
+    server = await manager.server_add(config=CONFIG, cmdline=CMDLINE)
+    await cassandra_stress(manager, server, "write", "cl=ALL", "no-warmup", "n=1000")
+    assert await listed_snapshots(manager, server) == []
+    tag = "snaptag"
+    args = ["snapshot", "-t", tag]
+    if kc:
+        args += ["-kc", kc]
+    if column_family:
+        args += ["-cf", column_family]
+    if keyspace:
+        args.append(keyspace)
+    out, _, _ = await run_nodetool(manager, server, *args)
+    assert re.findall(r"Snapshot directory:\s+([^\s]+)", out, re.MULTILINE)[0] == tag
+    if kc:
+        keyspace, column_family = kc.split(".")
+    check_snapshot_dirs(os.path.join(await manager.server_get_workdir(server.server_id), "data"), tag, keyspace, column_family)
+    if keyspace:
+        assert await snapshot_listed(manager, server, keyspace, tag)
+    else:
+        assert await snapshot_listed(manager, server, "keyspace1", tag)
+        assert await snapshot_listed(manager, server, "system", tag)
+    await run_nodetool(manager, server, "clearsnapshot", "-t" + tag)
+    assert not await snapshot_listed(manager, server, "keyspace1", tag)
+
+
+
+# Ported from scylla-dtest nodetool_additional_test.py::TestNodetool::test_snapshot_tag.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_snapshot_tag(manager: ScyllaClusterManager):
+    await snapshot_tag(manager)
+
+
+# Ported from scylla-dtest nodetool_additional_test.py::TestNodetool::test_snapshot_tag_keyspace.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_snapshot_tag_keyspace(manager: ScyllaClusterManager):
+    await snapshot_tag(manager, keyspace="keyspace1")
+
+
+# Ported from scylla-dtest nodetool_additional_test.py::TestNodetool::test_snapshot_tag_keyspace_cf.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_snapshot_tag_keyspace_cf(manager: ScyllaClusterManager):
+    await snapshot_tag(manager, keyspace="system_schema", column_family="tables")
+
+
+# Ported from scylla-dtest nodetool_additional_test.py::TestNodetool::test_snapshot_tag_kc.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_snapshot_tag_kc(manager: ScyllaClusterManager):
+    await snapshot_tag(manager, kc="system_schema.tables")
+
+
+# After "nodetool clearsnapshot" removed a snapshot of all keyspaces,
+# another one can be taken.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_nodetool_snapshot_after_clearsnapshot(manager: ScyllaClusterManager):
+    server = await manager.server_add(config=CONFIG, cmdline=CMDLINE)
+    await cassandra_stress(manager, server, "write", "cl=ALL", "no-warmup", "n=1000")
+    out, _, _ = await run_nodetool(manager, server, "snapshot")
+    [snapshot] = re.findall(r"Snapshot directory:\s+(\d+)", out, re.MULTILINE)
+    assert await snapshot_listed(manager, server, "keyspace1", snapshot)
+    await run_nodetool(manager, server, "clearsnapshot")
+    assert not await snapshot_listed(manager, server, "keyspace1", snapshot)
+    out, _, _ = await run_nodetool(manager, server, "snapshot")
+    [snapshot] = re.findall(r"Snapshot directory:\s+(\d+)", out, re.MULTILINE)
+    assert await snapshot_listed(manager, server, "keyspace1", snapshot)
