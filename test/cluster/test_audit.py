@@ -35,16 +35,13 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, named_tuple_factory
 from botocore.exceptions import ClientError
 
-from test.cluster.dtest.dtest_class import create_ks, wait_for
-from test.cluster.dtest.tools.assertions import assert_invalid
-from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
 
 from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
 from test.pylib.skip_types import skip_env
-from test.pylib.util import wait_for as wait_for_async
+from test.pylib.util import wait_for as wait_for_async, wait_for_sync
 from test.pylib.scylla_server import ScyllaVersionDescription
 
 logger = logging.getLogger(__name__)
@@ -317,7 +314,12 @@ class AuditTester:
         session = self.manager.get_cql()
         session.execute("DROP KEYSPACE IF EXISTS ks")
         if create_keyspace:
-            create_ks(session, "ks", rf)
+            # A generous timeout, and waiting for schema agreement, as the
+            # dtest helper this replaces did: CI disks can be slow.
+            session.execute(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}",
+                            timeout=120)
+            assert session.cluster.control_connection.wait_for_schema_agreement(wait_time=120)
+            session.execute("USE ks")
         self.helper.clear_audit_logs(session)
         return session
 
@@ -698,7 +700,7 @@ class CQLAuditTester(AuditTester):
                     return False
             return True
 
-        wait_for(counts_match, timeout=60)
+        wait_for_sync(counts_match, timeout=60)
 
     @staticmethod
     def token_in_range(token, start_token, end_token):
@@ -733,7 +735,7 @@ class CQLAuditTester(AuditTester):
     async def get_audit_partitions_for_operation(self, session, operation):
         """Returns a list of IP addresses for the audit partitions of a given operation."""
         logger.info(f"get_audit_partitions_for_operation: {operation}")
-        rows = rows_to_list(session.execute(f"SELECT token(date, node) FROM audit.audit_log WHERE operation = %s ALLOW FILTERING", [operation]))
+        rows = [list(r) for r in session.execute(f"SELECT token(date, node) FROM audit.audit_log WHERE operation = %s ALLOW FILTERING", [operation])]
         if len(rows) == 0:
             return None
         token = rows[0][0]
@@ -756,7 +758,7 @@ class CQLAuditTester(AuditTester):
             assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
             return all(counts_after[mode] - count_before >= expected_entries for mode, count_before in counts_before.items())
 
-        wait_for(audit_entry_counts_reached_expected, timeout=60)
+        wait_for_sync(audit_entry_counts_reached_expected, timeout=60)
 
         assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
         for mode, count_before in counts_before.items():
@@ -913,7 +915,7 @@ class CQLAuditTester(AuditTester):
 
             return True
 
-        wait_for(is_number_of_new_rows_correct, timeout=60)
+        wait_for_sync(is_number_of_new_rows_correct, timeout=60)
         for mode, new_rows in new_rows_dict.items():
             sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
             assert len(sorted_new_rows) == len(expected_entries)
@@ -975,7 +977,8 @@ class CQLAuditTester(AuditTester):
             expected_entry = AuditEntry(category="DML", cl="ONE", error=True, ks="ks",
                                         statement='USE "ks"', table="", user="anonymous")
             with self.assert_entries_were_added(session, [expected_entry]):
-                assert_invalid(session, 'USE "ks"', expected=InvalidRequest)  # ks doesn't exist because create_keyspace=False in prepare
+                with pytest.raises(InvalidRequest):
+                    session.execute('USE "ks"')  # ks doesn't exist because create_keyspace=False in prepare
 
     async def verify_table(self, audit_settings=AuditTester.audit_default_settings, helper=None, table_prefix="test", overwrite_audit_tables=False):
         """
@@ -1033,7 +1036,7 @@ class CQLAuditTester(AuditTester):
                 audit_settings=audit_settings,
                 table=f"{table}",
             )
-            assert sorted(rows_to_list(res)) == [[i, i, i] for i in range(10)], res
+            assert sorted([list(r) for r in res]) == [[i, i, i] for i in range(10)], res
 
             self.execute_and_validate_if_category_enabled(
                 session,
@@ -1050,7 +1053,7 @@ class CQLAuditTester(AuditTester):
                 audit_settings=audit_settings,
                 table=f"{table}",
             )
-            assert rows_to_list(res) == [], res
+            assert list(res) == [], res
 
             self.execute_and_validate_new_audit_entry(
                 session,
@@ -1060,7 +1063,8 @@ class CQLAuditTester(AuditTester):
             )
 
             with self.assert_no_audit_entries_were_added(session):
-                assert_invalid(session, f"SELECT * FROM {table}", expected=InvalidRequest)
+                with pytest.raises(InvalidRequest):
+                    session.execute(f"SELECT * FROM {table}")
 
         # Test that the audit entries are not added if the keyspace is not
         # specified in the audit_keyspaces setting.
@@ -1115,7 +1119,8 @@ class CQLAuditTester(AuditTester):
         session.execute("ALTER KEYSPACE ks WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 1 } AND DURABLE_WRITES = false")
 
         session.execute("DROP KEYSPACE ks")
-        assert_invalid(session, "use audit;", expected=InvalidRequest)
+        with pytest.raises(InvalidRequest):
+            session.execute("use audit;")
 
     async def _test_audit_type_invalid(self):
         """
@@ -1158,7 +1163,8 @@ class CQLAuditTester(AuditTester):
          check node started, ks audit not created
         """
         session = await self.prepare(create_keyspace=False, audit_settings={"audit": "none"})
-        assert_invalid(session, "use audit;", expected=InvalidRequest)
+        with pytest.raises(InvalidRequest):
+            session.execute("use audit;")
 
     async def _test_composite_audit_empty_settings(self):
         """
@@ -1166,7 +1172,8 @@ class CQLAuditTester(AuditTester):
          check node started, ks audit not created
         """
         session = await self.prepare(create_keyspace=False, audit_settings={"audit": "table,syslog,none"})
-        assert_invalid(session, "use audit;", expected=InvalidRequest)
+        with pytest.raises(InvalidRequest):
+            session.execute("use audit;")
 
     async def _test_audit_audit_ks(self):
         """
@@ -1317,7 +1324,8 @@ class CQLAuditTester(AuditTester):
         expected_entry = AuditEntry(category="ADMIN", table="", ks="", user="cassandra", cl="ONE", error=True, statement=stmt)
 
         with self.assert_entries_were_added(session, [expected_entry]):
-            assert_invalid(session, stmt, expected=InvalidRequest)
+            with pytest.raises(InvalidRequest):
+                session.execute(stmt)
 
         session.execute("DROP ROLE IF EXISTS test_role")
 
@@ -1332,7 +1340,8 @@ class CQLAuditTester(AuditTester):
         expected_entry = AuditEntry(category="DDL", table="", ks="ks", user="cassandra", cl="ONE", error=True, statement=stmt)
 
         with self.assert_entries_were_added(session, [expected_entry]):
-            assert_invalid(session, stmt, expected=AlreadyExists)
+            with pytest.raises(AlreadyExists):
+                session.execute(stmt)
 
     async def _test_negative_audit_records_dml(self):
         """
@@ -1368,7 +1377,8 @@ class CQLAuditTester(AuditTester):
         expected_entry = AuditEntry(category="DCL", table="", ks="", user="cassandra", cl="ONE", error=True, statement=stmt)
 
         with self.assert_entries_were_added(session, [expected_entry]):
-            assert_invalid(session, stmt, expected=InvalidRequest)
+            with pytest.raises(InvalidRequest):
+                session.execute(stmt)
 
     async def _test_negative_audit_records_query(self):
         """
@@ -1477,7 +1487,7 @@ class CQLAuditTester(AuditTester):
 
         with self.assert_no_audit_entries_were_added(session):
             res = sorted(session.execute("SELECT * FROM test1"))
-            assert rows_to_list(res) == [[i, i, i] for i in range(10)], res
+            assert [list(r) for r in res] == [[i, i, i] for i in range(10)], res
 
         self.execute_and_validate_new_audit_entry(
             session,
@@ -1488,7 +1498,7 @@ class CQLAuditTester(AuditTester):
 
         with self.assert_no_audit_entries_were_added(session):
             res = session.execute("SELECT * FROM test1")
-            assert rows_to_list(res) == [], res
+            assert list(res) == [], res
 
             session.execute("DROP TABLE test1")
 
@@ -1527,7 +1537,7 @@ class CQLAuditTester(AuditTester):
             session.execute(stmt)
             attempt_count = self._get_attempt_count(session, consistency_level=ConsistencyLevel.THREE)
 
-            token = rows_to_list(session.execute(f"SELECT token(k) FROM ks.test1 WHERE k = {i}"))[0][0]
+            token = session.execute(f"SELECT token(k) FROM ks.test1 WHERE k = {i}").one()[0]
 
             partitions = await self.get_partitions_for_token("ks", "test1", token)
 
@@ -1692,7 +1702,8 @@ class CQLAuditTester(AuditTester):
             expected_entry = AuditEntry(category="DML", cl="ONE", error=True, ks="ks",
                                         statement="INSERT INTO ks.test1 (k, v1) VALUES (2, 2)", table="test1", user="test")
             with self.assert_entries_were_added(session, [expected_entry]):
-                assert_invalid(test_session, "INSERT INTO ks.test1 (k, v1) VALUES (2, 2)", expected=Unauthorized)
+                with pytest.raises(Unauthorized):
+                    test_session.execute("INSERT INTO ks.test1 (k, v1) VALUES (2, 2)")
 
             session.execute("DROP USER IF EXISTS test")
 
@@ -2034,7 +2045,8 @@ class CQLAuditTester(AuditTester):
 
             try:
                 session.execute("CREATE KEYSPACE kss WITH replication = { 'class':'NetworkTopologyStrategy', 'replication_factor': 3 }")
-                run_in_parallel([{"func": lambda: session.execute("use ks;")}, {"func": lambda: session.execute("use kss;")}] * 1000)
+                for future in [session.execute_async(f"use {ks};") for ks in ["ks", "kss"] * 1000]:
+                    future.result()
             finally:
                 session.execute("DROP KEYSPACE IF EXISTS kss")
 
