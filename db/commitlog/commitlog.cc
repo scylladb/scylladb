@@ -2880,6 +2880,18 @@ void db::commitlog::segment_manager::collect_released_files(bool final) {
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
+    // Dispose of the files in id order. Names that do not parse go first.
+    auto ids = files | std::views::transform([this] (const sstring& s) -> std::optional<segment_id_type> {
+        try {
+            return descriptor(s, cfg.fname_prefix).id;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }) | std::ranges::to<std::vector>();
+    auto order = std::views::iota(size_t(0), files.size()) | std::ranges::to<std::vector>();
+    std::ranges::stable_sort(order, std::less<>{}, [&] (size_t i) { return ids[i]; });
+    files = order | std::views::transform([&] (size_t i) { return std::move(files[i]); }) | std::ranges::to<std::vector>();
+
     for (auto& s : files) {
         // Note: this is only for replay files. We can decide to
         // recycle these, but they don't count into footprint,
