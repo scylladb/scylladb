@@ -81,6 +81,8 @@ async def nodetool(manager: ScyllaClusterManager, server, *args):
     res = await asyncio.to_thread(subprocess.run, [exe, "nodetool", "-h", server.ip_addr, *args], capture_output=True, text=True)
     assert res.returncode == 0, f"nodetool {' '.join(args)} failed: {res.stdout} {res.stderr}"
     return res.stdout
+
+
 def session(manager: ScyllaClusterManager, server, keyspace=None):
     """The dtests' patient_cql_connection(node[, keyspace])."""
     cql = manager.con_gen([server.ip_addr], load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr])).connect()

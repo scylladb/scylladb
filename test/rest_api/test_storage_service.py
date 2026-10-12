@@ -520,6 +520,8 @@ def test_snapshot_delete_cf_multi_keyspace(cql, this_dc, rest_api):
             })
 
 
+
+
 # Verify that the same logical secondary-index name is resolved independently
 # in each keyspace during multi-keyspace snapshot deletion.
 def test_snapshot_delete_cf_multi_keyspace_secondary_index(cql, this_dc, rest_api):
