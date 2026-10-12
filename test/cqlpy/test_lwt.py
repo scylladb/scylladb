@@ -18,7 +18,7 @@ from cassandra.cluster import NoHostAvailable
 
 from .util import config_value_context, new_named_table, new_test_table, unique_key_int, new_user, new_session
 from .test_service_levels import new_service_level
-from .nodetool import del_snapshot, flush, list_snapshots
+from .nodetool import del_snapshot, flush, list_snapshots, flush_all
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 import time
@@ -920,3 +920,37 @@ def test_insert_if_not_exists_twice(cql, test_keyspace_vnodes):
         cql.execute(f"INSERT INTO {table} (login, email, name) values ('bcanet', 'benoit@scylladb.com', 'Benoit Canet') IF NOT EXISTS")
         cql.execute(f"INSERT INTO {table} (login, email, name) values ('bcanet', 'disabled@scylladb.com', 'disabled') IF NOT EXISTS")
         assert rows(cql, f"SELECT * FROM {table}") == [("bcanet", "benoit@scylladb.com", "Benoit Canet")]
+
+
+# A conditional DELETE of a clustering key range is rejected, for each
+# compaction strategy. Ported from scylla-dtest deletion_test.py, on a
+# vnodes keyspace and a table keyed by date, written at QUORUM, like the
+# dtests. In the end the node's tables are flushed, as a stopping dtest
+# node does.
+def conditional_range_delete_rejected(cql, test_keyspace_vnodes, condition):
+    days = [f'2019-11-{18 + i}' for i in range(5)]
+    for strategy in ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"]:
+        with new_test_table(cql, test_keyspace_vnodes, 'pk int, ck date, v1 int, PRIMARY KEY(pk, ck)',
+                            f"WITH compaction = {{'class': '{strategy}'}}") as table:
+            for pk in [1, 2]:
+                for i, day in enumerate(days):
+                    cql.execute(SimpleStatement(f"INSERT INTO {table} (pk, ck, v1) VALUES ({pk}, '{day}', {i})",
+                                                consistency_level=ConsistencyLevel.QUORUM))
+            with pytest.raises(InvalidRequest, match="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"):
+                cql.execute(f"DELETE FROM {table} WHERE pk = 1 AND ck < '{days[3]}' AND ck >= '{days[1]}' {condition}")
+    flush_all(cql)
+
+# Ported from scylla-dtest deletion_test.py::TestRangeDeletion::test_delete_by_1ck_range_condition_if_exists_failed.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_delete_by_1ck_range_condition_if_exists_failed(cql, test_keyspace_vnodes):
+    conditional_range_delete_rejected(cql, test_keyspace_vnodes, "IF EXISTS")
+
+# Ported from scylla-dtest deletion_test.py::TestRangeDeletion::test_delete_by_1ck_range_condition_if_equality_failed.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_delete_by_1ck_range_condition_if_equality_failed(cql, test_keyspace_vnodes):
+    conditional_range_delete_rejected(cql, test_keyspace_vnodes, "IF v1 = 1")
+
+# Ported from scylla-dtest deletion_test.py::TestRangeDeletion::test_delete_by_1ck_range_if_range_failed.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_delete_by_1ck_range_if_range_failed(cql, test_keyspace_vnodes):
+    conditional_range_delete_rejected(cql, test_keyspace_vnodes, "IF v1 >= 1 and v1 < 3")
