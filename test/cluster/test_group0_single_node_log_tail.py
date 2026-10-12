@@ -16,8 +16,6 @@ INJECTION = "block_raft_io_fiber_commit_past_start"
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5280",
-                      reason="a sole voter applies the log tail past the persisted commit index after the early replay")
 async def test_single_node_loads_table_from_uncommitted_log_tail(manager: ScyllaClusterManager):
     """Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-5280.
 

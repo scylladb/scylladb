@@ -595,6 +595,17 @@ future<> server_impl::start() {
     auto log_entries = co_await _persistence->load_log();
     auto log = raft::log(snapshot, std::move(log_entries), _config.max_command_size);
     auto commit_idx = co_await _persistence->load_commit_idx();
+    // The sole voter of a non-joint configuration can only be succeeded as
+    // leader by itself: every candidate needs its vote, which it grants only
+    // to a log at least as complete as its own. So nothing in its log can be
+    // lost, and it commits all of it as soon as it becomes leader, which a
+    // sole voter does right away (see fsm::fsm). Treat the whole log as
+    // committed from the start, so that the entries past the persisted
+    // commit index are applied before start() returns, with the rest of the
+    // replay, rather than later by the applier fiber on its own.
+    if (const auto& cfg = log.get_configuration(); !cfg.is_joint() && cfg.current.size() == 1 && cfg.can_vote(_id)) {
+        commit_idx = std::max(commit_idx, log.last_idx());
+    }
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
     logger.trace("[{}] start raft instance: snapshot id={} commit index={} last stable index={}", _tag, snapshot.id, commit_idx, stable_idx);
