@@ -111,7 +111,8 @@ S3-compatible object store, you first configure the storage endpoints.
 See {ref}`Configuring Object Storage <object-storage-configuration>` for instructions.
 
 ```{note}
-Object-storage keyspaces are supported for tablets only, and a number of features
+Object-storage keyspaces are a **Preview** feature and are not generally
+available. They are supported for tablets only, and a number of features
 are not available for them. Review
 {ref}`Object storage keyspaces: status and limitations <object-storage-limitations>`
 before using this feature.
