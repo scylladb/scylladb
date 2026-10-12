@@ -424,6 +424,22 @@ static int load_script_l(lua_State* l) {
     return 1;
 }
 
+// Returns the error value at the top of the stack, raised by a script (e.g.,
+// by error()), as a string. The error value may be any Lua value, and
+// lua_tostring() returns NULL for a value which isn't a string or a number,
+// so such a value is described by its type, as the standalone Lua
+// interpreter does. We don't use luaL_tolstring(), because it may call a
+// __tostring metamethod defined by the script, which may itself raise an
+// error - outside a protected call.
+static std::string error_message(lua_State* l) {
+    size_t len;
+    const char* s = lua_tolstring(l, -1, &len);
+    if (s) {
+        return std::string(s, len);
+    }
+    return fmt::format("(error object is a {} value)", luaL_typename(l, -1));
+}
+
 static lua_slice_state load_script(const lua::runtime_config& cfg, lua::bitcode_view binary) {
     lua_slice_state l = new_lua(cfg);
 
@@ -1126,8 +1142,7 @@ future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<d
             return make_ready_future<std::optional<bytes_opt>>(std::nullopt);
         }
         default:
-            throw exceptions::invalid_request_exception(std::string("lua execution failed: ") +
-                                                        lua_tostring(l, -1));
+            throw exceptions::invalid_request_exception(std::string("lua execution failed: ") + error_message(l));
         }
     });
 }
