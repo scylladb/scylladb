@@ -339,3 +339,27 @@ def test_slow_query_log(with_slow_query_logging, test_table_s, dynamodb):
         else:
             time.sleep(0.5)
     pytest.fail("Slow query entries not found")
+
+# After slow query logging is disabled through the REST API, Alternator
+# requests must no longer be logged. To check this without waiting for an
+# arbitrary time, a request made while logging is disabled is followed by a
+# request made after re-enabling it: once the second one shows up in the
+# log, the first one must not be there.
+def test_slow_query_log_disable(with_slow_query_logging, test_table_s, dynamodb, rest_api):
+    table = test_table_s
+    p_disabled = random_string(20)
+    p_enabled = random_string(20)
+    assert requests.post(rest_api+'/storage_service/slow_query?enable=false').status_code == 200
+    assert requests.get(rest_api+'/storage_service/slow_query').json()['enable'] == False
+    table.put_item(Item={'p': p_disabled})
+    assert requests.post(rest_api+'/storage_service/slow_query?enable=true').status_code == 200
+    table.put_item(Item={'p': p_enabled})
+    slow_query_table = dynamodb.Table('.scylla.alternator.system_traces.node_slow_log')
+    start_time = time.time()
+    while time.time() < start_time + 60:
+        results = full_scan(slow_query_table, ConsistentRead=False)
+        if any("PutItem" in result['parameters'] and p_enabled in result['parameters'] for result in results):
+            assert not any(p_disabled in result['parameters'] for result in results)
+            return
+        time.sleep(0.5)
+    pytest.fail("Slow query entry not found")
