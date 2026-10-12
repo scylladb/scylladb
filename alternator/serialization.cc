@@ -288,15 +288,16 @@ rjson::value deserialize_item(bytes_view bv) {
 }
 
 // This function takes a bytes_view created earlier by serialize_item(), and
-// if has the type "expected_type", the function returns the value as a
-// raw Scylla type. If the type doesn't match, returns an unset optional.
+// if it is a valid key value of the type "expected_type", the function
+// returns the value as a raw Scylla type. If the type doesn't match, or the
+// value isn't a valid key, returns an unset optional.
 // This function only supports the key types S (string), B (bytes) and N
 // (number) - serialize_item() serializes those types as a single-byte type
 // followed by the serialized raw Scylla type, so all this function needs to
 // do is to remove the first byte. This makes this function much more
 // efficient than deserialize_item() above because it avoids transformation
 // to/from JSON.
-std::optional<bytes> serialized_value_if_type(bytes_view bv, alternator_type expected_type) {
+std::optional<bytes> serialized_key_if_type(bytes_view bv, alternator_type expected_type) {
     if (bv.empty() || alternator_type(bv[0]) != expected_type) {
         return std::nullopt;
     }
@@ -305,6 +306,14 @@ std::optional<bytes> serialized_value_if_type(bytes_view bv, alternator_type exp
     // preceded by a type byte. So we just need to skip that byte and we are
     // left by exactly what we need to return.
     bv.remove_prefix(1);
+    // DynamoDB doesn't allow an empty string or binary value in a key
+    // attribute, including a GSI's key attribute, so an item which has an
+    // empty value in a GSI's key attribute - possible if it was written
+    // before the GSI was added - isn't added to that GSI. So we return an
+    // unset optional, telling the caller to skip this item.
+    if (bv.empty()) {
+        return std::nullopt;
+    }
     return bytes(bv);
 }
 
