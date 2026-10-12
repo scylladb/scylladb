@@ -50,6 +50,13 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
             return std::nullopt;
         }
     }
+    // A failure of the function's code - an error it raised, a timeout, or a
+    // returned value which doesn't fit the return type - is reported as a
+    // FUNCTION_FAILURE error.
+    auto function_failure = [&] (std::string_view detail) {
+        auto arg_names = types | std::views::transform([] (const data_type& t) { return t->as_cql3_type().to_string(); }) | std::ranges::to<std::vector<sstring>>();
+        return exceptions::function_execution_exception(name().name, sstring(detail), name().keyspace, std::move(arg_names));
+    };
     return to_managed_bytes_opt(seastar::visit(_ctx,
         [&] (lua_context& ctx) -> bytes_opt {
             std::vector<data_value> values;
@@ -59,7 +66,19 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
                 const managed_bytes_opt& bytes = parameters[i];
                 values.push_back(bytes ? type->deserialize(managed_bytes_view(*bytes)) : data_value::make_null(type));
             }
-            return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
+            try {
+                return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
+            } catch (const exceptions::invalid_request_exception& e) {
+                throw function_failure(e.what());
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const exceptions::cassandra_exception&) {
+                throw;
+            } catch (const std::exception& e) {
+                // E.g., a marshal_exception or an out-of-range date when
+                // converting the returned value to the return type.
+                throw function_failure(e.what());
+            }
         },
         [&] (wasm::context& ctx) -> bytes_opt {
             // FIXME: change wasm::run_script to accept fragmented buffers
@@ -69,7 +88,10 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
             try {
                 return wasm::run_script(name(), ctx, arg_types(), linear_parameters, return_type(), _called_on_null_input).get();
             } catch (const wasm::exception& e) {
-                throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
+                throw function_failure(fmt::format("UDF error: {}", e.what()));
+            } catch (const marshal_exception& e) {
+                // The returned value isn't valid for the return type.
+                throw function_failure(e.what());
             }
         }));
 }
