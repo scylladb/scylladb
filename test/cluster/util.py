@@ -654,6 +654,49 @@ async def wipe_server_data(manager: ScyllaClusterManager, server_id: ServerNum) 
             entry.unlink()
     manager.cluster.servers[server_id].forget_host_id()
 
+async def wait_for_held_streaming(manager: ScyllaClusterManager, servers: list[ServerInfo],
+                                  marks: list[int] | None = None, timeout: float = 60) -> None:
+    """Wait until one of the servers holds a mutation fragment it received by
+    streaming at the stream_mutation_fragments injection, as logged after the
+    given log marks (from the start of each log without them)."""
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = marks or [0] * len(logs)
+    assert len(marks) == len(logs), "one log mark per server"
+
+    async def holding():
+        for log, mark in zip(logs, marks):
+            if await log.grep("stream_mutation_fragments: waiting", from_mark=mark):
+                return True
+        return None
+    await wait_for(holding, time.time() + timeout)
+
+
+async def release_held_streaming(manager: ScyllaClusterManager, servers: list[ServerInfo],
+                                 until: asyncio.Future | None = None, period: float = 0.1) -> None:
+    """Let the streaming the servers hold at the stream_mutation_fragments
+    injection go on, then wait for `until`, if given.
+
+    The fragments share the injection's messages, so one message to each
+    server releases every fragment it holds and every one it receives later.
+    A server may go down meanwhile: a failed message is retried every `period`
+    seconds while the manager lists the server as running, for up to 30 s.
+    """
+    for s in servers:
+        deadline = time.time() + 30
+        while True:
+            try:
+                await manager.api.message_injection(s.ip_addr, "stream_mutation_fragments")
+                break
+            except Exception:
+                if s.server_id not in {r.server_id for r in await manager.running_servers()}:
+                    break
+                if time.time() > deadline:
+                    raise
+                await asyncio.sleep(period)
+    if until is not None:
+        await until
+
+
 def vnodes_keyspace(replication: int | str) -> str:
     """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
     a replication factor, or the replication options as CQL ("'dc1': 1, 'dc2': 2")."""
