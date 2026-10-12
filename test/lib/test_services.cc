@@ -649,6 +649,22 @@ bool test_env_compaction_manager::is_compaction_state_gate_closed(compaction::co
     return _cm.get_compaction_state(&table_s).gate.is_closed();
 }
 
+future<> test_env_compaction_manager::close_compaction_state_gate(compaction::compaction_group_view& table_s) {
+    return _cm.close_compaction_state_gate(_cm.get_compaction_state(&table_s));
+}
+
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
+future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {
+    return _cm.submit_automatic_scrub(t);
+}
+
+future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
+    return _cm.do_one_automatic_scrub_reevaluation();
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {
