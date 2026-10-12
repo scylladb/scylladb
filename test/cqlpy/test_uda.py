@@ -452,3 +452,65 @@ def test_uda_initcond_udt_case_sensitive_field(cql, test_keyspace, cassandra_bug
                     cql.execute(f'DROP AGGREGATE {test_keyspace}.{agg}')
                     cql.execute(desc)
                     assert [tuple(r[0]) for r in cql.execute(select)] == [(15,)]
+
+# Test that after ALTER TYPE adds a field to a UDT used by an aggregate (here,
+# as its argument and state type), the aggregate can still be used, and sees
+# the new field. Also check that the aggregate can then be dropped and
+# re-created.
+# Reproduces #12787 (the aggregate and its state function kept the old
+# version of the UDT, so the aggregate couldn't be used, and DROP AGGREGATE
+# left it behind in memory).
+def test_uda_after_alter_type(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return x'" if is_scylla(cql) else "LANGUAGE java AS 'return x;'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{udt}>') as table:
+            # The state function returns the last value it was given.
+            with new_function(cql, test_keyspace, f'(s {udt}, x {udt}) CALLED ON NULL INPUT RETURNS {udt} {body}') as last:
+                agg = f'{test_keyspace}.{unique_name()}'
+                create = f'CREATE AGGREGATE {agg}({udt}) SFUNC {last} STYPE {udt}'
+                cql.execute(create)
+                try:
+                    cql.execute(f'INSERT INTO {table} (p, u) VALUES (1, {{a: 1}})')
+                    assert [tuple(r[0]) for r in cql.execute(f'SELECT {agg}(u) FROM {table}')] == [(1,)]
+                    cql.execute(f'ALTER TYPE {udt} ADD b text')
+                    cql.execute(f"INSERT INTO {table} (p, u) VALUES (1, {{a: 2, b: 'x'}})")
+                    assert [tuple(r[0]) for r in cql.execute(f'SELECT {agg}(u) FROM {table}')] == [(2, 'x')]
+                    cql.execute(f'DROP AGGREGATE {agg}')
+                    with pytest.raises(InvalidRequest, match='nknown function'):
+                        cql.execute(f'SELECT {agg}(u) FROM {table}')
+                    cql.execute(create)
+                    assert [tuple(r[0]) for r in cql.execute(f'SELECT {agg}(u) FROM {table}')] == [(2, 'x')]
+                finally:
+                    cql.execute(f'DROP AGGREGATE IF EXISTS {agg}')
+
+# An aggregate's initial condition is saved in the schema as a CQL literal,
+# which names the fields of a UDT in the aggregate's state type. So a field
+# of this UDT can't be renamed or have its type changed (Cassandra doesn't
+# allow changing a field's type at all), but fields can be added - and the
+# aggregate then uses the new version of the type, including for its initial
+# condition.
+# Reproduces #12787 (renaming the field, which was allowed, made it
+# impossible to read the aggregate's schema back).
+def test_uda_initcond_alter_type(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return x'" if is_scylla(cql) else "LANGUAGE java AS 'return x;'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{udt}>') as table:
+            # The state function returns the last value it was given.
+            with new_function(cql, test_keyspace, f'(s {udt}, x {udt}) CALLED ON NULL INPUT RETURNS {udt} {body}') as last:
+                with new_aggregate(cql, test_keyspace, f'({udt}) SFUNC {last} STYPE {udt} INITCOND {{a: 7}}') as agg:
+                    with pytest.raises(InvalidRequest, match='still used in INITCOND'):
+                        cql.execute(f'ALTER TYPE {udt} RENAME a TO c')
+                    with pytest.raises(InvalidRequest, match='still used in INITCOND|no longer supported'):
+                        cql.execute(f'ALTER TYPE {udt} ALTER a TYPE blob')
+                    cql.execute(f'ALTER TYPE {udt} ADD b text')
+                    # On an empty table, the result is the initial condition.
+                    [result] = [r[0] for r in cql.execute(f'SELECT {test_keyspace}.{agg}(u) FROM {table}')]
+                    assert result._fields == ('a', 'b')
+                    assert tuple(result) == (7, None)
+                    cql.execute(f"INSERT INTO {table} (p, u) VALUES (1, {{a: 2, b: 'x'}})")
+                    assert [tuple(r[0]) for r in cql.execute(f'SELECT {test_keyspace}.{agg}(u) FROM {table}')] == [(2, 'x')]
+            # Without an aggregate using the type in its initial condition,
+            # its field can be renamed.
+            cql.execute(f'ALTER TYPE {udt} RENAME a TO c')

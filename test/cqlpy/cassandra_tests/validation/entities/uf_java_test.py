@@ -449,7 +449,7 @@ GET_TXT_LUA = "if udt.txt == nil then error(\"txt is not a field defined in this
 
 # Reproduces #12787 (a function isn't updated when its UDT is altered) and
 # SCYLLADB-5159 (wrong error code for a failing function)
-@pytest.mark.xfail(reason="#12787, SCYLLADB-5159")
+@pytest.mark.xfail(reason="SCYLLADB-5159")
 def testJavaUserTypeRenameField(cql):
     # The type, table and function are created in a new keyspace instead of
     # KEYSPACE, so that they will all be dropped at the end of the test.
@@ -487,7 +487,6 @@ GET_ADDED_JAVA = "return Double.valueOf(udt.getDouble(\"added\"));"
 GET_ADDED_LUA = "return udt.added or 0"
 
 # Reproduces #12787 (a function isn't updated when its UDT is altered)
-@pytest.mark.xfail(reason="#12787")
 def testJavaUserTypeAddFieldWithReplace(cql):
     # The type, table and functions are created in a new keyspace instead of
     # KEYSPACE, so that they will all be dropped at the end of the test.

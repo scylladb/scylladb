@@ -152,6 +152,20 @@ public:
     void remove_aggregate(function_name& name, std::vector<data_type>& arg_types) {
         remove_function(name, arg_types, true);
     }
+
+    // Replace a function or aggregate whose argument types changed because a
+    // user type they reference was altered. Unlike remove_function(), the
+    // function isn't recorded as removed, because it wasn't dropped. If no
+    // function is registered with the old argument types, this only logs an
+    // error, and the new function is still registered.
+    void replace_function_with_new_arg_types(const std::vector<data_type>& old_arg_types, shared_ptr<function> func) {
+        functions::remove_function(func->name(), old_arg_types);
+        if (find(func->name(), func->arg_types())) {
+            replace_function(std::move(func));
+        } else {
+            add_function(std::move(func));
+        }
+    }
 };
 
 }
