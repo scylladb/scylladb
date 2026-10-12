@@ -12,10 +12,13 @@ from . import util
 import json
 import glob
 import os
+import re
+import subprocess
 import time
 
 from collections import defaultdict
 
+from test import DEBUG_MODES
 from test.pylib.skip_types import skip_env
 
 def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_dir, expiry: int = None):
@@ -264,3 +267,116 @@ def test_one_row(scylla_only, cql):
     assert cql.execute("SELECT count(*) FROM system.one_row").one()[0] == 1
     with pytest.raises(WriteFailure, match="virtual table"):
         cql.execute("INSERT INTO system.one_row (\"system$dummy\") VALUES ('Y')")
+
+# Ported from scylla-dtest system_tables_test.py::TestTokenRingTable::test_content_one_node_create_and_drop_keyspace.
+# A keyspace (vnodes, as on the dtest's node) is listed in system.token_ring
+# once created, and not any more once dropped.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_token_ring_drop_keyspace(scylla_only, cql):
+    keyspace = util.unique_name()
+    cql.execute(f"CREATE KEYSPACE {keyspace} WITH replication={{'class':'NetworkTopologyStrategy', 'replication_factor':1}} "
+                "AND tablets = {'enabled': false}")
+    select_query = "select distinct keyspace_name from system.token_ring;"
+    found_keyspaces = [row.keyspace_name for row in cql.execute(select_query)]
+    assert keyspace in found_keyspaces, f"Token ranges for the keyspace '{keyspace}' weren't found in system.token_ring!"
+    cql.execute(f"drop keyspace {keyspace};")
+    found_keyspaces = [row.keyspace_name for row in cql.execute(select_query)]
+    assert keyspace not in found_keyspaces, f"Found token ranges for the non-existing keyspace '{keyspace}' in system.token_ring!"
+
+# system.versions describes the running binary: compare it with what the
+# binary itself prints with --version, --build-id and --build-mode.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_versions_content(scylla_only, cql, scylla_path):
+    row = cql.execute("SELECT * FROM system.versions WHERE key = 'local'").one()
+    def run(option):
+        return subprocess.check_output([scylla_path, option], text=True).strip()
+    assert row.version == run("--version")
+    assert row.build_id == run("--build-id")
+    assert row.build_mode == run("--build-mode")
+
+# Check the exact set of items system.runtime_info reports in each group, and
+# the format of their values.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_runtime_info_content(scylla_only, cql):
+    info = _runtime_info(cql)
+    assert {group: set(items) for group, items in info.items()} == {
+        "cache": {"entries", "hit_rate_recent", "hit_rate_total", "hits", "memory_free", "memory_total",
+                  "memory_used", "misses", "requests_recent", "requests_total"},
+        "memory": {"free", "total", "used"},
+        "generic": {"gossip_active", "incremental_backup_enabled", "load", "trace_probability", "uptime"},
+        "memtable": {"entries", "memory_free", "memory_total", "memory_used"},
+    }
+    generic = info["generic"]
+    assert generic["gossip_active"] in ("true", "false")
+    assert generic["incremental_backup_enabled"] in ("true", "false")
+    assert re.fullmatch(r"\d+ seconds", generic["uptime"])
+    for group, items in info.items():
+        for item, value in items.items():
+            if item not in ("gossip_active", "incremental_backup_enabled", "uptime"):
+                float(value)  # must be a number
+    assert int(info["memory"]["total"]) > 0
+
+# Every value in system.config must be formatted according to its type.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_system_config_value_types(scylla_only, cql):
+    for row in cql.execute("SELECT name, type, value FROM system.config"):
+        if row.type in ("integer", "double", "float"):
+            float(row.value)
+        elif row.type == "bool":
+            assert row.value in ("true", "false"), row
+        elif row.type == "string list":
+            assert isinstance(json.loads(row.value), list), row
+        elif row.type == "string map":
+            assert isinstance(json.loads(row.value), dict), row
+        elif row.type == "string":
+            assert row.value.isprintable(), row
+        else:
+            assert row.value, row
+
+# Ported from scylla-dtest system_tables_test.py::TestConfigTable::test_invalid_update.
+# UPDATEs of system.config which are not allowed must fail with a message
+# saying why. The dtest expects "Operation failed for system.config" for a
+# value of the wrong type and xfails it (#10394, since fixed); the message
+# says the value can't be parsed.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("statement,error_message", [
+    ("set source = 'default' where name = 'api_port'", "option value is required"),
+    ("set source = 'default', value = '15000' where name = 'api_port'", "option source is not updateable"),
+    ("set type = 'bool', value = '15000' where name = 'api_port'", "option type is immutable"),
+    ("set value = '15000' where name = 'api_port'", "option is not live-updateable"),
+    ("set value = '15000' where name = 'some_generic_name'", "no such option"),
+    ("set value = 'true' where name='failure_detector_timeout_in_ms'", "cannot parse option value"),
+], ids=["no_value_provided", "source_not_updatable", "type_not_updatable", "parameter_not_live_updatable",
+        "wrong_parameter_name", "wrong_value_type"])
+def test_system_config_invalid_update(scylla_only, cql, statement, error_message):
+    with pytest.raises(WriteFailure) as exc_info:
+        cql.execute(f"update system.config {statement};")
+    assert error_message in str(exc_info.value), f"Returned message '{exc_info.value!s}' doesn't contain '{error_message}'!"
+
+# Live-updatable options of every type can be updated through system.config:
+# the new value is read back, and the option's source becomes "cql".
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("name,value,expected", [
+    ("compaction_enforce_min_threshold", "1", "true"),                 # bool
+    ("max_hinted_handoff_concurrency", "10", "10"),                    # integer
+    ("max_memory_for_unlimited_query_soft_limit", "1572864", "1572864"),  # 64-bit integer
+    ("allowed_repair_based_node_ops", "replace,rebuild", "replace,rebuild"),  # string
+    ("strict_is_not_null_in_views", "false", "false"),                 # enum (tri_mode_restriction)
+    # The rest of the options the dtest updated, with its values.
+    ("failure_detector_timeout_in_ms", "30000", "30000"),
+    ("enable_repair_based_node_ops", "0", "false"),
+    ("force_gossip_generation", "5", "5"),
+    # test.py nodes run with it on, the dtest's ran with it off: change it.
+    ("abort_on_internal_error", "0", "false"),
+    ("max_partition_key_restrictions_per_query", "150", "150"),
+    ("max_clustering_key_restrictions_per_query", "150", "150"),
+    ("max_memory_for_unlimited_query_hard_limit", "157286400", "157286400"),
+    ("max_concurrent_requests_per_shard", "430000000", "430000000"),
+    ("flush_schema_tables_after_modification", "0", "false"),
+])
+def test_system_config_update_value(scylla_only, cql, name, value, expected):
+    select = f"SELECT value, source FROM system.config WHERE name = '{name}'"
+    with util.config_value_context(cql, name, value):
+        row = cql.execute(select).one()
+        assert row.value.strip('"') == expected
+        assert row.source == "cql"
