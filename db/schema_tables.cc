@@ -1128,7 +1128,8 @@ future<shared_ptr<cql3::functions::user_function>> create_func(replica::database
             row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
-shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch, const data_dictionary::user_types_storage& user_types) {
+shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch, const data_dictionary::user_types_storage& user_types,
+        const managed_bytes_opt* initcond_override) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(row, name.keyspace, user_types);
@@ -1181,7 +1182,9 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
     }
 
     managed_bytes_opt initcond = std::nullopt;
-    if (initcond_str) {
+    if (initcond_override) {
+        initcond = *initcond_override;
+    } else if (initcond_str) {
         // In general using the default dialect is wrong, but here the database is communicating with itself,
         // not the user, so any dialect should work.
         auto expr = cql3::util::do_with_parser(*initcond_str, cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::term));
