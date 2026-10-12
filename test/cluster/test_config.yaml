@@ -45,7 +45,6 @@ run_in_dev: &dev_only
   - test_replace_alive_node
   - dtest/audit_test
   - audit/test_audit
-  - dtest/rebuild_test
 # Sanitize runs everything dev does: it is the mode that covers these tests
 # in CI runs that do not include dev.
 run_in_sanitize: *dev_only
