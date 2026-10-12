@@ -23,5 +23,3 @@ def test_create_large_static_cells_and_rows(cql, test_keyspace):
         nodetool.flush(cql, table)
         # No need to check that the Scylla server is running here, since the test will
         # fail automatically in case Scylla crashes.
-
-
