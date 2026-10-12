@@ -805,7 +805,7 @@ public:
                 compaction::compaction_type::Compaction, "GC sstable registration test")
         , _descriptor(std::move(descriptor))
         , _check_after_replacement(std::move(check))
-        , _hold(_compaction_state.gate.hold())
+        , _hold(hold_compaction_state_gate())
     {}
 
 protected:
