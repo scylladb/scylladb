@@ -137,9 +137,8 @@ async def test_client_routes_lost_quorum(request, manager: ScyllaClusterManager)
     This test verifies that `/v2/client-routes` fails with a timeout if the Raft quorum cannot be reached.
     """
     num_servers = 3
-    timeout = 10
-    config = {'group0_raft_op_timeout_in_ms': timeout * 1000}
-    servers = await manager.servers_add(num_servers, config=config)
+    timeout = 1
+    servers = await manager.servers_add(num_servers)
     cql, hosts = await manager.get_ready_cql(servers)
 
     await wait_for_expected_client_routes_size(cql, 0)
@@ -148,11 +147,19 @@ async def test_client_routes_lost_quorum(request, manager: ScyllaClusterManager)
 
     for server in servers[1:]:
         await manager.server_stop(server.server_id, convict=False)
+    host = next(h for h in hosts if h.address == servers[0].ip_addr)
+    await cql.run_async(f"UPDATE system.config SET value = '{timeout * 1000}' WHERE name = 'group0_raft_op_timeout_in_ms'", host=host)
 
     async def fail_req(f):
         with pytest.raises(HTTPError) as exc:
             await f("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)], timeout=timeout + 60)
         assert "raft operation [read_barrier] timed out, there is no raft quorum" in exc.value.message
+
+    # The error mentions the lost quorum only once the failure detector has marked the peers dead.
+    async def quorum_loss_detected():
+        await fail_req(manager.api.client.post)
+        return True
+    await wait_for(quorum_loss_detected, time.time() + 60)
 
     await asyncio.gather(fail_req(manager.api.client.post), fail_req(manager.api.client.delete))
     await wait_for_expected_client_routes_size(cql, 1)
