@@ -7,9 +7,10 @@
 # Tests for user-defined aggregates (UDA)
 #############################################################################
 
+from test import DEBUG_MODES
 import pytest
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type, is_scylla
+from .util import unique_name, new_cql, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type, is_scylla
 
 # Test that computing an average by hand works the same as
 # the built-in function
@@ -359,3 +360,43 @@ def test_create_aggregate_null_state_with_returns_null_sfunc(cql, test_keyspace)
     with new_function(cql, test_keyspace, sfunc('CALLED')) as sf:
         with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int'):
             pass
+
+# Aggregates over int and double with Lua state and final functions, whose
+# arguments are named by keywords; an aggregate can't be the state or final
+# function of another aggregate, even when its signature is what that
+# function needs.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_aggregate_as_sfunc(scylla_only, cql, test_keyspace):
+    # As the dtest, the table, functions and aggregates are named
+    # unqualified, after USE.
+    with new_cql(cql) as session:
+        session.execute(f"USE {test_keyspace}")
+        table, plus, stri, suma, mixed, aggy = (unique_name() for _ in range(6))
+        session.execute(f"CREATE TABLE {table} (key int PRIMARY KEY, val int)")
+        try:
+            for x in range(1, 4):
+                session.execute(f"INSERT INTO {table} (key, val) VALUES ({x}, {x})")
+            session.execute(f"CREATE FUNCTION {plus}(key int, val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return key + val'")
+            session.execute(f"CREATE FUNCTION {stri}(key int) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS 'return tostring(key)'")
+            session.execute(f"CREATE AGGREGATE {suma} (int) SFUNC {plus} STYPE int FINALFUNC {stri} INITCOND 10")
+            assert session.execute(f"SELECT {suma}(val) FROM {table}").one()[0] == '16'
+            session.execute(f"CREATE FUNCTION {mixed}(a int, b double) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b'")
+            session.execute(f"CREATE AGGREGATE {aggy}(double) SFUNC {mixed} STYPE int")
+            with pytest.raises(InvalidRequest):
+                session.execute(f"CREATE AGGREGATE {unique_name()}(int) SFUNC {aggy} STYPE int")
+            with pytest.raises(InvalidRequest):
+                session.execute(f"CREATE AGGREGATE {unique_name()}(int) SFUNC {mixed} STYPE int FINALFUNC {aggy}")
+        finally:
+            session.execute(f"DROP AGGREGATE IF EXISTS {aggy}")
+            session.execute(f"DROP AGGREGATE IF EXISTS {suma}")
+            for f in (mixed, stri, plus):
+                session.execute(f"DROP FUNCTION IF EXISTS {f}")
+            session.execute(f"DROP TABLE {table}")
+    sum2_body = "(acc int, a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return acc + a + b'"
+    with new_function(cql, test_keyspace, sum2_body) as sum2:
+        # agg(int, int) has the signature of a state function with STYPE int
+        # for an aggregate of int.
+        with new_aggregate(cql, test_keyspace, f'(int, int) SFUNC {sum2} STYPE int INITCOND 0') as agg:
+            with pytest.raises(InvalidRequest, match=f'State function {agg}\\(int, int\\) not found'):
+                cql.execute(f'CREATE AGGREGATE {test_keyspace}.{unique_name()} (int) SFUNC {agg} STYPE int')

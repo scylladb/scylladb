@@ -97,3 +97,6 @@ async def test_boot_create_keyspace_table_insert_shutdown_commitlog_replay_selec
     await run_nodetool(manager, server, "flush")
     await restart(manager, server, gracefully=False)
     await check_k1_and_not_k2(manager.get_cql())
+
+
+############################################################################
