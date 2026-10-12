@@ -79,3 +79,5 @@ async def test_topology_ops(request, manager: ScyllaClusterManager, tablets_enab
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
+
+
