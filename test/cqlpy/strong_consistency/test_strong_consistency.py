@@ -21,7 +21,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from .. import nodetool
-from ..util import new_materialized_view, new_test_table, unique_name
+from ..util import ScyllaMetrics, new_materialized_view, new_test_table, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -496,6 +496,55 @@ def test_read_consistency_level_on_sc_table(cql, sc_keyspace):
                 cql.execute(SimpleStatement(select, consistency_level=cl))
 
 
+def test_write_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent write accepts QUORUM and LOCAL_QUORUM only, and
+    rejects every other consistency level, ONE and LOCAL_ONE included, which
+    a read takes. The two lists below are all the levels there are.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        accepted = [ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM]
+        refused = [ConsistencyLevel.ANY, ConsistencyLevel.ONE, ConsistencyLevel.TWO,
+                   ConsistencyLevel.THREE, ConsistencyLevel.ALL, ConsistencyLevel.LOCAL_ONE,
+                   ConsistencyLevel.EACH_QUORUM, ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL]
+        # The claim of the test is that these are all of them.
+        assert set(accepted) | set(refused) == set(ConsistencyLevel.name_to_value.values())
+
+        for v, cl in enumerate(accepted):
+            cql.execute(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, {v})", consistency_level=cl))
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == v
+
+        cl_error = "Strongly consistent writes must use QUORUM/LOCAL_QUORUM"
+        for cl in refused:
+            with pytest.raises(InvalidRequest, match=cl_error):
+                cql.execute(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 100)", consistency_level=cl))
+
+
+def test_ttl_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent write carries its TTL: TTL() reads it back, the
+    table's default_time_to_live applies to a write without one, USING TTL 0
+    overrides that default, and the row expires. Only a batch-level TTL is
+    refused, see test_batch_attributes_on_sc_table.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", " WITH default_time_to_live = 1000") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1) USING TTL 100")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (2, 2)")
+        cql.execute(f"UPDATE {table} USING TTL 0 SET v = 3 WHERE pk = 3")
+        def ttl(pk):
+            return cql.execute(f"SELECT TTL(v) FROM {table} WHERE pk = {pk}").one().ttl_v
+
+        assert 90 < ttl(1) <= 100
+        assert 990 < ttl(2) <= 1000
+        assert ttl(3) is None
+
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (4, 4) USING TTL 1")
+        deadline = time.monotonic() + 30
+        while cql.execute(f"SELECT v FROM {table} WHERE pk = 4").one() is not None:
+            assert time.monotonic() < deadline, "the row written with TTL 1 has not expired"
+            time.sleep(0.1)
+
+
 def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
     """
     A CQL text batch that mixes statements on strongly consistent and
@@ -598,16 +647,25 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
     group is rejected with a clear error, not the raft error surfacing as
-    a server error.
+    a server error, and is counted as a write error of reason "other".
     """
+    def write_errors():
+        metrics = ScyllaMetrics.query(cql)
+        return {reason: metrics.get("scylla_strong_consistency_coordinator_write_errors", {"reason": reason}) or 0
+                for reason in ("timeout", "status_unknown", "other")}
+
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
         insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        errors = write_errors()
         cql.execute(insert, [1, b'x' * 1024])
+        assert write_errors() == errors
+
         with pytest.raises(InvalidRequest, match="Strongly consistent write of .* bytes exceeds the limit of .* bytes") as e:
             cql.execute(insert, [2, b'x' * (200 * 1024)])
         m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
         size, limit = int(m.group(1)), int(m.group(2))
         assert size >= 200 * 1024 > limit
+        assert write_errors() == errors | {"other": errors["other"] + 1}
 
 
 def test_mutation_fragments_on_sc_table(cql, sc_keyspace):
