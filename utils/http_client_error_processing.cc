@@ -48,6 +48,10 @@ retryable from_system_error(const std::system_error& system_error) {
     case static_cast<int>(std::errc::network_down):
     case static_cast<int>(std::errc::network_reset):
     case static_cast<int>(std::errc::no_buffer_space):
+    // A reply body that ended before its declared Content-Length, or a chunked
+    // one that ended before its last chunk. A fresh request for the same range
+    // usually gets it whole.
+    case static_cast<int>(std::errc::protocol_error):
     // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
     case GNUTLS_E_PREMATURE_TERMINATION:
     case GNUTLS_E_AGAIN:
