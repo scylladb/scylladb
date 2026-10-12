@@ -83,6 +83,10 @@ private:
     lw_shared_ptr<container_t> _sstables;
     // s.max_position().reversed() -> s, ordered using _reversed_schema; the set of values is the same as in _sstables
     lw_shared_ptr<container_t> _sstables_reversed;
+    // The same sstables, indexed by token range, for selecting the ones a partition range
+    // read needs. The maps above are ordered by clustering position only, so selecting from
+    // them would open every sstable at once, e.g. all the fragments of an sstable run.
+    std::unique_ptr<partitioned_sstable_set> _token_index;
 
 public:
     time_series_sstable_set(schema_ptr schema, bool enable_optimized_twcs_queries);
@@ -90,6 +94,7 @@ public:
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
+    virtual std::vector<frozen_sstable_run> all_sstable_runs() const override;
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
