@@ -7,6 +7,9 @@
 Test consistency of schema changes with topology changes.
 """
 import asyncio
+import glob
+import json
+import uuid
 import logging
 import functools
 import math
@@ -21,6 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import pytest
+from cassandra import AlreadyExists
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
@@ -28,7 +32,6 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from typing import Optional, List, Union
-from cassandra import AlreadyExists
 
 logger = logging.getLogger(__name__)
 
@@ -876,7 +879,11 @@ def corrupt_commitlog_segment(path: str, sector: int = 1) -> None:
         assert len(stored) == crc_size, f"{path} is shorter than sector {sector}"
         f.seek(crc_offset)
         f.write(bytes(b ^ 0xff for b in stored))
+
+
 _ASAN_WARNING = re.compile(r"^==\d+==WARNING: ASan .*\n?", re.MULTILINE)
+
+
 def strip_asan_warnings(text: str) -> str:
     """
     Drops the warnings AddressSanitizer itself prints in debug builds (for
@@ -884,6 +891,8 @@ def strip_asan_warnings(text: str) -> str:
     functions ..."), so that a tool's stderr holds only the tool's output.
     """
     return _ASAN_WARNING.sub("", text)
+
+
 async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str,
                        check: bool = True) -> tuple[str, str, int]:
     """
@@ -901,6 +910,51 @@ async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args:
     if check:
         assert proc.returncode == 0, f"nodetool {' '.join(args)} failed ({proc.returncode}): {stderr}"
     return stdout, stderr, proc.returncode
+
+
+async def get_table_dir(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str) -> str:
+    """The data directory of table ks.cf on the server."""
+    workdir = await manager.server_get_workdir(server.server_id)
+    [table_dir] = glob.glob(f"{workdir}/data/{ks}/{cf}-*")
+    return table_dir
+
+
+async def dump_sstables(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str) -> list[dict]:
+    """
+    The partitions of all sstables of ks.cf, merged, as printed by "scylla
+    sstable dump-data --merge". Like the dtests' node.dump_sstables(), the
+    sstables are dumped from a snapshot (removed afterwards), with
+    autocompaction of system_schema and of the table disabled meanwhile.
+    """
+    tag = f"sstable-dump-{uuid.uuid1()}"
+    # The dtests' helper read the table's autocompaction state first.
+    assert await manager.api.client.get_json(f"/column_family/autocompaction/{ks}:{cf}", host=server.ip_addr)
+    await manager.api.disable_autocompaction(server.ip_addr, "system_schema")
+    await manager.api.disable_autocompaction(server.ip_addr, ks, cf)
+    try:
+        await run_nodetool(manager, server, "snapshot", "-t", tag, f"{ks}.{cf}")
+        table_dir = await get_table_dir(manager, server, ks, cf)
+        data_files = glob.glob(f"{table_dir}/snapshots/{tag}/*-Data.db")
+        if not data_files:
+            return []
+        exe = await manager.server_get_exe(server.server_id)
+        # Run it outside the source tree, where no conf/scylla.yaml is found,
+        # as for the dtests: the tool then enables all experimental features.
+        # Not in the snapshot directory either: its schema.cql would be read as
+        # the default --schema-file, while the dtests' tool falls back to the
+        # schema stored in the sstable.
+        proc = await asyncio.create_subprocess_exec(exe, "sstable", "dump-data", "--merge", *data_files,
+                                                    cwd=table_dir,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        assert proc.returncode == 0, err.decode()
+        await run_nodetool(manager, server, "clearsnapshot", "-t", tag, ks)
+        return json.loads(out)["sstables"]["anonymous"]
+    finally:
+        await manager.api.enable_autocompaction(server.ip_addr, ks, cf)
+        await manager.api.enable_autocompaction(server.ip_addr, "system_schema")
+
+
 async def cassandra_stress(manager: ScyllaClusterManager, server: ServerInfo, *args: str, rf: int = 1,
                            create_keyspace: bool = True) -> str:
     """
@@ -922,6 +976,8 @@ async def cassandra_stress(manager: ScyllaClusterManager, server: ServerInfo, *a
     output = out.decode()
     assert proc.returncode == 0, f"cassandra-stress {' '.join(args)} failed: {output}"
     return output
+
+
 async def stop_servers_gracefully(manager: ScyllaClusterManager) -> None:
     """
     Stops the test's running servers gracefully, as the dtests' teardown
