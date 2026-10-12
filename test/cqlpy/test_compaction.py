@@ -212,3 +212,13 @@ def test_nodetool_py_compact(cql, test_keyspace):
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
 
 
+def get_compaction_class(cql, table):
+    ks, cf = table.split('.')
+    return cql.execute(f"SELECT compaction FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compaction['class']
+
+# Test that a table created without a compaction option uses Scylla's
+# default compaction strategy, IncrementalCompactionStrategy.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_default_compaction_strategy(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        assert get_compaction_class(cql, table).endswith('IncrementalCompactionStrategy')
