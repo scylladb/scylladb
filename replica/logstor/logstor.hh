@@ -55,23 +55,6 @@ class logstor {
     stats _stats;
     seastar::gate _async_gate;
 
-    // The result of lookup(): the index key, and the cached mutation or the record location.
-    struct point_lookup {
-        primary_index_key key;
-        primary_index::read_lookup_result result;
-    };
-
-    // The first part of a point read. It does not yield. Returns nullopt if the index does not have
-    // the key. Uses the cache, unless the slice has bypass_cache. Throws key_mismatch_error if the
-    // cached mutation has a different key.
-    static std::optional<point_lookup> lookup(const primary_index&, const dht::decorated_key&, const schema&, const query::partition_slice&);
-
-    // The second part of a point read, if the cache does not have the key. Reads the record from
-    // its segment, compares its key with the requested key, and decodes it. If populate is true
-    // and the index still points to the location, adds the mutation to the cache.
-    future<mutation> read_from_segment(schema_ptr, const primary_index&, const dht::decorated_key&, const primary_index_key&,
-            primary_index::guarded_location, bool populate);
-
 public:
 
     logstor(logstor_config, ::cache_tracker& shared_cache_tracker);
@@ -95,13 +78,23 @@ public:
 
     std::unique_ptr<primary_index> make_primary_index(bool cache_enabled);
 
+    future<> flush_to_separator();
+
     future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout) noexcept;
 
     // Writes a frozen mutation without unfreezing it. s must be the schema version that the
     // mutation was frozen with.
     future<> write(const frozen_mutation&, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept;
 
-    future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
+    // Create a mutation reader for a partition range.
+    mutation_reader make_reader(schema_ptr schema,
+                                const primary_index& index,
+                                reader_permit permit,
+                                const dht::partition_range& pr,
+                                const query::partition_slice& slice,
+                                tracing::trace_state_ptr trace_state = nullptr,
+                                streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
     // Debug introspection for SELECT * FROM MUTATION_FRAGMENTS(): returns one
     // mutation source per place the key's data currently lives in - the
@@ -112,21 +105,28 @@ public:
     // since the cache entry may be evicted before the source is read from.
     std::map<sstring, mutation_source> make_mutation_sources_for_dump(schema_ptr, const primary_index&, const dht::decorated_key&, reader_permit);
 
-    // Create a mutation reader for a partition range.
-    mutation_reader make_reader(schema_ptr schema,
-                                       const primary_index& index,
-                                       reader_permit permit,
-                                       const dht::partition_range& pr,
-                                       const query::partition_slice& slice,
-                                       tracing::trace_state_ptr trace_state = nullptr,
-                                       streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-                                       mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
-
-    future<> flush_to_separator();
+    future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
 private:
     future<> do_write(const schema&, dht::decorated_key, api::timestamp_type, record_value,
             write_target target, db::timeout_clock::time_point timeout);
+
+    // The result of lookup(): the index key, and the cached mutation or the record location.
+    struct point_lookup {
+        primary_index_key key;
+        primary_index::read_lookup_result result;
+    };
+
+    // The first part of a point read. It does not yield. Returns nullopt if the index does not have
+    // the key. Uses the cache, unless the slice has bypass_cache. Throws key_mismatch_error if the
+    // cached mutation has a different key.
+    static std::optional<point_lookup> lookup(const primary_index&, const dht::decorated_key&, const schema&, const query::partition_slice&);
+
+    // The second part of a point read, if the cache does not have the key. Reads the record from
+    // its segment, compares its key with the requested key, and decodes it. If populate is true
+    // and the index still points to the location, adds the mutation to the cache.
+    future<mutation> read_from_segment(schema_ptr, const primary_index&, const dht::decorated_key&, const primary_index_key&,
+            primary_index::guarded_location, bool populate);
 };
 
 } // namespace logstor

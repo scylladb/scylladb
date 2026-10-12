@@ -129,6 +129,12 @@ std::unique_ptr<primary_index> logstor::make_primary_index(bool cache_enabled) {
     return std::make_unique<primary_index>(_segment_manager, cache_enabled ? &_cache_tracker : nullptr);
 }
 
+future<> logstor::flush_to_separator() {
+    auto gate_holder = _async_gate.hold();
+    co_await _write_buffer.flush();
+    co_await _segment_manager.await_pending_writes();
+}
+
 future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) noexcept {
     try {
         return do_write(*m.schema(), m.decorated_key(), record_timestamp(m), encode_record_value(m),
@@ -188,19 +194,6 @@ future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestam
     index.insert(key, std::move(new_entry));
 }
 
-future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
-    auto found = lookup(index, dk, *s, slice);
-    if (!found) {
-        co_return std::nullopt;
-    }
-    if (auto* cached = std::get_if<mutation>(&found->result)) {
-        co_return std::move(*cached);
-    }
-    const auto populate = !slice.options.contains(query::partition_slice::option::bypass_cache);
-    co_return co_await read_from_segment(std::move(s), index, dk, found->key,
-            std::get<primary_index::guarded_location>(std::move(found->result)), populate);
-}
-
 std::optional<logstor::point_lookup> logstor::lookup(const primary_index& index, const dht::decorated_key& dk, const schema& s,
         const query::partition_slice& slice) {
     primary_index_key key(dk);
@@ -213,6 +206,19 @@ std::optional<logstor::point_lookup> logstor::lookup(const primary_index& index,
         throw key_mismatch_error(dk.key(), cached->decorated_key().key(), key_mismatch_error::cache_location{});
     }
     return point_lookup{.key = key, .result = std::move(*found)};
+}
+
+future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
+    auto found = lookup(index, dk, *s, slice);
+    if (!found) {
+        co_return std::nullopt;
+    }
+    if (auto* cached = std::get_if<mutation>(&found->result)) {
+        co_return std::move(*cached);
+    }
+    const auto populate = !slice.options.contains(query::partition_slice::option::bypass_cache);
+    co_return co_await read_from_segment(std::move(s), index, dk, found->key,
+            std::get<primary_index::guarded_location>(std::move(found->result)), populate);
 }
 
 future<mutation> logstor::read_from_segment(schema_ptr s, const primary_index& index, const dht::decorated_key& dk,
@@ -232,12 +238,6 @@ future<mutation> logstor::read_from_segment(schema_ptr s, const primary_index& i
     }
 
     co_return std::move(m);
-}
-
-future<> logstor::flush_to_separator() {
-    auto gate_holder = _async_gate.hold();
-    co_await _write_buffer.flush();
-    co_await _segment_manager.await_pending_writes();
 }
 
 }
