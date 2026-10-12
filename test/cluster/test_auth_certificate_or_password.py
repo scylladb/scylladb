@@ -39,7 +39,7 @@ from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ig
 from cassandra.policies import WhiteListRoundRobinPolicy     # type: ignore
 from cassandra.query import SimpleStatement                  # type: ignore
 
-from test.cluster.dtest.dtest_class import wait_for
+from test.pylib.util import wait_for_sync
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 
@@ -452,7 +452,7 @@ def _await_login_record(admin, host, username, error, description):
                  if r.username == username and r.error == error]
         return bool(found)
 
-    wait_for(appeared, timeout=60, text=f'audit login record for {description}')
+    wait_for_sync(appeared, timeout=60, text=f'audit login record for {description}')
     for row in found:
         assert row.node == host
         assert row.source
@@ -562,8 +562,8 @@ async def _certificate_authenticator_node(manager, tmp_path):
             safe_driver_shutdown(cluster)
             return None
 
-    admin_cluster, admin = wait_for(connect_admin, timeout=60,
-                                    text='the TLS port to accept a certificate login')
+    admin_cluster, admin = wait_for_sync(connect_admin, timeout=60,
+                                         text='the TLS port to accept a certificate login')
     try:
         yield server.ip_addr, admin
     finally:
@@ -600,7 +600,7 @@ async def test_audit_login_without_certificate(manager: ScyllaClusterManager, tm
             found = _refused_login_records(admin)
             return bool(found)
 
-        wait_for(appeared, timeout=60, text='audit login record for a certificate-less client')
+        wait_for_sync(appeared, timeout=60, text='audit login record for a certificate-less client')
         for row in found:
             assert row.node == host
             assert row.source
@@ -636,6 +636,6 @@ async def test_audit_repeated_refused_startup(manager: ScyllaClusterManager, tmp
         def both_appeared():
             return len(_refused_login_records(admin)) >= 2
 
-        wait_for(both_appeared, timeout=60, text='an audit record for each rejected STARTUP')
+        wait_for_sync(both_appeared, timeout=60, text='an audit record for each rejected STARTUP')
         assert len(_refused_login_records(admin)) == 2, \
             'two rejected STARTUPs produced more than two audit records'
