@@ -898,6 +898,15 @@ public:
         return _segment_manager->cfg.descriptor_tag;
     }
 
+    // Either insert can throw on a new cf, so the time entry goes first: a count no handle
+    // owns keeps the segment dirty for good, a time entry alone is a flushed cf's state.
+    void mark_dirty(const cf_id_type& cf, gc_clock::time_point time) {
+        auto [it, inserted] = _cf_min_time.emplace(cf, time);
+        if (!inserted) {
+            it->second = std::min(it->second, time);
+        }
+        ++_cf_dirty[cf];
+    }
     void release_cf_count(const cf_id_type& cf) {
         mark_clean(cf, 1);
         if (can_delete()) {
@@ -1379,8 +1388,7 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            _cf_dirty[id]++; // increase use count for cf.
-            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
+            mark_dirty(id, gc_clock::now());
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
