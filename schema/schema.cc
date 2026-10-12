@@ -121,6 +121,16 @@ sstring to_sstring(column_kind k) {
     throw std::invalid_argument("unknown column kind");
 }
 
+std::string_view column_kind_name(column_kind k) {
+    switch (k) {
+    case column_kind::partition_key:  return "partition key";
+    case column_kind::clustering_key: return "clustering key";
+    case column_kind::static_column:  return "static";
+    case column_kind::regular_column: return "regular";
+    }
+    throw std::invalid_argument("unknown column kind");
+}
+
 bool is_compatible(column_kind k1, column_kind k2) {
     return k1 == k2;
 }
