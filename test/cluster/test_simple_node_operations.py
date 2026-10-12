@@ -14,12 +14,15 @@ per node), and are stopped gracefully at the end of each test, as the
 dtests' teardown did.
 """
 
+import asyncio
 import logging
 
 import pytest
 
 from test.cluster.util import run_nodetool, stop_servers_gracefully
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +102,64 @@ async def test_boot_create_keyspace_table_insert_shutdown_commitlog_replay_selec
 
 
 ############################################################################
+# Ported from persistence_test.py.
+
+# Five rows with a 1-byte blob column, written with the driver into a
+# table made by the dtests' create_cf() (keyspace1 with RF=1), read back
+# equal after a restart.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_persist_small_columns(manager: ScyllaClusterManager):
+    server = await manager.server_add(config=CONFIG)
+    cql = manager.get_cql()
+    size = 1
+    cql.execute(f"CREATE KEYSPACE keyspace1 {ks_opts(1)}")
+    # The dtests' create_cf(session, "standard1", key_type="blob", columns={"c0": "blob"}).
+    cql.execute("CREATE COLUMNFAMILY keyspace1.standard1 (key blob PRIMARY KEY, c0 blob) WITH comment='test cf' "
+                "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'true'} AND compression = {}")
+    cql.execute(SimpleStatement("SELECT * FROM keyspace1.standard1 LIMIT 1", consistency_level=ConsistencyLevel.ONE))
+    rows = {f"{i}".encode(): bytes([i]) * size for i in range(1, 6)}
+    for key, val in rows.items():
+        cql.execute(SimpleStatement("INSERT INTO keyspace1.standard1 (key, c0) VALUES (%s, %s)", consistency_level=ConsistencyLevel.ONE), (key, val))
+    # restart_cluster(): stop, 0.5 s, start, 0.5 s.
+    await manager.server_stop_gracefully(server.server_id)
+    await asyncio.sleep(0.5)
+    await manager.server_start(server.server_id)
+    await asyncio.sleep(0.5)
+    await manager.driver_connect(server=server)
+    cql = manager.get_cql()
+    for key, val in rows.items():
+        res = [list(r) for r in cql.execute(SimpleStatement(f"SELECT c0 FROM keyspace1.standard1 WHERE key = 0x{key.hex()}",
+                                                            consistency_level=ConsistencyLevel.ONE))]
+        assert res == [[val]], f"Expected [[{val!r}]] for key 0x{key.hex()}, got {res}"
+
+
+############################################################################
+
+
+############################################################################
+# Ported from persistence_test.py.
+
+# Ported from scylla-dtest persistence_test.py::TestPersistence::test_data_persistence_of_map_with_empty_keys.
+# On one node, a row whose map has an empty key, flushed and compacted,
+# is the same after the node restarts (scylla-enterprise#909).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_data_persistence_of_map_with_empty_keys(manager: ScyllaClusterManager):
+    server = await manager.server_add(config={**CONFIG, "endpoint_snitch": "SimpleSnitch"}, property_file={"dc": "datacenter1", "rack": "rack1"})
+    cql = manager.get_cql()
+    table_name = "keyspace1.user_stats3"
+    cql.execute("CREATE KEYSPACE keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;")
+    cql.execute(f"CREATE TABLE {table_name} ( user_id text PRIMARY KEY, clients_usage map<text, text>, last_seen timestamp );")
+    cql.execute(f"Insert into {table_name} (user_id, clients_usage) values ('Piotr', {{'': '2019-05-05T04:14:16.954407'}});")
+    row_before_reboot = cql.execute(f"Select * from {table_name};").current_rows[0]
+    await run_nodetool(manager, server, "flush")
+    await run_nodetool(manager, server, "compact")
+    # restart_cluster(): stop, 0.5 s, start, 0.5 s.
+    await manager.server_stop_gracefully(server.server_id)
+    await asyncio.sleep(0.5)
+    await manager.server_start(server.server_id)
+    await asyncio.sleep(0.5)
+    await manager.driver_connect(server=server)
+    row_after_reboot = manager.get_cql().execute(f"Select * from {table_name};").current_rows[0]
+    assert row_before_reboot == row_after_reboot, \
+        f"The data before reboot ('{row_before_reboot}') should be equal to data after reboot ('{row_after_reboot}')"
+
