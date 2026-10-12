@@ -3079,6 +3079,7 @@ def test_index_select_collection(cql, test_keyspace):
         assert [list(r) for r in res] == [[1, {'bar1', 'bar2'}], [1, {'bar2', 'bar3'}], [2, {'baz'}]]
 
 
+
 # Wait until system_distributed.view_build_status says the view backing the
 # given index is built on this node, as the dtests waited for index builds.
 def wait_for_index_view_built(cql, keyspace, index_name, timeout_sec=60):
