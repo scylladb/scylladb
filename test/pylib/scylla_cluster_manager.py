@@ -28,6 +28,7 @@ from time import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Concatenate, cast, overload
 
 import allure
+import psutil
 from cassandra import ConsistencyLevel
 from cassandra.auth import AuthProvider, PlainTextAuthProvider
 from cassandra.cluster import (
@@ -457,15 +458,22 @@ class ScyllaClusterManager:
 
     @manager_op
     async def server_pause(self, server_id: ServerNum) -> None:
-        """Pause the specified server."""
+        """Pause the specified server and wait until its process is stopped."""
 
         self.cluster.server_pause(server_id)
+        await self.wait_for_scylla_process_status(server_id, [psutil.STATUS_STOPPED])
 
     @manager_op
     async def server_unpause(self, server_id: ServerNum) -> None:
-        """Unpause the specified server."""
+        """Unpause the specified server and wait until its process is no longer stopped."""
 
         self.cluster.server_unpause(server_id)
+
+        async def process_is_not_stopped() -> bool | None:
+            status = await self.server_get_process_status(server_id)
+            return True if status != psutil.STATUS_STOPPED else None
+
+        await wait_for(process_is_not_stopped, time() + 30)
 
     @manager_op(timeout=None)
     async def _server_add(self,

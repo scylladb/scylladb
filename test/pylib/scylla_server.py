@@ -1108,11 +1108,15 @@ class ScyllaServer:
 
     def pause(self) -> None:
         """Pause a running server."""
+        status = self.process_status()
+        assert status != psutil.STATUS_STOPPED, f"{self} is already paused"
         if self.cmd:
             self.cmd.send_signal(signal.SIGSTOP)
 
     def unpause(self) -> None:
         """Unpause a paused server."""
+        status = self.process_status()
+        assert status == psutil.STATUS_STOPPED, f"{self} is not paused (process status: {status})"
         if self.cmd:
             self.cmd.send_signal(signal.SIGCONT)
 
