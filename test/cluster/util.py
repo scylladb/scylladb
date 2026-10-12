@@ -254,7 +254,6 @@ async def get_topology_version(cql: Session, host: Host) -> int:
     return rows[0].version
 
 
-
 async def check_token_ring_and_group0_consistency(manager: ScyllaClusterManager) -> None:
     """Ensure that the normal token owners and group 0 members match
        according to each currently running server.
@@ -507,7 +506,6 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
     return finish
 
 
-
 async def trigger_snapshot(manager, server: ServerInfo) -> None:
     cql = manager.get_cql()
     group0_id = (await cql.run_async(
@@ -530,7 +528,6 @@ async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = N
     if target_host_id is not None:
         params["target_host_id"] = target_host_id
     await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params or None)
-
 
 
 async def get_coordinator_host_ids(manager: ScyllaClusterManager) -> list[HostID]:
@@ -664,6 +661,7 @@ async def wipe_server_data(manager: ScyllaClusterManager, server_id: ServerNum) 
         else:
             entry.unlink()
     manager.cluster.servers[server_id].forget_host_id()
+
 
 def vnodes_keyspace(replication: int | str) -> str:
     """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
@@ -1068,3 +1066,4 @@ async def stop_servers_gracefully(manager: ScyllaClusterManager) -> None:
     """
     for server in await manager.running_servers():
         await manager.server_stop_gracefully(server.server_id)
+
