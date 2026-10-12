@@ -14,7 +14,11 @@ from cassandra.cluster import NoHostAvailable  # type: ignore
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error
 from test.pylib.util import graceful_stop_timeout, wait_for, wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace, new_test_table
+from test.cluster.util import new_test_keyspace, new_test_table, create_new_test_keyspace
+from cassandra import ConsistencyLevel, ReadFailure  # type: ignore
+from cassandra.protocol import ServerError  # type: ignore
+from cassandra.policies import FallthroughRetryPolicy  # type: ignore
+from cassandra.query import SimpleStatement  # type: ignore
 
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
@@ -81,3 +85,69 @@ async def test_cancel_mapreduce(manager: ScyllaClusterManager, build_mode: str):
                     _ = tg.create_task(wait_and_shutdown())
 
 
+async def run_count_while_replica_dies(manager: ScyllaClusterManager, rf):
+    """
+    Create a table with the given replication factor (on vnodes, as the
+    dtest's), and run SELECT count(*)
+    through node 1 (the supercoordinator of the aggregation). While node 2
+    holds a mapreduce subquery from node 1, kill node 2, so that node 1 sees
+    the connection to it closed. Returns the query result or raises its error.
+    """
+    s1, s2, _ = await manager.running_servers()
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [s1, s2], time.time() + 30)
+    [host1] = filter(lambda host: host.address == s1.ip_addr, hosts)
+    host_id2 = await manager.get_host_id(s2.server_id)
+    await manager.api.set_logger_level(s1.ip_addr, "forward_service", "debug")
+
+    ks = await create_new_test_keyspace(cql, f"WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}}} AND TABLETS = {{'enabled': false}}")
+    await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+    for pk in range(100):
+        await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({pk}, {pk})")
+
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
+    await manager.api.enable_injection(s2.ip_addr, "mapreduce_pause_dispatch_to_shards", one_shot=True)
+    # CL=ONE, so that one live replica is enough for the subqueries. Don't
+    # let the driver retry the query, we want to see how it fails.
+    select = asyncio.ensure_future(cql.run_async(SimpleStatement(f"SELECT count(*) FROM {ks}.t USING TIMEOUT 300s",
+                                                                 consistency_level=ConsistencyLevel.ONE,
+                                                                 retry_policy=FallthroughRetryPolicy()), host=host1))
+    await s1_log.wait_for(f"dispatching mapreduce_request=.* to address={host_id2}", from_mark=s1_mark, timeout=60)
+    await manager.api.wait_for_injection_enter(s2.ip_addr, "mapreduce_pause_dispatch_to_shards")
+    await manager.server_stop(s2.server_id, convict=False)
+    try:
+        return (await select)[0].count
+    finally:
+        assert await s1_log.grep("retrying mapreduce_request=.* on a super-coordinator", from_mark=s1_mark)
+
+
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_mapreduce_retries_on_supercoordinator(manager: ScyllaClusterManager):
+    """
+    If a mapreduce subquery fails because the connection to the node it was
+    sent to is closed, the supercoordinator retries it locally. Every node
+    replicates all the data (the dtest's RF=2 on two nodes; RF=3 on this
+    file's three), so the aggregation still returns the full count.
+    """
+    assert await run_count_while_replica_dies(manager, 3) == 100
+
+
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_mapreduce_retry_on_non_replica_fails(manager: ScyllaClusterManager):
+    """
+    Like test_mapreduce_retries_on_supercoordinator, but with RF=1: node 2
+    holds the only replica of its ranges. Retrying the subquery on the
+    supercoordinator must not return a partial count - the query must fail
+    instead.
+    """
+    # The local retry reads the data through the replicas (at the query's
+    # CL), so it fails like a regular read with the only replica down.
+    # (The read failure reaches the client as a generic server error.)
+    with pytest.raises((ServerError, ReadFailure), match="0 responses and 1 failures"):
+        count = await run_count_while_replica_dies(manager, 1)
+        pytest.fail(f"aggregation returned {count} instead of failing")
