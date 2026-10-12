@@ -587,6 +587,18 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         ++exploded_pk_it;
     }
     auto pos = paging_state.get_position_in_partition();
+    // In an Alternator table, the page ends on an item (or a deleted item),
+    // whose key attributes are all we put in LastEvaluatedKey. It can only
+    // end between items (e.g., just after a key) on a range tombstone (a
+    // deletion of a range of sort keys), and Alternator never writes those.
+    // But they can be written through CQL, and then we can't represent the
+    // position in LastEvaluatedKey: Using just its key would make the next
+    // page restart in the wrong place - possibly the same place, over and
+    // over. So we refuse this query - retrying it wouldn't help.
+    if (is_alternator_keyspace(schema.ks_name()) && pos.has_key() && pos.get_bound_weight() != bound_weight::equal) {
+        throw api_error::validation("Cannot page through a range tombstone (a deletion of a range of sort keys), "
+                "which Alternator doesn't write - it may have been written through CQL");
+    }
     if (pos.has_key()) {
         // A base table has at most one clustering key column, but the views
         // backing GSIs and LSIs carry the base table's key columns as extra
@@ -604,8 +616,9 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     // To avoid possible conflicts (and thus having to reserve these names) we
     // avoid adding the weight and region fields of the position to the paging
-    // state. Alternator will never need these as it doesn't have range
-    // tombstones (the only thing that can generate a position other than at(row)).
+    // state. Alternator will never need these as it doesn't write range
+    // tombstones (the only thing that can generate a position other than at(row)),
+    // and refuses to page through range tombstones written through CQL (see above).
     // We conditionally include these fields when reading CQL tables through alternator.
     if (!is_alternator_keyspace(schema.ks_name()) && (!pos.has_key() || pos.get_bound_weight() != bound_weight::equal)) {
         rjson::add_with_string_name(last_evaluated_key, scylla_paging_region, rjson::empty_object());
