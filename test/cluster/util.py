@@ -635,6 +635,14 @@ async def wait_new_coordinator_elected(manager: ScyllaClusterManager, previous_c
 
     await wait_for(new_coordinator_elected, deadline=deadline)
 
+def vnodes_keyspace(replication: int | str) -> str:
+    """Options of a vnodes keyspace (tablets disabled) with NetworkTopologyStrategy:
+    a replication factor, or the replication options as CQL ("'dc1': 1, 'dc2': 2")."""
+    if isinstance(replication, int):
+        replication = f"'replication_factor': {replication}"
+    return f"WITH replication = {{'class': 'NetworkTopologyStrategy', {replication}}} AND tablets = {{'enabled': false}}"
+
+
 async def create_new_test_keyspace(cql: Session, opts, host=None):
     """
     A utility function for creating a new temporary keyspace with given
