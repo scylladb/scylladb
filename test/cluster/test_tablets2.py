@@ -1273,6 +1273,9 @@ async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_us
     shards_count = 4
     cmdline = ['--smp=4']
     servers = await manager.servers_add(2, cmdline=cmdline)
+    # The coordinator's commits for the system keyspaces' tablets can fail the DDL
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     # When table is created with initial tablets set to 1
     cql = manager.get_cql()
@@ -2406,6 +2409,9 @@ async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterMana
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
     ])
+    # The coordinator's commits for the system keyspaces' tablets can fail the DDL
+    # below, issued on a group0 follower; let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     cql = manager.get_cql()
 
