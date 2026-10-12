@@ -2016,6 +2016,7 @@ def test_filtering_on_view(cql, test_keyspace):
     finally:
         cql.execute(f"DROP TABLE {table}")
 
+
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.
 
