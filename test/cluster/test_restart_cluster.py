@@ -7,6 +7,7 @@
 Test clusters can restart fine after all nodes are stopped gracefully
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -16,7 +17,6 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, reconnect_driver, run_nodetool
 from test.cqlpy.util import run_cqlsh_at
-import asyncio
 
 logger = logging.getLogger(__name__)
 

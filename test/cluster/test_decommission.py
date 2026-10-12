@@ -8,7 +8,8 @@ import time
 
 import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import wait_for_token_ring_and_group0_consistency, run_nodetool
+from test.cluster.util import run_nodetool
+from test.cluster.util import wait_for_token_ring_and_group0_consistency
 
 logger = logging.getLogger(__name__)
 
