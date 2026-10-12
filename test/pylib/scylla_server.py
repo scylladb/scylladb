@@ -1032,14 +1032,17 @@ class ScyllaServer:
             self.shutdown_control_connection()
             return
 
-        # Dump the profile if exists and supported by the API.
-        try:
-            api = ScyllaRESTAPIClient()
-            await api.dump_llvm_profile(self.ip_addr)
-        except:
-            # since it is not part of the test functionality, allow
-            # this step to fail unconditionally.
-            pass
+        # Dump the profile if exists and supported by the API. A stopped process
+        # (paused by the test, or by one of the SIGSTOP error injections) can't
+        # answer, so the request would only block until it times out.
+        if self.process_status() != psutil.STATUS_STOPPED:
+            try:
+                api = ScyllaRESTAPIClient()
+                await api.dump_llvm_profile(self.ip_addr)
+            except:
+                # since it is not part of the test functionality, allow
+                # this step to fail unconditionally.
+                pass
         self.shutdown_control_connection()
 
         if cmd.returncode is not None:
