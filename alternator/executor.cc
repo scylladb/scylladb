@@ -294,6 +294,7 @@ public:
 };
 
 executor::executor(gms::gossiper& gossiper,
+         cql3::query_processor& qp,
          service::storage_proxy& proxy,
          service::storage_service& ss,
          service::migration_manager& mm,
@@ -304,6 +305,7 @@ executor::executor(gms::gossiper& gossiper,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _qp(qp),
       _ss(ss),
       _proxy(proxy),
       _mm(mm),

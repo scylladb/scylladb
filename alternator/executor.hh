@@ -47,6 +47,10 @@ class partition_slice;
 class result;
 }
 
+namespace cql3 {
+    class query_processor;
+}
+
 namespace cql3::selection {
     class selection;
 }
@@ -86,6 +90,7 @@ class expression_cache;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
+    cql3::query_processor& _qp;
     service::storage_service& _ss;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
@@ -130,6 +135,7 @@ public:
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
     executor(gms::gossiper& gossiper,
+             cql3::query_processor& qp,
              service::storage_proxy& proxy,
              service::storage_service& ss,
              service::migration_manager& mm,
