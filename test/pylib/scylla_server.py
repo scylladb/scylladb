@@ -29,6 +29,7 @@ from io import BufferedWriter
 from typing import Any, Dict, List, NamedTuple, NoReturn, Optional, Union
 
 import aiohttp
+import psutil
 import yaml
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -1093,6 +1094,17 @@ class ScyllaServer:
             if self.cmd:
                 self.logger.info("gracefully stopped %s", self)
             self.cmd = None
+
+    def process_status(self) -> str:
+        """Return the status of the server's process, as reported by psutil.
+
+        Return psutil.STATUS_DEAD if the server has no process or it no longer exists."""
+        if not self.cmd:
+            return psutil.STATUS_DEAD
+        try:
+            return psutil.Process(self.cmd.pid).status()
+        except psutil.NoSuchProcess:
+            return psutil.STATUS_DEAD
 
     def pause(self) -> None:
         """Pause a running server."""
