@@ -8,7 +8,9 @@ import asyncio
 from datetime import datetime, timezone
 
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace
+from test.cluster.dtest_helpers import DTEST_CONFIG, dtest_session
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from cassandra.policies import DCAwareRoundRobinPolicy, TokenAwarePolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 import pytest
@@ -296,3 +298,43 @@ async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
     for table in tables:
         assert await log.grep(f"database - Truncated {ks}.{table}", from_mark=mark)
     assert not await log.grep("applier fiber stopped because of the error", from_mark=mark)
+
+
+def truncate_test_insert_data(cql, data):
+    """The dtests' TestTruncate.insert_data(): QUORUM writes to ks.test1."""
+    for x, y in data:
+        cql.execute(SimpleStatement(f"INSERT INTO ks.test1 (k, v1) VALUES ({x}, {y})", consistency_level=ConsistencyLevel.QUORUM))
+
+
+# Ported from scylla-dtest cql_tests.py::TestTruncate::test_truncate_after_restart.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_truncate_after_restart(manager: ScyllaClusterManager):
+    """TRUNCATE works on a table written to after a node bootstrapped into
+    the cluster restarted: through three connections to it (to exercise many
+    shards), each re-inserts the data, truncates it and reads the table back
+    empty. The cluster is the dtest's populate(1) and a bootstrapped node2:
+    SimpleSnitch, datacenter1/rack1, vnodes."""
+    config = {**DTEST_CONFIG, "endpoint_snitch": "SimpleSnitch"}
+    rack = {"dc": "datacenter1", "rack": "rack1"}
+    node1 = await manager.server_add(config=config, property_file=rack)
+    cql = dtest_session(manager.con_gen([node1.ip_addr], load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy())).connect())
+    cql.execute("CREATE KEYSPACE ks WITH replication = { 'class':'NetworkTopologyStrategy', 'replication_factor':1} AND DURABLE_WRITES = true")
+    cql.execute("CREATE TABLE ks.test1 (k int PRIMARY KEY, v1 int)")
+
+    node2 = await manager.server_add(config=config, property_file=rack)
+
+    data = [[i, i] for i in range(30)]
+    truncate_test_insert_data(cql, data)
+    select_query = "SELECT * FROM ks.test1"
+    assert sorted([list(r) for r in cql.execute(SimpleStatement(select_query, consistency_level=ConsistencyLevel.QUORUM))]) == data
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+    await manager.server_start(node2.server_id)
+
+    # Many connections to exercise many shards.
+    conns = [dtest_session(await manager.get_cql_exclusive(node2)) for _ in range(3)]
+    for conn in conns:
+        truncate_test_insert_data(conn, data)
+        conn.execute("TRUNCATE ks.test1")
+        assert list(conn.execute(SimpleStatement(select_query, consistency_level=ConsistencyLevel.ALL))) == []

@@ -11,6 +11,7 @@
 # https://github.com/apache/cassandra/blob/1959502d8b16212479eecb076c89945c3f0f180c/doc/native_protocol_v4.spec#L675
 
 import pytest
+from cassandra.protocol import InvalidRequest
 from .util import new_test_table, unique_key_int, config_value_context, is_scylla
 
 @pytest.fixture(scope="module")
@@ -353,3 +354,35 @@ def test_in_bind_marker_name_case_sensitive_column_lowercase_operator(cql, test_
     with new_test_table(cql, test_keyspace, 'p int, "C" int, PRIMARY KEY (p, "C")') as table:
         prepared = cql.prepare(f'SELECT * FROM {table} WHERE p = ? AND "C" IN ?')
         assert [col.name for col in prepared.column_metadata] == ['p', 'in(C)']
+
+# Test that statements prepared before an ALTER TABLE keep working correctly
+# after it: a prepared "SELECT *" returns the new set of columns after a column
+# is dropped or added, while a prepared SELECT naming a dropped column fails.
+# Reproduces CASSANDRA-7910.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_prepared_statement_after_alter_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, c int') as table:
+        cql.execute(f'INSERT INTO {table} (k, a, b, c) VALUES (0, 0, 0, 0)')
+        wildcard_prepared = cql.prepare(f'SELECT * FROM {table}')
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, c FROM {table}')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, 0)]
+
+        cql.execute(f'ALTER TABLE {table} DROP c')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0)]
+        # The driver re-prepares the statement, which fails now that c is gone.
+        with pytest.raises(InvalidRequest):
+            cql.execute(explicit_prepared)
+
+        cql.execute(f'ALTER TABLE {table} ADD d int')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, d FROM {table}')
+        assert list(cql.execute(explicit_prepared)) == [(0, 0, 0, None)]
+
+        # After a column's type changes, both statements still work (the
+        # driver re-prepares them). Cassandra no longer allows changing a
+        # column's type, so this part is Scylla-only.
+        if is_scylla(cql):
+            cql.execute(f'ALTER TABLE {table} ALTER d TYPE blob')
+            assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+            assert list(cql.execute(explicit_prepared)) == [(0, 0, 0, None)]
