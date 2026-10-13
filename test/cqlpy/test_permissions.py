@@ -32,10 +32,10 @@ def get_roles_table(cql):
 # This case does not include functions, because due to differences in implementation
 # the tests will diverge between Scylla and Cassandra (e.g. there's no common language)
 # to create a user-defined function in.
-# Marked cassandra_bug, because Cassandra allows granting a DESCRIBE permission
-# to a specific ROLE, in contradiction to its own documentation:
-# https://cassandra.apache.org/doc/latest/cassandra/cql/security.html#cql-permissions
-def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandra_bug):
+# DESCRIBE on a specific ROLE allows listing its permissions. Cassandra added
+# it in version 4.1 (CASSANDRA-16902), although its documentation still
+# lists DESCRIBE only for ALL ROLES. Scylla added it in SCYLLADB-5232.
+def test_grant_applicable_data_and_role_permissions(cql, test_keyspace):
     schema = "a int primary key"
     user = "cassandra"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -46,7 +46,7 @@ def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandr
             f'keyspace {test_keyspace}': ['create', 'alter', 'drop', 'select', 'modify', 'authorize'],
             f'table {table}': ['alter', 'drop', 'select', 'modify', 'authorize'],
             'all roles': ['create', 'alter', 'drop', 'authorize', 'describe'],
-            f'role {user}': ['alter', 'drop', 'authorize'],
+            f'role {user}': ['alter', 'drop', 'authorize', 'describe'],
         }
         for resource, permissions in applicable_permissions.items():
             # Applicable permissions can be legally granted
@@ -105,6 +105,54 @@ def check_enforced(cql, username, permission, resource, function):
     eventually_authorized(function)
     revoke(cql, permission, resource, username)
     eventually_unauthorized(function)
+
+# A user with DESCRIBE permission on a specific role can list that role's
+# permissions, but not the permissions of other roles. The creator of a role
+# gets this permission automatically (see the translated Cassandra test
+# cassandra_authorizer_test.py::testListPermissionsOfChildByParent), but here
+# we check a DESCRIBE permission which was explicitly granted.
+# Reproduces SCYLLADB-5232.
+def test_describe_permission_on_role(cql):
+    with new_user(cql) as user, new_user(cql) as role1, new_user(cql) as role2:
+        grant(cql, 'DESCRIBE', f'ROLE {role1}', user)
+        with new_session(cql, user) as session:
+            session.execute(f'LIST ALL PERMISSIONS OF {role1}')
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ALL PERMISSIONS OF {role2}')
+            with pytest.raises(Unauthorized):
+                session.execute('LIST ALL PERMISSIONS')
+            # DESCRIBE on a specific role is not enough for LIST ROLES OF
+            # it, which requires DESCRIBE on all roles.
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ROLES OF {role1}')
+
+# A user with DESCRIBE permission on all roles can list the permissions of
+# any role, and of everyone.
+# Reproduces SCYLLADB-5232.
+def test_describe_permission_on_all_roles(cql):
+    with new_user(cql) as user, new_user(cql) as role1:
+        grant(cql, 'DESCRIBE', 'ALL ROLES', user)
+        with new_session(cql, user) as session:
+            session.execute(f'LIST ALL PERMISSIONS OF {role1}')
+            session.execute('LIST ALL PERMISSIONS')
+            session.execute(f'LIST ROLES OF {role1}')
+
+# The creator of a role gets DESCRIBE permission on it, so it can list the
+# role's permissions - but not the roles granted to it (LIST ROLES OF), which
+# requires DESCRIBE on all roles.
+# Reproduces SCYLLADB-5232.
+def test_role_creator_describe_permission(cql):
+    with new_user(cql) as parent:
+        grant(cql, 'CREATE', 'ALL ROLES', parent)
+        child = unique_name()
+        with new_session(cql, parent) as session:
+            session.execute(f'CREATE ROLE {child}')
+            try:
+                session.execute(f'LIST ALL PERMISSIONS OF {child}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ROLES OF {child}')
+            finally:
+                cql.execute(f'DROP ROLE {child}')
 
 def test_user_displays_as_authenticated(cql):
     with new_session(cql, "cassandra") as user_session_1:
