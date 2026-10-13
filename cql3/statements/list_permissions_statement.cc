@@ -52,34 +52,32 @@ void cql3::statements::list_permissions_statement::validate(
 future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
     if (_resource) {
         maybe_correct_resource(*_resource, state, qp);
-        return state.ensure_exists(*_resource);
+        co_return co_await state.ensure_exists(*_resource);
     }
 
-    const auto& as = *state.get_auth_service();
-    const auto user = state.user();
+    if (co_await state.has_superuser()) {
+        co_return;
+    }
 
-    return state.has_superuser().then([this, &as, user](bool has_super) {
-        if (has_super) {
-            return make_ready_future<>();
+    // DESCRIBE permission on a role allows listing its permissions, and
+    // DESCRIBE on all roles allows listing everyone's permissions. The creator
+    // of a role gets DESCRIBE on it automatically.
+    if (!_role_name) {
+        if (!co_await state.check_has_permission({auth::permission::DESCRIBE, auth::root_role_resource()})) {
+            throw exceptions::unauthorized_exception("You are not authorized to view everyone's permissions");
         }
+        co_return;
+    }
 
-        if (!_role_name) {
-            return make_exception_future<>(
-                    exceptions::unauthorized_exception("You are not authorized to view everyone's permissions"));
-        }
-
-        return auth::has_role(as, *user, *_role_name).then([this](bool has_role) {
-            if (!has_role) {
-                return make_exception_future<>(
-                        exceptions::unauthorized_exception(
-                                format("You are not authorized to view {}'s permissions", *_role_name)));
-            }
-
-            return make_ready_future<>();
-        }).handle_exception_type([](const auth::nonexistant_role& e) {
-            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
-        });
-    });
+    bool has_role;
+    try {
+        has_role = co_await auth::has_role(*state.get_auth_service(), *state.user(), *_role_name);
+    } catch (const auth::nonexistant_role& e) {
+        throw exceptions::invalid_request_exception(e.what());
+    }
+    if (!has_role && !co_await state.check_has_permission({auth::permission::DESCRIBE, auth::make_role_resource(*_role_name)})) {
+        throw exceptions::unauthorized_exception(format("You are not authorized to view {}'s permissions", *_role_name));
+    }
 }
 
 

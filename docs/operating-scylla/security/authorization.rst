@@ -467,7 +467,10 @@ permissions can be granted on which types of resources, and which statements are
      - ``GRANT PERMISSION`` and ``REVOKE PERMISSION`` on specified table
    * - ``DESCRIBE``
      - ``ALL ROLES``
-     - ``LIST ROLES`` on all roles or only roles granted to another specified role
+     - ``LIST ROLES`` on all roles or only roles granted to another specified role, and ``LIST PERMISSIONS`` of any role
+   * - ``DESCRIBE``
+     - ``ROLE role_name``
+     - ``LIST PERMISSIONS`` of the specified role
    * - ``VECTOR_SEARCH_INDEXING``
      - ``ALL KEYSPACES``
      - ``SELECT`` on all tables with vector search indexes, and on some :ref:`system tables <external-index-system-tables>`
@@ -596,6 +599,11 @@ query. Adding the ``NORECURSIVE`` switch restricts the results to only those per
     LIST SELECT PERMISSIONS OF carlos;
 
 Show any permissions granted to ``carlos``, limited to ``SELECT`` permissions on any resource.
+
+A user can always list its own permissions, and those of the roles granted to it. Listing the permissions of any other
+role requires ``DESCRIBE`` permission on that role or on ``ALL ROLES``, and listing the permissions of all roles
+(without ``OF``) requires ``DESCRIBE`` permission on ``ALL ROLES``. The creator of a role automatically gets ``DESCRIBE``
+permission on it, so can list its permissions.
 
 Related Topics
 ```````````````
