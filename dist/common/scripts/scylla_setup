@@ -501,16 +501,20 @@ if __name__ == '__main__':
                     run_setup_script('rsyslog', 'scylla_rsyslog_setup --remote-server ' + rsyslog_server)
 
     if not is_nonroot():
-        perf_collector_setup = interactive_ask_service('Do you want to enable the perf data collector?', 'Yes - enables system-wide perf sampling for profiling and diagnostics. The collector runs with minimal overhead. No - skip this step.', perf_collector_setup)
-        args.no_perf_collector_setup = not perf_collector_setup
-        if perf_collector_setup:
+        # scylla-perf-collector is an optional package (only Recommended by
+        # the scylla metapackage), so its unit may not be installed.
+        if systemd_unit.available('scylla-perf-collector.service'):
+            perf_collector_setup = interactive_ask_service('Do you want to enable the perf data collector?', 'Yes - enables system-wide perf sampling for profiling and diagnostics. The collector runs with minimal overhead. No - skip this step.', perf_collector_setup)
+            args.no_perf_collector_setup = not perf_collector_setup
             perf_unit = systemd_unit('scylla-perf-collector.service')
-            perf_unit.enable()
-            perf_unit.start()
-        else:
-            perf_unit = systemd_unit('scylla-perf-collector.service')
-            perf_unit.stop()
-            perf_unit.disable()
+            if perf_collector_setup:
+                perf_unit.enable()
+                perf_unit.start()
+            else:
+                perf_unit.stop()
+                perf_unit.disable()
+        elif perf_collector_setup:
+            print('scylla-perf-collector.service is not available, skipping perf collector setup.')
 
     print('ScyllaDB setup finished.')
 
