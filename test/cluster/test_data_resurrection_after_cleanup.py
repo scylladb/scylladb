@@ -28,7 +28,7 @@ async def test_data_resurrection_after_cleanup(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         table = f"{ks}.test"
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int) WITH gc_grace_seconds=0;")
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode': 'immediate'}};")
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});") for k in keys])

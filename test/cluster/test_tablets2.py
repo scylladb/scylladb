@@ -1394,7 +1394,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ScyllaClust
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds=0;")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode': 'immediate'}};")
 
         await manager.api.disable_autocompaction(servers[0].ip_addr, ks)
 
@@ -1445,7 +1445,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ScyllaClust
         s1_mark = await s1_log.mark()
 
         logger.info("Force compaction of split sstable containing expired tombstone")
-        # The forced compaction can empty the tablet (gc_grace_seconds=0 purges the
+        # The forced compaction can empty the tablet (tombstone_gc mode 'immediate' purges the
         # co-located inserts and their tombstones) while the split is in flight. An empty
         # tablet drives avg_tablet_size to 0, which would otherwise make the load balancer
         # revoke the already split-ready split instead of finalizing it. Suppress that
