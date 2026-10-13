@@ -1050,6 +1050,18 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                             "DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
                 }
             }
+            if (_with_internals) {
+                // WITH INTERNALS also describes all the roles and permission grants,
+                // and all the service levels and their attachments to roles. Require
+                // the permissions needed to list these with LIST ROLES and LIST ALL
+                // PERMISSIONS (DESCRIBE on all roles), and with LIST ALL SERVICE
+                // LEVELS and LIST ALL ATTACHED SERVICE LEVELS (DESCRIBE on all service
+                // levels), so this statement doesn't show anything which the user
+                // couldn't list anyway. Anything sensitive added to this output in
+                // the future should likewise require the permission needed to list it.
+                co_await client_state.ensure_has_permission({auth::permission::DESCRIBE, auth::root_role_resource()});
+                co_await client_state.ensure_has_permission({auth::permission::DESCRIBE, auth::root_service_level_resource()});
+            }
 
             auto keyspaces = config.full_schema ? db.get_all_keyspaces() : db.get_user_keyspaces();
             // The database lists keyspaces in hash-map order, which differs between shards;
