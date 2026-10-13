@@ -496,3 +496,96 @@ async def test_describe_schema_internals_round_trips_stored_config(manager: Scyl
     assert len(t3_rows) == 1
     assert "\n    -- AND auto_repair_enabled = false  -- from cluster (table=NULL, keyspace=NULL, cluster=false)" in t3_rows[0].create_statement
     assert "\n    AND auto_repair_enabled" not in t3_rows[0].create_statement
+
+
+async def get_throughput(manager: ScyllaClusterManager, server, resource: str) -> int:
+    return await manager.api.client.get_json(f"/storage_service/{resource}", host=server.ip_addr)
+
+
+async def wait_for_throughput(manager: ScyllaClusterManager, expected: dict, resource: str) -> None:
+    """Wait until each server's REST getter for `resource` reports the expected effective limit.
+
+    `expected` maps a server to the limit it should report.
+    """
+    async def throughput_matches():
+        actual = {srv.server_id: await get_throughput(manager, srv, resource) for srv in expected}
+        if actual == {srv.server_id: value for srv, value in expected.items()}:
+            return True
+        logger.info("Observed %s: %s, expected %s", resource, actual, {srv.server_id: v for srv, v in expected.items()})
+        return None
+
+    await wait_for(throughput_matches, deadline=time.time() + 120)
+
+
+@pytest.mark.asyncio
+async def test_throughput_limits_resolve_per_node_and_fall_back_to_yaml(manager: ScyllaClusterManager) -> None:
+    """The I/O throughput limits are node-oriented cluster-config options.
+
+    Verifies that each node's effective limit, as reported by the REST getters behind nodetool
+    get{compaction,stream}throughput, follows the node -> rack -> datacenter -> cluster chain,
+    that a node falls back to its (deprecated) scylla.yaml setting when no scope stores a value,
+    and that a node warns about that deprecated setting.
+    """
+    servers = [
+        await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"},
+                                 config={"compaction_throughput_mb_per_sec": 7}),
+        await manager.server_add(property_file={"dc": "dc2", "rack": "rack1"}),
+    ]
+    s1, s2, s3 = servers
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql(servers)
+
+    log2 = await manager.server_open_log(s2.server_id)
+    assert await log2.grep("The compaction_throughput_mb_per_sec configuration option is deprecated")
+
+    await wait_for_throughput(manager, {s1: 0, s2: 7, s3: 0}, "compaction_throughput")
+
+    await cql.run_async("ALTER CLUSTER WITH compaction_throughput_mb_per_sec = 100")
+    await wait_for_throughput(manager, {s1: 100, s2: 100, s3: 100}, "compaction_throughput")
+
+    await cql.run_async("ALTER DATACENTER dc2 WITH compaction_throughput_mb_per_sec = 200")
+    await wait_for_throughput(manager, {s1: 100, s2: 100, s3: 200}, "compaction_throughput")
+
+    await cql.run_async("ALTER RACK dc1 rack2 WITH compaction_throughput_mb_per_sec = 300")
+    await wait_for_throughput(manager, {s1: 100, s2: 300, s3: 200}, "compaction_throughput")
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    await cql.run_async(f"ALTER NODE {host_id1} WITH compaction_throughput_mb_per_sec = 0")
+    await wait_for_throughput(manager, {s1: 0, s2: 300, s3: 200}, "compaction_throughput")
+
+    # Removing every override returns each node to its scylla.yaml setting.
+    await cql.run_async(f"ALTER NODE {host_id1} WITH compaction_throughput_mb_per_sec = null")
+    await cql.run_async("ALTER RACK dc1 rack2 WITH compaction_throughput_mb_per_sec = null")
+    await cql.run_async("ALTER DATACENTER dc2 WITH compaction_throughput_mb_per_sec = null")
+    await cql.run_async("ALTER CLUSTER WITH compaction_throughput_mb_per_sec = null")
+    await wait_for_throughput(manager, {s1: 0, s2: 7, s3: 0}, "compaction_throughput")
+
+    # The streaming limit follows the same chain.
+    await cql.run_async("ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = 50")
+    await cql.run_async("ALTER DATACENTER dc1 WITH stream_io_throughput_mb_per_sec = 60")
+    await wait_for_throughput(manager, {s1: 60, s2: 60, s3: 50}, "stream_throughput")
+
+    # Out-of-range values are rejected before anything is stored.
+    for value in (-1, 2**32):
+        with pytest.raises(InvalidRequest):
+            await cql.run_async(f"ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = {value}")
+    await wait_for_throughput(manager, {s1: 60, s2: 60, s3: 50}, "stream_throughput")
+
+
+@pytest.mark.asyncio
+async def test_throughput_limits_apply_to_joining_node(manager: ScyllaClusterManager) -> None:
+    """A node that joins after a throughput limit was set applies it, overriding its yaml setting."""
+    servers = [await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"})]
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql(servers)
+
+    await cql.run_async("ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = 70")
+    await wait_for_throughput(manager, {servers[0]: 70}, "stream_throughput")
+
+    new_server = await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"},
+                                          config={"stream_io_throughput_mb_per_sec": 5})
+    await wait_for_throughput(manager, {servers[0]: 70, new_server: 70}, "stream_throughput")
+
+    log = await manager.server_open_log(new_server.server_id)
+    assert await log.grep("The deprecated stream_io_throughput_mb_per_sec configuration option \\(5\\) is overridden by the cluster configuration \\(70\\)")
