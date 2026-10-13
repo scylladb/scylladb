@@ -167,6 +167,20 @@ cluster_config_manager::config_callback_registration cluster_config_manager::reg
     return config_callback_registration(*this, callback_id);
 }
 
+cluster_config_manager::config_callback_registration cluster_config_manager::connect_config(sstring config_name,
+        std::function<void(std::optional<sstring>)> on_change) {
+    const auto* opt = db::cluster_config_registry::find(config_name);
+    if (!opt || db::cluster_config_registry::is_table_oriented(*opt)) {
+        utils::on_internal_error(format("connect_config() called for '{}', which is not a node-oriented option", config_name));
+    }
+    on_change(resolve_node_config(config_name));
+    return register_config_callback(std::move(config_name),
+            [on_change = std::move(on_change)] (const lookup_context&, std::optional<sstring> value) {
+        on_change(std::move(value));
+        return make_ready_future<>();
+    });
+}
+
 void cluster_config_manager::request_refresh() {
     // Must run on shard 0, where the refresh fiber lives.
     if (this_shard_id() != 0) {
