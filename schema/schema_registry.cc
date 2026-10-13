@@ -323,9 +323,13 @@ schema_registry& local_schema_registry() {
     return registry;
 }
 
-global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)
-    : global_schema_ptr(o.get())
-{ }
+global_schema_ptr::global_schema_ptr(const global_schema_ptr& o) {
+    throwing_assert(o._cpu_of_origin == this_shard_id());
+    _ptr = o._ptr;
+    _cpu_of_origin = o._cpu_of_origin;
+    _origin_gen = o._origin_gen;
+    _origin_synced = o._origin_synced;
+}
 
 global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     auto current = this_shard_id();
@@ -357,13 +361,6 @@ schema_ptr global_schema_ptr::get_on_this_shard() const {
         s->registry_entry()->mark_synced();
     }
     return s;
-}
-
-schema_ptr global_schema_ptr::get() const {
-    if (this_shard_id() == _cpu_of_origin) {
-        return _ptr;
-    }
-    return get_on_this_shard();
 }
 
 future<schema_ptr> global_schema_ptr::get(db::timeout_clock::time_point timeout) const {

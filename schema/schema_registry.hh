@@ -201,13 +201,12 @@ class global_schema_ptr {
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
     global_schema_ptr(const schema_ptr&);
-    // The other may come from a different shard.
+    // The other must come from current shard. Copying on another shard would share _ptr across
+    // shards, and the copy would have no way to wait for this shard to catch up, see get().
+    // Note that sharded<>::invoke_on_all() and the like copy the function on the calling shard.
     global_schema_ptr(const global_schema_ptr& other);
     // The other must come from current shard.
     global_schema_ptr(global_schema_ptr&& other) noexcept;
-    // May be invoked across shards. Always returns an engaged pointer.
-    schema_ptr get() const;
-    operator schema_ptr() const { return get(); }
     // May be invoked across shards. Always returns an engaged pointer.
     // On a shard other than the origin, first waits until the shard has committed every schema
     // change the origin had committed when this object was created, failing with timed_out_error
