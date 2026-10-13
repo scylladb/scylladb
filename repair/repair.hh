@@ -335,6 +335,9 @@ public:
     int ranges_index = 0;
     std::unordered_set<sstring> dropped_tables;
     std::unordered_set<locator::host_id> nodes_down;
+    // Whether a table of this repair uses repair-mode tombstone gc, so that the
+    // repair had to flush hints and batchlog, and whether it managed to.
+    bool needs_flush_before_repair = false;
     bool hints_batchlog_flushed = false;
     bool small_table_optimization = false;
     size_t small_table_optimization_ranges_reduced_factor = 1;
@@ -358,6 +361,7 @@ public:
             std::unordered_set<locator::host_id> ignore_nodes_,
             std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
             streaming::stream_reason reason_,
+            bool needs_flush_before_repair,
             bool hints_batchlog_flushed,
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
