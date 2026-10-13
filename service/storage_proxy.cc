@@ -1057,7 +1057,7 @@ private:
                                     cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
                                     ballot, only_digest, da, timeout, src_addr, &paxos_store = _paxos_store] (storage_proxy& sp) -> future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> {
             tracing::trace_state_ptr tr_state = gt;
-            auto r = co_await paxos::paxos_state::prepare(sp, paxos_store.local(), tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout);
+            auto r = co_await paxos::paxos_state::prepare(sp, paxos_store.local(), tr_state, co_await coroutine::try_future(gs.get(*timeout)), *cmd, key, ballot, only_digest, da, *timeout);
             tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_addr);
             co_return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
         });
@@ -1100,8 +1100,8 @@ private:
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
         auto result = co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, coroutine::lambda([gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(tr_state),
-                                   proposal = std::move(proposal), timeout, token, this] (storage_proxy& sp) {
-            return paxos::paxos_state::accept(sp, paxos_store(), gt, gs, token, proposal, *timeout);
+                                   proposal = std::move(proposal), timeout, token, this] (storage_proxy& sp) -> future<bool> {
+            co_return co_await paxos::paxos_state::accept(sp, paxos_store(), gt, co_await coroutine::try_future(gs.get(*timeout)), token, proposal, *timeout);
         }));
 
         co_await _sp.apply_fence(fence_opt, src_addr);
@@ -1149,7 +1149,7 @@ private:
         co_await smp::submit_to(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                     key = std::move(key), ballot, timeout, src_addr, &paxos_store = _paxos_store] () -> future<> {
                 tracing::trace_state_ptr tr_state = gt;
-                co_await paxos::paxos_state::prune(paxos_store.local(), gs, key, ballot,  *timeout, tr_state);
+                co_await paxos::paxos_state::prune(paxos_store.local(), co_await coroutine::try_future(gs.get(*timeout)), key, ballot,  *timeout, tr_state);
                 tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_addr);
             });
         co_return netw::messaging_service::no_wait();
@@ -6326,14 +6326,14 @@ storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, sc
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(query_schema), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
+        return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(query_schema), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable
+                -> future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying singular range {}", prv.front());
-            return db.query(gs, *cmd, opts, prv, trace_state, timeout, rate_limit_info).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
-                auto&& [f, ht] = f_ht;
-                tracing::trace(trace_state, "Querying is done");
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(std::move(f)), ht));
-            });
+            auto s = co_await coroutine::try_future(gs.get(timeout));
+            auto [f, ht] = co_await coroutine::try_future(db.query(std::move(s), *cmd, opts, prv, trace_state, timeout, rate_limit_info));
+            tracing::trace(trace_state, "Querying is done");
+            co_return rpc::tuple(make_foreign(std::move(f)), ht);
         });
     } else {
         // FIXME: adjust query_*_on_all_shards() to accept an smp_service_group and propagate it there
@@ -7406,11 +7406,11 @@ storage_proxy::query_mutations_locally(schema_ptr query_schema, lw_shared_ptr<qu
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(query_schema), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
-            return db.query_mutations(gs, *cmd, pr, gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
-                auto&& [result, ht] = result_ht;
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), std::move(ht)));
-            });
+        return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(query_schema), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable
+                -> future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> {
+            auto s = co_await coroutine::try_future(gs.get(timeout));
+            auto [result, ht] = co_await coroutine::try_future(db.query_mutations(std::move(s), *cmd, pr, gt, timeout));
+            co_return rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), std::move(ht));
         });
     } else {
         return query_nonsingular_mutations_locally(std::move(query_schema), std::move(cmd), {pr}, std::move(trace_state), timeout);
