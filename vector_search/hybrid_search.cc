@@ -82,6 +82,9 @@ seastar::future<std::expected<std::vector<search_candidate>, vector_store_client
                 [&] (bm25_request& request) {
                     return client.bm25(request.keyspace, request.index, schema, std::move(request.term), request.limit, searches_as);
                 },
+                [&] (like_request& request) {
+                    return client.like(request.keyspace, request.index, schema, std::move(request.pattern), request.limit, searches_as);
+                },
         }, requests[i]));
         if (answered.failed()) {
             searches_as.request_abort();

@@ -45,7 +45,16 @@ struct bm25_request {
     vector_store_client::limit limit;
 };
 
-using search_request = std::variant<ann_request, bm25_request>;
+/// A request for one pattern search: the rows matching the LIKE `pattern`, in no particular order.
+struct like_request {
+    vector_store_client::keyspace_name keyspace;
+    vector_store_client::index_name index;
+    vector_store_client::query_string pattern;
+    /// How many keys the index is asked for, all of them joined.
+    vector_store_client::limit limit;
+};
+
+using search_request = std::variant<ann_request, bm25_request, like_request>;
 
 /// What one answer said about a key it names.
 struct search_hit {
