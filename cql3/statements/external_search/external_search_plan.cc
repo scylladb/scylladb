@@ -10,6 +10,7 @@
 
 #include "cql3/statements/external_search/ann_search.hh"
 #include "cql3/statements/external_search/bm25_search.hh"
+#include "index/fulltext_index.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/expr/expr-utils.hh"
@@ -116,6 +117,16 @@ sstring query_value_mismatch_message(functions::search_family family, std::strin
                 ? seastar::format("{}() in ORDER BY must use the same search term as the other BM25 calls on the same column", function_name)
                 : seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
                         "the search term differs", clause == search_clause::restrictions ? "BM25" : function_name, clause_name(clause));
+    }
+    std::unreachable();
+}
+
+std::string_view index_type_name(functions::search_family family) {
+    switch (family) {
+    case functions::search_family::ann:
+        return secondary_index::vector_index::INDEX_TYPE_NAME;
+    case functions::search_family::bm25:
+        return secondary_index::fulltext_index::INDEX_TYPE_NAME;
     }
     std::unreachable();
 }
