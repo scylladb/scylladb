@@ -27,6 +27,7 @@
 #include "test/lib/error_injection.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "test/lib/eventually.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -1022,6 +1023,28 @@ void require_error(noncopyable_function<void()> f, std::string_view what) {
     });
 }
 
+// Prepares `ks`, running `while_paused` once the coordinator has committed the first
+// command of the request and paused with the request still queued.
+void prepare_with_pause(cql_test_env& e, const sstring& ks, noncopyable_function<void()> while_paused) {
+    constexpr std::string_view pause = "prepare_migration_after_part";
+    scoped_error_injection injection(pause, true, {});
+    auto prepare = e.get_storage_service().local().prepare_for_tablets_migration(ks);
+    std::exception_ptr ex;
+    try {
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return utils::get_local_injector().waiters(pause); }, 1);
+        while_paused();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    utils::get_local_injector().receive_message_on_all(pause).get();
+    if (ex) {
+        // Whatever the preparation does then, the failure to report is the one above.
+        prepare.handle_exception([] (std::exception_ptr) {}).get();
+        std::rethrow_exception(ex);
+    }
+    prepare.get();
+}
+
 } // anonymous namespace
 
 // Verify that a keyspace whose tablet maps don't fit into one group0 command is prepared
@@ -1071,6 +1094,33 @@ SEASTAR_TEST_CASE(test_failed_preparation_drops_its_maps) {
         // The failed request left one part, and the second one, starting from scratch,
         // left one per table but the last.
         BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size());
+    });
+}
+
+// Verify that while a keyspace is being prepared, a node can't be marked for tablets and
+// the keyspace can't be finalized. A node marked for tablets moves every table with a
+// tablet map to tablets when it restarts, while the preparation would then fail and drop
+// the maps; a finalization would be queued behind the preparation and, as a rollback, drop
+// its maps right after it reports success.
+SEASTAR_TEST_CASE(test_no_marking_or_finalizing_mid_preparation) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 4);
+        auto& ss = e.get_storage_service().local();
+        auto mark_for_tablets = [&] { ss.set_node_intended_storage_mode(service::storage_mode::tablets).get(); };
+
+        prepare_with_pause(e, ks, [&] {
+            require_error(mark_for_tablets, "still being prepared");
+            require_error([&] { ss.set_node_intended_storage_mode(service::storage_mode::vnodes).get(); }, "still being prepared");
+            require_error([&] { ss.finalize_tablets_migration(ks).get(); }, "still being prepared");
+        });
+        require_mapped(e, ks, tables, tables.size());
+
+        mark_for_tablets();
     });
 }
 
