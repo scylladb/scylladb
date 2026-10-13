@@ -11,9 +11,10 @@ process.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
+import time
 
 
 @dataclass
@@ -53,12 +54,15 @@ class VectorStoreMock:
         self._status_requests: list[Request] = []
         self._lock = threading.Lock()
         self._next_ann_response = Response()
+        self._ann_response_delay = 0.0
         self._next_bm25_response = BM25Response()
+        self._ann_responses_by_index: dict[str, Response] = {}
+        self._bm25_responses_by_index: dict[str, BM25Response] = {}
         self._next_highlight_response = HighlightResponse()
         self._next_status_response = Response(status=200, body='"SERVING"')
         # Maps "{keyspace}/{index}" -> Response for per-index status queries.
         self._index_status_responses: dict[str, Response] = {}
-        self._server: HTTPServer | None = None
+        self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
     @property
@@ -85,13 +89,26 @@ class VectorStoreMock:
         with self._lock:
             return self._status_requests.copy()
 
-    def set_next_ann_response(self, status: int, body: str) -> None:
+    def set_next_ann_response(self, status: int, body: str, index: str | None = None) -> None:
+        """With `index`, only requests to that index get this answer; the others keep the default."""
         with self._lock:
-            self._next_ann_response = Response(status=status, body=body)
+            if index is None:
+                self._next_ann_response = Response(status=status, body=body)
+            else:
+                self._ann_responses_by_index[index] = Response(status=status, body=body)
 
-    def set_next_bm25_response(self, status: int, body: str) -> None:
+    def set_ann_response_delay(self, seconds: float) -> None:
+        """Holds every ANN answer back by `seconds`, while other requests are answered at once."""
         with self._lock:
-            self._next_bm25_response = BM25Response(status=status, body=body)
+            self._ann_response_delay = seconds
+
+    def set_next_bm25_response(self, status: int, body: str, index: str | None = None) -> None:
+        """With `index`, only requests to that index get this answer; the others keep the default."""
+        with self._lock:
+            if index is None:
+                self._next_bm25_response = BM25Response(status=status, body=body)
+            else:
+                self._bm25_responses_by_index[index] = BM25Response(status=status, body=body)
 
     def set_next_highlight_response(self, status: int, body: str) -> None:
         with self._lock:
@@ -113,21 +130,31 @@ class VectorStoreMock:
             self._highlight_requests.clear()
             self._status_requests.clear()
             self._next_ann_response = Response()
+            self._ann_response_delay = 0.0
             self._next_bm25_response = BM25Response()
+            self._ann_responses_by_index.clear()
+            self._bm25_responses_by_index.clear()
             self._next_highlight_response = HighlightResponse()
             self._next_status_response = Response(status=200, body='"SERVING"')
             self._index_status_responses.clear()
 
+    @staticmethod
+    def _index_of(request: Request) -> str:
+        # The path is /api/v1/indexes/<keyspace>/<index>/<ann or bm25>.
+        return request.path.split("/")[-2]
+
     def _handle_ann(self, request: Request, send_response: Callable[[Response], None]) -> None:
         with self._lock:
             self._ann_requests.append(request)
-            response = self._next_ann_response
+            response = self._ann_responses_by_index.get(self._index_of(request), self._next_ann_response)
+            delay = self._ann_response_delay
+        time.sleep(delay)
         send_response(response)
 
     def _handle_bm25(self, request: Request, send_response: Callable[[BM25Response], None]) -> None:
         with self._lock:
             self._bm25_requests.append(request)
-            response = self._next_bm25_response
+            response = self._bm25_responses_by_index.get(self._index_of(request), self._next_bm25_response)
         send_response(response)
 
     def _handle_highlight(self, request: Request, send_response: Callable[[HighlightResponse], None]) -> None:
@@ -187,13 +214,20 @@ class VectorStoreMock:
 
             def _send_response(self, response):
                 payload = response.body.encode()
-                self.send_response(response.status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    self.send_response(response.status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    # Scylla gave up on this request, as it does with the other searches of a
+                    # hybrid query once one of them failed. The request was still recorded.
+                    pass
 
-        self._server = HTTPServer((host, 0), Handler)
+        # One thread per request, so that a delayed answer does not hold back the requests sent
+        # beside it.
+        self._server = ThreadingHTTPServer((host, 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever)
         self._thread.daemon = True
         self._thread.start()

@@ -70,7 +70,7 @@ void fetch_primary_key_columns(selection::selection& selection, const schema& sc
     }
 }
 
-expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+expr::expression search_call_replacement(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
         expr::temporary_allocator& allocator) {
     auto read = [&] (std::optional<size_t>& index, data_type type, std::optional<expr::expression> replaced) {
         if (!index) {

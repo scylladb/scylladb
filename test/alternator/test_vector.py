@@ -1769,15 +1769,15 @@ def max_topk(dynamodb):
     if is_aws(dynamodb):
         return 100
     else:
-        # In Alternator, this is max_vector_search_limit in
-        # alternator/executor_read.cc, analogous to CQL's max_ann_query_limit
-        # defined in cql3/statements/select_statement.hh.
+        # In Alternator, this is max_topk in SearchVectors
+        # (alternator/executor_read.cc), the same as CQL's
+        # external_index_select_statement::max_query_limit.
         return 1000
 
 # Test that SearchVectors does not allow a TopK above max_topk(). This
-# limit also exists in CQL (max_ann_query_limit). TopK needs to be limited
-# because vector search does not support pagination so a very large TopK
-# would result in a very large single response page..
+# limit also exists in CQL (external_index_select_statement::max_query_limit).
+# TopK needs to be limited because vector search does not support pagination
+# so a very large TopK would result in a very large single response page..
 def test_searchvectors_topk_too_large(table_vs):
     client = table_vs.meta.client
     with pytest.raises(ClientError, match='ValidationException.*TopK'):

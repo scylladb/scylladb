@@ -12,7 +12,7 @@
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/values.hh"
 #include "utils/managed_bytes.hh"
-#include "vector_search/vector_store_client.hh"
+#include "vector_search/hybrid_search.hh"
 
 #include <optional>
 #include <span>
@@ -29,49 +29,45 @@ class partition_slice;
 namespace cql3::statements::external_search {
 
 struct joined_row {
-    /// Index of the external result naming this row, or nothing when no result does or the rows
-    /// were not matched.
-    std::optional<size_t> external_result;
+    /// Index of the candidate naming this row, or nothing where no candidate does or the rows were
+    /// not matched.
+    std::optional<size_t> candidate;
     /// True if the row is left out of the result set; see join_table_results().
     bool dropped = false;
-    /// The values of the columns the join was asked to read out of the row, in the order asked.
+    /// The values of the columns the join was asked to read out of the row, in the order asked; null
+    /// where a column is read for a search that did not return the row (see column_read).
     std::vector<managed_bytes_opt> columns;
 };
 
-/// Walks the rows just read from the base table, one joined_row per row, reading `columns` out of
-/// every row and, when `external_results` is given, matching each to the external result that
-/// names it. The walk visits exactly the
-/// rows the result set is built from, in the same order; `slice` must be the slice
-/// `table_results` were read with.
+/// A column the join reads out of the rows: out of every row, or, given `for_search`, only out of
+/// the rows that search returned. The others get a null for it, as they get for the search's score
+/// and rank.
+struct column_read {
+    const column_definition* column;
+    std::optional<size_t> for_search;
+};
+
+/// Walks the rows just read from the base table, in the order the result set is built from them,
+/// reading `columns` out of every row and, when `candidates` is given, matching each row to the
+/// candidate that names it. `slice` must be the slice `table_results` were read with.
 ///
-/// `table_results` must hold the rows in the order of `external_results` - query_base_table()
-/// reads them that way - so matching walks both forward at once, comparing primary keys, and a
-/// result stepped over is one whose row the base table no longer has. With results [k1, k2, k3]
-/// and rows [k1, k3] the joined rows are [{external_result = 0}, {external_result = 2}].
+/// `table_results` must hold the rows in the order of `candidates`, as query_base_table() reads
+/// them, so matching walks both forward at once comparing primary keys; a candidate stepped over is
+/// one whose row the base table no longer has. A row no search has a score for is marked dropped.
 ///
-/// A row the matching leaves with no similarity to report - one no result names, or one whose
-/// result scored it with something that is not a finite number - is marked dropped as it is built.
-///
-/// Matching compares primary keys, so `slice` must include the key columns; it asserts if they are
-/// missing. A null `external_results` skips matching, leaving every row unnamed and none dropped.
-///
-/// Each column of `columns` is read from where the row keeps it: a key column from the key, any
-/// other from the cells `slice` asked for, which must therefore include it; it asserts if it does
-/// not, a column nobody asked for having nothing to read. A row with no value
-/// for a column - a regular column of a partition holding nothing but a static row, say - gets an
-/// absent value. Nothing is deserialized.
+/// Matching needs the key columns in `slice`, and every column of `columns` must be one `slice`
+/// asked for; both are asserted. A null `candidates` skips matching, leaving every row unnamed and
+/// none dropped, and then no column can be read only for a search. Nothing is deserialized.
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const vector_search::vector_store_client::primary_keys* external_results, std::span<const column_definition* const> columns);
+        const std::vector<vector_search::search_candidate>* candidates, std::span<const column_read> columns);
 
-/// The similarity of each joined row, as the values of one temporary: null for a row that has none
-/// to report (see join_table_results()).
-std::vector<cql3::raw_value> similarities_of(
-        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results);
+/// The score one search gave each joined row, null where it has no hit for the row.
+std::vector<cql3::raw_value> scores_of(
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::search_candidate>& candidates);
 
-/// The rank of each joined row, as the values of one temporary: the position of the row's external
-/// result in the response, counted from 1. Null for the same rows similarities_of() gives null.
+/// The rank one search gave each joined row, counted from 1, null where it has no hit for the row.
 std::vector<cql3::raw_value> ranks_of(
-        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results);
+        std::span<const joined_row> rows, size_t search, const std::vector<vector_search::search_candidate>& candidates);
 
 /// One temporary and the value every row is given under it, in the order the rows are emitted.
 struct external_values {
@@ -79,13 +75,12 @@ struct external_values {
     std::vector<cql3::raw_value> values;
 };
 
-/// The values of one search's temporaries, filled from the joined rows: the similarity of each row
-/// under `temporaries.score` and its rank under `temporaries.rank`, each only if allocated.
-std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows,
-        const vector_search::vector_store_client::primary_keys& external_results);
+/// The values of one search's temporaries, filled from the joined rows: the score of each row under
+/// `temporaries.score` and its rank under `temporaries.rank`, each only if allocated.
+std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows, size_t search,
+        const std::vector<vector_search::search_candidate>& candidates);
 
-/// Hands each row of a search's result set the values already read off the index's response, in
-/// the order the rows are offered. Single-use: it cannot be rewound.
+/// Hands each row its values, in the order the rows are offered. Single-use: it cannot be rewound.
 class values_provider final : public cql3::selection::external_values_provider {
     std::vector<external_values> _values;
     std::vector<bool> _dropped;

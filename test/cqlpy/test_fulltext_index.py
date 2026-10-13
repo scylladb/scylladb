@@ -430,7 +430,7 @@ def test_bm25_without_comparison(cql, fulltext_table):
 
 def test_bm25_requires_limit(cql, fulltext_table):
     """A SELECT with BM25 but no LIMIT must be rejected."""
-    with pytest.raises(InvalidRequest, match="require a LIMIT"):
+    with pytest.raises(InvalidRequest, match="must have a limit specified"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello')")
 
 
@@ -521,7 +521,7 @@ def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
 
 def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search")):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
 
 
@@ -531,8 +531,8 @@ def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
-            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
+        with pytest.raises(InvalidRequest, match=r"support only one WHERE BM25\(\) restriction"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col1, 'world') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
 
 
 def test_bm25_order_by_only_rejected(cql, fulltext_table):
@@ -557,7 +557,7 @@ def test_bm25_where_with_ann_order_by_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
-        with pytest.raises(InvalidRequest, match="BM25 and ANN cannot be combined in the same query"):
+        with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search")):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0] LIMIT 1")
 
 
@@ -584,8 +584,8 @@ def test_order_by_two_bm25_rejected(cql, fulltext_table):
 
 
 def test_bm25_in_select_clause_rejected(cql, fulltext_table):
-    """BM25() in SELECT is rejected without both a BM25 WHERE and ORDER BY clause."""
-    with pytest.raises(InvalidRequest, match="not supported in the SELECT clause"):
+    """BM25() in SELECT is rejected without a BM25 search on its column in ORDER BY."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search")):
         cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
 
 
@@ -596,7 +596,7 @@ def test_bm25_in_select_clause_with_where_order_by_accepted(cql, fulltext_table)
 
 def test_bm25_in_select_clause_different_term_rejected(cql, fulltext_table):
     """BM25() in SELECT with a different literal search term than ORDER BY must be rejected at prepare time."""
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.prepare(f"SELECT BM25(content, 'world') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
@@ -606,7 +606,7 @@ def test_bm25_in_select_clause_different_column_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="same column"):
+        with pytest.raises(InvalidRequest, match=re.escape("BM25() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search on column col2")):
             cql.prepare(f"SELECT BM25(col2, 'hello') FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 10")
 
 
@@ -627,8 +627,8 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
-    """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
+    """A function call in ORDER BY that names no search must be rejected."""
+    with pytest.raises(InvalidRequest, match="must name at least one search"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 
@@ -655,14 +655,25 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="same column"):
+        with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search on column col1")):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
 def test_bm25_different_search_terms_rejected(cql, fulltext_table):
     """WHERE BM25 and ORDER BY BM25 with different search terms must be rejected."""
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; the search term differs")):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'world') LIMIT 1")
+
+
+def test_two_bm25_calls_on_one_order_by_column_must_agree(cql, test_keyspace, fulltext_table):
+    """Two calls on one column in an ORDER BY expression are one search, so they must use the same
+    search term."""
+    body = "(a tuple<float, int>, b tuple<float, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE lua AS 'return 0'"
+    with new_function(cql, test_keyspace, body) as fuse:
+        with pytest.raises(InvalidRequest, match=re.escape(
+                "BM25() in ORDER BY must use the same search term as the other BM25 calls on the same column")):
+            cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                        f"ORDER BY {test_keyspace}.{fuse}(BM25(content, 'hello'), BM25(content, 'world')) LIMIT 1")
 
 
 def test_bm25_literal_as_column_reference_rejected(cql, fulltext_table):
@@ -740,9 +751,8 @@ def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
 #
 # BM25_HIGHLIGHT(col, 'term') reports a fragment of the searched text with the
 # matched terms marked. It describes the same search BM25() does, so it is only
-# accepted where BM25() is - in the SELECT clause of a query that already has
-# the required WHERE and ORDER BY clauses, naming the same column and the same
-# search term.
+# accepted where BM25() is - in the SELECT clause of a query whose ORDER BY has a
+# BM25 search on the same column, with the same search term.
 #
 # Execution tests that require a running Vector Store are in
 # test_fulltext_search_with_mock.py.
@@ -768,20 +778,20 @@ def test_highlight_nested_accepted(cql, fulltext_table):
 
 
 def test_highlight_without_where_and_order_by_rejected(cql, fulltext_table):
-    """BM25_HIGHLIGHT() is rejected without both a BM25 WHERE and ORDER BY - there is no search to highlight."""
-    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses")):
+    """BM25_HIGHLIGHT() is rejected without a BM25 search on its column in ORDER BY - there is no search to highlight."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search")):
         cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {fulltext_table}")
 
 
 def test_highlight_without_order_by_rejected(cql, fulltext_table):
     """A WHERE BM25 alone does not make a search to highlight either."""
-    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses")):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search")):
         cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 10")
 
 
 def test_highlight_different_term_rejected(cql, fulltext_table):
     """A fragment of a different search than the one driving the query must be rejected at prepare time."""
-    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must use the same search term")):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; the search term differs")):
         cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'world') FROM {fulltext_table} "
                     f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
 
@@ -792,7 +802,7 @@ def test_highlight_different_column_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must reference the same column")):
+        with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must match a BM25 search in ORDER BY, with the same column and search term; ORDER BY has no BM25 search on column col2")):
             cql.prepare(f"SELECT BM25_HIGHLIGHT(col2, 'hello') FROM {table} "
                         f"WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 10")
 
@@ -820,9 +830,21 @@ def test_highlight_in_where_with_integer_rejected(cql, fulltext_table):
                     f"ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
+def test_aggregate_in_order_by_rejected(cql, fulltext_table):
+    """An aggregate collapses the rows it is computed over, so it cannot order them.
+
+    Without an explicit rejection the score selector added for the ordering would turn the whole
+    statement into an aggregation, and the query would silently return a single row.
+    """
+    for aggregate in ["SUM", "MIN", "MAX", "AVG", "COUNT"]:
+        with pytest.raises(InvalidRequest, match="Aggregation functions are not supported in the ORDER BY clause"):
+            cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                        f"ORDER BY {aggregate}(BM25_SCORE(content, 'hello')) LIMIT 10")
+
+
 def test_highlight_in_order_by_rejected(cql, fulltext_table):
     """The rows are ranked by relevance, never by a fragment."""
-    with pytest.raises(InvalidRequest, match=re.escape("Only ANN() and BM25() are supported as scoring functions in ORDER BY")):
+    with pytest.raises(InvalidRequest, match=r"BM25_HIGHLIGHT\(\) cannot be used as a scoring function in ORDER BY"):
         cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
                     f"ORDER BY BM25_HIGHLIGHT(content, 'hello') LIMIT 10")
 

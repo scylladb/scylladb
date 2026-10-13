@@ -40,18 +40,19 @@ An FTS query is identified at prepare time by the presence of a `BM25(column, te
 in the `ORDER BY` clause. The index is resolved from that column, and all structural
 validations are enforced at prepare time: `LIMIT` is required; `PER PARTITION LIMIT` and
 aggregation are rejected; a matching `WHERE BM25(column, ...) > 0` must be present on the
-**same column** as the `ORDER BY`; any additional `WHERE` restrictions are rejected. The
+**same column** as the `ORDER BY`, unless the `ORDER BY` runs several searches, when no `WHERE`
+is accepted (see `hybrid_search.md`); any additional `WHERE` restrictions are rejected. The
 search-term expression is captured during prepare so that bind markers are correctly
 evaluated at execute time.
 
 `BM25()` and `BM25_HIGHLIGHT()` in `SELECT` report two values of the same search: the row's
-relevance score and an excerpt of its matched text. `prepare_bm25_selectors()` handles both with
-the same rules, and replaces each call with an `expr::temporary`, a slot `external_search::values_provider`
-fills per row. One slot serves every occurrence of a value, since all of them must name the same
-column and search term. The score is matched to a row by primary key, so the key columns are added
-to the selection even when the query does not select them. The excerpt is matched by position, but
-the highlighted column is added to the selection because its text has to be read to be sent to the
-index. `BM25_HIGHLIGHT()` is accepted only in the `SELECT` clause.
+relevance score and an excerpt of its matched text. `external_search_plan::replace_selectors()`
+handles both with the same rules, and replaces each call with an `expr::temporary`, a slot
+`values_provider` fills per row. One slot serves every occurrence of a value, since all of them must
+name the same column and search term. The score is matched to a row by primary key, so the key
+columns are added to the selection even when the query does not select them. The excerpt is matched
+by position, but the highlighted column is added to the selection because its text has to be read to
+be sent to the index. `BM25_HIGHLIGHT()` is accepted only in the `SELECT` clause.
 
 Additionally, at execute time the search term values in `WHERE` and `ORDER BY` are evaluated
 and compared - they must be identical. This catches mismatches that cannot be detected at
@@ -77,14 +78,14 @@ carrying the search term and the highlighted column's text of the rows. The alte
 the text in the index or having the index read the base table, were rejected: the first duplicates
 data the base table owns, the second gives the index a read path into the cluster.
 
-That request needs all the rows in hand and has to suspend, and `external_values_provider::try_fill()`
-can do neither: it is called from a synchronous walk over the serialized `query::result`. So
-`execute_search()` reads the base-table rows and emits the result set in two steps, with the
-request in between. `join_table_results()` walks the rows once, matching the ranked keys to them
-and reading out the highlighted column; `highlights_of()` sends that text to the index and turns
-the reply into one temporary's values; `external_search::values_provider` is built from those values and
-does no I/O: `try_fill()` hands out the value computed for each row, in order, and says which rows
-to leave out.
+That request needs all the rows in hand and has to suspend, and
+`external_values_provider::try_fill()` can do neither: it is called from a synchronous walk over the
+serialized `query::result`. So `execute_search()` reads the base-table rows and emits the result set
+in two steps, with the request in between. `join_table_results()` walks the rows once, matching each
+to the candidate `vector_search::search_all()` returned for it and reading out the highlighted
+column; `highlights_of()` sends that text to the index and turns the reply into one temporary's
+values; `values_provider` is built from those values and does no I/O: `try_fill()` hands out the
+value computed for each row, in order, and says which rows to leave out.
 
 The reply is positional: entry *i* belongs to the *i*-th document sent, and carries no primary
 keys. Position is exact because `join_table_results()` walks the serialized `query::result` with
@@ -92,7 +93,9 @@ keys. Position is exact because `join_table_results()` walks the serialized `que
 serialized, and `result_set_builder::visitor` later walks the same `query::result` the same way,
 so the join sees the rows the result set is built from, in the same order. A row the join marked
 dropped is not sent, since its fragment would be thrown away with the row, and neither is a row
-with no text, there being nothing to find a fragment in; either gets a null in its slot. The score
+with no text, there being nothing to find a fragment in; either gets a null in its slot. A row
+the full-text search did not return, in a query running several searches, has no text: the join
+leaves the highlighted column out of it, as its score and rank are null. The score
 is delivered by position too, although it is matched by key.
 
 A row the index found no fragment in gets a null and is kept. A failed or timed-out `/highlight`

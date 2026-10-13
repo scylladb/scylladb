@@ -12,6 +12,7 @@
 ###############################################################################
 
 import json
+import re
 
 import pytest
 from cassandra.protocol import InvalidRequest
@@ -19,7 +20,7 @@ from test.pylib.skip_types import skip_env
 from cassandra.query import SimpleStatement
 from http import HTTPStatus
 
-from .util import new_test_table, unique_name
+from .util import new_function, new_test_table, unique_name
 
 NUM_ROWS = 5
 RESPONSE_PK_REVERSED = list(reversed(range(NUM_ROWS)))
@@ -69,6 +70,37 @@ def test_fts_basic_query_executes(cql, fts_setup_with_mock):
     assert [r.id for r in rows] == RESPONSE_PK_REVERSED
 
 
+def test_bm25_score_alone_orders_by_the_index(cql, fts_setup_with_mock):
+    """ORDER BY BM25_SCORE() alone means the index's own order, as ORDER BY BM25() does."""
+    table, _ = fts_setup_with_mock
+
+    rows = cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                       f"ORDER BY BM25_SCORE(content, 'hello') LIMIT {NUM_ROWS}")
+    assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
+def test_bm25_rank_cannot_order_rows(cql, fts_table):
+    """A rank called directly is an int, not something ORDER BY can sort by."""
+    table, _ = fts_table
+    with pytest.raises(InvalidRequest, match=r"BM25_RANK\(\) cannot be used as a scoring function in ORDER BY"):
+        cql.prepare(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                    f"ORDER BY BM25_RANK(content, 'hello') LIMIT {NUM_ROWS}")
+
+
+def test_bm25_rank_orders_rows_through_a_function(cql, fts_setup_with_mock):
+    """Only a bare rank is rejected. A function of ranks is a score like any other, sorted highest
+    first, so it is the function that decides the order: 1 / rank gives the index's own, and the
+    rank itself the reverse."""
+    table, _ = fts_setup_with_mock
+    keyspace = table.split(".")[0]
+    for expression, expected in [("1 / r", RESPONSE_PK_REVERSED), ("r", list(reversed(RESPONSE_PK_REVERSED)))]:
+        body = f"(r int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE lua AS 'return {expression}'"
+        with new_function(cql, keyspace, body) as f:
+            rows = cql.execute(f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 "
+                               f"ORDER BY {keyspace}.{f}(BM25_RANK(content, 'hello')) LIMIT {NUM_ROWS}")
+            assert [r.id for r in rows] == expected
+
+
 def test_fts_bind_markers_execute(cql, fts_setup_with_mock):
     """A BM25 query with bind markers (?) should execute end-to-end against the vector store."""
     table, _ = fts_setup_with_mock
@@ -83,12 +115,12 @@ def test_bm25_mixed_constant_and_bind_marker_search_term(cql, fts_setup_with_moc
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ['world'])
     cql.execute(stmt, ['hello'])
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ['world'])
     cql.execute(stmt, ['hello'])
 
@@ -98,7 +130,7 @@ def test_bm25_two_bind_markers_search_term(cql, fts_setup_with_mock):
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match=re.escape("BM25() in WHERE must match a BM25 search in ORDER BY, with the same column and search term; the search term differs")):
         cql.execute(stmt, ['hello', 'world'])
     cql.execute(stmt, ['hello', 'hello'])
 
@@ -149,7 +181,7 @@ def test_fts_http_error_propagated_as_invalid_request(cql, vector_store_mock, ft
 
 
 def test_fts_limit_exceeds_max_raises_error(cql, fts_setup_with_mock):
-    """A LIMIT exceeding max_fts_query_limit (1000) must be rejected."""
+    """A LIMIT exceeding max_query_limit (1000) must be rejected."""
     table, _ = fts_setup_with_mock
 
     with pytest.raises(InvalidRequest, match="1000"):
@@ -286,7 +318,7 @@ def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, ve
     vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
     cql.execute(stmt, ["hello", "hello", "hello"])
     # SELECT marker differs from ORDER BY marker: raises
-    with pytest.raises(InvalidRequest, match="same search term"):
+    with pytest.raises(InvalidRequest, match="the search term differs"):
         cql.execute(stmt, ["world", "hello", "hello"])
 
 
@@ -484,6 +516,19 @@ def test_bm25_drops_a_row_whose_score_is_not_finite(cql, fts_table, vector_store
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
     assert [(row.id, row.r) for row in rows] == expected
+
+
+def test_bm25_key_named_twice_is_one_row(cql, fts_table, vector_store_mock):
+    """A malformed answer naming a key twice gives one row, with the score and rank the index gave
+    it first. The repeat still takes up its place, so the next key is ranked 3."""
+    table, _ = fts_table
+    vector_store_mock.set_next_bm25_response(200, bm25_response([1, 1, 2], scores=[3.0, 2.0, 1.0]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25_SCORE(content, 'hello') AS s, BM25_RANK(content, 'hello') AS r FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 3"))
+
+    assert [(row.id, row.s, row.r) for row in rows] == [(1, 3.0, 1), (2, 1.0, 3)]
 
 
 def test_bm25_unaliased_column_names(cql, fts_setup_with_mock):
@@ -885,5 +930,5 @@ def test_highlight_bind_marker_mismatch_raises(cql, distinct_fts_table, vector_s
     vector_store_mock.set_next_highlight_response(200, highlight_response(["a"]))
     cql.execute(stmt, ["fox", "fox", "fox"])
 
-    with pytest.raises(InvalidRequest, match="BM25_HIGHLIGHT\\(\\) in SELECT must use the same search term"):
+    with pytest.raises(InvalidRequest, match="BM25_HIGHLIGHT\\(\\) in SELECT must match a BM25 search in ORDER BY, with the same column and search term; the search term differs"):
         cql.execute(stmt, ["dog", "fox", "fox"])

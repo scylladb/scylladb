@@ -71,6 +71,10 @@ Neither clause works on its own - a query with only ``WHERE BM25()`` or only
 ``ORDER BY BM25()`` is rejected, and both must reference the **same column** and
 the **same search term**. Every FTS query also requires a ``LIMIT``.
 
+The exception is a :ref:`hybrid query <hybrid-queries>`, which ranks the rows by a
+full-text search together with other searches, such as a vector search, and takes
+no ``WHERE`` clause.
+
 For the full syntax reference, see :ref:`Full-Text Search queries (BM25) <fulltext-queries>`.
 
 Basic query
@@ -107,9 +111,9 @@ query wants::
         ORDER BY BM25(v, 'search term')
         LIMIT 10;
 
-All three describe the search the rows are ranked by, so each needs the two clauses above and has
-to reference the same column and the same search term they do. A query using several of them still
-makes a single request.
+All three describe the search the rows are ranked by, so each needs a BM25 search on the same
+column in the ``ORDER BY`` clause, and has to use the same search term as that search. A query using
+several of them still makes a single request.
 
 The rank is the position in the index's result, not in the result set. If the index returns a row
 that is no longer in the base table, that row's rank is missing from the result and the ranks after
@@ -129,8 +133,8 @@ terms marked, for showing the reader why a row was returned::
         LIMIT 10;
 
 It is accepted only in the ``SELECT`` clause, under the same rules as ``BM25()``
-there: the query must have the ``WHERE`` and ``ORDER BY`` clauses above, and
-the call must reference the same column and the same search term they do.
+there: the ``ORDER BY`` clause must have a BM25 search on the same column, and
+the call must use the same search term as that search.
 
 The result is a single fragment of type ``text``, holding HTML: the matched
 terms are wrapped in ``<b>`` and ``</b>``, and the text around them is
@@ -141,8 +145,10 @@ when the query consists only of stop words. Such a row is still returned.
 
 A query that asks for an excerpt costs one additional round trip to the
 full-text index, made after the matching rows have been read, carrying the text
-of the highlighted column of those rows. Queries that do not ask for an excerpt
-are unaffected.
+of the highlighted column of those rows. In a query that ranks the rows by
+several searches, only the rows the full-text search returned are sent, and the
+others get a ``null`` excerpt. Queries that do not ask for an excerpt are
+unaffected.
 
 Filtering support
 ~~~~~~~~~~~~~~~~~
@@ -187,7 +193,9 @@ FTS queries enforce the following rules:
    * - Both clauses required
      - A query must include both a ``WHERE BM25() > 0`` filter and an
        ``ORDER BY BM25()`` ranking. Both must reference the same column and
-       the same search term. Neither clause is accepted on its own.
+       the same search term. Neither clause is accepted on its own. The
+       exception is a :ref:`hybrid query <hybrid-queries>`, which takes no
+       ``WHERE`` clause.
    * - ``>`` and literal ``0`` only
      - In ``WHERE``, the only accepted form is ``BM25(column, 'term') > 0``.
        Other operators (``>=``, ``=``, ``<``, ``<=``, ``!=``) and non-zero
@@ -208,19 +216,20 @@ FTS queries enforce the following rules:
    * - Fulltext index required
      - The queried column must have a ``fulltext_index``. A regular secondary
        index does not satisfy this requirement.
-   * - Selecting a score or a rank needs the other two clauses
+   * - Selecting a score or a rank needs a BM25 search in ``ORDER BY``
      - ``BM25()`` returns a ``tuple<float, int>``, the row's relevance score and
        its rank; ``BM25_SCORE()`` and ``BM25_RANK()`` return one element each.
-       Any of them may be used as a selector, but only in a query that already
-       has the required ``WHERE`` and ``ORDER BY`` clauses. Every occurrence
-       must reference the same column and the same search term.
+       Any of them may be used as a selector, but only in a query whose
+       ``ORDER BY`` clause has a BM25 search on the same column, and every
+       occurrence must use the same search term as that search.
    * - ``BM25_HIGHLIGHT()`` is a selector only
      - ``BM25_HIGHLIGHT()`` is accepted in the ``SELECT`` clause under the same
        rules as ``BM25()``, and rejected in every other clause. See
        :ref:`Highlighting <fulltext-highlighting>`.
    * - Single ordering only
-     - ``ORDER BY BM25()`` cannot be combined with other ``ORDER BY`` columns,
-       a second ``BM25()`` ordering, or with ``ANN`` ordering.
+     - ``ORDER BY BM25()`` cannot be combined with other ``ORDER BY`` columns.
+       To rank the rows by several searches, fuse them in a
+       :ref:`hybrid query <hybrid-queries>`.
    * - Paging not supported
      - FTS queries do not support paging; all matching rows up to ``LIMIT``
        are returned in a single page.
