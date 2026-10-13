@@ -228,8 +228,15 @@ public:
     // to be repaired, but the hints and batchlog flush done before the repair
     // still has to be recorded in the repair history, to allow repair-mode
     // tombstone gc to purge tombstones written before the flush.
-    // Returns false (doing nothing) if this node is not the only replica of the range.
-    future<bool> repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range, gc_clock::time_point flush_time);
+    // With the small table optimization, the range is the whole ring and the
+    // participants are all token owners: the whole ring is recorded as repaired
+    // on all of them, if every token of the ring has a single replica.
+    // Returns false (doing nothing) if the range has more than one replica
+    // (any token of the ring, with the small table optimization), or the
+    // participants (this node and the live followers) are not exactly its
+    // replicas (all token owners, with the small table optimization).
+    future<bool> repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range,
+            const std::vector<locator::host_id>& followers, gc_clock::time_point flush_time);
 
     // Repair a single local range, multiple column families.
     // Comparable to RepairSession in Origin
