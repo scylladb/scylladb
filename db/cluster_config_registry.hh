@@ -69,6 +69,12 @@ inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period
 
 }
 
+// Inclusive bounds on the value of an integer option.
+struct integer_range {
+    int64_t min;
+    int64_t max;
+};
+
 struct option {
     std::string_view name;
     std::string_view description;
@@ -83,6 +89,9 @@ struct option {
     // If set, the custom_excpected_description will be used in validation errors.
     config_value (*custom_parser)(std::string_view) = nullptr;
     std::string_view custom_expected_description = "";
+    // When set, validate_value() rejects an integer value outside this range. Only valid for
+    // an integer option, and the default must fall within it.
+    std::optional<integer_range> valid_range = std::nullopt;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());

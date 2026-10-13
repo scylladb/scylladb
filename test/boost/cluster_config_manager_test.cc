@@ -205,6 +205,39 @@ auto inject_text_test_option(cql_test_env& e) {
 
 }
 
+// An integer option may declare a valid_range: values outside it are rejected before anything
+// is stored, at every scope, while the bounds themselves are accepted.
+SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_range) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_ranged_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = int64_t(0),
+            .valid_range = db::cluster_config_registry::integer_range{.min = 0, .max = 100},
+        }).get();
+        auto clear_test_options = seastar::defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        const auto* opt = db::cluster_config_registry::find("test_ranged_option");
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*opt, "0"));
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*opt, "100"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "-1"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "101"));
+        // A value that does not parse is still reported as such, not as out of range.
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "abc"));
+
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 100").get());
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_ranged_option = -1").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 101").get(),
+            exceptions::invalid_request_exception);
+    });
+}
+
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
 // a "-- from <scope> (...)" provenance comment, and it wraps a described CDC log or paxos
 // table in a /* ... */ block. A CQL string literal has no escape for a line break or for

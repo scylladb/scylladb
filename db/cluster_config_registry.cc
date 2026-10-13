@@ -114,6 +114,31 @@ static_assert(all_registry_options_are_single_domain(),
 // The feature names of options removed from the registry; see retired_feature_names().
 constexpr std::array<std::string_view, 0> retired_option_features = {};
 
+// A valid_range only makes sense for an integer option, and the default it falls back to
+// must itself be a value validate_value() would accept.
+constexpr bool has_consistent_range(const option& opt) {
+    if (!opt.valid_range) {
+        return true;
+    }
+    if (opt.type() != value_type::integer) {
+        return false;
+    }
+    const auto def = std::get<int64_t>(opt.default_value);
+    return opt.valid_range->min <= def && def <= opt.valid_range->max;
+}
+
+constexpr bool all_registry_options_have_consistent_ranges() {
+    for (const auto& opt : registry_options) {
+        if (!has_consistent_range(opt)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_options_have_consistent_ranges(),
+        "A cluster config option's valid_range must belong to an integer option and contain its default");
+
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
 // registry_options. Per-shard state, mirroring how the registry is otherwise stateless.
@@ -173,8 +198,17 @@ std::optional<seastar::sstring> validate_with(T (*parse)(std::string_view), std:
     }
 }
 
-std::optional<seastar::sstring> validate_integer(std::string_view value) {
-    return validate_with(parse_integer, "64-bit integer", value);
+std::optional<seastar::sstring> validate_integer(const option& opt, std::string_view value) {
+    if (auto error = validate_with(parse_integer, "64-bit integer", value)) {
+        return error;
+    }
+    if (opt.valid_range) {
+        const auto v = parse_integer(value);
+        if (v < opt.valid_range->min || v > opt.valid_range->max) {
+            return fmt::format("expected an integer between {} and {}, got {}", opt.valid_range->min, opt.valid_range->max, v);
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
@@ -325,7 +359,7 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        return validate_integer(opt, value);
     case value_type::floating_point:
         return validate_floating_point(value);
     case value_type::boolean:
@@ -394,6 +428,10 @@ void add_test_only_option(option opt) {
     if (!is_single_domain(opt.scopes)) {
         utils::on_internal_error(fmt::format(
                 "test-only cluster config option '{}' mixes table-oriented and node-oriented scopes", opt.name));
+    }
+    if (!has_consistent_range(opt)) {
+        utils::on_internal_error(fmt::format(
+                "test-only cluster config option '{}' has a valid_range that does not fit its type or default", opt.name));
     }
     if (g_options_with_test_overrides.empty()) {
         g_options_with_test_overrides.reserve(registry_options.size() + max_test_only_options);
