@@ -565,6 +565,7 @@ cql_server::forward_cql(
     unsigned target_shard,
     seastar::lowres_clock::time_point timeout,
     bool is_write,
+    db::consistency_level cl,
     uint16_t stream,
     tracing::trace_state_ptr trace_state,
     forward_cql_execute_request req,
@@ -588,9 +589,9 @@ cql_server::forward_cql(
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
-                        format("Write request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, db::write_type::SIMPLE))
+                        format("Write request timed out while forwarding to {}", target_host), cl, 0, 1, db::write_type::SIMPLE))
                     : std::make_exception_ptr(exceptions::read_timeout_exception(
-                        format("Read request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, false));
+                        format("Read request timed out while forwarding to {}", target_host), cl, 0, 1, false));
             } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
                 if (on_forwarding_finished) {
@@ -598,9 +599,9 @@ cql_server::forward_cql(
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
-                        format("Write request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, db::write_type::SIMPLE))
+                        format("Write request failed while forwarding to {}", target_host), cl, 0, 1, 1, db::write_type::SIMPLE))
                     : std::make_exception_ptr(exceptions::read_failure_exception(
-                        format("Read request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, false));
+                        format("Read request failed while forwarding to {}", target_host), cl, 0, 1, 1, false));
             } else {
                 clogger.debug("Forwarding CQL request to {} shard {} failed with an unexpected error: {}. Will return this error to the client", target_host, target_shard, eptr);
             }
@@ -2188,7 +2189,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
 
             auto response = co_await forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
-                stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
+                (*bounce_msg)->consistency().value(), stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
 
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
