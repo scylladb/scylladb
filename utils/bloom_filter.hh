@@ -13,6 +13,7 @@
 #pragma once
 #include "i_filter.hh"
 #include "utils/large_bitset.hh"
+#include "utils/minidump/registry.hh"
 
 namespace utils {
 namespace filter {
@@ -25,6 +26,8 @@ private:
     bitmap _bitset;
     int _hash_count;
     filter_format _format;
+    // Filters are big and hold nothing worth debugging, keep them out of minidumps.
+    minidump::registered_ranges _dump_ranges{minidump::tags::bloom_filter};
 
     static thread_local struct stats {
         uint64_t memory_size = 0;
