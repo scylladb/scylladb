@@ -144,12 +144,21 @@ def run_cassandra_cmd(pid, dir):
             'CASSANDRA_LOG_DIR': logsdir,
             'CASSANDRA_INCLUDE': '',
             'CASSANDRA_HOME': '',
-            # Unfortunately, Cassandra's JMX cannot listen only on a specific
-            # interface. To allow tests to use JMX (nodetool), we need to
-            # have it listen on 0.0.0.0 :-( This is insecure, but arguably
-            # can be forgiven for test environments. The following JVM_OPTS
-            # configures that:
-            'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199'
+            # To allow tests to use JMX (nodetool), we need JMX to listen on
+            # our IP address. Cassandra's own JMX server can only listen on
+            # 0.0.0.0 (cassandra.jmx.remote.port) or 127.0.0.1
+            # (cassandra.jmx.local.port), and either would prevent running
+            # several Cassandra instances concurrently with different IP
+            # addresses. So instead, we use the JVM's built-in JMX agent,
+            # which can listen on a specific address. Cassandra notices that
+            # com.sun.management.jmxremote.port is set, and doesn't start
+            # its own JMX server.
+            'JVM_OPTS': '-Dcom.sun.management.jmxremote.port=7199'
+                        ' -Dcom.sun.management.jmxremote.rmi.port=7199'
+                        f' -Dcom.sun.management.jmxremote.host={ip}'
+                        f' -Djava.rmi.server.hostname={ip}'
+                        ' -Dcom.sun.management.jmxremote.authenticate=false'
+                        ' -Dcom.sun.management.jmxremote.ssl=false'
             # SAI vector indexes in Cassandra 5.0 reject custom index
             # parameters (like similarity_function) unless this flag is
             # set.  Our tests exercise those options for Cassandra SAI
