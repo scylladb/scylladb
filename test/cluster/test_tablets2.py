@@ -2644,3 +2644,52 @@ async def test_split_vs_regular_compaction_stale_snapshot(manager: ManagerClient
     for marker in ("Unable to remove input SSTable", "Aborting on shard"):
         matches = await log.grep(marker, from_mark=mark)
         assert not matches, f"Race triggered: '{marker}' found in log"
+
+# Reproducer for SCYLLADB-4775: a write selects its compaction group, then waits
+# for memory. If split is acked meanwhile, because the main group it selected is
+# still empty, the write lands in that main group after the ack, and the node
+# aborts when the split is finalized.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_ack_waits_for_write_waiting_for_memory(manager: ManagerClient):
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        # The write is held at the injection for longer than the default write timeout.
+        'write_request_timeout_in_ms': 300000,
+    }
+    server = await manager.server_add(config=cfg, cmdline=['--smp', '1'])
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        # Hold a write to the empty table after it selected the (main) compaction group.
+        await manager.api.enable_injection(server.ip_addr, "table_apply_wait_for_memory", one_shot=True, parameters={'table': 'test'})
+        write = asyncio.ensure_future(cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (0, 0)", timeout=300))
+        await log.wait_for("table_apply_wait_for_memory: waiting for message", from_mark=mark)
+
+        await manager.api.enable_injection(server.ip_addr, "tablet_split_finalization_postpone", one_shot=False)
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+        await manager.enable_tablet_balancing()
+
+        await log.wait_for('Detected new split decision for table', from_mark=mark)
+        # Give the split monitor time to check whether the table is split ready. The
+        # check is retried without delay, so the split would be acked well within that.
+        await asyncio.sleep(5)
+        assert not await log.grep('Setting split ready sequence number', from_mark=mark), \
+            "split was acked while a write to the main compaction group was pending"
+
+        await manager.api.message_injection(server.ip_addr, "table_apply_wait_for_memory")
+        await write
+
+        await log.wait_for('Setting split ready sequence number', from_mark=mark)
+        await manager.api.disable_injection(server.ip_addr, "tablet_split_finalization_postpone")
+        await log.wait_for('Detected tablet split for table', from_mark=mark)
+
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+        rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
+        assert [(r.pk, r.c) for r in rows] == [(0, 0)]
