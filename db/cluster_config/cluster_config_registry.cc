@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -42,8 +43,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -55,6 +55,8 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+constexpr integer_range throughput_mb_per_sec_range{.min = 0, .max = std::numeric_limits<uint32_t>::max()};
+
 constexpr std::array registry_options = {
     option{
         .name = "auto_repair_enabled",
@@ -62,6 +64,42 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    // I/O throughput limits, migrated from the db::config options of the same name. They
+    // limit the bandwidth of a node's scheduling groups, so they resolve per node. 0 means
+    // unlimited. The range matches the uint32_t the legacy options are declared with.
+    option{
+        .name = "compaction_throughput_mb_per_sec",
+        .description = "Throttles compaction I/O to the specified total throughput (in MiB/s) on each node. 0 disables throttling",
+        .scopes = node_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .valid_range = throughput_mb_per_sec_range,
+    },
+    option{
+        .name = "stream_io_throughput_mb_per_sec",
+        .description = "Throttles streaming and repair I/O to the specified total throughput (in MiB/s) on each node. 0 disables throttling",
+        .scopes = node_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .valid_range = throughput_mb_per_sec_range,
+    },
+    option{
+        .name = "maintenance_io_throughput_mb_per_sec",
+        .description = "Throttles background (maintenance) I/O to the specified total throughput (in MiB/s) on each node. "
+                "0 disables throttling. When not set, stream_io_throughput_mb_per_sec applies",
+        .scopes = node_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .valid_range = throughput_mb_per_sec_range,
+    },
+    option{
+        .name = "backup_io_throughput_mb_per_sec",
+        .description = "Throttles backup I/O to the specified total throughput (in MiB/s) on each node. 0 disables throttling",
+        .scopes = node_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(0),
+        .valid_range = throughput_mb_per_sec_range,
     },
 };
 

@@ -58,6 +58,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/cluster_config/cluster_config_manager.hh"
+#include "db/cluster_config/throughput_limits.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
@@ -1014,10 +1015,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
 
+            // The I/O throughput limits follow the cluster configuration once the cluster
+            // config manager is attached below, and the (deprecated) db::config options until then.
+            static sharded<db::throughput_limits> throughput_limits;
+            throughput_limits.start(std::cref(*cfg)).get();
+            auto stop_throughput_limits = defer_verbose_shutdown("throughput limits", [] {
+                throughput_limits.stop().get();
+            });
+
             // Maintenance supergroup -- the collection of background low-prio activities
             auto maintenance_supergroup = create_scheduling_supergroup(200).get();
             auto bandwidth_updater = io_throughput_updater("maintenance supergroup", maintenance_supergroup,
-                    cfg->maintenance_io_throughput_mb_per_sec.is_set() ? cfg->maintenance_io_throughput_mb_per_sec : cfg->stream_io_throughput_mb_per_sec);
+                    throughput_limits.local().maintenance_io_throughput_mb_per_sec());
             auto maintenance_scheduling_group = create_scheduling_group("maintenance", "mant", 200, maintenance_supergroup).get();
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
@@ -1341,7 +1350,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
-                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                    .throughput_mb_per_sec = throughput_limits.local().compaction_throughput_mb_per_sec(),
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
@@ -1355,7 +1364,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
-            auto compaction_throughput_update = io_throughput_updater("compaction", dbcfg.compaction_scheduling_group, cfg->compaction_throughput_mb_per_sec);
+            auto compaction_throughput_update = io_throughput_updater("compaction", dbcfg.compaction_scheduling_group,
+                    throughput_limits.local().compaction_throughput_mb_per_sec());
 
             static sharded<auth::service> auth_service;
             static sharded<auth::service> maintenance_auth_service;
@@ -2014,7 +2024,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(sharded_parameter([&] { return utils::updateable_value<uint32_t>(cfg->stream_io_throughput_mb_per_sec); }), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
+            stream_manager.start(sharded_parameter([] { return throughput_limits.local().stream_io_throughput_mb_per_sec(); }), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -2030,7 +2040,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_stream_manager(ctx).get();
             });
 
-            auto stream_throughput_update = io_throughput_updater("streaming", dbcfg.streaming_scheduling_group, cfg->stream_io_throughput_mb_per_sec);
+            auto stream_throughput_update = io_throughput_updater("streaming", dbcfg.streaming_scheduling_group,
+                    throughput_limits.local().stream_io_throughput_mb_per_sec());
 
             checkpoint(stop_signal, "starting auth cache");
             auth_cache.start(std::ref(qp), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -2124,6 +2135,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
+            });
+
+            throughput_limits.invoke_on_all([] (db::throughput_limits& tl) {
+                tl.attach(cluster_config_manager.local());
+            }).get();
+            auto detach_throughput_limits = defer_verbose_shutdown("throughput limits cluster config", [] {
+                throughput_limits.invoke_on_all(&db::throughput_limits::detach).get();
             });
 
             // making compaction manager api available, after system keyspace has already been established.
@@ -2405,7 +2423,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             db.local().plug_snapshot_ctl(snapshot_ctl.local());
 
-            auto backup_throughput_update = io_throughput_updater("backup", dbcfg.backup_scheduling_group, cfg->backup_io_throughput_mb_per_sec);
+            auto backup_throughput_update = io_throughput_updater("backup", dbcfg.backup_scheduling_group,
+                    throughput_limits.local().backup_io_throughput_mb_per_sec());
 
             api::set_server_snapshot(ctx, snapshot_ctl).get();
             auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {

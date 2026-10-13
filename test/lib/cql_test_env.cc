@@ -49,6 +49,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/cluster_config/cluster_config_manager.hh"
+#include "db/cluster_config/throughput_limits.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
@@ -171,6 +172,7 @@ private:
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<db::cluster_config_manager> _cluster_config_manager;
+    sharded<db::throughput_limits> _throughput_limits;
     sharded<gms::gossiper> _gossiper;
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
@@ -401,6 +403,10 @@ public:
 
     virtual sharded<db::cluster_config_manager>& cluster_config_manager() override {
         return _cluster_config_manager;
+    }
+
+    virtual sharded<db::throughput_limits>& throughput_limits() override {
+        return _throughput_limits;
     }
 
     virtual sharded<netw::messaging_service>& get_messaging_service() override {
@@ -712,6 +718,9 @@ private:
             _disk_space_monitor_shard0->start().get();
             auto stop_dsm = defer_verbose_shutdown("disk space monitor", [this] { _disk_space_monitor_shard0->stop().get(); });
 
+            _throughput_limits.start(std::cref(*cfg)).get();
+            auto stop_throughput_limits = deferred_stop(_throughput_limits);
+
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
             auto get_cm_cfg = sharded_parameter([&] {
@@ -721,7 +730,7 @@ private:
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
-                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                    .throughput_mb_per_sec = _throughput_limits.local().compaction_throughput_mb_per_sec(),
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
@@ -815,6 +824,13 @@ private:
             _cluster_config_manager.start(std::ref(_cluster_config_manager), std::ref(_db), std::ref(_qp)).get();
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [this] {
                 _cluster_config_manager.stop().get();
+            });
+
+            _throughput_limits.invoke_on_all([this] (db::throughput_limits& tl) {
+                tl.attach(_cluster_config_manager.local());
+            }).get();
+            auto detach_throughput_limits = defer_verbose_shutdown("throughput limits cluster config", [this] {
+                _throughput_limits.invoke_on_all(&db::throughput_limits::detach).get();
             });
 
             _elc_notif.start().get();
@@ -1012,7 +1028,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(sharded_parameter([&] { return utils::updateable_value<uint32_t>(cfg->stream_io_throughput_mb_per_sec); }), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(sharded_parameter([this] { return _throughput_limits.local().stream_io_throughput_mb_per_sec(); }), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();

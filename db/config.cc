@@ -860,6 +860,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @GroupDescription Be sure to set the properties in the Quick start section as well.
     */
     , compaction_throughput_mb_per_sec(this, "compaction_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Deprecated: set the compaction_throughput_mb_per_sec cluster configuration option instead (ALTER CLUSTER, DATACENTER, RACK or NODE ... WITH compaction_throughput_mb_per_sec = <value>). This value is used only on nodes where the cluster configuration does not set it. Support for this option may be removed in a future release. "
         "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"
         "\n"
         "Related information: Configuring compaction")
@@ -1045,6 +1046,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
     , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Deprecated: set the stream_io_throughput_mb_per_sec cluster configuration option instead (ALTER CLUSTER, DATACENTER, RACK or NODE ... WITH stream_io_throughput_mb_per_sec = <value>). This value is used only on nodes where the cluster configuration does not set it. Support for this option may be removed in a future release. "
         "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
     , stream_plan_ranges_fraction(this, "stream_plan_ranges_fraction", liveness::LiveUpdate, value_status::Used, 0.1,
         "Specify the fraction of ranges to stream in a single stream plan. Value is between 0 and 1.")
@@ -1860,8 +1862,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
     , maintenance_io_throughput_mb_per_sec(this, "maintenance_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Deprecated: set the maintenance_io_throughput_mb_per_sec cluster configuration option instead (ALTER CLUSTER, DATACENTER, RACK or NODE ... WITH maintenance_io_throughput_mb_per_sec = <value>). This value is used only on nodes where the cluster configuration does not set it. Support for this option may be removed in a future release. "
         "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables background IO throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
     , backup_io_throughput_mb_per_sec(this, "backup_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Deprecated: set the backup_io_throughput_mb_per_sec cluster configuration option instead (ALTER CLUSTER, DATACENTER, RACK or NODE ... WITH backup_io_throughput_mb_per_sec = <value>). This value is used only on nodes where the cluster configuration does not set it. Support for this option may be removed in a future release. "
         "Throttles backup I/O to the specified total throughput (in MiBs/s) across the entire system")
     , force_effective_capacity_to_raw_disk_capacity(this, "force_effective_capacity_to_raw_disk_capacity", liveness::LiveUpdate, value_status::Used, false,
         "Forces effective_capacity used in tablets load balancing to be the equal to the raw disk capacity instead of the sum of tablet "

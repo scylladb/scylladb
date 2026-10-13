@@ -140,12 +140,12 @@ SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_fea
     }, cfg);
 }
 
-// No shipping option supports the node-oriented scopes yet, so we inject a test-only option
-// to exercise the ALTER DATACENTER/RACK/NODE paths. Verifies that each node-oriented write is
-// schema-backed (bumps the global schema version), persists its value out-of-band in the
-// matching scylla_datacenters/scylla_racks/scylla_nodes config table, and - because it never
-// raises a per-table schema-change notification - leaves an unrelated table's prepared
-// statement valid.
+// Exercises the ALTER DATACENTER/RACK/NODE paths through an injected test-only option, so the
+// test does not depend on the node-oriented options the registry happens to ship. Verifies
+// that each node-oriented write is schema-backed (bumps the global schema version), persists
+// its value out-of-band in the matching scylla_datacenters/scylla_racks/scylla_nodes config
+// table, and - because it never raises a per-table schema-change notification - leaves an
+// unrelated table's prepared statement valid.
 SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_persist_and_bump_version_without_invalidation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         static constexpr auto node_oriented_scopes = db::cluster_config_registry::scope_set::of<

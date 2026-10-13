@@ -8,6 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <limits>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -23,6 +24,8 @@
 
 #include "db/cluster_config/cluster_config_manager.hh"
 #include "db/cluster_config/cluster_config_registry.hh"
+#include "db/config.hh"
+#include "db/cluster_config/throughput_limits.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
@@ -170,8 +173,9 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_typed_accessor_falls_back_to_regis
 
 namespace {
 
-// No shipped option is node-oriented yet, so the node-oriented tests inject a test-only
-// one (mirroring the ALTER DATACENTER/RACK/NODE tests in cql_query_test). Returns the
+// The node-oriented tests inject a test-only option (mirroring the ALTER DATACENTER/RACK/NODE
+// tests in cql_query_test), so they do not depend on the node-oriented options the registry
+// happens to ship. Returns the
 // deferred cleanup that removes the injected option from every shard.
 auto inject_node_oriented_test_option() {
     static constexpr auto node_oriented_scopes = db::cluster_config_registry::scope_set::of<
@@ -900,6 +904,175 @@ SEASTAR_TEST_CASE(test_callback_unregistered_during_invocation_is_swept_safely) 
         mgr.local().refresh().get();
         BOOST_REQUIRE_GE(a_invocations, 1u);
         BOOST_REQUIRE_EQUAL(b_invocations, 0u);
+    });
+}
+
+namespace {
+
+// The effective throughput limits must agree on every shard: each shard's consumers read
+// their own shard's copy.
+void require_throughput_limit(cql_test_env& e, uint32_t (*get)(const db::throughput_limits&), uint32_t expected) {
+    e.throughput_limits().invoke_on_all([get, expected] (const db::throughput_limits& tl) {
+        BOOST_REQUIRE_EQUAL(get(tl), expected);
+    }).get();
+}
+
+uint32_t compaction_limit(const db::throughput_limits& tl) {
+    return tl.compaction_throughput_mb_per_sec()();
+}
+
+uint32_t stream_limit(const db::throughput_limits& tl) {
+    return tl.stream_io_throughput_mb_per_sec()();
+}
+
+uint32_t maintenance_limit(const db::throughput_limits& tl) {
+    return tl.maintenance_io_throughput_mb_per_sec()();
+}
+
+uint32_t backup_limit(const db::throughput_limits& tl) {
+    return tl.backup_io_throughput_mb_per_sec()();
+}
+
+}
+
+// A throughput limit resolves through the node-oriented chain (node -> rack -> datacenter ->
+// cluster), and falls back to the deprecated db::config option of the same name when no
+// scope stores an override. A change to the db::config value while an override is in force
+// is shadowed, and becomes effective once the override is removed.
+SEASTAR_TEST_CASE(test_throughput_limits_follow_cluster_config_and_fall_back_to_db_config) {
+    cql_test_config cfg;
+    cfg.db_config->compaction_throughput_mb_per_sec.set_value("16", utils::config_file::config_source::SettingsFile);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node_uuid = topo.my_host_id().uuid();
+        auto& mgr = e.cluster_config_manager();
+
+        require_throughput_limit(e, compaction_limit, 16);
+        BOOST_REQUIRE_EQUAL(e.db().local().get_compaction_manager().throughput_mbs(), 16);
+
+        e.execute_cql("ALTER CLUSTER WITH compaction_throughput_mb_per_sec = 32").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 32);
+        // The compaction manager reports the effective value, e.g. to nodetool getcompactionthroughput.
+        BOOST_REQUIRE_EQUAL(e.db().local().get_compaction_manager().throughput_mbs(), 32);
+
+        e.execute_cql(seastar::format("ALTER DATACENTER \"{}\" WITH compaction_throughput_mb_per_sec = 64", dc)).get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 64);
+
+        e.execute_cql(seastar::format("ALTER RACK \"{}\" \"{}\" WITH compaction_throughput_mb_per_sec = 65", dc, rack)).get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 65);
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH compaction_throughput_mb_per_sec = 0", node_uuid)).get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 0);
+
+        // The db::config value is shadowed while an override is in force.
+        e.db_config().compaction_throughput_mb_per_sec.set_value_on_all_shards("20", utils::config_file::config_source::API).get();
+        require_throughput_limit(e, compaction_limit, 0);
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH compaction_throughput_mb_per_sec = null", node_uuid)).get();
+        e.execute_cql(seastar::format("ALTER RACK \"{}\" \"{}\" WITH compaction_throughput_mb_per_sec = null", dc, rack)).get();
+        e.execute_cql(seastar::format("ALTER DATACENTER \"{}\" WITH compaction_throughput_mb_per_sec = null", dc)).get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 32);
+
+        // With no override left, the db::config value applies again.
+        e.execute_cql("ALTER CLUSTER WITH compaction_throughput_mb_per_sec = null").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, compaction_limit, 20);
+        BOOST_REQUIRE_EQUAL(e.db().local().get_compaction_manager().throughput_mbs(), 20);
+    }, cfg);
+}
+
+// The streaming and backup limits follow the same rules.
+SEASTAR_TEST_CASE(test_throughput_limits_stream_and_backup) {
+    cql_test_config cfg;
+    cfg.db_config->backup_io_throughput_mb_per_sec.set_value("7", utils::config_file::config_source::SettingsFile);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& mgr = e.cluster_config_manager();
+
+        require_throughput_limit(e, stream_limit, 0);
+        require_throughput_limit(e, backup_limit, 7);
+
+        e.execute_cql("ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = 100").get();
+        e.execute_cql("ALTER CLUSTER WITH backup_io_throughput_mb_per_sec = 50").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, stream_limit, 100);
+        require_throughput_limit(e, backup_limit, 50);
+
+        e.execute_cql("ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = null").get();
+        e.execute_cql("ALTER CLUSTER WITH backup_io_throughput_mb_per_sec = null").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, stream_limit, 0);
+        require_throughput_limit(e, backup_limit, 7);
+    }, cfg);
+}
+
+// The maintenance supergroup used to follow stream_io_throughput_mb_per_sec unless
+// maintenance_io_throughput_mb_per_sec was set. That holds for the effective values: the
+// maintenance limit follows the effective streaming limit until the maintenance limit is set
+// either in cluster config or in db::config.
+SEASTAR_TEST_CASE(test_throughput_limits_maintenance_falls_back_to_stream) {
+    cql_test_config cfg;
+    cfg.db_config->stream_io_throughput_mb_per_sec.set_value("10", utils::config_file::config_source::SettingsFile);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& mgr = e.cluster_config_manager();
+
+        require_throughput_limit(e, maintenance_limit, 10);
+
+        e.execute_cql("ALTER CLUSTER WITH stream_io_throughput_mb_per_sec = 20").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, maintenance_limit, 20);
+
+        e.execute_cql("ALTER CLUSTER WITH maintenance_io_throughput_mb_per_sec = 30").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, maintenance_limit, 30);
+        require_throughput_limit(e, stream_limit, 20);
+
+        e.execute_cql("ALTER CLUSTER WITH maintenance_io_throughput_mb_per_sec = null").get();
+        mgr.local().refresh().get();
+        require_throughput_limit(e, maintenance_limit, 20);
+
+        // An explicitly set db::config maintenance limit takes precedence over the streaming one.
+        e.db_config().maintenance_io_throughput_mb_per_sec.set_value_on_all_shards("40", utils::config_file::config_source::API).get();
+        require_throughput_limit(e, maintenance_limit, 40);
+    }, cfg);
+}
+
+// The throughput limits are uint32_t in db::config, so cluster config rejects a value that
+// does not fit before storing anything.
+SEASTAR_TEST_CASE(test_throughput_limits_reject_out_of_range_values) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        for (auto name : {"compaction_throughput_mb_per_sec", "stream_io_throughput_mb_per_sec",
+                "maintenance_io_throughput_mb_per_sec", "backup_io_throughput_mb_per_sec"}) {
+            BOOST_REQUIRE_THROW(
+                e.execute_cql(seastar::format("ALTER CLUSTER WITH {} = -1", name)).get(),
+                exceptions::invalid_request_exception);
+            BOOST_REQUIRE_THROW(
+                e.execute_cql(seastar::format("ALTER CLUSTER WITH {} = 4294967296", name)).get(),
+                exceptions::invalid_request_exception);
+            BOOST_REQUIRE_NO_THROW(e.execute_cql(seastar::format("ALTER CLUSTER WITH {} = 4294967295", name)).get());
+        }
+        e.cluster_config_manager().local().refresh().get();
+        require_throughput_limit(e, compaction_limit, std::numeric_limits<uint32_t>::max());
+    });
+}
+
+// A throughput limit is node-oriented, so it cannot be set on a keyspace or a table.
+SEASTAR_TEST_CASE(test_throughput_limits_reject_table_oriented_scopes) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_tl WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_tl.tbl (pk int PRIMARY KEY)").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER KEYSPACE ks_tl WITH compaction_throughput_mb_per_sec = 1").get(),
+            exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER TABLE ks_tl.tbl WITH compaction_throughput_mb_per_sec = 1").get(),
+            exceptions::syntax_exception);
     });
 }
 

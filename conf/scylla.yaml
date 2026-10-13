@@ -1007,4 +1007,11 @@ rf_rack_valid_keyspaces: false
 # Converted to disk bytes: 1875 * 1000 / 1024 = 1831 MB/s (disk wise)
 # 75% of disk bytes is: 0.75 * 1831 = 1373 megabytes/s
 # maintenance_io_throughput_mb_per_sec: 1373
+#
+# Deprecated: maintenance_io_throughput_mb_per_sec, as well as
+# compaction_throughput_mb_per_sec, stream_io_throughput_mb_per_sec and
+# backup_io_throughput_mb_per_sec, are cluster configuration options.
+# Set them with ALTER CLUSTER|DATACENTER|RACK|NODE ... WITH <option> = <value>.
+# The values set here apply only when the cluster configuration does not set them.
+# Support for setting them here may be removed in a future release.
 # 

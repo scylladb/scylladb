@@ -18,6 +18,8 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <seastar/http/exception.hh>
 
+extern logging::logger apilog;
+
 namespace api {
 using namespace seastar::httpd;
 namespace sp = httpd::storage_proxy_json;
@@ -181,12 +183,18 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
 
     ss::set_compaction_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
         auto value = get_query_param<uint32_t>(*req, "value");
+        apilog.warn("Setting the deprecated compaction_throughput_mb_per_sec configuration option to {}. It has no effect while the cluster "
+                "configuration sets compaction_throughput_mb_per_sec. Use ALTER CLUSTER|DATACENTER|RACK|NODE ... WITH compaction_throughput_mb_per_sec = <value> instead",
+                value);
         cfg.compaction_throughput_mb_per_sec(value, utils::config_file::config_source::API);
         return make_ready_future<json::json_return_type>(json::json_void());
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
         auto value = get_query_param<uint32_t>(*req, "value");
+        apilog.warn("Setting the deprecated stream_io_throughput_mb_per_sec configuration option to {}. It has no effect while the cluster "
+                "configuration sets stream_io_throughput_mb_per_sec. Use ALTER CLUSTER|DATACENTER|RACK|NODE ... WITH stream_io_throughput_mb_per_sec = <value> instead",
+                value);
         cfg.stream_io_throughput_mb_per_sec(value, utils::config_file::config_source::API);
         return make_ready_future<json::json_return_type>(json::json_void());
     });
