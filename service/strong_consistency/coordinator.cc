@@ -677,14 +677,14 @@ auto coordinator::mutate(schema_ptr schema,
         // which cells from the second entry are visible while the first entry
         // still wins on the cells they share. Such a history is not
         // linearizable.
-        const raft_command command {
+        write_mutation write {
             .mutation{mutation_gen(ts_with_term->timestamp)}
         };
-        raft::command raft_cmd;
-        ser::serialize(raft_cmd, command);
-
         logger.debug("mutate(): add_entry({}), {}",
-            command.mutation.pretty_printer(schema), state_fmt);
+            write.mutation.pretty_printer(schema), state_fmt);
+
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, raft_command{.change = std::move(write)});
 
         // CAUTION: If a preemption point gets added between `begin_mutate`
         // and `add_entry`, add an explicit check that the term has not

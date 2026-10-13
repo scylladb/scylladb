@@ -40,7 +40,8 @@ We introduce a separate set of Raft system tables for strongly consistent tablet
 - `system.raft_groups_snapshots`
 - `system.raft_groups_snapshot_config`
 
-`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx) — unlike
+`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx, and the resize
+markers of a parent group being replaced by a tablet split or merge) — unlike
 `system.raft`, it does not contain log entries (those are stored in the commitlog).
 `system.raft_groups_snapshots` and `system.raft_groups_snapshot_config` mirror the logical
 contents of `system.raft_snapshots` and `system.raft_snapshot_config` respectively.
@@ -238,3 +239,38 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
+
+# Tablet split
+
+A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
+not just a matter of rewriting the tablet map: the group of the tablet being split has to be
+replaced by the groups of the two tablets it is split into. The table has to stay linearizable
+across the replacement, which comes down to two things the split has to arrange:
+
+- every write acknowledged by the parent is applied to a child before that child serves a
+  linearizable read,
+- no write is accepted by a group which the new tablet map no longer refers to.
+
+This section describes how the split achieves that. Throughout it, and in the code, the group
+being replaced is called the **parent** and the groups replacing it the **children**. The same
+machinery is meant to serve a tablet merge, where a child has several parents, hence the
+neutral name *resize* in the identifiers; merging is not implemented yet and no merge decision
+is emitted for a strongly consistent table.
+
+The markers are ordinary entries in the parent's log, so they are replicated and applied in
+log order like any write. They are *not* carried as mutations, though: each marker is recorded
+as a static column of the group's own row in `system.raft_groups`, whose partition key contains
+the shard hosting the group, and replicas may host the same group on different shards. A single
+mutation could therefore not serve all of them, so `raft_command` is a variant
+(`write_mutation`, `resize_marker`) and every replica builds its own mutation when it applies
+the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
+so every replica and every replay writes the same cell. The kind of resize in progress comes from
+the tablet metadata, not from the markers.
+
+`service::strong_consistency::raft_resize_tracker` holds, per shard, which markers the parent of
+every resize the replica takes part in has applied. It is reloaded from `system.raft_groups`
+before the parent's Raft server is created: after a restart the parent's committed entries are
+applied by commitlog replay rather than by `state_machine::apply()`, so nothing else would record
+the markers. The state is created when the replica learns of the resize, from the tablet
+metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
+server.
