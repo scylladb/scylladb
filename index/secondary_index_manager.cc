@@ -50,6 +50,9 @@ index::supports_expression_v index::supports_expression(const column_definition&
     if (cdef.name_as_text() != _target_column) {
         return supports_expression_v::from_bool(false);
     }
+    if (secondary_index_manager::is_custom_index<pattern_index>(_im)) {
+        return supports_expression_v::from_bool(op == cql3::expr::oper_t::LIKE);
+    }
 
     switch (op) {
         case cql3::expr::oper_t::EQ:
