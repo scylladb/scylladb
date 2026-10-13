@@ -254,6 +254,39 @@ def test_list_permissions_on_resource_with_authorize_hides_unauthorized(cql, tes
             finally:
                 cql.execute(f'DROP TABLE {table}')
 
+# A user who may not view a role must not be able to find out whether it
+# exists: LIST PERMISSIONS ON ROLE for a role which doesn't exist must fail
+# the same way as for an existing role the user may not view. A superuser
+# still gets a "doesn't exist" error. The translated Cassandra test
+# cassandra_authorizer_test.py::testListDoesNotLeakRoleExistenceToUnauthorizedUsers
+# checks the same for LIST ROLES OF and LIST PERMISSIONS OF.
+# Cassandra had the same bug, CASSANDRA-21560, which is already fixed, but
+# the Cassandra releases we test against (5.0.9, 6.0-alpha2) don't have the
+# fix yet and fail this test, so it is marked cassandra_bug. Future Cassandra
+# releases will pass it.
+# Reproduces SCYLLADB-5233.
+def test_list_permissions_on_nonexistent_role(cql, cassandra_bug):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user, new_user(cql) as other:
+        with new_session(cql, user) as session:
+            for role in [nonexistent_role, other]:
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ALL PERMISSIONS ON ROLE {role}')
+        with pytest.raises(InvalidRequest, match='exist'):
+            cql.execute(f'LIST ALL PERMISSIONS ON ROLE {nonexistent_role}')
+
+# A user who may view all roles (has DESCRIBE on all roles), even if it isn't
+# a superuser, gets a "doesn't exist" error when listing the roles or the
+# permissions of a role which doesn't exist.
+def test_list_nonexistent_role_with_describe(cql):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user:
+        grant(cql, 'DESCRIBE', 'ALL ROLES', user)
+        with new_session(cql, user) as session:
+            for stmt in [f'LIST ROLES OF {nonexistent_role}', f'LIST ALL PERMISSIONS OF {nonexistent_role}']:
+                with pytest.raises(InvalidRequest, match='exist'):
+                    session.execute(stmt)
+
 def test_user_displays_as_authenticated(cql):
     with new_session(cql, "cassandra") as user_session_1:
         with new_session(cql, "cassandra") as user_session_2:

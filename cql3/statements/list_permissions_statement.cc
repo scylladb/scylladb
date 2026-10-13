@@ -67,8 +67,11 @@ future<std::optional<std::string>> cql3::statements::list_permissions_statement:
     bool has_role;
     try {
         has_role = co_await auth::has_role(*state.get_auth_service(), *state.user(), *_role_name);
-    } catch (const auth::nonexistant_role& e) {
-        throw exceptions::invalid_request_exception(e.what());
+    } catch (const auth::nonexistant_role&) {
+        // Treat a role which doesn't exist like a role which the user may not
+        // view, so the error doesn't tell the user whether the role exists. A
+        // user who may view it gets the "doesn't exist" error from execute().
+        has_role = false;
     }
     if (has_role || co_await state.check_has_permission({auth::permission::DESCRIBE, auth::make_role_resource(*_role_name)})) {
         co_return std::nullopt;
@@ -79,7 +82,6 @@ future<std::optional<std::string>> cql3::statements::list_permissions_statement:
 future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
     if (_resource) {
         maybe_correct_resource(*_resource, state, qp);
-        co_await state.ensure_exists(*_resource);
     }
 
     if (auto denied = co_await check_role_access(state)) {
@@ -89,6 +91,12 @@ future<> cql3::statements::list_permissions_statement::check_access(query_proces
         if (!_resource || !co_await state.check_has_permission({auth::permission::AUTHORIZE, *_resource})) {
             throw exceptions::unauthorized_exception(*denied);
         }
+    }
+
+    // Check that the resource exists only after checking access, so the error
+    // doesn't tell an unauthorized user whether it exists (e.g., ON ROLE r).
+    if (_resource) {
+        co_await state.ensure_exists(*_resource);
     }
 }
 
