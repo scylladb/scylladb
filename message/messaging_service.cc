@@ -21,7 +21,6 @@
 #include "message/messaging_service.hh"
 #include <seastar/core/sharded.hh>
 #include "gms/gossiper.hh"
-#include "service/storage_service.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/prepare_message.hh"
 #include "sstables_loader.hh"
@@ -31,7 +30,6 @@
 #include "query/query-result.hh"
 #include <seastar/rpc/rpc.hh>
 #include "mutation/canonical_mutation.hh"
-#include "db/config.hh"
 #include "db/view/view_update_backlog.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/interval.hh"
@@ -130,7 +128,6 @@
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
 #include "partition_range_compat.hh"
 #include "mutation/frozen_mutation.hh"
-#include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "idl/repair.dist.impl.hh"
 #include "idl/node_ops.dist.impl.hh"
