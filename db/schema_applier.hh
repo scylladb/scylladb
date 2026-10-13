@@ -236,7 +236,7 @@ private:
 
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
-    void commit_on_shard(replica::database& db);
+    void commit_on_shard(replica::database& db, uint64_t commit_gen);
 };
 
 }
