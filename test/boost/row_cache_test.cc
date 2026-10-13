@@ -4838,6 +4838,70 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
     });
 }
 
+// Like test_compact_range_tombstones_on_read, but the read which compacts
+// rows under an expired range tombstone is a reversed read. The reversed read
+// starts in the middle of the range tombstone, at a position which isn't an
+// entry in the cache, so it must not drop the range tombstone of rows it
+// didn't read: A later read must not see the deleted rows.
+// Reproduces SCYLLADB-5187.
+SEASTAR_THREAD_TEST_CASE(test_compact_range_tombstones_on_reversed_read) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto cache_mt = make_lw_shared<replica::memtable>(s.schema());
+    cache_tracker tracker;
+    row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+    auto pk = s.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    // Rows 0 to 4, and an expired range tombstone covering rows 1 to 3.
+    auto dt_exp = gc_clock::now() - std::chrono::seconds(s.schema()->gc_grace_seconds().count() + 1);
+    mutation m(s.schema(), pk);
+    m.partition().apply_delete(*s.schema(), s.make_range_tombstone(s.make_ckey_range(1, 3), dt_exp));
+    for (uint32_t i = 0; i < 5; i++) {
+        s.add_row(m, s.make_ckey(i), "v");
+    }
+    cache.populate(m);
+
+    // The range tombstone is older than the rows, so populate() kept them.
+    // As in test_compact_range_tombstones_on_read, make the rows older than
+    // the range tombstone directly in the cache, so that it deletes rows 1
+    // to 3, which the cache still holds.
+    auto& cp = cache.lookup(pk).partition().version()->partition();
+    for (uint32_t i = 0; i < 5; i++) {
+        cp.clustered_row(*s.schema(), s.make_ckey(i)).cells().for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
+            cell.as_mutable_atomic_cell(s.schema()->regular_column_at(id)).set_timestamp(api::min_timestamp);
+        });
+    }
+
+    tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
+
+    // A reversed read of the rows <= 2 compacts rows 2 and 1 away.
+    {
+        auto slice = partition_slice_builder(*s.schema())
+                .with_range(query::clustering_range::make_ending_with(s.make_ckey(2)))
+                .build();
+        auto rev_slice = query::reverse_slice(*s.schema(), slice);
+        auto rd = cache.make_reader(s.schema()->make_reversed(), semaphore.make_permit(), pr,
+                rev_slice, nullptr,
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no, gc_state, can_always_purge);
+        auto close_rd = deferred_close(rd);
+        auto mopt = read_mutation_from_mutation_reader(rd).get();
+        BOOST_REQUIRE(mopt);
+        BOOST_REQUIRE_EQUAL(mopt->live_row_count(), 1);
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows_compacted_away, 2);
+    }
+
+    // Row 3, deleted by the same range tombstone, must remain deleted.
+    {
+        auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+        auto close_rd = deferred_close(rd);
+        auto mopt = read_mutation_from_mutation_reader(rd).get();
+        BOOST_REQUIRE(mopt);
+        BOOST_REQUIRE_EQUAL(mopt->live_row_count(), 2);
+    }
+}
+
 // Reproduces #15278
 // Check that the semaphore's OOM kill doesn't send LSA allocating sections
 // into a tailspin, retrying the failing code, with increase reserves, which

@@ -36,16 +36,10 @@ def activeTombstoneInIndex(cql, test_keyspace, cacheKeys):
 
     # On a single-node Scylla, tombstone_gc's default "repair" mode makes
     # tombstones purgeable as soon as the second of their deletion has
-    # passed. This test then often fails because of SCYLLADB-5187: its
-    # descending LIMIT 1 queries leave the row cache without the purgeable
-    # range tombstones, so later reads return deleted data. That bug has its
-    # own reproducer, test_clustering_order.py::
-    # test_reversed_read_purgeable_range_tombstone, so here we disable
-    # tombstone GC to test what the original test intended (Cassandra doesn't
-    # have this option, and only purges tombstones after gc_grace_seconds,
-    # 10 days by default).
-    extra = " AND tombstone_gc = {'mode': 'disabled'}" if is_scylla(cql) else ""
-    with create_table(cql, test_keyspace, "(k int, t int, v1 text, v2 text, v3 text, v4 text, PRIMARY KEY (k, t)) WITH caching = { 'keys' : '" + cacheKeys + "' }" + extra) as table:
+    # passed. So this test, with its descending LIMIT 1 queries, also
+    # reproduces SCYLLADB-5187 (the row cache lost purgeable range tombstones
+    # in reversed reads, so later reads returned deleted data).
+    with create_table(cql, test_keyspace, "(k int, t int, v1 text, v2 text, v3 text, v4 text, PRIMARY KEY (k, t)) WITH caching = { 'keys' : '" + cacheKeys + "' }") as table:
         text = makeRandomString(VALUE_LENGTH)
 
         # Write a large-enough partition to be indexed.
