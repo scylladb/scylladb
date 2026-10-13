@@ -1012,7 +1012,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(sharded_parameter([&] { return utils::updateable_value<uint32_t>(cfg->stream_io_throughput_mb_per_sec); }), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();

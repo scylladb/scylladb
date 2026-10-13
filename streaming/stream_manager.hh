@@ -103,7 +103,7 @@ private:
     utils::updateable_value<uint32_t> _io_throughput_mbs;
 
 public:
-    stream_manager(db::config& cfg, sharded<replica::database>& db,
+    stream_manager(utils::updateable_value<uint32_t> io_throughput_mbs, sharded<replica::database>& db,
             db::view::view_builder& view_builder,
             sharded<db::view::view_building_worker>& view_building_worker,
             sharded<netw::messaging_service>& ms,

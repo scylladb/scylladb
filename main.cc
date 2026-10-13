@@ -420,7 +420,7 @@ requires std::is_same_v<SchedGroupOrSuper, seastar::scheduling_group> || std::is
 class io_throughput_updater {
     std::string_view _name;
     SchedGroupOrSuper _sg;
-    utils::config_file::named_value<uint32_t>& _value;
+    utils::updateable_value<uint32_t> _value;
     serialized_action _updater = serialized_action([this] { return update(_value()); });
     utils::observer<uint32_t> _observer;
 
@@ -438,10 +438,10 @@ class io_throughput_updater {
     }
 
 public:
-    io_throughput_updater(std::string_view name, SchedGroupOrSuper ssg, utils::config_file::named_value<uint32_t>& v)
+    io_throughput_updater(std::string_view name, SchedGroupOrSuper ssg, utils::updateable_value<uint32_t> v)
             : _name(name)
             , _sg(ssg)
-            , _value(v)
+            , _value(std::move(v))
             , _observer(_value.observe(_updater.make_observer()))
     {
         (void)_updater.trigger_later();
@@ -2014,7 +2014,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
+            stream_manager.start(sharded_parameter([&] { return utils::updateable_value<uint32_t>(cfg->stream_io_throughput_mb_per_sec); }), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();

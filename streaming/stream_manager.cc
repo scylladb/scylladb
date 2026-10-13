@@ -25,7 +25,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_manager::stream_manager(db::config& cfg,
+stream_manager::stream_manager(utils::updateable_value<uint32_t> io_throughput_mbs,
             sharded<replica::database>& db,
             db::view::view_builder& view_builder,
             sharded<db::view::view_building_worker>& view_building_worker,
@@ -39,7 +39,7 @@ stream_manager::stream_manager(db::config& cfg,
         , _mm(mm)
         , _gossiper(gossiper)
         , _streaming_group(std::move(sg))
-        , _io_throughput_mbs(cfg.stream_io_throughput_mb_per_sec)
+        , _io_throughput_mbs(std::move(io_throughput_mbs))
 {
     namespace sm = seastar::metrics;
 
