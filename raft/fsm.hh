@@ -423,6 +423,10 @@ private:
         }
     }
 
+    bool is_stepping_down() const {
+        return is_leader() && bool(leader_state().stepdown);
+    }
+
     void become_leader();
 
     void become_candidate(bool is_prevote, bool is_leadership_transfer = false);
@@ -555,6 +559,9 @@ public:
     size_t state_to_metric() const {
         return _state.index();
     }
+    // Everything reported about this server on demand. The applied index and
+    // the entries waiting for their turn to be appended are the caller's to add.
+    server_status get_status() const;
     index_t log_last_idx() const {
         return _log.last_idx();
     }
@@ -612,9 +619,10 @@ public:
 
     // Call this function to wait for the total size in bytes of log entries to
     // go below max_log_size.
-    // Can only be called on a leader.
+    // Can only be called on a leader. Counts a wait that had to block in `stats`.
     // On abort throws `semaphore_aborted`.
-    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size,
+            server_stats& stats);
 
     // Return current configuration.
     const configuration& get_configuration() const;
