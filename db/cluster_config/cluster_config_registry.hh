@@ -57,6 +57,12 @@ enum class version : uint8_t {
 // option::type() is the index of the active alternative.
 using config_value = std::variant<std::string_view, int64_t, double, bool>;
 
+// Inclusive bounds on the value of an integer option.
+struct integer_range {
+    int64_t min;
+    int64_t max;
+};
+
 struct option {
     std::string_view name;
     std::string_view description;
@@ -65,6 +71,9 @@ struct option {
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
+    // When set, validate_value() rejects an integer value outside this range. Only valid for
+    // an integer option, and the default must fall within it.
+    std::optional<integer_range> valid_range = std::nullopt;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());
