@@ -223,6 +223,14 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
+    // Record a range which has a single replica (e.g. a range of an RF=1 table)
+    // as repaired, without running row-level repair. Such ranges have nothing
+    // to be repaired, but the hints and batchlog flush done before the repair
+    // still has to be recorded in the repair history, to allow repair-mode
+    // tombstone gc to purge tombstones written before the flush.
+    // Returns false (doing nothing) if this node is not the only replica of the range.
+    future<bool> repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range, gc_clock::time_point flush_time);
+
     // Repair a single local range, multiple column families.
     // Comparable to RepairSession in Origin
     future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
