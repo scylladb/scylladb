@@ -17,6 +17,7 @@
 #include "mutation/tombstone.hh"
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
+#include "utils/minidump/registry.hh"
 #include <boost/intrusive/set.hpp>
 #include "sstables/key.hh"
 #include "sstables/file_writer.hh"
@@ -227,8 +228,12 @@ private:
     class summary_data_memory {
         unsigned _size;
         std::unique_ptr<bytes::value_type[]> _data;
+        // Sampled partition keys are user data, keep them out of minidumps.
+        minidump::registered_ranges _dump_range{minidump::tags::sstable_summary};
     public:
-        summary_data_memory(unsigned size) : _size(size), _data(std::make_unique<bytes::value_type[]>(size)) {}
+        summary_data_memory(unsigned size) : _size(size), _data(std::make_unique<bytes::value_type[]>(size)) {
+            _dump_range.add(_data.get(), _size);
+        }
         bytes_view store_at(unsigned pos, bytes_view src) {
             auto addr = _data.get() + pos;
             std::copy_n(src.data(), src.size(), addr);
