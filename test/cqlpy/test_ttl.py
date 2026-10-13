@@ -97,6 +97,16 @@ def test_default_time_to_live_limit(cql, test_keyspace):
 def test_paxos_grace_seconds_limit(scylla_only, cql, test_keyspace):
     check_ttl_property_limit(cql, test_keyspace, 'paxos_grace_seconds')
 
+# A null value bound to USING TTL ? means "no TTL" - like a zero TTL, and
+# unlike an unset TTL, it overrides the table's default TTL (table_ttl_100 has
+# a default TTL of 100 seconds).
+# Reproduces #12243 (a null TTL was rejected).
+def test_null_ttl(cql, table_ttl_100):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table_ttl_100} (p, v) VALUES (?, 1) USING TTL ?')
+    cql.execute(stmt, [p, None])
+    assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) == [(None,)]
+
 # An empty (zero-length) value bound to USING TTL ? is rejected with
 # InvalidRequest, like an empty USING TIMESTAMP ? (see
 # test_using_timestamp.py::test_empty_timestamp). Cassandra treats an empty
