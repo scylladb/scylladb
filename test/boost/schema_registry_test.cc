@@ -471,4 +471,30 @@ SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_wait_for_commit_gen) {
+    auto& registry = local_schema_registry();
+    // The registry is per process, so earlier test cases may have committed schema changes.
+    const auto gen = registry.commit_gen();
+    const auto waits_before = registry.commit_gen_waits();
+
+    BOOST_REQUIRE(registry.wait_for_commit_gen(gen, db::no_timeout).available());
+    BOOST_REQUIRE_EQUAL(registry.commit_gen_waits(), waits_before);
+
+    auto waiter = registry.wait_for_commit_gen(gen + 1, db::no_timeout);
+    BOOST_REQUIRE(!waiter.available());
+    BOOST_REQUIRE_EQUAL(registry.commit_gen_waits(), waits_before + 1);
+    registry.advance_commit_gen(gen + 1);
+    waiter.get();
+
+    auto timeout = db::timeout_clock::now() + std::chrono::milliseconds(10);
+    BOOST_REQUIRE_THROW(registry.wait_for_commit_gen(gen + 2, timeout).get(), seastar::timed_out_error);
+    BOOST_REQUIRE_EQUAL(registry.commit_gen(), gen + 1);
+
+    // Leave all shards at the same generation, as a schema change commit would, for the test
+    // cases which follow in this process.
+    smp::invoke_on_others([gen] {
+        local_schema_registry().advance_commit_gen(gen + 1);
+    }).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
