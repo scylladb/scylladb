@@ -898,9 +898,14 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
 }
 
 future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
+    // Deleting is idempotent and every caller wants it that way: AWS answers 204 whether
+    // or not the key was there, S3-compatible servers answer 404 for one that wasn't. A
+    // missing *bucket* answers 404 as well and is tolerated with it -- callers cannot tell
+    // the two apart, and the gcp backend ignores it here too.
+    constexpr expected_status deleted_or_absent = {http::reply::status_type::no_content, http::reply::status_type::not_found};
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
-    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
+    co_await make_request(std::move(req), ignore_reply, deleted_or_absent, as);
 }
 
 future<> client::create_bucket(sstring bucket_name, seastar::abort_source* as) {
