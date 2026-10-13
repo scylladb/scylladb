@@ -25,6 +25,7 @@ enum class can_use {
     no_schema_version_mismatch,
     no_ring_pos_mismatch,
     no_clustering_pos_mismatch,
+    no_position_mismatch,
     no_scheduling_group_mismatch,
     no_fatal_semaphore_mismatch
 };
@@ -41,6 +42,8 @@ static sstring cannot_use_reason(can_use cu)
             return "ring pos mismatch";
         case can_use::no_clustering_pos_mismatch:
             return "clustering pos mismatch";
+        case can_use::no_position_mismatch:
+            return "reader position or ranges mismatch";
         case can_use::no_scheduling_group_mismatch:
             return "scheduling group mismatch";
         case can_use::no_fatal_semaphore_mismatch:
@@ -102,6 +105,92 @@ static bool clustering_position_matches(const schema& s, const query::partition_
         return false;
     }
     return !start->is_inclusive() && eq(start->value(), pos.position.key());
+}
+
+static bool clustering_ranges_equal(const schema& s, const query::clustering_row_ranges& a, const query::clustering_row_ranges& b) {
+    const auto eq = clustering_key_prefix::equality(s);
+    const auto bounds_equal = [&] (const std::optional<query::clustering_range::bound>& x, const std::optional<query::clustering_range::bound>& y) {
+        return bool(x) == bool(y) && (!x || (x->is_inclusive() == y->is_inclusive() && eq(x->value(), y->value())));
+    };
+    return std::ranges::equal(a, b, [&] (const query::clustering_range& x, const query::clustering_range& y) {
+        return bounds_equal(x.start(), y.start()) && bounds_equal(x.end(), y.end());
+    });
+}
+
+static bool specific_ranges_equal(const schema& s, const query::partition_slice& a, const query::partition_slice& b) {
+    const auto& x = a.get_specific_ranges();
+    const auto& y = b.get_specific_ranges();
+    return bool(x) == bool(y) && (!x || (x->pk().equal(s, y->pk()) && clustering_ranges_equal(s, x->ranges(), y->ranges())));
+}
+
+// Whether readers of `a` and of `b` emit the same columns of the same rows,
+// in the partitions which neither slice has specific ranges for.
+static bool slices_match_except_specific_ranges(const schema& s, const query::partition_slice& a, const query::partition_slice& b) {
+    return a.options.mask() == b.options.mask()
+        && a.static_columns == b.static_columns
+        && a.regular_columns == b.regular_columns
+        && a.partition_row_limit() == b.partition_row_limit()
+        && clustering_ranges_equal(s, a.default_row_ranges(), b.default_row_ranges());
+}
+
+// Whether the reader of `q` emits, from where it stopped, the same fragments
+// as a new reader of `range` and `slice`. Then a page which `q` serves is
+// exactly like one which a new querier serves.
+//
+// The reader's slice is the one it was created with, so the page's slice must
+// ask for what the reader's slice still has left. The page's range must start
+// where the reader stopped:
+// - if the reader stopped inside a partition, the page continues it, from
+//   right after the last fragment which the reader emitted. consume_page()
+//   emits the partition's state again, as a new reader does;
+// - if the reader stopped at the end of a partition, the page starts after
+//   it. A page which starts inside the partition instead would receive its
+//   partition start and static row from a new reader, but not from this one.
+static bool reader_matches_page(const schema& s, const querier& q, const dht::partition_range& range, const query::partition_slice& slice) {
+    if (!slices_match_except_specific_ranges(s, q.slice(), slice)) {
+        return false;
+    }
+    const auto cmp = dht::ring_position_comparator(s);
+    const auto pos = q.current_position();
+    if (!pos) {
+        // The reader has not emitted anything yet.
+        const auto& start = range.start();
+        const auto& q_start = q.range().start();
+        return bool(start) == bool(q_start) && (!start || start->equal(*q_start, cmp)) && specific_ranges_equal(s, q.slice(), slice);
+    }
+    // Both readers read the partitions after pos->partition with the default
+    // ranges, so we only need to compare specific ranges for pos->partition.
+    if (const auto& specific = slice.get_specific_ranges(); specific && !specific->pk().equal(s, pos->partition)) {
+        return false;
+    }
+    // We assume that the read is non-reversed.
+    // insert_querier() never saves a reversed querier, so the
+    // partitions come in ring order.
+    const auto& start = range.start();
+    if (!start || cmp(start->value(), dht::decorate_key(s, pos->partition)) != 0) {
+        return false;
+    }
+    if (!q.stopped_inside_partition()) {
+        return !start->is_inclusive();
+    }
+    if (!start->is_inclusive()) {
+        return false;
+    }
+    // A reader which stopped at the static row resumes before all clustering
+    // rows. Trimming at pos->position works for that.
+    const auto resume_pos = pos->position.region() == partition_region::clustered
+            ? position_in_partition::after_key(s, pos->position)
+            : position_in_partition(pos->position);
+    auto rest = q.slice().row_ranges(s, pos->partition);
+    query::trim_clustering_row_ranges_to(s, rest, resume_pos);
+    const auto& page_ranges = slice.row_ranges(s, pos->partition);
+    if (!clustering_ranges_equal(s, rest, page_ranges)) {
+        return false;
+    }
+    // consume_page() reopens the open range tombstone at resume_pos, and a
+    // new reader at the start of the page's first range.
+    return !q.input_tombstone() || (!page_ranges.empty()
+            && position_in_partition::equal_compare(s)(position_in_partition::for_range_start(page_ranges.front()), resume_pos));
 }
 
 static bool ranges_match(const schema& s, const dht::partition_range& original_range, const dht::partition_range& new_range) {
@@ -169,6 +258,18 @@ static can_use can_be_used_for_page(querier_cache::is_user_semaphore_func& is_us
             return can_use::no_scheduling_group_mismatch;
         }
         return can_use::no_fatal_semaphore_mismatch;
+    }
+
+    // `reader_matches_page` is a stricter check than the `pos_opt` heuristics below.
+    // Those heuristics aren't good enough (they were a source of subtle bugs)
+    // and `reader_matches_page` is supposed to be correct.
+    //
+    // FIXME: we only use it for `querier` because that was the scope of the fix.
+    // It's possible that the `pos_opt` heuristics aren't
+    // quite correct for `shard_mutation_querier` either,
+    // but the work needed to test and/or fix that just hasn't been done yet.
+    if constexpr (std::is_same_v<Querier, querier>) {
+        return reader_matches_page(s, q, range, slice) ? can_use::yes : can_use::no_position_mismatch;
     }
 
     const auto pos_opt = q.current_position();

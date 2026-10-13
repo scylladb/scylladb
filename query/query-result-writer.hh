@@ -166,11 +166,23 @@ public:
                 return std::move(pw).skip_key();
             }
         }();
-        if (_request != result_request::only_result) {
+        // The writer takes the snapshot of the digest which retract()
+        // restores. Under xxHash, the snapshot includes the key, so the
+        // digest covers the key of a partition which the result omits. Under
+        // xxHash_without_empty_partitions, the snapshot precedes the key, so
+        // the digest covers only the partitions of the result.
+        const bool digest_key = _request != result_request::only_result;
+        if (digest_key && !query::digest_omits_empty_partitions(_digest.algorithm())) {
+            _digest.feed_hash(key, s);
+            return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                    _partition_count, _last_modified);
+        }
+        auto pw = partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                   _partition_count, _last_modified);
+        if (digest_key) {
             _digest.feed_hash(key, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
-                                _partition_count, _last_modified);
+        return pw;
     }
 
     result build(std::optional<full_position> last_pos = {}) {
@@ -228,8 +240,32 @@ class query_result_builder {
     std::optional<mutation_querier> _mutation_consumer;
     // We need to remember that we requested stop, to mark the read as short in the end.
     stop_iteration _stop;
+    // The partition which the page starts inside, if any.
+    const partition_key* _start_partition;
+    // Whether the page has yet to consume its first partition.
+    bool _before_first_partition = true;
+    // While the page may be in its start partition, before the position
+    // where it starts there, the key of the page's first partition, which
+    // the compactor keeps until the partition ends. The page's start there
+    // is the start of the partition's first clustering range.
+    //
+    // This is used to avoid counting replayed fragments (static row,
+    // open range tombstone) against the limits.
+    // This ensures progress regardless of how low the limits are,
+    // as long as they are positive.
+    const partition_key* _first_partition = nullptr;
+
+    stop_iteration count_tombstone(position_in_partition_view pos);
 public:
-    query_result_builder(const schema& s, query::result::builder& rb) noexcept;
+    // `start_partition` is the partition which the page starts inside, if
+    // any. See start_partition_of(). It must stay alive while the builder
+    // consumes.
+    query_result_builder(const schema& s, query::result::builder& rb, const partition_key* start_partition = nullptr) noexcept;
+
+    // The partition which a page of `range` starts inside, if any: the first
+    // partition of the range, if the range includes it. It belongs to
+    // `range`.
+    static const partition_key* start_partition_of(const dht::partition_range& range);
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);

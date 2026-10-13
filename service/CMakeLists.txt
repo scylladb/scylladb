@@ -30,6 +30,7 @@ target_sources(service
     raft/raft_group_registry.cc
     raft/raft_rpc.cc
     raft/raft_sys_table_storage.cc
+    read_page_resolution.cc
     session.cc
     storage_proxy.cc
     storage_service.cc

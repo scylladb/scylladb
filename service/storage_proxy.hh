@@ -43,6 +43,7 @@
 #include "service/maintenance_mode.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/read_page_resolution.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -103,12 +104,12 @@ struct batchlog_replay_mutation;
 struct read_repair_mutation;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
-using mutations_per_partition_key_map =
-        std::unordered_map<partition_key, std::unordered_map<locator::host_id, std::optional<mutation>>, partition_key::hashing, partition_key::equality>;
 
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
     replicas_per_token_range replicas;
+    // See storage_proxy_coordinator_query_result.
+    suggested_reconciliation_limit_exponents reconciliation_exponents;
 };
 
 struct view_update_backlog_timestamped {
@@ -133,6 +134,13 @@ public:
     replicas_per_token_range preferred_replicas;
     std::optional<db::read_repair_decision> read_repair_decision;
     node_local_only node_local_only;
+    // The exponents of the limits of the reconciliation rounds, see
+    // frontier_reconciliation and
+    // service::pager::paging_state::get_reconciliation_row_limit_exponent().
+    reconciliation_limit_exponents reconciliation_exponents;
+    // The largest row limit of a reconciliation round, usually the page
+    // size. query::max_rows if there is none, as in an unpaged read.
+    uint64_t reconciliation_row_limit_cap;
 
     storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
             service_permit permit_,
@@ -140,14 +148,18 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             replicas_per_token_range preferred_replicas = { },
             std::optional<db::read_repair_decision> read_repair_decision = { },
-            service::node_local_only node_local_only_ = service::node_local_only::no)
+            service::node_local_only node_local_only_ = service::node_local_only::no,
+            reconciliation_limit_exponents reconciliation_exponents = {},
+            uint64_t reconciliation_row_limit_cap = query::max_rows)
         : _timeout(timeout)
         , permit(std::move(permit_))
         , cstate(client_state_)
         , trace_state(std::move(trace_state))
         , preferred_replicas(std::move(preferred_replicas))
         , read_repair_decision(read_repair_decision)
-        , node_local_only(node_local_only_) {
+        , node_local_only(node_local_only_)
+        , reconciliation_exponents(reconciliation_exponents)
+        , reconciliation_row_limit_cap(reconciliation_row_limit_cap) {
     }
 
     storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
@@ -159,6 +171,17 @@ struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
     db::read_repair_decision read_repair_decision;
+    // Whether the page holds only rows which the data before its cursor
+    // decides. A coordinator with the READ_FRONTIERS cluster feature leaves
+    // out a static-only row of the cursor's partition, because a clustering
+    // row after the cursor may cancel it. See
+    // service::pager::paging_state::get_partition_row_pending().
+    bool rows_decided_before_cursor = false;
+    // The exponents of the limits which the reconciliations of the page
+    // suggest for the next page: the largest suggestions of the page's
+    // reads. The next page keeps the exponents of this page where no read
+    // suggested one. See frontier_reconciliation::suggested_limit_exponents().
+    suggested_reconciliation_limit_exponents reconciliation_exponents;
 
     storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
             replicas_per_token_range last_replicas = {},
@@ -466,7 +489,9 @@ private:
             uint32_t remaining_partition_count,
             replicas_per_token_range preferred_replicas,
             service_permit permit,
-            node_local_only node_local_only);
+            node_local_only node_local_only,
+            reconciliation_limit_exponents reconciliation_exponents,
+            uint64_t reconciliation_row_limit_cap);
 
     future<result<coordinator_query_result>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,

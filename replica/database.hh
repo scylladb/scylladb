@@ -542,6 +542,9 @@ private:
     std::vector<const storage_group*> _truncating_storage_groups;
     seastar::condition_variable _tablet_truncate_done;
     future<> wait_for_tablet_truncate(const dht::partition_range& range);
+    // The contexts of the table's pages, see replica/read_page.hh.
+    struct page_context;
+    struct data_page_context;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<const sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted

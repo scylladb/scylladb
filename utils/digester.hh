@@ -24,17 +24,23 @@ struct noop_hasher {
 
 class digester final {
     std::variant<noop_hasher, xx_hasher> _impl;
+    digest_algorithm _algo;
 
 public:
-    explicit digester(digest_algorithm algo) {
+    explicit digester(digest_algorithm algo) : _algo(algo) {
         switch (algo) {
         case digest_algorithm::xxHash:
+        case digest_algorithm::xxHash_without_empty_partitions:
             _impl = xx_hasher();
             break;
         case digest_algorithm ::none:
             _impl = noop_hasher();
             break;
         }
+    }
+
+    digest_algorithm algorithm() const {
+        return _algo;
     }
 
     template<typename T, typename... Args>

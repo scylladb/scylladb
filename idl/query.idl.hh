@@ -42,6 +42,7 @@ class query_result stub [[writable]] {
 enum class digest_algorithm : uint8_t {
     none = 0,  // digest not required
     xxHash = 3, // default algorithm
+    xxHash_without_empty_partitions = 4, // same as xxHash, but without tombstone-only partitions
 };
 
 }
