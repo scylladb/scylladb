@@ -27,6 +27,7 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include "tombstone_gc_options.hh"
 #include <bit>
 #include <iterator>
 #include <ranges>
@@ -1213,6 +1214,11 @@ public:
         return _db.get_config().auto_repair_enabled_default();
     }
 
+    bool uses_repair_mode_tombstone_gc(table_id table) const {
+        auto t = _db.get_tables_metadata().get_table_if_exists(table);
+        return t && t->schema()->tombstone_gc_options().mode() == tombstone_gc_mode::repair;
+    }
+
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
             const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
@@ -1224,7 +1230,12 @@ public:
             co_return false;
         }
         auto size = info.replicas.size();
-        if (size <= 1) {
+        // A tablet with a single replica has nothing to repair. Its repair only
+        // flushes hints and batchlog and records the flush time as the repair
+        // time, which only tables using repair-mode tombstone gc need. Other
+        // tables don't get the repair time updated, so they would be scheduled
+        // for repair again and again.
+        if (size == 0 || (size == 1 && !uses_repair_mode_tombstone_gc(gid.table))) {
             lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
             co_return false;
         }
