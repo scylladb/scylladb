@@ -1329,23 +1329,14 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req), [](const http::reply& rep, input_stream<char>&& in) -> future<> {
+    co_await _client->make_request(std::move(req), [](const http::reply&, input_stream<char>&& in) -> future<> {
+        // CompleteMultipartUpload can fail after the 200 OK status has been sent,
+        // in which case the error comes in the body
         auto payload = std::move(in);
-        auto status_class = http::reply::classify_status(rep._status);
         std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
         if (possible_error) {
             co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
         }
-
-        if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
-            co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
-        }
-
-        if (rep._status != http::reply::status_type::ok) {
-            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
-        }
-        // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
-        // this point it is ok since we are not interested in parsing this particular response
     }, http::reply::status_type::ok, _as);
     _upload_id = ""; // now upload_started() returns false
 }
