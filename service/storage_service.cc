@@ -1394,12 +1394,12 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
     co_return false;
 }
 
-future<std::optional<utils::UUID>> storage_service::ongoing_prepare_migration(const group0_guard& guard, sstring ks) const {
+future<std::optional<utils::UUID>> storage_service::ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const {
     auto ongoing_ks_prepare = [&] (utils::UUID request_id) -> future<bool> {
         auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
         co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
             std::get<global_topology_request>(req_entry.request_type) == global_topology_request::prepare_migration &&
-            req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == ks;
+            (!ks || (req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == *ks));
     };
     if (auto request_id = _topology_state_machine._topology.global_request_id) {
         if (co_await ongoing_ks_prepare(*request_id)) {
@@ -4408,6 +4408,14 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
+        // A mark fails a running preparation, dropping its maps: under a node marked for
+        // tablets which may already have moved those tables, or leaving a mark for vnodes
+        // which nothing can clear.
+        if (co_await ongoing_prepare_migration(guard, std::nullopt)) {
+            throw std::runtime_error(::format("Cannot set intended storage mode to {}: a migration is still being prepared."
+                    " Please wait for it to finish and retry.", mode));
+        }
+
         // Make sure that a migration has been started, i.e.,
         // prepare_for_tablets_migration() has been called for at least one
         // keyspace. prepare_for_tablets_migration() will fail if
@@ -4648,6 +4656,14 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         auto tables = ks.metadata()->tables();
         if (tables.empty()) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
+        }
+
+        // A finalization queued behind a preparation of the keyspace would, as a rollback,
+        // drop its maps right after it reports success. The check below that every table
+        // has a map stops most of that, but not for a view, which it doesn't count.
+        if (co_await ongoing_prepare_migration(guard, ks_name)) {
+            throw std::runtime_error(fmt::format("Cannot finalize the migration of keyspace '{}': it is still being prepared."
+                    " Please wait for the preparation to finish and retry.", ks_name));
         }
 
         for (const auto& schema : tables) {

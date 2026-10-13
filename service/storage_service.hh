@@ -883,8 +883,9 @@ private:
 public:
     bool topology_global_queue_empty() const;
     future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
-    // The prepare_migration request for `ks` which is queued or executing, if any.
-    future<std::optional<utils::UUID>> ongoing_prepare_migration(const group0_guard& guard, sstring ks) const;
+    // The prepare_migration request which is queued or executing, for `ks` or, without it,
+    // for any keyspace, if there is one.
+    future<std::optional<utils::UUID>> ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
     // Does the local part of global_token_metadata_barrier(), without a raft group0 barrier.
