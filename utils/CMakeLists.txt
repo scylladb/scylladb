@@ -35,6 +35,7 @@ target_sources(utils
     like_matcher.cc
     lister.cc
     logalloc.cc
+    minidump/elf_core.cc
     minidump/registry.cc
     managed_bytes.cc
     multiprecision_int.cc
