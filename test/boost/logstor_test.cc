@@ -1962,6 +1962,72 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_torn_chunk) {
     BOOST_REQUIRE(resealed_result.timestamps == expected);
 }
 
+// A segment has one chunk write in flight at a time, so a crash tears only its last chunk. Checks
+// that the scan skips a chunk whose body fails its CRC and continues at the next chunk. A chunk of
+// an earlier generation after the failed chunk ends the scan.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_skips_chunk_with_failed_body) {
+    auto schema = make_kv_schema();
+
+    auto make_chunk = [&] (api::timestamp_type ts, segment_sequence seq) {
+        raw_write_buffer wb(64 * 1024, segment_kind::mixed);
+        wb.append(log_record_writer(make_log_record(schema, sstring(fmt::format("pk{}", ts)), "value", ts)));
+        wb.seal(seq, std::nullopt, ondisk::block_alignment);
+        return copy_chunk(wb.chunk());
+    };
+    auto make_failed_chunk = [&] (api::timestamp_type ts, segment_sequence seq) {
+        auto chunk = make_chunk(ts, seq);
+        // The first byte of the body. The headers stay valid.
+        flip_byte(chunk, ondisk::chunk_header_size);
+        return chunk;
+    };
+
+    struct scan_result {
+        std::vector<segment_sequence> segment_seqs;
+        std::vector<api::timestamp_type> timestamps;
+    };
+    auto scan = [] (std::initializer_list<const temporary_buffer<char>*> chunks) {
+        scan_result result;
+        auto segment = concat_chunks(chunks);
+        const auto segment_size = segment.size();
+        auto in = seastar::util::as_input_stream(std::move(segment));
+        scan_segment(in, log_segment_id{9}, segment_size,
+            [&result] (const segment_info& info) {
+                result.segment_seqs.push_back(info.segment_seq);
+                return make_ready_future<>();
+            },
+            [] (record_location, const record_header&) {
+                return want_data::yes;
+            },
+            [&result] (record_location, log_record rec) {
+                result.timestamps.push_back(rec.header.timestamp);
+                return make_ready_future<>();
+            }).get();
+        in.close().get();
+        return result;
+    };
+
+    const auto seq = segment_sequence{141};
+    const auto chunk0 = make_chunk(api::timestamp_type(1), seq);
+    const auto failed_chunk1 = make_failed_chunk(api::timestamp_type(2), seq);
+    const auto chunk2 = make_chunk(api::timestamp_type(3), seq);
+
+    // A corrupt chunk in the middle of the segment. The records of the chunks around it are kept.
+    auto result = scan({&chunk0, &failed_chunk1, &chunk2});
+    BOOST_REQUIRE(result.segment_seqs == std::vector<segment_sequence>(3, seq));
+    BOOST_REQUIRE(result.timestamps == (std::vector<api::timestamp_type>{api::timestamp_type(1), api::timestamp_type(3)}));
+
+    // A failed last chunk.
+    result = scan({&chunk0, &failed_chunk1});
+    BOOST_REQUIRE(result.segment_seqs == std::vector<segment_sequence>(2, seq));
+    BOOST_REQUIRE(result.timestamps == std::vector<api::timestamp_type>{api::timestamp_type(1)});
+
+    // A failed chunk with a chunk of an earlier generation after it ends the scan there.
+    const auto earlier_chunk2 = make_chunk(api::timestamp_type(3), segment_sequence{140});
+    result = scan({&chunk0, &failed_chunk1, &earlier_chunk2});
+    BOOST_REQUIRE(result.segment_seqs == std::vector<segment_sequence>(2, seq));
+    BOOST_REQUIRE(result.timestamps == std::vector<api::timestamp_type>{api::timestamp_type(1)});
+}
+
 // Checks that the rewriter updates the initial full chunk header sequence number.
 SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial_full_chunk_header) {
     auto schema = make_kv_schema();

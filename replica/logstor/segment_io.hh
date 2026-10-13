@@ -64,11 +64,11 @@ future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char
 // on_record_header asks for. The views that on_record gets point into the chunk body. They are
 // valid until the future of on_record resolves.
 //
-// The scan stops at the first chunk whose headers or body are invalid or cut short, or whose
-// segment_seq is not the one of the first chunk. The body is checked against its body CRC before
-// the scan delivers a record of the chunk, so a chunk whose body fails gives its segment info and
-// no records. The scan also stops after the only chunk of a full segment. A record frame that does
-// not parse ends the scan of its chunk only.
+// The scan stops at the first chunk whose headers are invalid, whose headers or body are cut short,
+// or whose segment_seq is not the one of the first chunk. The body is checked against its body CRC
+// before the scan delivers a record of the chunk. A chunk whose body fails gives its segment info
+// and no records, and the scan continues at the next chunk. The scan also stops after the only
+// chunk of a full segment. A record frame that does not parse ends the scan of its chunk only.
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,

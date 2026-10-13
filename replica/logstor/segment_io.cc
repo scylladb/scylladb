@@ -118,26 +118,17 @@ segment_info make_segment_info(const chunk_headers& headers) {
     return seg_info;
 }
 
-// Reads the body of the chunk whose headers the reader read last - its record frames - and checks
-// it against the header's body CRC. Returns nullopt if the body goes past the end of the segment,
-// the stream ends first, or the CRC does not match.
-//
-// The scan delivers no record of a chunk before this check: a torn chunk can hold records of an
-// earlier use of the segment that parse cleanly. See chunk_header::body_crc.
+// Reads the body of the chunk whose headers the reader read last - its record frames. Returns
+// nullopt if the body goes past the end of the segment or the stream ends first. The caller
+// checks the body against the header's body CRC.
 future<std::optional<temporary_buffer<char>>> read_chunk_body(segment_reader& reader,
         const ondisk::chunk_header& ch,
-        log_segment_id segment_id,
         size_t segment_size) {
     if (ch.records_size > segment_size - reader.position()) {
         co_return std::nullopt;
     }
     auto body = co_await reader.read_exactly(ch.records_size);
     if (body.size() < ch.records_size) {
-        co_return std::nullopt;
-    }
-    if (!ondisk::validate_chunk_body(ch, std::span(body.get(), body.size()))) {
-        // After a crash, this is the torn last chunk of a segment. Anywhere else, it is corruption.
-        logstor_logger.warn("The chunk body in {} at {} does not match its CRC. The scan stops.", segment_id, ch.segment_seq);
         co_return std::nullopt;
     }
     co_return body;
@@ -231,12 +222,17 @@ future<> scan_segment(seastar::input_stream<char>& in,
         log_record_bytes_consumer on_record) {
     segment_reader reader(in);
     std::optional<segment_sequence> segment_seq;
+    // The number of chunks whose body does not match its CRC, and whether the last chunk of the scan
+    // is one of them.
+    size_t failed_chunks = 0;
+    bool last_chunk_failed = false;
 
     logstor_logger.trace("Reading records from {}", segment_id);
 
     while (reader.position() < segment_size) {
-        // An invalid chunk, or a chunk of an earlier generation of the segment, ends the scan.
-        // Chunks are written in sequence, so no chunk of this generation of the segment follows it.
+        // A chunk with invalid headers, or a chunk of an earlier generation of the segment, ends the
+        // scan. Chunks are written in sequence, so no chunk of this generation of the segment
+        // follows it.
         auto headers = co_await read_chunk_headers(reader);
         if (!headers) {
             break;
@@ -255,13 +251,24 @@ future<> scan_segment(seastar::input_stream<char>& in,
         auto seg_info = make_segment_info(*headers);
         co_await on_segment_info(seg_info);
 
-        auto body_buf = co_await read_chunk_body(reader, ch, segment_id, segment_size);
+        auto body_buf = co_await read_chunk_body(reader, ch, segment_size);
         if (!body_buf) {
             break;
         }
 
-        auto records = simple_memory_input_stream(body_buf->get(), body_buf->size());
-        co_await scan_chunk_records(records, reader.position() - records.size(), segment_id, on_record_header, on_record);
+        // Validate the chunk before delivering records - a torn chunk can hold records of an
+        // earlier use of the segment that parse cleanly.
+        if (ondisk::validate_chunk_body(ch, std::span(body_buf->get(), body_buf->size()))) {
+            last_chunk_failed = false;
+            auto records = simple_memory_input_stream(body_buf->get(), body_buf->size());
+            co_await scan_chunk_records(records, reader.position() - records.size(), segment_id, on_record_header, on_record);
+        } else {
+            // The valid header gives the size of the chunk, so the scan continues at the next
+            // chunk. After a torn chunk, what follows is not a valid chunk or is a chunk of an
+            // earlier generation, which ends the scan.
+            last_chunk_failed = true;
+            ++failed_chunks;
+        }
 
         if (seg_info.kind == segment_kind::full) {
             // A full segment has only one chunk.
@@ -270,6 +277,16 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
         // The next chunk starts at the first block boundary after this one.
         co_await reader.skip_to(align_up(reader.position(), ondisk::block_alignment));
+    }
+
+    // A segment has one chunk write in flight at a time, and a write is durable when it completes.
+    // Thus a crash can tear only the last chunk of a segment. A failed chunk before it is corrupt.
+    if (failed_chunks == 1 && last_chunk_failed) {
+        logstor_logger.warn("Skipped the last chunk of {}: its body CRC does not match, probably a torn write from a crash.",
+                segment_id);
+    } else if (failed_chunks > 0) {
+        logstor_logger.warn("Skipped {} chunks of {} whose body CRC does not match, including a chunk before the last. "
+                "The segment is corrupt; their records are lost.", failed_chunks, segment_id);
     }
 }
 
