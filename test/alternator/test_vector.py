@@ -5778,12 +5778,14 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
             }]) as table:
         client = table.meta.client
         h = random_string()
-        # The n=3 and n=4 items are the nearest to the query vector [0, 0, 1],
+        # The n=10 and n=20 items are the nearest to the query vector [0, 0, 1],
         # so a filter keeping only n=1 and n=2 can return them with TopK=2 only
         # if it is applied *before* the ANN search - which is what these
         # operators ask the vector store to do.
+        # The two-digit n=10 and n=20 also check that numbers are compared
+        # numerically, not as strings - as strings, "10" < "2".
         for n, x, vec in [(1, 'a', [1, 0, 0]), (2, 'b', [0.9, 0, 0]),
-                          (3, 'c', [0, 0, 1]), (4, 'd', [0, 0.1, 1])]:
+                          (10, 'c', [0, 0, 1]), (20, 'd', [0, 0.1, 1])]:
             table.put_item(Item={'p': random_string(), 'h': h, 'x': x, 'n': n,
                                  'v': [Decimal(str(e)) for e in vec]})
         query_vector = [Decimal(0), Decimal(0), Decimal(1)]
@@ -5791,7 +5793,7 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
         # Wait for the items to be indexed, using an equality-only filter
         # which works regardless of this option.
         wait_for_search_vectors(client,
-            condition=lambda result: got_n(result) == {3, 4},
+            condition=lambda result: got_n(result) == {10, 20},
             message='Timed out waiting for items to be indexed',
             TableName=table.name, IndexName='vind', SearchVector=query_vector, TopK=2,
             SearchConditionExpression='h = :h',
@@ -5803,8 +5805,8 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
                 # the same, with the constant on the left-hand side:
                 ('h = :h AND :x > x', {':x': 'c'}, {1, 2}),
                 ('h = :h AND n <= :n', {':n': 2}, {1, 2}),
-                ('h = :h AND n >= :n', {':n': 3}, {3, 4}),
-                ('h = :h AND n > :n', {':n': 2}, {3, 4}),
+                ('h = :h AND n >= :n', {':n': 3}, {10, 20}),
+                ('h = :h AND n > :n', {':n': 2}, {10, 20}),
                 ]:
             result = client.search_vectors(TableName=table.name, IndexName='vind',
                 SearchVector=query_vector, TopK=2,
