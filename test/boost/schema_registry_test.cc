@@ -23,7 +23,7 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"

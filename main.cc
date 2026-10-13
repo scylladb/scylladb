@@ -57,7 +57,7 @@
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
-#include "db/cluster_config_manager.hh"
+#include "db/cluster_config/cluster_config_manager.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"

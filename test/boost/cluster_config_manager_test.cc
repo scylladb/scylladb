@@ -21,8 +21,8 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/sharded.hh>
 
-#include "db/cluster_config_manager.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_manager.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"

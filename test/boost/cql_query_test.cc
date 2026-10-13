@@ -63,7 +63,7 @@
 #include "compaction/compaction_manager.hh"
 #include "service/query_state.hh"
 #include "service_permit.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "locator/token_metadata.hh"
 #include "locator/topology.hh"
 #include <seastar/core/smp.hh>

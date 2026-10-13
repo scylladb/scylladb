@@ -19,7 +19,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 

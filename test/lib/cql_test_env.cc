@@ -48,7 +48,7 @@
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
-#include "db/cluster_config_manager.hh"
+#include "db/cluster_config/cluster_config_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"

@@ -28,7 +28,7 @@
 #include "utils/bloom_calculations.hh"
 #include "utils/overloaded_functor.hh"
 #include "db/config.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "cql3/statements/cluster_config_props.hh"
 
 #include <boost/algorithm/string/predicate.hpp>

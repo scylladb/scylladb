@@ -14,7 +14,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "db/schema_tables.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"

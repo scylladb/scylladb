@@ -28,7 +28,7 @@ The easiest way to think about it is:
 - one schema-backed persistence path for all writes
 
 
-Registry metadata lives in `db/cluster_config_registry.{hh,cc}` and is the source of truth for which keys exist, which scopes they support, what types they accept, and which registry epoch they require. Resolution and callback dispatch center on `db::cluster_config_manager`, which loads from schema-backed metadata.
+Registry metadata lives in `db/cluster_config/cluster_config_registry.{hh,cc}` and is the source of truth for which keys exist, which scopes they support, what types they accept, and which registry epoch they require. Resolution and callback dispatch center on `db::cluster_config_manager`, which loads from schema-backed metadata.
 
 Every option, regardless of category, uses the same stored-override model — overrides live in a `configs` map column in the schema tables (see Storage Model) — and the same scope-resolution model. The categories differ only in two things: the CQL syntax used to set and read an option at each scope, and how (or whether) the resolved value is applied to a running node. The schema-version, digest, and prepared-statement consequences of a write are uniform across options (see Schema-Backed Ownership).
 
@@ -568,7 +568,7 @@ A native option is read either through a registered callback or by resolving it 
 
 Use this path when the key is persisted in cluster config and consumed directly by a subsystem (it does not exist in `db/config.cc`).
 
-1. Add the key to `db/cluster_config_registry.cc`.
+1. Add the key to `db/cluster_config/cluster_config_registry.cc`.
 2. Define which scopes it supports.
 3. Set its `min_version` to the registry epoch its batch belongs to, and gate that epoch behind the matching `CLUSTER_CONFIG_REGISTRY_V*` feature (see [Registry Versioning](#registry-versioning)).
 4. Decide whether its consumer reads the value on demand or needs a callback.

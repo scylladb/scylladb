@@ -52,7 +52,7 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
 #include "db/config.hh"
-#include "db/cluster_config_registry.hh"
+#include "db/cluster_config/cluster_config_registry.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"

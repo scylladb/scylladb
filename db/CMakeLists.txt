@@ -1,8 +1,8 @@
 add_library(db STATIC)
 target_sources(db
   PRIVATE
-    cluster_config_manager.cc
-    cluster_config_registry.cc
+    cluster_config/cluster_config_manager.cc
+    cluster_config/cluster_config_registry.cc
     consistency_level.cc
     system_keyspace.cc
     virtual_table.cc
