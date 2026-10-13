@@ -43,6 +43,7 @@
 #include "seastarx.hh"
 
 #include "commitlog.hh"
+#include "utils/minidump/registry.hh"
 #include "rp_set.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -3080,7 +3081,13 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
 }
 
 temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s, size_t alignment) {
-    return temporary_buffer<char>::aligned(alignment, s);
+    auto buf = temporary_buffer<char>::aligned(alignment, s);
+    // Commitlog buffers hold freshly written mutations, which are user data;
+    // keep them out of minidumps for as long as the buffer lives.
+    minidump::registered_ranges dump_range(minidump::tags::commitlog_buffer);
+    dump_range.add(buf.get(), buf.size());
+    auto data = buf.get_write();
+    return temporary_buffer<char>(data, s, make_object_deleter(std::make_pair(std::move(buf), std::move(dump_range))));
 }
 
 db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s, size_t alignment) {
