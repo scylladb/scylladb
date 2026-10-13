@@ -23,6 +23,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
         const locator::tablet_replica& target,
         db::timeout_clock::time_point timeout,
         bool is_write,
+        db::consistency_level cl,
         service::strong_consistency::stats& stats,
         locator::host_id_or_exception_callback on_forwarding_finished)
 {
@@ -30,7 +31,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
     if (target.host != my_host_id) {
         ++(is_write ? stats.write_node_bounces : stats.read_node_bounces);
-        co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, std::move(on_forwarding_finished));
+        co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, cl, std::move(on_forwarding_finished));
     }
     ++(is_write ? stats.write_shard_bounces : stats.read_shard_bounces);
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
