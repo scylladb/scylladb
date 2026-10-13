@@ -298,6 +298,9 @@ private:
     std::optional<shared_promise<>> _state_change_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    // The commit index start() waited to be applied before returning. Only
+    // for the block_raft_io_fiber_commit_past_start injection.
+    index_t _start_commit_idx;
     // Index of the last persisted snapshot descriptor.
     index_t _snapshot_desc_idx;
     std::list<active_read> _reads;
@@ -592,6 +595,17 @@ future<> server_impl::start() {
     auto log_entries = co_await _persistence->load_log();
     auto log = raft::log(snapshot, std::move(log_entries), _config.max_command_size);
     auto commit_idx = co_await _persistence->load_commit_idx();
+    // The sole voter of a non-joint configuration can only be succeeded as
+    // leader by itself: every candidate needs its vote, which it grants only
+    // to a log at least as complete as its own. So nothing in its log can be
+    // lost, and it commits all of it as soon as it becomes leader, which a
+    // sole voter does right away (see fsm::fsm). Treat the whole log as
+    // committed from the start, so that the entries past the persisted
+    // commit index are applied before start() returns, with the rest of the
+    // replay, rather than later by the applier fiber on its own.
+    if (const auto& cfg = log.get_configuration(); !cfg.is_joint() && cfg.current.size() == 1 && cfg.can_vote(_id)) {
+        commit_idx = std::max(commit_idx, log.last_idx());
+    }
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
     logger.trace("[{}] start raft instance: snapshot id={} commit index={} last stable index={}", _tag, snapshot.id, commit_idx, stable_idx);
@@ -641,6 +655,7 @@ future<> server_impl::start() {
     }
 
     _is_alive = true;
+    _start_commit_idx = commit_idx;
 
     // start fiber to persist entries added to in-memory log
     _io_status = io_fiber(stable_idx);
@@ -1649,6 +1664,17 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // the leader or, after a full cluster restart, the new leader recomputes
         // it from a quorum. So the commit notification above does not need to
         // wait for this write.
+        //
+        // Lets a test hold the io fiber before the commit index of entries
+        // that start() did not wait for is persisted. On a running server
+        // that is every commit, with the entries already in the persisted
+        // log: a crash here leaves them past the persisted commit index. On
+        // a restarting sole voter it is the commit of that log tail, which
+        // the server does on its own once it becomes leader.
+        if (ids.last_idx > _start_commit_idx) {
+            co_await utils::get_local_injector().inject("block_raft_io_fiber_commit_past_start",
+                    utils::wait_for_message(std::chrono::minutes(5)));
+        }
         co_await _persistence->store_commit_idx(ids.last_idx);
         _stats.queue_entries_for_apply += ids.size();
         _applier_mailbox.publish_committed(ids.last_idx);
