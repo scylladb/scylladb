@@ -43,6 +43,15 @@ bloom_filter::bloom_filter(int hashes, bitmap&& bs, filter_format format) noexce
     , _format(format)
 {
     _shard_stats.memory_size += memory_size();
+    const auto& storage = _bitset.get_storage();
+    constexpr size_t chunk = bitmap::storage_type::max_chunk_capacity();
+    try {
+        for (size_t i = 0; i < storage.size(); i += chunk) {
+            _dump_ranges.add(&storage[i], std::min(chunk, storage.size() - i) * sizeof(storage[i]));
+        }
+    } catch (...) {
+        // Losing the registration only makes minidumps bigger.
+    }
 }
 
 bloom_filter::~bloom_filter() noexcept {
