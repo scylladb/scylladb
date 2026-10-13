@@ -130,7 +130,6 @@ def test_multi_column_eq_write_all_asc(cql, table_all_asc):
 # drop the rows that the tombstone deleted as well.
 # Reproduces SCYLLADB-5187 (reversed read with LIMIT drops a purgeable range
 # tombstone from the row cache, resurrecting the deleted rows).
-@pytest.mark.xfail(reason="SCYLLADB-5187")
 def test_reversed_read_purgeable_range_tombstone(cql, test_keyspace):
     schema = "p int, c int, PRIMARY KEY (p, c)"
     with new_test_table(cql, test_keyspace, schema, "WITH gc_grace_seconds = 0") as table:
