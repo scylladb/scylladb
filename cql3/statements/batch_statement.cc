@@ -495,6 +495,16 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         }
         statements.emplace_back(std::move(statement));
     }
+    // A schema change during a yield can leave sub-statements of one table
+    // prepared against different versions of it.
+    for (auto& s : statements) {
+        auto& schema = *s.statement->s;
+        auto table = db.try_find_table(schema.id());
+        if (!table || table->schema()->version() != schema.version()) {
+            throw exceptions::invalid_request_exception(format("Table {}.{} changed while the batch was being prepared. Retry the batch.",
+                    schema.ks_name(), schema.cf_name()));
+        }
+    }
     if (has_sc_statements && has_non_sc_statements) {
         throw exceptions::invalid_request_exception("Cannot mix strongly consistent and eventually consistent statements in a batch");
     }
