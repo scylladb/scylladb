@@ -92,6 +92,10 @@ std::string_view query_kind_name(const std::vector<search_source>& sources) {
     std::unreachable();
 }
 
+sstring served_by(const std::vector<search_source>& sources) {
+    return is_hybrid(sources) ? "several external indexes" : seastar::format("a {} index", index_type_name(sources.front().family));
+}
+
 /// The evaluated query value of one search, in the form its index takes: a query vector for ANN, a
 /// search term for BM25.
 using query_value = std::variant<std::vector<float>, sstring>;
@@ -360,6 +364,13 @@ void external_index_select_statement::maybe_add_paging_warning(
 
 future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
+    // Ignoring the paging state would return the full result again as if it were the next page.
+    if (options.get_paging_state()) {
+        auto message = seastar::format("Cannot continue paged query: this query is served by {}, and {} queries are not paged. "
+                "Please retry the query from the beginning.", served_by(_sources), query_kind_name(_sources));
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(std::move(message)));
+    }
+
     auto limit = get_limit(options, _limit);
 
     auto result = co_await measure_index_latency(
