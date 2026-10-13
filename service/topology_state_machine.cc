@@ -474,6 +474,9 @@ auto fmt::formatter<service::raft_topology_cmd::command>::format(service::raft_t
         case wait_for_ip:
             name = "wait_for_ip";
             break;
+        case drain_hints:
+            name = "drain_hints";
+            break;
     }
     return formatter<string_view>::format(name, ctx);
 }

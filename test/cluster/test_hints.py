@@ -449,6 +449,52 @@ async def test_draining_hints(manager: ScyllaClusterManager):
         _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hints_sent_before_decommission(manager: ScyllaClusterManager):
+    """
+    This test verifies that a decommissioning node sends the hints it holds for
+    other nodes before it leaves the cluster, even if the periodic hint sender
+    has not replayed them yet.
+
+    Hints towards s2 are generated on s1 while s2 is down. The periodic hint
+    sender on s1 is paused until the decommission reaches its hint draining
+    step, so that step is the only thing that can make the hints reach s2
+    before the decommission moves on. After s1 is gone, s3 is stopped and
+    the rows are read from s2 alone to check that they did arrive.
+    """
+    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
+
+    # All writes go through s1, so all hints are stored there.
+    cql = await manager.get_cql_exclusive(s1)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
+
+    for i in range(100):
+        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await wait_until_hint_writing_settled(manager, [s1])
+
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+    await manager.server_start(s2.server_id)
+    await manager.servers_see_each_other([s1, s2, s3])
+
+    await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s2.rack, s3.rack]}}}")
+
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
+    async with asyncio.TaskGroup() as tg:
+        _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
+        await s1_log.wait_for("DECOMMISSIONING: draining hints", from_mark=s1_mark, timeout=60)
+        await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    await manager.server_stop_gracefully(s3.server_id)
+    cql = await manager.get_cql_exclusive(s2)
+    rows = await cql.run_async(SimpleStatement("SELECT pk, v FROM ks.t", consistency_level=ConsistencyLevel.ONE))
+    assert sorted((r.pk, r.v) for r in rows) == [(i, i + 1) for i in range(100)]
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     """
     This test verifies that draining hints is canceled as soon as we issue a shutdown,
