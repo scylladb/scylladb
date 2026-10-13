@@ -349,6 +349,24 @@ def test_list_nonexistent_role_with_describe(cql):
                 with pytest.raises(InvalidRequest, match='exist'):
                     session.execute(stmt)
 
+# A user who may not grant or revoke permissions on a role must not be able to
+# find out whether the role exists: GRANT and REVOKE ... ON ROLE of a role
+# which doesn't exist must fail the same way as for an existing role on which
+# the user doesn't have AUTHORIZE permission. A superuser still gets a
+# "doesn't exist" error.
+# Reproduces SCYLLADB-5332.
+def test_grant_on_nonexistent_role(cql):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user, new_user(cql) as other:
+        with new_session(cql, user) as session:
+            for role in [nonexistent_role, other]:
+                with pytest.raises(Unauthorized):
+                    session.execute(f'GRANT ALTER ON ROLE {role} TO {user}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'REVOKE ALTER ON ROLE {role} FROM {user}')
+        with pytest.raises(InvalidRequest, match='exist'):
+            cql.execute(f'GRANT ALTER ON ROLE {nonexistent_role} TO {user}')
+
 def test_user_displays_as_authenticated(cql):
     with new_session(cql, "cassandra") as user_session_1:
         with new_session(cql, "cassandra") as user_session_2:
