@@ -12,6 +12,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/condition-variable.hh>
+#include "db/timeout_clock.hh"
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
@@ -114,6 +116,11 @@ class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
     schema_registry_entry::erase_clock::duration _grace_period{std::chrono::seconds(1)};
+    // Generation of the last schema change committed on this shard, see schema_applier::commit().
+    // All shards have the same generation once a commit has reached them all.
+    uint64_t _commit_gen = 0;
+    condition_variable _commit_gen_advanced;
+    uint64_t _commit_gen_waits = 0;
 
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
@@ -160,6 +167,15 @@ public:
     //
     // Prerequisite: all futures from get_or_load() are resolved.
     void clear();
+
+    uint64_t commit_gen() const noexcept { return _commit_gen; }
+    // Called by the schema applier once a schema change is committed on this shard.
+    void advance_commit_gen(uint64_t gen);
+    // Resolves once this shard has committed the schema change of generation `gen`.
+    // Fails with timed_out_error if that does not happen before `timeout`.
+    future<> wait_for_commit_gen(uint64_t gen, db::timeout_clock::time_point timeout);
+    // How many times wait_for_commit_gen() had to wait.
+    uint64_t commit_gen_waits() const noexcept { return _commit_gen_waits; }
 };
 
 schema_registry& local_schema_registry();

@@ -9,10 +9,12 @@
 #include "db/view/base_info.hh"
 #include "utils/assert.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include "schema_registry.hh"
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
+#include "utils/exceptions.hh"
 #include "db/schema_tables.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
@@ -284,6 +286,36 @@ void schema_registry_entry::mark_synced() {
     _registry.attach_table(*this);
     _sync_state = sync_state::SYNCED;
     slogger.debug("Marked {} as synced", _version);
+}
+
+void schema_registry::advance_commit_gen(uint64_t gen) {
+    if (gen <= _commit_gen) {
+        on_internal_error(slogger, format("advance_commit_gen: generation {} is not newer than the current one, {}", gen, _commit_gen));
+    }
+    _commit_gen = gen;
+    _commit_gen_advanced.broadcast();
+}
+
+future<> schema_registry::wait_for_commit_gen(uint64_t gen, db::timeout_clock::time_point timeout) {
+    if (_commit_gen >= gen) {
+        co_return;
+    }
+    ++_commit_gen_waits;
+    slogger.debug("Waiting for schema commit generation {}, current: {}", gen, _commit_gen);
+    auto reached = [this, gen] { return _commit_gen >= gen; };
+    if (timeout == db::no_timeout) {
+        co_await _commit_gen_advanced.wait(reached);
+        co_return;
+    }
+    auto f = co_await coroutine::as_future(_commit_gen_advanced.wait(timeout, reached));
+    if (f.failed()) {
+        auto ex = f.get_exception();
+        if (try_catch<condition_variable_timed_out>(ex)) {
+            // Let is_timeout_exception() recognize it.
+            co_await coroutine::return_exception(timed_out_error());
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 schema_registry& local_schema_registry() {
