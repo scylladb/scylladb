@@ -1201,6 +1201,20 @@ void drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/drain");
 }
 
+void minidump_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    for (auto name : {"path", "include", "exclude"}) {
+        if (vm.contains(name)) {
+            params[name] = vm[name].as<sstring>();
+        }
+    }
+    if (vm.contains("dry-run")) {
+        params["dry_run"] = "true";
+    }
+    auto res = client.post("/system/minidump", std::move(params));
+    fmt::print("{}\n", rjson::print(res));
+}
+
 void enableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.contains("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
@@ -4455,6 +4469,35 @@ For more information, see: {}
             },
             {
                 drain_operation
+            }
+        },
+        {
+            {
+                "minidump",
+                "Write a minidump of the node, readable by gdb, without cache and memtable contents",
+R"(
+Writes an ELF core file of the running node which gdb (with scylla-gdb.py) can
+open. Most user data is left out: LSA memory (cache and memtable contents),
+registered buffers (bloom filters, sstable summaries, commitlog buffers) and
+free memory. In-flight requests and other live buffers are still dumped and
+can hold user data, and secrets such as TLS and encryption keys are dumped.
+Each shard stops for well under a millisecond while its memory
+is write-protected; the memory is then copied while the node keeps running.
+
+Memory is selected by categories: lsa:<owner>[:<name>] (e.g. lsa:cache,
+lsa:memtable:ks.table), tag:<name>, free, small, large, map:<path>. Selectors
+are globs; --include and --exclude take comma-separated lists and override the
+defaults. Prints a JSON report; fails if the dump failed or was aborted.
+)",
+                {
+                    typed_option<sstring>("path", "Output file (default: <workdir>/minidumps/scylla-<timestamp>.core)"),
+                    typed_option<sstring>("include", "Comma-separated selectors of memory to include, e.g. lsa:memtable:ks.table"),
+                    typed_option<sstring>("exclude", "Comma-separated selectors of memory to leave out"),
+                    typed_option<>("dry-run", "Only report what would be dumped"),
+                },
+            },
+            {
+                minidump_operation
             }
         },
         {
