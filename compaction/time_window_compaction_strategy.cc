@@ -378,6 +378,18 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
     co_return compaction_descriptor(std::move(compaction_candidates));
 }
 
+size_t time_window_compaction_strategy::window_min_threshold(const compaction_group_view& cg,
+        timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const {
+    // Past windows are rarely written to (e.g. by repair and read repair), so they can afford
+    // the write amplification of compacting as few as 2 similar-sized sstables, like STCS and
+    // ICS already do when min_threshold isn't enforced. Only the active window, which absorbs
+    // the write workload, is held to the configured min_threshold.
+    if (is_last_active_bucket(bucket_key, now) || cg.compaction_enforce_min_threshold()) {
+        return min_threshold;
+    }
+    return 2;
+}
+
 time_window_compaction_strategy::bucket_compaction_mode
 time_window_compaction_strategy::compaction_mode(const time_window_compaction_strategy_state& state,
         const bucket_t& bucket, timestamp_type bucket_key,
@@ -485,10 +497,11 @@ time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, s
         if (last_active_bucket) {
             state.recent_active_windows.insert(key);
         }
-        switch (compaction_mode(state, bucket, key, now, min_threshold)) {
+        auto threshold = window_min_threshold(table_s, key, now, min_threshold);
+        switch (compaction_mode(state, bucket, key, now, threshold)) {
         case bucket_compaction_mode::size_tiered: {
             // If we're in the newest bucket, we'll use STCS to prioritize sstables.
-            auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, _stcs_options);
+            auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, threshold, max_threshold, _stcs_options);
 
             // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
             if (!stcs_interesting_bucket.empty()) {
@@ -537,9 +550,10 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
 
     int64_t n = 0;
     for (auto& [bucket_key, bucket] : buckets) {
-        switch (compaction_mode(*state, bucket, bucket_key, max_timestamp, min_threshold)) {
+        auto threshold = window_min_threshold(table_s, bucket_key, max_timestamp, min_threshold);
+        switch (compaction_mode(*state, bucket, bucket_key, max_timestamp, threshold)) {
         case bucket_compaction_mode::size_tiered:
-            n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
+            n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, threshold, max_threshold, _stcs_options);
             break;
         case bucket_compaction_mode::major:
             n++;
