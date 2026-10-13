@@ -1397,12 +1397,12 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
     co_return false;
 }
 
-future<bool> storage_service::ongoing_prepare_migration(const group0_guard& guard, sstring ks) const {
+future<bool> storage_service::ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const {
     auto ongoing_ks_prepare = [&] (utils::UUID request_id) -> future<bool> {
         auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
         co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
             std::get<global_topology_request>(req_entry.request_type) == global_topology_request::prepare_migration &&
-            req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == ks;
+            (!ks || (req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == *ks));
     };
     if (_topology_state_machine._topology.global_request_id.has_value()) {
         if (co_await ongoing_ks_prepare(*_topology_state_machine._topology.global_request_id)) {
@@ -4395,6 +4395,15 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
+        // A node marked for tablets moves every table with a tablet map to tablets when it
+        // restarts, so no keyspace may have maps for only some of its tables, whether its
+        // preparation failed or is still running. A running one would also fail, since it
+        // refuses a cluster with a node marked.
+        if (mode == storage_mode::tablets && co_await ongoing_prepare_migration(guard, std::nullopt)) {
+            throw std::runtime_error(::format("Cannot set intended storage mode to {}: a migration is still being prepared."
+                    " Please wait for it to finish and retry.", mode));
+        }
+
         // Make sure that a migration has been started, i.e.,
         // prepare_for_tablets_migration() has been called for at least one
         // keyspace. prepare_for_tablets_migration() will fail if
@@ -4417,6 +4426,20 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
         }
         if (!has_any_migrating_table) {
             throw std::runtime_error(::format("Cannot set intended storage mode to {}: no migration is in progress. You need to start a migration first.", mode));
+        }
+        if (mode == storage_mode::tablets) {
+            for (const auto& ks : _db.local().get_non_system_keyspaces()) {
+                auto& keyspace = _db.local().find_keyspace(ks);
+                if (keyspace.uses_tablets() || !replica::has_any_tablet_map(tablet_metadata, *keyspace.metadata())) {
+                    continue;
+                }
+                if (!std::ranges::all_of(keyspace.metadata()->tables(), [&] (const schema_ptr& schema) {
+                        return tablet_metadata.has_tablet_map(schema->id());
+                    })) {
+                    throw std::runtime_error(::format("Cannot set intended storage mode to {}: keyspace '{}' is prepared only in part."
+                            " Prepare it again to complete it, or finalize it to roll it back.", mode, ks));
+                }
+            }
         }
 
         auto it = _topology_state_machine._topology.find(raft_server.id());
