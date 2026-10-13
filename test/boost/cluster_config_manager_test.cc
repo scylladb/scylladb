@@ -418,6 +418,37 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_auto_repair_threshold_in_
     });
 }
 
+// connect_node_config() delivers the current value at once, without waiting for a refresh
+// pass, and every later change through the registered callback.
+SEASTAR_TEST_CASE(test_connect_node_config_delivers_current_value_then_changes) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto clear_test_options = inject_node_oriented_test_option(e);
+        const auto node_uuid = e.shared_token_metadata().local().get()->get_topology().my_host_id().uuid();
+
+        e.execute_cql("ALTER CLUSTER WITH test_node_only_option = 3").get();
+        auto& mgr = e.cluster_config_manager();
+        mgr.local().refresh().get();
+
+        std::vector<std::optional<sstring>> values;
+        auto registration = mgr.local().connect_node_config("test_node_only_option",
+                [&] (const db::cluster_config_registry::option& opt, std::optional<sstring> value) {
+            BOOST_REQUIRE_EQUAL(opt.name, "test_node_only_option");
+            values.push_back(std::move(value));
+        });
+        BOOST_REQUIRE_EQUAL(values.size(), 1u);
+        BOOST_REQUIRE_EQUAL(values.back().value_or(""), "3");
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 5", node_uuid)).get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE_EQUAL(values.back().value_or(""), "5");
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = null", node_uuid)).get();
+        e.execute_cql("ALTER CLUSTER WITH test_node_only_option = null").get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(!values.back());
+    });
+}
+
 // ALTER TABLE has no restriction on mixing registry-backed config properties (e.g.
 // auto_repair_enabled) with legacy schema properties (e.g. gc_grace_seconds) in the
 // same statement: the config write and the legacy schema rebuild target disjoint

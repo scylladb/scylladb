@@ -129,6 +129,13 @@ public:
 
     config_callback_registration register_config_callback(sstring config_name, config_callback_function on_change);
 
+    // Calls on_change with the current value of a node-oriented option for the local node,
+    // then registers it to be called with every later change. The value is std::nullopt when
+    // no scope stores an override, as for register_config_callback(). on_change also gets the
+    // option's registry entry, for the cluster_config_registry::to_*() converters.
+    using connect_node_config_function = std::function<void(const cluster_config_registry::option&, std::optional<sstring>)>;
+    config_callback_registration connect_node_config(sstring config_name, connect_node_config_function on_change);
+
 private:
     using config_map = absl::flat_hash_map<sstring, sstring>;
     using rack_key = std::tuple<sstring, sstring>;
