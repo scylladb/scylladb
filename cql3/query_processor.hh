@@ -266,6 +266,11 @@ public:
         return _prepared_cache.find(key);
     }
 
+    // For a prepared statement found stale before a schema change removes it.
+    void remove_prepared(const prepared_cache_key_type& key) {
+        _prepared_cache.remove(key);
+    }
+
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(
@@ -589,6 +594,14 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
+
+    // One attempt of get_statement(). Takes the query only on success.
+    future<std::unique_ptr<statements::prepared_statement>> parse_and_prepare(
+            utils::chunked_string& query,
+            const service::client_state& client_state,
+            dialect d,
+            std::optional<service::pager::query_plan>& pinned_plan,
+            std::optional<std::string_view> forced_keyspace);
 
     /*!
      * \brief created a state object for paging

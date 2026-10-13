@@ -34,6 +34,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "service/migration_manager.hh"
 #include "utils/labels.hh"
 
@@ -812,6 +813,23 @@ prepared_cache_key_type query_processor::compute_id(
 
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+    // A USE on this connection can run while this suspends. Every attempt
+    // resolves tables against the connection's state from the start.
+    const auto state = client_state.snapshot();
+    for (unsigned attempt = 1; ; ++attempt) {
+        auto prepared = co_await coroutine::as_future(parse_and_prepare(query, state, d, pinned_plan, forced_keyspace));
+        if (!prepared.failed()) {
+            co_return prepared.get();
+        }
+        auto ex = prepared.get_exception();
+        if (attempt == statements::batch_prepare_attempts || !try_catch<statements::mixed_schema_versions>(ex)) {
+            co_return coroutine::exception(std::move(ex));
+        }
+    }
+}
+
+future<std::unique_ptr<prepared_statement>>
+query_processor::parse_and_prepare(utils::chunked_string& query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan>& pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // The parsing cost tracker counts only this statement's bytes, so no
     // other task may run inside a measured span.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();

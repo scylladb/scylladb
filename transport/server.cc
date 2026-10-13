@@ -1965,12 +1965,13 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     });
 }
 
+// One attempt of process_batch_internal(). snapshot is the client state that
+// textual statements resolve tables against, taken at the first of them.
 static future<cql_server::process_fn_return_type>
-process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
+process_batch_attempt(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
-        // Never paged, so nothing here re-derives a statement. See above.
-        semaphore&) {
+        std::optional<const service::client_state>& snapshot) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
     if (!type) {
         co_return coroutine::exception(std::move(type).assume_error());
@@ -1984,11 +1985,14 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     std::vector<cql3::statements::batch_statement::single_statement> modifications;
     std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> values;
+    std::vector<std::pair<cql3::prepared_cache_key_type, schema_ptr>> prepared_entries;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
+    cql3::statements::table_versions versions;
 
     modifications.reserve(n.assume_value());
     batch_audit_infos.reserve(n.assume_value());
     values.reserve(n.assume_value());
+    prepared_entries.reserve(n.assume_value());
 
     if (init_trace && trace_state) {
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
@@ -2002,6 +2006,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
         std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
         cql3::statements::prepared_statement::checked_weak_ptr ps;
+        std::optional<cql3::prepared_cache_key_type> prepared_key;
         bool needs_authorization(kind.assume_value() == 0);
 
         switch (kind.assume_value()) {
@@ -2010,7 +2015,12 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!query) {
                 co_return coroutine::exception(std::move(query).assume_error());
             }
-            auto stmt_fut = co_await coroutine::as_future(qp.local().get_statement(std::move(query).assume_value(), client_state, dialect));
+            // A USE on this connection can run while an entry is prepared.
+            // Resolve all entries against the keyspace from before the first.
+            if (!snapshot) {
+                snapshot.emplace(client_state.snapshot());
+            }
+            auto stmt_fut = co_await coroutine::as_future(qp.local().get_statement(std::move(query).assume_value(), *snapshot, dialect));
             if (stmt_fut.failed()) {
                 co_return coroutine::exception(stmt_fut.get_exception());
             }
@@ -2028,6 +2038,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             }
             cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
             auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
+            prepared_key = cache_key;
 
             // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
             // look for the prepared statement and then authorize it.
@@ -2054,6 +2065,24 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (!modif_statement_ptr) {
             co_return coroutine::exception(std::make_exception_ptr(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.")));
+        }
+        if (prepared_key) {
+            prepared_entries.emplace_back(std::move(*prepared_key), modif_statement_ptr->s);
+        }
+        if (!versions.try_add(*modif_statement_ptr->s)) {
+            // A schema change ran between the statements. Its table's prepared
+            // statements leave the cache only a little later, so one here may
+            // be stale: drop it now, and the driver prepares it again.
+            for (auto& [key, prepared_schema] : prepared_entries) {
+                auto table = qp.local().db().try_find_table(prepared_schema->id());
+                if (!table || table->schema()->version() != prepared_schema->version()) {
+                    qp.local().remove_prepared(key);
+                    co_return coroutine::exception(std::make_exception_ptr(
+                            exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(key))));
+                }
+            }
+            // Only textual statements are stale, so prepare them again.
+            co_return coroutine::exception(std::make_exception_ptr(cql3::statements::mixed_schema_versions(*modif_statement_ptr->s)));
         }
         if (init_trace && trace_state) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
@@ -2129,6 +2158,29 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
         co_return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, query_state.get_trace_state(), version, cql_metadata_id_wrapper{})));
+    }
+}
+
+// Statements of a BATCH message are prepared one by one, and a schema change
+// in between can leave two of them on different versions of one table. Read
+// and prepare them again then.
+static future<cql_server::process_fn_return_type>
+process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
+        uint16_t stream, cql_protocol_version_type version,
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
+        // Never paged, so nothing here re-derives a statement. See above.
+        semaphore&) {
+    std::optional<const service::client_state> snapshot;
+    for (unsigned attempt = 1; ; ++attempt) {
+        auto result = co_await coroutine::as_future(process_batch_attempt(client_state, qp, in, stream, version, permit, trace_state,
+                init_trace && attempt == 1, cached_pk_fn_calls, dialect, sg_stats, request_start_timestamp, snapshot));
+        if (!result.failed()) {
+            co_return result.get();
+        }
+        auto ex = result.get_exception();
+        if (attempt == cql3::statements::batch_prepare_attempts || !try_catch<cql3::statements::mixed_schema_versions>(ex)) {
+            co_return coroutine::exception(std::move(ex));
+        }
     }
 }
 

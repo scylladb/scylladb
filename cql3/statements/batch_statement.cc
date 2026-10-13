@@ -220,6 +220,20 @@ void batch_statement::build_cas_result_set_metadata() {
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
+mixed_schema_versions::mixed_schema_versions(const schema& s)
+    : std::runtime_error(format("Table {}.{} changed while the batch was being prepared", s.ks_name(), s.cf_name())) {
+}
+
+bool table_versions::try_add(const schema& s) {
+    return _versions.try_emplace(s.id(), s.version()).first->second == s.version();
+}
+
+void table_versions::add(const schema& s) {
+    if (!try_add(s)) {
+        throw mixed_schema_versions(s);
+    }
+}
+
 namespace raw {
 
 future<std::unique_ptr<prepared_statement>>
@@ -235,6 +249,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
     batch_audit_infos.reserve(_parsed_statements.size());
 
+    table_versions versions;
     auto start = seastar::memory::stats().total_bytes_allocated();
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
@@ -245,6 +260,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
         auto statement = parsed->prepare(db, meta, stats);
+        versions.add(*statement->s);
         if (auto* audit_info = statement->get_audit_info()) {
             audit_info->set_query_string(parsed->get_raw_cql());
             batch_audit_infos.emplace_back(*audit_info);
