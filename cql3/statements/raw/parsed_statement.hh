@@ -17,6 +17,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include <optional>
 #include <vector>
 #include "audit/audit.hh"
 
@@ -45,6 +46,10 @@ public:
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names, dialect d);
 
     virtual future<std::unique_ptr<prepared_statement>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) = 0;
+
+    virtual std::optional<uint64_t> prepare_allocated_bytes() const {
+        return std::nullopt;
+    }
 
 protected:
     virtual audit::statement_category category() const = 0;

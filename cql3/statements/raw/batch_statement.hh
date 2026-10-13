@@ -29,6 +29,7 @@ private:
     type _type;
     std::unique_ptr<attributes::raw> _attrs;
     std::vector<std::unique_ptr<raw::modification_statement>> _parsed_statements;
+    uint64_t _prepare_allocated_bytes = 0;
 public:
     batch_statement(
         type type_,
@@ -47,6 +48,9 @@ public:
     }
 
     virtual future<std::unique_ptr<prepared_statement>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual std::optional<uint64_t> prepare_allocated_bytes() const override {
+        return _prepare_allocated_bytes;
+    }
 protected:
     virtual audit::statement_category category() const override;
     virtual audit::audit_info_ptr audit_info() const override {

@@ -608,12 +608,19 @@ private:
     future<std::unique_ptr<statements::prepared_statement>> await_prepare(
             std::unique_ptr<statements::raw::parsed_statement> statement,
             future<std::unique_ptr<statements::prepared_statement>> prepared,
-            uint64_t bytes_before,
+            uint64_t allocated_before_prepare,
+            uint64_t bytes_before_prepare,
             utils::chunked_string query,
             prepared_for_driver for_driver);
 
     // What get_statement() sets on a statement after prepare(). Takes the query.
     static void finish_prepare(statements::prepared_statement& p, utils::chunked_string& query, prepared_for_driver for_driver);
+    // finish_prepare() after an awaited prepare(), plus the statement's sample
+    // for the parsing cost tracker. Call it right after the await.
+    // allocated_before_prepare: the bytes the statement allocated before prepare().
+    // bytes_before_prepare: the allocator's total of allocated bytes, read right before prepare().
+    void finish_prepare_and_track_cost(statements::raw::parsed_statement& statement, statements::prepared_statement& p, utils::chunked_string& query,
+            prepared_for_driver for_driver, uint64_t allocated_before_prepare, uint64_t bytes_before_prepare);
 
     /*!
      * \brief created a state object for paging

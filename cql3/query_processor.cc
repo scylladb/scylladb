@@ -846,6 +846,16 @@ void query_processor::finish_prepare(prepared_statement& p, utils::chunked_strin
     p.statement->raw_cql_statement = std::move(query);
 }
 
+void query_processor::finish_prepare_and_track_cost(raw::parsed_statement& statement, prepared_statement& p, utils::chunked_string& query,
+        prepared_for_driver for_driver, uint64_t allocated_before_prepare, uint64_t bytes_before_prepare) {
+    auto bytes_before_finish = seastar::memory::stats().total_bytes_allocated();
+    finish_prepare(p, query, for_driver);
+    auto bytes_after_finish = seastar::memory::stats().total_bytes_allocated();
+    auto allocated_in_prepare = statement.prepare_allocated_bytes().value_or(bytes_before_finish - bytes_before_prepare);
+    auto allocated_in_finish = bytes_after_finish - bytes_before_finish;
+    _parsing_cost_tracker.add_sample(allocated_before_prepare + allocated_in_prepare + allocated_in_finish);
+}
+
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // A statement is ready on return, without a coroutine, unless its
@@ -857,6 +867,7 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
         auto statement = parse_statement(query, d);
         set_keyspace_and_plan(*statement, client_state, pinned_plan, forced_keyspace);
         ++_stats.prepare_invocations;
+        auto bytes_before_prepare = seastar::memory::stats().total_bytes_allocated();
         auto prepared = statement->prepare(_db, _cql_stats, _cql_config);
         if (prepared.available() && !prepared.failed()) {
             auto p = prepared.get();
@@ -865,7 +876,8 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
             _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
             return make_ready_future<std::unique_ptr<prepared_statement>>(std::move(p));
         }
-        return await_prepare(std::move(statement), std::move(prepared), bytes_before, std::move(query), for_driver);
+        return await_prepare(std::move(statement), std::move(prepared), bytes_before_prepare - bytes_before, bytes_before_prepare,
+                std::move(query), for_driver);
     } catch (...) {
         return current_exception_as_future<std::unique_ptr<prepared_statement>>();
     }
@@ -873,16 +885,13 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
 
 future<std::unique_ptr<prepared_statement>>
 query_processor::await_prepare(std::unique_ptr<raw::parsed_statement> statement, future<std::unique_ptr<prepared_statement>> prepared,
-        uint64_t bytes_before, utils::chunked_string query, prepared_for_driver for_driver) {
+        uint64_t allocated_before_prepare, uint64_t bytes_before_prepare, utils::chunked_string query, prepared_for_driver for_driver) {
     prepared = co_await coroutine::as_future(std::move(prepared));
     if (prepared.failed()) {
         co_return coroutine::exception(prepared.get_exception());
     }
     auto p = prepared.get();
-    finish_prepare(*p, query, for_driver);
-    // The parsing cost tracker counts only this statement's bytes. Every
-    // prepare() returns a ready future, so no other task ran since bytes_before.
-    _parsing_cost_tracker.add_sample(seastar::memory::stats().total_bytes_allocated() - bytes_before);
+    finish_prepare_and_track_cost(*statement, *p, query, for_driver, allocated_before_prepare, bytes_before_prepare);
     co_return p;
 }
 
