@@ -928,10 +928,10 @@ future<> repair_service::repair_range(shard_repair_state& rstate, const dht::tok
         }
         neighbors.swap(live_neighbors);
     }
+    if ((neighbors.empty() || rstate.small_table_optimization) && co_await repair_single_replica_range(rstate, table.name, table.id, range, neighbors, flush_time)) {
+        co_return;
+    }
     if (neighbors.empty()) {
-        if (co_await repair_single_replica_range(rstate, table.name, table.id, range, flush_time)) {
-            co_return;
-        }
         auto status = "skipped_no_followers";
         rlogger.warn("repair[{}]: Repair {} out of {} ranges,  keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                 rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), table.name, range, neighbors, live_neighbors, status);
