@@ -13,7 +13,9 @@
 
 #include "dht/i_partitioner.hh"
 #include "replica/database.hh"
+#include "mutation/mutation.hh"
 #include "schema/schema_registry.hh"
+#include "service/storage_proxy.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
@@ -247,6 +249,42 @@ SEASTAR_TEST_CASE(test_create_view_update_during_shard_commit) {
 
         assert_that(e.execute_cql(format("SELECT pk FROM ks.tv WHERE v = {}", v)).get())
             .is_rows().with_rows({{int32_type->decompose(pk)}});
+    });
+}
+
+// The mirror image of the above: a base write on shard 1, which has not committed a DROP of a view
+// yet, generates an update for shard 0, which has already dropped the view. The update has no
+// effect, so it must not fail the write or count as a failed view update.
+SEASTAR_TEST_CASE(test_drop_view_update_during_shard_commit) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks.tv AS SELECT * FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk) WITH synchronous_updates = true").get();
+        auto pk = key_on_shard(e, e.local_db().find_schema("ks", "t"), 1);
+        auto v = key_on_shard(e, e.local_db().find_schema("ks", "tv"), 0);
+        auto failed_view_updates = [&e] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return db.cf_stats()->total_view_updates_failed_local;
+            }, uint64_t(0), std::plus<uint64_t>()).get();
+        };
+        auto failed_before = failed_view_updates();
+
+        auto drop = start_paused_schema_change(e, "DROP MATERIALIZED VIEW ks.tv", [] (replica::database& db) {
+            return !db.has_schema("ks", "tv");
+        });
+        // A write coordinated on shard 0 would wait for shard 1 to commit the drop, so write on
+        // shard 1 directly. It completes without releasing the drop.
+        e.get_storage_proxy().invoke_on(1, [pk, v] (service::storage_proxy& sp) -> future<> {
+            auto s = sp.get_db().local().find_schema("ks", "t");
+            mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+            m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(v), api::new_timestamp());
+            co_await sp.mutate_locally(m, nullptr, db::commitlog::force_sync::no);
+        }).get();
+        BOOST_REQUIRE_EQUAL(failed_view_updates(), failed_before);
+
+        drop.get();
     });
 }
 
