@@ -17,7 +17,7 @@ name = "scylla-test"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
-    "scylla-driver==3.29.7",
+    "scylla-driver==3.29.12",
     "treelib==1.8.0",
     "allure-pytest==2.16.0",
     "pytest==8.4.2",
