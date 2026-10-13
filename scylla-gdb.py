@@ -2102,7 +2102,11 @@ class scylla_task_histogram(gdb.Command):
             span_size = span.used_span_size() * page_size
             for idx2 in range(0, int(span_size / objsize)):
                 obj_addr = span.start + idx2 * objsize
-                addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
+                try:
+                    addr = int(gdb.Value(obj_addr).reinterpret_cast(vptr_type).dereference())
+                except gdb.MemoryError:
+                    # A page left out of a minidump.
+                    continue
                 if not addr_in_ranges(text_ranges, addr):
                     continue
                 if args.filter_tasks:
@@ -2163,7 +2167,12 @@ def find_vptrs():
         span_size = pages[idx]['span_size'] * page_size
         for idx2 in range(0, int(span_size / objsize) + 1):
             obj_addr = mem_start + idx * page_size + idx2 * objsize
-            vptr = obj_addr.reinterpret_cast(vptr_type).dereference()
+            try:
+                vptr = obj_addr.reinterpret_cast(vptr_type).dereference()
+                vptr.fetch_lazy()
+            except gdb.MemoryError:
+                # A page left out of a minidump.
+                continue
             if is_vptr(vptr):
                 yield obj_addr, vptr
         idx += pages[idx]['span_size']
@@ -3450,8 +3459,13 @@ class scylla_timers(gdb.Command):
 
 
 def has_reactor():
-    if gdb.parse_and_eval('\'seastar\'::local_engine'):
-        return True
+    try:
+        if gdb.parse_and_eval('\'seastar\'::local_engine'):
+            return True
+    except gdb.error:
+        # Threads without registers (e.g. non-reactor threads in a
+        # minidump) have no reachable thread-local storage.
+        pass
     return False
 
 
@@ -3468,9 +3482,8 @@ def reactors():
     orig = gdb.selected_thread()
     for t in gdb.selected_inferior().threads():
         t.switch()
-        reactor = gdb.parse_and_eval('\'seastar\'::local_engine')
-        if reactor:
-            yield reactor.dereference()
+        if has_reactor():
+            yield gdb.parse_and_eval('\'seastar\'::local_engine').dereference()
     orig.switch()
 
 
@@ -3520,6 +3533,8 @@ class scylla_shard(gdb.Command):
         orig = gdb.selected_thread()
         for t in gdb.selected_inferior().threads():
             t.switch()
+            if not has_reactor():
+                continue
             reactor = gdb.parse_and_eval('\'seastar\'::local_engine')
             if reactor and reactor['_id'] == id:
                 gdb.write('Switched to thread %d\n' % t.num)
@@ -4507,12 +4522,51 @@ class scylla_fiber(gdb.Command):
             return
 
 
+@functools.cache
+def _core_loads(core, progspace, pid):
+    """The core file's load sections with contents, sorted; parsed once per
+    core, as a minidump has tens of thousands of them. The core's name is
+    part of the key, as two dumps of one process share the binary and pid."""
+    loads = []
+    for line in gdb.execute('maint info sections', to_string=True).splitlines():
+        m = re.match(r'\s*\[\d+\]\s+0x([0-9a-f]+)->0x([0-9a-f]+) at 0x[0-9a-f]+: load\d+ .*HAS_CONTENTS', line)
+        if m:
+            loads.append((int(m.group(1), 16), int(m.group(2), 16)))
+    loads.sort()
+    return loads
+
+
+def readable_ranges(start, end):
+    """The parts of [start, end) which the core file has contents for.
+
+    gdb's find halts at the first unreadable byte, and a minidump leaves
+    memory out. For a live process, or a core without such sections, returns
+    the whole range.
+    """
+    inf = gdb.selected_inferior()
+    core = getattr(inf, 'corefile', None)  # absent in older gdb
+    loads = _core_loads(core.filename if core else None, gdb.current_progspace().filename, inf.pid)
+    if not loads:
+        return [(start, end)]
+    out = []
+    for s, e in loads:
+        s, e = max(s, start), min(e, end)
+        if s >= e:
+            continue
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def find_objects(mem_start, mem_size, value, size_selector='g', only_live=True):
-    for line in gdb.execute("find/%s 0x%x, +0x%x, 0x%x" % (size_selector, mem_start, mem_size, value), to_string=True).split('\n'):
-        if line.startswith('0x'):
-            ptr_meta = scylla_ptr.analyze(int(line, base=16))
-            if not only_live or ptr_meta.is_live:
-                yield ptr_meta
+    for start, end in readable_ranges(mem_start, mem_start + mem_size):
+        for line in gdb.execute("find/%s 0x%x, +0x%x, 0x%x" % (size_selector, start, end - start, value), to_string=True).split('\n'):
+            if line.startswith('0x'):
+                ptr_meta = scylla_ptr.analyze(int(line, base=16))
+                if not only_live or ptr_meta.is_live:
+                    yield ptr_meta
 
 
 class scylla_find(gdb.Command):
@@ -4768,9 +4822,13 @@ class scylla_cache(gdb.Command):
             schema = table['_schema']['_p'].reinterpret_cast(schema_ptr_type)
             name = '%s.%s' % (schema['_raw']['_ks_name'], schema['_raw']['_cf_name'])
             gdb.write("%s:\n" % (name))
-            for e in self.__partitions(table):
-                gdb.write('  (cache_entry*) 0x%x {_key=%s, _flags=%s, _pe=%s}\n' % (
-                    int(e.address), e['_key'], e['_flags'], e['_pe']))
+            try:
+                for e in self.__partitions(table):
+                    gdb.write('  (cache_entry*) 0x%x {_key=%s, _flags=%s, _pe=%s}\n' % (
+                        int(e.address), e['_key'], e['_flags'], e['_pe']))
+            except gdb.MemoryError as e:
+                # Cache contents live in LSA memory, which minidumps leave out.
+                gdb.write("  <cache contents not available: %s>\n" % e)
             gdb.write("\n")
 
 
@@ -5364,7 +5422,8 @@ class scylla_small_objects(gdb.Command):
             # Let any StopIteration bubble up, as it signals we are done with
             # all spans.
             span = next(self._span_it)
-            while span.pool() not in self._small_pool_addresses:
+            # A freed span keeps the pool and free list it had; skip it.
+            while not span.is_small() or span.pool() not in self._small_pool_addresses:
                 span = next(self._span_it)
 
             self._free_in_span = set()
