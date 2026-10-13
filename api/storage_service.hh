@@ -64,8 +64,6 @@ struct scrub_info {
     sstring snapshot_tag;
 };
 
-scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req);
-
 // TTL is given as a number with an optional a suffix of:
 // s - seconds (default)
 // m - minutes

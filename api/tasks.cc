@@ -7,16 +7,19 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 #include <fmt/ranges.h>
 
 #include "api/api.hh"
 #include "api/storage_service.hh"
+#include "api/scrub_status.hh"
 #include "api/api-doc/tasks.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "replica/database.hh"
+#include "service/storage_service.hh"
 
 using namespace seastar::httpd;
 
@@ -58,6 +61,90 @@ static future<tasks::task_manager::task_ptr> upgrade_sstables(sharded<replica::d
 
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
     return compaction_module.start_upgrade_sstables_keyspace_compaction(db, std::move(keyspace), std::move(table_infos), exclude_current_version);
+}
+
+static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
+    auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+    auto& ks = db.local().find_keyspace(keyspace);
+    const auto& rs = ks.get_replication_strategy();
+    if (rs.is_local() || !rs.is_vnode_based()) {
+        auto reason = rs.is_local() ? "require" : "support";
+        apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
+        co_return nullptr;
+    }
+    apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
+    const auto my_id = db.local().get_token_metadata().get_my_id();
+    if (!db.local().vnodes_cleanup_allowed() || ks.get_static_effective_replication_map()->has_pending_ranges(my_id)) {
+        auto msg = "Can not perform cleanup operation when topology changes";
+        apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
+        co_await coroutine::return_exception(std::runtime_error(msg));
+    }
+
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
+}
+
+static scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
+    scrub_info info;
+    auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+    info.keyspace = std::move(keyspace);
+    info.column_families = table_infos | std::views::transform(&table_info::name) | std::ranges::to<std::vector>();
+    auto scrub_mode_str = req->get_query_param("scrub_mode");
+    auto scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
+
+    if (scrub_mode_str.empty()) {
+        const auto skip_corrupted = get_query_param<bool>(*req, "skip_corrupted");
+
+        if (skip_corrupted) {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
+        }
+    } else {
+        if (scrub_mode_str == "ABORT") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
+        } else if (scrub_mode_str == "SKIP") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
+        } else if (scrub_mode_str == "SEGREGATE") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::segregate;
+        } else if (scrub_mode_str == "VALIDATE") {
+            scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
+        } else {
+            throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
+        }
+    }
+
+    if (!get_query_param<bool>(*req, "disable_snapshot") && !info.column_families.empty()) {
+        info.snapshot_tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+    }
+
+    info.opts = {
+        .operation_mode = scrub_mode,
+    };
+    const sstring quarantine_mode_str = get_query_param<sstring>(*req, "quarantine_mode", "INCLUDE");
+    if (quarantine_mode_str == "INCLUDE") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::include;
+    } else if (quarantine_mode_str == "EXCLUDE") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::exclude;
+    } else if (quarantine_mode_str == "ONLY") {
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::only;
+    } else {
+        throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
+    }
+
+    if (get_query_param<bool>(*req, "drop_unfixable_sstables")) {
+        if(scrub_mode != compaction::compaction_type_options::scrub::mode::segregate) {
+            throw httpd::bad_param_exception("The 'drop_unfixable_sstables' parameter is only valid when 'scrub_mode' is 'SEGREGATE'");
+        }
+        info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
+    }
+
+    if (req->get_query_param("quarantine_invalid_sstables") != "") {
+        if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
+            throw httpd::bad_param_exception("The 'quarantine_invalid_sstables' parameter is only valid when 'scrub_mode' is 'VALIDATE'");
+        }
+        info.opts.quarantine_sstables = compaction::compaction_type_options::scrub::quarantine_invalid_sstables(get_query_param<bool>(*req, "quarantine_invalid_sstables", true));
+    }
+
+    return info;
 }
 
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
@@ -114,6 +201,48 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
 
+    ss::scrub.set(r, [&ctx, &db, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto info = parse_scrub_options(ctx, std::move(req));
+
+        if (!info.snapshot_tag.empty()) {
+            db::snapshot_options opts = {.skip_flush = false};
+            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, opts);
+        }
+
+        compaction::compaction_stats stats;
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.start_scrub_sstables_keyspace_compaction(db, info.keyspace, info.column_families, info.opts, &stats);
+        try {
+            co_await task->done();
+            if (stats.validation_errors) {
+                co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
+            }
+        } catch (const compaction::compaction_aborted_exception&) {
+            co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
+        } catch (...) {
+            apilog.error("scrub keyspace={} tables={} failed: {:t}", info.keyspace, info.column_families, std::current_exception());
+            throw;
+        }
+
+        co_return json::json_return_type(static_cast<int>(scrub_status::successful));
+    });
+
+    t::force_keyspace_cleanup_async.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        tasks::task_id id = tasks::task_id::create_null_id();
+        auto task = co_await force_keyspace_cleanup(ctx, db, std::move(req));
+        if (task) {
+            id = task->get_status().id;
+        }
+        co_return json::json_return_type(id.to_sstring());
+    });
+    ss::force_keyspace_cleanup.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto task = co_await force_keyspace_cleanup(ctx, db, std::move(req));
+        if (task) {
+            co_await task->done();
+        }
+        co_return json::json_return_type(0);
+    });
+
     ss::force_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto flush = get_query_param<bool>(*req, "flush_memtables", true);
         auto consider_only_existing_data = get_query_param<bool>(*req, "consider_only_existing_data");
@@ -138,6 +267,9 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::upgrade_sstables_async.unset(r);
     ss::upgrade_sstables.unset(r);
     t::scrub_async.unset(r);
+    ss::scrub.unset(r);
+    t::force_keyspace_cleanup_async.unset(r);
+    ss::force_keyspace_cleanup.unset(r);
     ss::force_compaction.unset(r);
 }
 
