@@ -34,6 +34,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "service/migration_manager.hh"
 #include "utils/labels.hh"
 
@@ -817,8 +818,13 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
+// Whether get_statement() prepares a statement again after a failed attempt.
+static bool should_retry_prepare(std::exception_ptr& ex, unsigned attempt) {
+    return attempt < statements::batch_prepare_attempts && try_catch<statements::mixed_schema_versions>(ex);
+}
+
 static void set_keyspace_and_plan(raw::parsed_statement& statement, const service::client_state& client_state,
-        std::optional<service::pager::query_plan>& pinned_plan, std::optional<std::string_view> forced_keyspace) {
+        const std::optional<service::pager::query_plan>& pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Set keyspace for statement that require login
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(&statement);
     if (cf_stmt) {
@@ -830,7 +836,8 @@ static void set_keyspace_and_plan(raw::parsed_statement& statement, const servic
             cf_stmt->prepare_keyspace(client_state);
         }
         if (pinned_plan) {
-            cf_stmt->set_pinned_plan(std::move(pinned_plan));
+            // Copied, since another attempt sets the plan again.
+            cf_stmt->set_pinned_plan(pinned_plan);
         }
     }
 }
@@ -876,8 +883,11 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
             _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
             return make_ready_future<std::unique_ptr<prepared_statement>>(std::move(p));
         }
+        // A USE on this connection can run while the prepare is suspended.
+        // Every attempt resolves tables against the connection's state from
+        // the start, so the state is copied before the first suspension.
         return await_prepare(std::move(statement), std::move(prepared), bytes_before_prepare - bytes_before, bytes_before_prepare,
-                std::move(query), for_driver);
+                std::move(query), client_state.snapshot(), d, for_driver, std::move(pinned_plan), forced_keyspace);
     } catch (...) {
         return current_exception_as_future<std::unique_ptr<prepared_statement>>();
     }
@@ -885,13 +895,52 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
 
 future<std::unique_ptr<prepared_statement>>
 query_processor::await_prepare(std::unique_ptr<raw::parsed_statement> statement, future<std::unique_ptr<prepared_statement>> prepared,
-        uint64_t allocated_before_prepare, uint64_t bytes_before_prepare, utils::chunked_string query, prepared_for_driver for_driver) {
+        uint64_t allocated_before_prepare, uint64_t bytes_before_prepare, utils::chunked_string query, service::client_state state, dialect d,
+        prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     prepared = co_await coroutine::as_future(std::move(prepared));
     if (prepared.failed()) {
-        co_return coroutine::exception(prepared.get_exception());
+        auto ex = prepared.get_exception();
+        // That was attempt 1.
+        if (!should_retry_prepare(ex, 1)) {
+            co_return coroutine::exception(std::move(ex));
+        }
+        co_return co_await get_statement_with_retries(std::move(query), std::move(state), d, for_driver, std::move(pinned_plan), forced_keyspace, 2);
     }
     auto p = prepared.get();
     finish_prepare_and_track_cost(*statement, *p, query, for_driver, allocated_before_prepare, bytes_before_prepare);
+    co_return p;
+}
+
+future<std::unique_ptr<prepared_statement>>
+query_processor::get_statement_with_retries(utils::chunked_string query, service::client_state state, dialect d, prepared_for_driver for_driver,
+        std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace, unsigned attempt) {
+    for (;; ++attempt) {
+        auto prepared = co_await coroutine::as_future(parse_and_prepare(query, state, d, for_driver, pinned_plan, forced_keyspace));
+        if (!prepared.failed()) {
+            co_return prepared.get();
+        }
+        auto ex = prepared.get_exception();
+        if (!should_retry_prepare(ex, attempt)) {
+            co_return coroutine::exception(std::move(ex));
+        }
+    }
+}
+
+future<std::unique_ptr<prepared_statement>>
+query_processor::parse_and_prepare(utils::chunked_string& query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, const std::optional<service::pager::query_plan>& pinned_plan, std::optional<std::string_view> forced_keyspace) {
+    // The parsing cost tracker counts only this statement's bytes, so no
+    // other task may run inside a measured span.
+    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
+    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
+
+    set_keyspace_and_plan(*statement, client_state, pinned_plan, forced_keyspace);
+    ++_stats.prepare_invocations;
+    auto bytes_before_prepare = seastar::memory::stats().total_bytes_allocated();
+    // A prepare() that yields counts its own bytes, see prepare_allocated_bytes().
+    // Any other returns a ready future, and awaiting it without a preemption
+    // check adds no yield point.
+    auto p = co_await coroutine::without_preemption_check(statement->prepare(_db, _cql_stats, _cql_config));
+    finish_prepare_and_track_cost(*statement, *p, query, for_driver, bytes_before_prepare - bytes_before, bytes_before_prepare);
     co_return p;
 }
 

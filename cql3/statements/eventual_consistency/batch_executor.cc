@@ -19,7 +19,6 @@
 #include "db/large_data_handler.hh"
 #include "service/storage_proxy.hh"
 #include "utils/result.hh"
-#include "utils/unique_view.hh"
 
 #include <ranges>
 
@@ -209,14 +208,10 @@ void batch_executor::validate(const batch_statement& batch) const {
         throw exceptions::invalid_request_exception("Counter and non-counter mutations cannot exist in the same batch");
     }
 
+    // Tables are told apart by id, not by name: a table that was dropped and
+    // created again while the batch was prepared is another table.
     if (batch.has_conditions()
-            && !statements.empty()
-            && (std::ranges::distance(statements
-                            | std::views::transform([] (auto&& s) { return s.statement->keyspace(); })
-                            | utils::views::unique) != 1
-                || (std::ranges::distance(statements
-                        | std::views::transform([] (auto&& s) { return s.statement->column_family(); })
-                        | utils::views::unique) != 1))) {
+            && std::ranges::any_of(statements, [&] (auto&& s) { return s.statement->s->id() != statements.front().statement->s->id(); })) {
         throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
     }
     std::optional<bool> raw_counter;

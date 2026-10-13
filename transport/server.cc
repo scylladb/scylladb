@@ -2049,6 +2049,10 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 }
 
 // The entries of a BATCH message, read and prepared one by one.
+//
+// A schema change between two entries can leave their statements on
+// different versions of one table. The entries are then read and prepared
+// again from the first one.
 class batch_message {
 public:
     // The statement that a textual entry has to wait for, if any.
@@ -2063,12 +2067,20 @@ private:
     const bool _trace_entries;
     const cql3::statements::batch_statement::type _type;
     const uint16_t _entry_count;
+    const request_reader _first_entry;
     request_reader _in;
+    unsigned _attempt = 1;
     uint16_t _entries_read = 0;
+    // Entries are read again on the next attempt, but traced only once.
+    uint16_t _entries_traced = 0;
+    // The client state that textual statements resolve tables against, taken
+    // at the first of them.
+    std::optional<service::client_state> _snapshot;
     std::vector<cql3::statements::batch_statement::single_statement> _modifications;
     std::vector<std::reference_wrapper<const audit::audit_info>> _audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> _values;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> _pending_authorization_entries;
+    cql3::statements::table_versions _versions;
 public:
     // in is at the first entry.
     batch_message(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in, cql_protocol_version_type version,
@@ -2082,6 +2094,7 @@ public:
         , _trace_entries(init_trace && _trace_state)
         , _type(type)
         , _entry_count(entry_count)
+        , _first_entry(in)
         , _in(in)
     {
         _modifications.reserve(entry_count);
@@ -2105,7 +2118,9 @@ private:
     utils::result_with_exception_ptr<awaited_statement> add_textual();
     utils::result_with_exception_ptr<void> finish_textual(std::unique_ptr<cql3::statements::prepared_statement> statement);
     utils::result_with_exception_ptr<void> add_prepared();
-    utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps, bool needs_authorization);
+    utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+            const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization);
+    void start_next_attempt();
 };
 
 utils::result_with_exception_ptr<batch_message::awaited_statement>
@@ -2156,7 +2171,12 @@ batch_message::add_textual() {
     if (!query) {
         return bo::failure(std::move(query).assume_error());
     }
-    auto statement = _qp.local().get_statement(std::move(query).assume_value(), _client_state, _dialect,
+    // A USE on this connection can run while an entry is prepared.
+    // Resolve all entries against the keyspace from before the first.
+    if (!_snapshot) {
+        _snapshot.emplace(_client_state.snapshot());
+    }
+    auto statement = _qp.local().get_statement(std::move(query).assume_value(), *_snapshot, _dialect,
             cql3::query_processor::prepared_for_driver::no);
     if (statement.failed()) {
         return bo::failure(statement.get_exception());
@@ -2173,10 +2193,7 @@ batch_message::add_textual() {
 
 utils::result_with_exception_ptr<void>
 batch_message::finish_textual(std::unique_ptr<cql3::statements::prepared_statement> statement) {
-    if (_trace_entries) {
-        tracing::add_query(_trace_state, statement->statement->raw_cql_statement);
-    }
-    return add_statement(statement->checked_weak_from_this(), true);
+    return add_statement(statement->checked_weak_from_this(), nullptr, true);
 }
 
 utils::result_with_exception_ptr<void>
@@ -2197,24 +2214,46 @@ batch_message::add_prepared() {
             return bo::failure(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(cache_key))));
         }
         // authorize a particular prepared statement only once
-        needs_authorization = _pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
+        needs_authorization = _pending_authorization_entries.emplace(cache_key, ps->checked_weak_from_this()).second;
     }
-    if (_trace_entries) {
-        tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
-    }
-    return add_statement(std::move(ps), needs_authorization);
+    return add_statement(std::move(ps), &cache_key, needs_authorization);
 }
 
-// Adds the statement of an entry and reads the entry's values.
+// Adds the statement of an entry and reads the entry's values. prepared_key
+// is the cache key of a prepared entry, and null for a textual one.
 utils::result_with_exception_ptr<void>
-batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps, bool needs_authorization) {
+batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+        const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization) {
     auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
     if (!modif_statement_ptr) {
         return bo::failure(std::make_exception_ptr(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.")));
     }
-    if (_trace_entries) {
+    const schema& s = *modif_statement_ptr->s;
+    if (prepared_key && _attempt > 1) {
+        // A schema change ran during an earlier attempt. Its table's prepared
+        // statements leave the cache only a little later, so this one may be
+        // stale: drop it now, and the driver prepares it again.
+        auto table = _qp.local().db().try_find_table(s.id());
+        if (!table || table->schema()->version() != s.version()) {
+            _qp.local().remove_prepared(*prepared_key);
+            return bo::failure(std::make_exception_ptr(
+                    exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(*prepared_key))));
+        }
+    }
+    if (!_versions.try_add(s)) {
+        // A schema change ran between the statements. Read and prepare them
+        // again, unless this was the last attempt.
+        if (_attempt == cql3::statements::batch_prepare_attempts) {
+            return bo::failure(std::make_exception_ptr(cql3::statements::mixed_schema_versions(s)));
+        }
+        start_next_attempt();
+        return bo::success();
+    }
+    if (_trace_entries && _entries_read == _entries_traced) {
+        tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
         tracing::add_table_name(_trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
         tracing::add_prepared_statement(_trace_state, ps);
+        ++_entries_traced;
     }
     if (auto* inner_ai = ps->statement->get_audit_info()) {
         _audit_infos.emplace_back(*inner_ai);
@@ -2237,6 +2276,18 @@ batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_
     _values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
     ++_entries_read;
     return bo::success();
+}
+
+// Makes read_entries() read the entries again from the first one.
+void batch_message::start_next_attempt() {
+    ++_attempt;
+    _in = _first_entry;
+    _entries_read = 0;
+    _modifications.clear();
+    _audit_infos.clear();
+    _values.clear();
+    _pending_authorization_entries.clear();
+    _versions = {};
 }
 
 future<cql_server::process_fn_return_type>

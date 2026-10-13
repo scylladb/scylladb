@@ -268,6 +268,11 @@ public:
         return _prepared_cache.find(key);
     }
 
+    // For a prepared statement found stale before a schema change removes it.
+    void remove_prepared(const prepared_cache_key_type& key) {
+        _prepared_cache.remove(key);
+    }
+
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(
@@ -603,15 +608,41 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
 
-    // Waits for a prepare() that did not return a statement at once, then
-    // finishes get_statement().
+    // get_statement() for a statement whose prepare suspends. state
+    // is a copy of the client state from before the first suspension. A batch
+    // that a schema change leaves on mixed schema versions is prepared again.
+    future<std::unique_ptr<statements::prepared_statement>> get_statement_with_retries(
+            utils::chunked_string query,
+            service::client_state state,
+            dialect d,
+            prepared_for_driver for_driver,
+            std::optional<service::pager::query_plan> pinned_plan,
+            std::optional<std::string_view> forced_keyspace,
+            unsigned attempt);
+
+    // One attempt of get_statement(). Takes the query only on success.
+    future<std::unique_ptr<statements::prepared_statement>> parse_and_prepare(
+            utils::chunked_string& query,
+            const service::client_state& client_state,
+            dialect d,
+            prepared_for_driver for_driver,
+            const std::optional<service::pager::query_plan>& pinned_plan,
+            std::optional<std::string_view> forced_keyspace);
+
+    // Waits for the prepare() of get_statement()'s first attempt, which did
+    // not return a statement at once. Then finishes the attempt as
+    // parse_and_prepare() does, and retries as above.
     future<std::unique_ptr<statements::prepared_statement>> await_prepare(
             std::unique_ptr<statements::raw::parsed_statement> statement,
             future<std::unique_ptr<statements::prepared_statement>> prepared,
             uint64_t allocated_before_prepare,
             uint64_t bytes_before_prepare,
             utils::chunked_string query,
-            prepared_for_driver for_driver);
+            service::client_state state,
+            dialect d,
+            prepared_for_driver for_driver,
+            std::optional<service::pager::query_plan> pinned_plan,
+            std::optional<std::string_view> forced_keyspace);
 
     // What get_statement() sets on a statement after prepare(). Takes the query.
     static void finish_prepare(statements::prepared_statement& p, utils::chunked_string& query, prepared_for_driver for_driver);
