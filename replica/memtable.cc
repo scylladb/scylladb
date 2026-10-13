@@ -137,6 +137,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
     if (shared_gc_state) {
         _tombstone_gc_snapshot.emplace(shared_gc_state->snapshot());
     }
+    logalloc::region::set_dump_owner("memtable", seastar::format("{}.{}", _schema->ks_name(), _schema->cf_name()));
     logalloc::region::listen(this);
 }
 
