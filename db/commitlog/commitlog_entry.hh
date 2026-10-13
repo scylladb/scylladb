@@ -93,20 +93,26 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
-// A Raft log entry (command, configuration change, or dummy) together with
-// its group ID.  Stored in the database commitlog when the strongly-consistent
-// tables experimental feature is enabled and the segment uses the variant
-// serialization format.
-struct raft_commitlog_entry {
+// One raft batch as stored in the commitlog: the group id, the group's commit
+// index at write time, the term of the entry the batch follows, and the entries
+// the batch appended. One commitlog entry, so one position. An oversized batch is
+// rejected, since the commitlog fragments an oversized entry across segments.
+//
+// prev_term links the batch to the entry below its first index: raft's AppendEntries
+// consistency check, applied to the on-disk log. Replay refuses a log whose chain is
+// broken by a missing batch. The term is stored alone. The index is always
+// entries.front()->idx - 1: a raft log has no holes, and replay refuses a batch that
+// holds no entries.
+struct raft_commitlog_batch {
     raft::group_id group_id;
-    raft::log_entry_ptr entry;
+    raft::index_t commit_idx;
+    raft::term_t prev_term;
+    std::vector<raft::log_entry_ptr> entries;
 };
 
-// The on-disk envelope for variant-format commitlog segments. Each
-// entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
-using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
+// The on-disk envelope for variant-format commitlog segments: each entry holds
+// exactly one alternative, a normal table write or one raft batch.
+using commitlog_entry_variant = std::variant<raft_commitlog_batch, mutation_entry>;
 struct commitlog_entry {
     commitlog_entry_variant item;
 };
@@ -178,11 +184,16 @@ public:
     frozen_mutation&& mutation() && { return std::move(_me).mutation(); }
 };
 
-// Writer for Raft log entries to the database commit log using the commitlog_entry format.
-class commitlog_raft_log_entry_writer {
-public:
+// Writes one raft batch as a commitlog entry. Holds a reference to the caller's
+// entries, which the caller must keep alive across the write. Serializes with the
+// field writers generated for raft_commitlog_batch, so the bytes cannot drift from
+// the struct.
+class commitlog_raft_batch_writer {
 protected:
-    raft_commitlog_entry _item;
+    raft::group_id _group_id;
+    raft::index_t _commit_idx;
+    raft::term_t _prev_term;
+    const std::vector<raft::log_entry_ptr>& _entries;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -190,8 +201,10 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
-        : _item(std::move(item)) { compute_size(); }
+    commitlog_raft_batch_writer(raft::group_id group_id, raft::index_t commit_idx,
+            raft::term_t prev_term, const std::vector<raft::log_entry_ptr>& entries)
+        : _group_id(group_id), _commit_idx(commit_idx), _prev_term(prev_term)
+        , _entries(entries) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -200,9 +213,20 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
-        return _item;
-    }
+
+    raft::group_id group_id() const { return _group_id; }
+    raft::index_t commit_idx() const { return _commit_idx; }
+    raft::term_t prev_term() const { return _prev_term; }
+    const std::vector<raft::log_entry_ptr>& entries() const { return _entries; }
+};
+
+// Thrown when the variant tag says raft batch but its payload will not decode.
+// The tag is read before the payload, so the entry is known to be a raft batch.
+// Replay must fail instead of counting the entry as one bad mutation and going
+// on: the batch's entries are gone with the old segments once startup finishes.
+class raft_batch_decode_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
 };
 
 class commitlog_entry_reader {
