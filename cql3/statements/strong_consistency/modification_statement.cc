@@ -68,6 +68,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
     auto mutate_result = co_await coordinator.get().mutate(_statement->s,
         token,
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             return get_mutation(options, ts, json_cache, keys);
         }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));

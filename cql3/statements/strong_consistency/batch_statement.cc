@@ -93,6 +93,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
 
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             std::optional<mutation> merged;
             for (size_t i = 0; i < _statements.size(); ++i) {
