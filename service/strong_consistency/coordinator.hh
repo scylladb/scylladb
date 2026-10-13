@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
@@ -103,6 +104,7 @@ public:
     using mutation_gen = noncopyable_function<mutation(api::timestamp_type)>;
     future<value_or_redirect<mutate_result>> mutate(schema_ptr schema,
         const dht::token& token,
+        db::consistency_level cl,
         mutation_gen&& mutation_gen,
         timeout_clock::time_point timeout,
         abort_source& as,
@@ -117,6 +119,7 @@ public:
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         read_type rtype,
+        db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,

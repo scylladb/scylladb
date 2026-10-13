@@ -94,6 +94,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             std::optional<mutation> merged;
             for (size_t i = 0; i < statements.size(); ++i) {

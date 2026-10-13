@@ -55,6 +55,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
 
     auto mutate_result = co_await coordinator.get().mutate(stmt.s,
         token,
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             return get_mutation(stmt, options, ts, spec);
         }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));

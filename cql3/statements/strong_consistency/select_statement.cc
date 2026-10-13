@@ -59,7 +59,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
     const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     auto result_or_redirect = co_await coordinator.get().query(_query_schema, *read_command,
-        key_ranges, read_type, state.get_trace_state(), timeout, state.get_client_state().get_abort_source(),
+        key_ranges, read_type, options.get_consistency(), state.get_trace_state(), timeout, state.get_client_state().get_abort_source(),
         tablet_version_block_for(state, options));
 
     using namespace service::strong_consistency;
