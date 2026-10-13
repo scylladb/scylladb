@@ -257,6 +257,68 @@ SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records) {
     }, cfg);
 }
 
+// TRUNCATE must keep saving truncation records, for the table and for its views,
+// while DROP MATERIALIZED VIEW and DROP TABLE must only delete the records of the
+// dropped table, without saving new ones, and without flushing system.truncated.
+//
+// Based on a test by Andrei Chekun in https://github.com/scylladb/scylladb/pull/32114
+SEASTAR_TEST_CASE(test_drop_does_not_save_truncation_records) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto truncated_stats = [&e] (auto get) {
+            return e.db().map_reduce0([get] (replica::database& db) {
+                return get(db.find_column_family(db::system_keyspace::NAME, db::system_keyspace::TRUNCATED).get_stats());
+            }, int64_t(0), std::plus<int64_t>()).get();
+        };
+        // Writes to system.truncated, summed over all shards.
+        auto truncated_writes = [&] {
+            return truncated_stats([] (const replica::table_stats& stats) { return int64_t(stats.writes.hist.count); });
+        };
+        // Flushes that switch out a non-empty memtable of system.truncated, summed over all shards.
+        auto truncated_flushes = [&] {
+            return truncated_stats([] (const replica::table_stats& stats) { return int64_t(stats.memtable_switch_count); });
+        };
+        auto truncation_records = [&e] (table_id uuid) {
+            auto res = e.execute_cql(fmt::format("SELECT * FROM system.truncated WHERE table_uuid = {}", uuid)).get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+
+        e.execute_cql("CREATE KEYSPACE ks_drop WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_drop.test (pk int PRIMARY KEY, c int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks_drop.mv AS SELECT * FROM ks_drop.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)").get();
+        const table_id table_uuid = e.local_db().find_uuid("ks_drop", "test");
+        const table_id view_uuid = e.local_db().find_uuid("ks_drop", "mv");
+
+        // TRUNCATE saves one record per shard for the table and for its view.
+        // The records are keyed by the shard of their replay position, and, unlike
+        // for the base table, the empty replay position of a view without data is
+        // saved as is, with shard 0, on all shards. So only check that the view has records.
+        auto writes_before = truncated_writes();
+        replica::database::truncate_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks_drop", "test", db_clock::now(), false /* with_snapshot */).get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - writes_before, 2 * this_smp_shard_count());
+        BOOST_REQUIRE_EQUAL(truncation_records(table_uuid), this_smp_shard_count());
+        BOOST_REQUIRE_GT(truncation_records(view_uuid), 0);
+
+        // DROP only deletes the records saved by the TRUNCATE above, which is a single write.
+        writes_before = truncated_writes();
+        auto flushes_before = truncated_flushes();
+        e.execute_cql("DROP MATERIALIZED VIEW ks_drop.mv").get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - writes_before, 1);
+        BOOST_REQUIRE_EQUAL(truncated_flushes() - flushes_before, 0);
+        BOOST_REQUIRE_EQUAL(truncation_records(view_uuid), 0);
+
+        writes_before = truncated_writes();
+        flushes_before = truncated_flushes();
+        e.execute_cql("DROP TABLE ks_drop.test").get();
+        BOOST_REQUIRE_EQUAL(truncated_writes() - writes_before, 1);
+        BOOST_REQUIRE_EQUAL(truncated_flushes() - flushes_before, 0);
+        BOOST_REQUIRE_EQUAL(truncation_records(table_uuid), 0);
+    }, cfg);
+}
+
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env_thread([](cql_test_env& e) {
             // FIXME: restore indent.
