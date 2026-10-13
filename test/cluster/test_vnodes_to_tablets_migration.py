@@ -1355,6 +1355,55 @@ async def test_migration_partially_prepared_keyspace_can_be_rolled_back(manager:
         await assert_all_tables_have_tablet_map(manager, server, ks, tables)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_node_not_marked_for_tablets_while_prepared_in_part(manager: ScyllaClusterManager):
+    """Verify that a node can't be marked for tablets while a keyspace is prepared only in part.
+
+    A node marked for tablets moves every table with a tablet map to tablets when it
+    restarts, so marking it while only some tables of a keyspace have a map would split
+    the keyspace between the two. Both a failed and a running preparation leave that
+    state, and the mark has to be refused in both until the preparation completes.
+    """
+    num_tables = 4
+    server, cql = await setup_single_node(manager)
+
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_one_table_per_command',
+                                       one_shot=False)
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_fail_on_resume',
+                                       one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Preparing the migration, failing after the first command")
+        with pytest.raises(HTTPError, match="injected prepare_migration failure"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        with pytest.raises(HTTPError, match="prepared only in part"):
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Preparing the migration again, pausing after its next command")
+        await manager.api.enable_injection(server.ip_addr, 'prepare_migration_after_part',
+                                           one_shot=True)
+        prepare = asyncio.create_task(
+                manager.api.create_vnode_tablet_migration(server.ip_addr, ks))
+        try:
+            await manager.api.wait_for_injection_enter(server.ip_addr, 'prepare_migration_after_part')
+            with pytest.raises(HTTPError, match="still being prepared"):
+                await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.api.message_injection(server.ip_addr, 'prepare_migration_after_part')
+            await prepare
+        finally:
+            if not prepare.done():
+                prepare.cancel()
+            await asyncio.gather(prepare, return_exceptions=True)
+
+        await assert_all_tables_have_tablet_map(manager, server, ks, tables)
+        logger.info("Marking the node for tablets now that the keyspace is prepared")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+
 @pytest.mark.asyncio
 async def test_migration_multiple_tables(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
