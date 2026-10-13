@@ -34,13 +34,17 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe a node (such as ``compaction_throughput_mb_per_sec``) can be set at ``NODE``, ``RACK``,
+``DATACENTER`` and ``CLUSTER`` scope.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
-if it has one, otherwise the keyspace's, otherwise the cluster's. If no scope stores a value, the
-option's built-in default applies.
+if it has one, otherwise the keyspace's, otherwise the cluster's. Likewise, the effective value of
+an option for a node is the node's own value if it has one, otherwise its rack's, otherwise its
+datacenter's, otherwise the cluster's. If no scope stores a value, the option's built-in default
+applies; for an option migrated from ``scylla.yaml``, the node's ``scylla.yaml`` setting applies
+instead (see :ref:`Options migrated from scylla.yaml <cql-cluster-config-migrated-options>`).
 
 Setting an option
 -----------------
@@ -76,7 +80,7 @@ For the cluster as a whole, use ``ALTER CLUSTER``:
 
    ALTER CLUSTER WITH auto_repair_enabled = true;
 
-The statements for the node-oriented scopes exist for options that will support them:
+For a datacenter, a rack, or a single node, use the node-oriented statements:
 
 .. code-block:: cql
 
@@ -85,11 +89,23 @@ The statements for the node-oriented scopes exist for options that will support 
    alter_rack_statement:       ALTER RACK `datacenter_name` `rack_name` WITH `option` '=' `value`
    alter_node_statement:       ALTER NODE `host_id` WITH `option` '=' `value`
 
-The datacenter, rack, or node named in the statement must exist in the cluster.
+For example, to limit compaction throughput to 256 MiB/s across the cluster, to 128 MiB/s in
+datacenter ``dc2``, and to lift the limit on a single node:
+
+.. code-block:: cql
+
+   ALTER CLUSTER WITH compaction_throughput_mb_per_sec = 256;
+   ALTER DATACENTER dc2 WITH compaction_throughput_mb_per_sec = 128;
+   ALTER NODE 7f4d8b1e-1c2a-4f3b-9e6d-0a1b2c3d4e5f WITH compaction_throughput_mb_per_sec = 0;
+
+The datacenter, rack, or node named in the statement must exist in the cluster. A node's host ID
+is shown by ``nodetool status``.
 
 Values are validated against the option's type before anything is stored: a boolean option accepts
-``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer, and
-so on, and a text option accepts at most 4096 bytes. An unknown option name, an option used at a
+``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer
+(some integer options accept a narrower range, listed in
+:ref:`Available options <cql-cluster-config-options>`), and so on, and a text option accepts at
+most 4096 bytes. An unknown option name, an option used at a
 scope it does not support, or a value of the wrong type is rejected and nothing changes.
 
 Removing an option
@@ -118,8 +134,8 @@ The permission required depends on the scope, not on the option:
 Inspecting effective values
 ---------------------------
 
-``DESCRIBE KEYSPACE`` and ``DESCRIBE TABLE`` show the cluster configuration options that are in
-force for the described object, in the ``WITH`` clause alongside the other properties. Each such
+``DESCRIBE KEYSPACE`` and ``DESCRIBE TABLE`` show the table-oriented cluster configuration options
+that are in force for the described object, in the ``WITH`` clause alongside the other properties. Each such
 line ends with a comment that says where the value comes from and what every scope stores
 (``NULL`` means nothing is stored at that scope).
 
@@ -161,3 +177,51 @@ Available options
      - boolean
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Enable automatic repair for tablet-based tables. Default: ``false``.
+   * - ``compaction_throughput_mb_per_sec``
+     - integer, 0 to 4294967295
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - Throttles compaction I/O on each node to the specified total throughput, in MiB/s.
+       ``0`` disables throttling. Default: the node's ``scylla.yaml`` setting, ``0`` if unset.
+   * - ``stream_io_throughput_mb_per_sec``
+     - integer, 0 to 4294967295
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - Throttles streaming I/O on each node, including the I/O performed by repair and by
+       topology operations such as adding or removing a node, to the specified total throughput,
+       in MiB/s. ``0`` disables throttling. Default: the node's ``scylla.yaml`` setting, ``0`` if
+       unset.
+   * - ``maintenance_io_throughput_mb_per_sec``
+     - integer, 0 to 4294967295
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - Throttles background (maintenance) I/O on each node to the specified total throughput, in
+       MiB/s. ``0`` disables throttling. Default: the node's ``scylla.yaml`` setting if set,
+       otherwise the effective ``stream_io_throughput_mb_per_sec``.
+   * - ``backup_io_throughput_mb_per_sec``
+     - integer, 0 to 4294967295
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - Throttles backup I/O on each node to the specified total throughput, in MiB/s. ``0``
+       disables throttling. Default: the node's ``scylla.yaml`` setting, ``0`` if unset.
+
+.. _cql-cluster-config-migrated-options:
+
+Options migrated from scylla.yaml
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The I/O throughput limits above (``compaction_throughput_mb_per_sec``,
+``stream_io_throughput_mb_per_sec``, ``maintenance_io_throughput_mb_per_sec`` and
+``backup_io_throughput_mb_per_sec``) used to be configured per node, in ``scylla.yaml``. Since
+they are normally the same across the cluster, or across a datacenter, they are now cluster
+configuration options. The ``scylla.yaml`` options of the same name are deprecated, and support
+for them may be removed in a future release:
+
+* A node uses its ``scylla.yaml`` setting only when no scope in its chain (node, rack, datacenter,
+  cluster) stores a value for the option. Once any of them does, the stored value takes over, and
+  removing it (``= NULL``) returns the node to its ``scylla.yaml`` setting.
+* A node logs a warning at startup for each deprecated option set in ``scylla.yaml``, and when the
+  option is changed at runtime, for example with ``nodetool setcompactionthroughput`` or
+  ``nodetool setstreamthroughput``. Those commands still change the ``scylla.yaml`` value, so they
+  have no effect while a cluster configuration value is in force.
+* ``nodetool getcompactionthroughput`` and ``nodetool getstreamthroughput`` report the effective
+  value, wherever it comes from.
+
+To migrate, set the value once with ``ALTER CLUSTER`` (or ``ALTER DATACENTER``, ``ALTER RACK``, or
+``ALTER NODE`` where it differs), then remove the option from ``scylla.yaml`` on every node.

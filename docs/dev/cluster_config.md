@@ -11,7 +11,7 @@ This document is the design for cluster config. It first defines the shared foun
 - Options Migrated From `db::config.cc`
 - Options Migrated From Legacy Schema Properties
 
-The proposed initial implementation targets the shared foundation and native options; the two migrated categories are described here once they are designed.
+The proposed initial implementation targets the shared foundation and native options. Options migrated from `db::config.cc` are described in their own section; options migrated from legacy schema properties will be described here once they are designed.
 
 Read the shared foundation first, then the category section for the option you are working with.
 
@@ -180,7 +180,7 @@ The required behavior is:
 
 - `DESCRIBE KEYSPACE` and `DESCRIBE TABLE` show effective values for inheritable table-oriented config, formatted as described in [Stored Overrides and Effective Values](#stored-overrides-and-effective-values): live properties for stored overrides, commented-out properties for inherited values, each with the provenance trailer
 - `DESCRIBE SCHEMA` emits the cluster-scope overrides first, before any keyspace and in **all** tiers, as a single synthetic row (`keyspace_name = null`, `type = 'cluster_config'`) whose `create_statement` holds one `ALTER CLUSTER WITH <option> = <value>;` statement per stored option, one per line, each annotated with the provenance trailer in the plain tier and bare under `WITH INTERNALS` (cluster scope is portable operator state; emitting it only under INTERNALS would make the default dump silently lossy: live statements are stored-only, so nothing else in the dump carries the cluster scope)
-- the node-oriented introspection surfaces — `DESCRIBE DATACENTER`, `DESCRIBE RACK`, `DESCRIBE NODE`, a `config` column on `DESCRIBE CLUSTER`, and a topology block in `DESCRIBE SCHEMA WITH INTERNALS` — are planned as a follow-up; no shipping option supports the node-oriented scopes yet, so nothing is introspectable there today
+- the node-oriented introspection surfaces — `DESCRIBE DATACENTER`, `DESCRIBE RACK`, `DESCRIBE NODE`, a `config` column on `DESCRIBE CLUSTER`, and a topology block in `DESCRIBE SCHEMA WITH INTERNALS` — are planned as a follow-up; until then, node-oriented options (such as the I/O throughput limits migrated from `db::config.cc`) have no `DESCRIBE` read-back surface
 - these read surfaces require no special privileges beyond login: the config tables live in `system_schema` and are readable by any user, so a dump never silently omits config state depending on who runs it
 
 The per-object `DESCRIBE`s and the schema-dump cluster block all follow the two-form rule from [Stored Overrides and Effective Values](#stored-overrides-and-effective-values): the live property is the write view, the commented-out property is the read view.
@@ -247,6 +247,8 @@ Each later epoch is introduced when a new batch of options is added: the new opt
 ### Value Encoding And Type Validation
 
 Config values are stored and transported as text, regardless of an option's declared type. The registry type is the single point of validation: before any mutation is generated, the textual value is validated against it (`text`, `integer`, `floating_point`, `boolean`), and an invalid value is rejected before any schema mutation.
+
+An integer option may also declare a `valid_range` (inclusive bounds); a value outside it is rejected the same way. The range must contain the option's default, which is checked when the registry is built.
 
 For an option whose value cannot be expressed as a registry type, the option may instead declare a per-option parser and validator.
 
@@ -586,3 +588,51 @@ The shared test areas and main test files are listed in [Tests](#tests) above. C
 - registry validation and scope rejection for newly added native keys
 
 The proposed v1 implementation should cover `auto_repair_enabled` in these areas: the table-oriented CQL surface and persistence in `test/boost/cql_query_test.cc`, and the schema-version/digest and prepared-statement behavior in `test/boost/schema_change_test.cc`.
+
+## Options Migrated From `db::config.cc`
+
+This section covers options that existed in `db::config.cc` (and so in `scylla.yaml`, on the command line, in `system.config`, and possibly behind REST API setters) before they became cluster-config options. The shared model is the same as for native options; what differs is that the legacy option already has users, so it cannot simply disappear.
+
+### The Migrated-Option Model
+
+- The cluster-config option keeps the legacy option's name, and its registry type and default mirror the legacy declaration. A legacy `uint32_t` becomes an `integer` option with a `valid_range` of `[0, UINT32_MAX]`, so `ALTER ... WITH` rejects values the legacy type could not hold.
+- The legacy option is deprecated but keeps working, as the fallback: when no scope in the chain stores an override, the node uses the legacy `db::config` value, not the registry default. The resolution order is therefore the scope chain, then the node's `db::config` value (which itself is the yaml/command-line/API value or the built-in default).
+- The legacy option keeps `value_status::Used`. `value_status::Deprecated` would make `config_file` skip the yaml value entirely ("Option is deprecated"), which would break the fallback. The deprecation is stated in the option's description instead, and the consumer logs warnings (see below).
+- The consumer reads `resolve_config()`/the callback's `std::optional<sstring>`, not the typed `resolve_*_config()` accessors: those substitute the registry default for absence, while a migrated option must substitute the legacy value.
+- The code that reconciles a migrated option with its legacy source lives in `db/cluster_config/`, next to the registry and the manager.
+
+### Throughput Limits
+
+The first migrated options are the I/O throughput limits, which limit the bandwidth of a node's scheduling groups:
+
+| Option | Scheduling group |
+| --- | --- |
+| `compaction_throughput_mb_per_sec` | compaction |
+| `stream_io_throughput_mb_per_sec` | streaming |
+| `maintenance_io_throughput_mb_per_sec` | maintenance supergroup |
+| `backup_io_throughput_mb_per_sec` | backup |
+
+They are node-oriented (`CLUSTER`, `DATACENTER`, `RACK`, `NODE`): a limit applies to each node, but is usually the same across the cluster or a datacenter.
+
+`db::throughput_limits` (`db/cluster_config/throughput_limits.{hh,cc}`) is the single consumer. It is a sharded service started early in `main()`, before the scheduling groups' bandwidth updaters, the compaction manager and the stream manager, all of which take the effective value from it as a `utils::updateable_value<uint32_t>`. Until the cluster config manager is started and `attach()`ed, it follows only the `db::config` values; after that, it registers a callback for each option on every shard. On every change of either source it recomputes the effective values:
+
+- compaction, streaming, backup: the cluster-config value if set, otherwise the `db::config` value
+- maintenance: the cluster-config value if set, otherwise the `db::config` value if explicitly set (`is_set()`), otherwise the effective streaming limit — preserving the legacy rule that the maintenance supergroup follows `stream_io_throughput_mb_per_sec` unless `maintenance_io_throughput_mb_per_sec` is set
+
+Because the compaction and stream managers hold the effective value, the REST getters behind `nodetool getcompactionthroughput` and `nodetool getstreamthroughput` report it. The REST setters (`nodetool setcompactionthroughput`/`setstreamthroughput`) still write the legacy `db::config` value: it takes effect only when no override is in force.
+
+Warnings are logged:
+
+- at startup, for each legacy option that is explicitly set, naming the `ALTER ... WITH` replacement
+- by the REST setters (`nodetool set{compaction,stream}throughput`), on every call, since they change the legacy value only on the shard that handles the request
+- when a legacy option is changed at runtime on shard 0 (`system.config`, yaml reload, or a REST call handled there), and, if a cluster-config override is in force, that the change has no effect
+- when a cluster-config override starts shadowing an explicitly set legacy value
+
+All but the REST setters' warnings are logged on shard 0 only, since every shard sees the same change.
+
+A node that joins the cluster applies the overrides once it receives the group0 snapshot during `join_cluster()`, so the limits in force during its bootstrap streaming are the cluster-config ones as long as they reach it before streaming starts; the legacy yaml value covers the window before that, and is the only way to throttle a node that has not joined yet (it has no host ID to address with `ALTER NODE`).
+
+### Tests
+
+- `test/boost/cluster_config_manager_test.cc` — range validation, the node-oriented chain with the `db::config` fallback, the maintenance-to-streaming fallback, scope rejection
+- `test/cluster/test_cluster_config.py` — end-to-end: overrides reach the REST getters on every node, and removing them returns to the yaml value

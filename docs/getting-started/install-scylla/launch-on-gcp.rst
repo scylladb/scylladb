@@ -153,8 +153,10 @@ GCP Tier 1 networking
 provides higher egress bandwidth on supported GCP machine types — up to 100 Gbps
 on N2 and N2D instances with 48 or more vCPUs, and up to 200 Gbps on Z3 instances.
 ScyllaDB uses the assumed network bandwidth to tune streaming throughput
-(``stream_io_throughput_mb_per_sec``), so it needs to know whether the instance
-runs with Tier 1 bandwidth.
+(``stream_io_throughput_mb_per_sec`` in ``scylla.yaml``), so it needs to know whether the instance
+runs with Tier 1 bandwidth. The tuned value applies only while the
+``stream_io_throughput_mb_per_sec`` cluster configuration option is not set for the node; see
+:ref:`Configuring a Cluster with CQL <cluster-config>`.
 
 By default ScyllaDB detects this automatically, in the following order of precedence:
 
