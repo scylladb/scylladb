@@ -600,10 +600,24 @@ query. Adding the ``NORECURSIVE`` switch restricts the results to only those per
 
 Show any permissions granted to ``carlos``, limited to ``SELECT`` permissions on any resource.
 
-A user can always list its own permissions, and those of the roles granted to it. Listing the permissions of any other
-role requires ``DESCRIBE`` permission on that role or on ``ALL ROLES``, and listing the permissions of all roles
-(without ``OF``) requires ``DESCRIBE`` permission on ``ALL ROLES``. The creator of a role automatically gets ``DESCRIBE``
-permission on it, so can list its permissions.
+Who can list which permissions:
+
+* A superuser can list all permissions.
+* Any user can list its own permissions, and those of the roles granted to it.
+* A user with ``DESCRIBE`` permission on a role can list that role's permissions, and a user with ``DESCRIBE``
+  permission on ``ALL ROLES`` can list everyone's permissions. The creator of a role automatically gets ``DESCRIBE``
+  permission on it. A role's permissions include those it inherits from the roles granted to it, so listing them
+  also shows which of these roles have permissions.
+* A user with ``AUTHORIZE`` permission on a resource can list everyone's permissions on that resource, using
+  ``LIST PERMISSIONS ON`` without ``OF``. Such a user may grant and revoke permissions on the resource, so it may also
+  see them. It sees only the permissions it could revoke: revoking a permission on a resource requires ``AUTHORIZE``
+  on that resource and also the permission itself. For example, the creator of a table automatically gets all
+  permissions on it, so it can see who else has permissions on its table. ``LIST PERMISSIONS ON`` a table normally
+  also lists the permissions on the table's keyspace, which apply to the table too, but the table's creator doesn't
+  see those unless it also has ``AUTHORIZE`` on the keyspace. Such a user can't list the permissions ``OF`` a specific
+  role this way, because that would also list the permissions of the roles granted to that role, and reveal which
+  roles these are.
+  Note that Cassandra doesn't have this rule.
 
 Related Topics
 ```````````````
