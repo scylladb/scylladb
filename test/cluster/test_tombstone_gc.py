@@ -492,6 +492,29 @@ async def test_tombstone_gc_rf_one_small_table_optimization(manager: ScyllaClust
             assert await get_tombstone_counts(cql, hosts, table) == [0, 0]
 
 
+async def test_tombstone_gc_rf_one_auto_repair(manager: ScyllaClusterManager):
+    """ Check that auto repair repairs RF=1 tablet tables in repair mode
+
+    The repair records the hints and batchlog flush time as the repair time,
+    so tombstones written before it are eventually purged.
+    """
+    cfg = RF_ONE_CFG | {'auto_repair_enabled_default': True, 'auto_repair_threshold_default_in_seconds': 1}
+    servers = await manager.servers_add(2, auto_rack_dc="dc1", config=cfg)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    keys = range(10)
+
+    async with new_test_keyspace(manager, "with replication = { 'class': 'NetworkTopologyStrategy', 'dc1': ['rack1'] } and tablets = { 'enabled': true }") as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key", " with tombstone_gc = {'mode': 'repair', 'propagation_delay_in_seconds': '0'}") as table:
+            await asyncio.gather(*[cql.run_async(SimpleStatement(f"DELETE FROM {table} WHERE p = {k}", consistency_level=ConsistencyLevel.ALL)) for k in keys])
+
+            async def tombstones_purged():
+                await manager.api.flush_keyspace(servers[0].ip_addr, keyspace)
+                await manager.api.keyspace_compaction(servers[0].ip_addr, keyspace)
+                return (await get_tombstone_counts(cql, hosts[:1], table))[0] == 0 or None
+
+            await wait_for(tombstones_purged, time.time() + 120, period=1)
+
 
 async def test_tombstone_gc_rf_one_incremental_repair_promotes_sstables(manager: ScyllaClusterManager):
     """ The incremental repair of a single-replica tablet promotes its sstables to repaired
