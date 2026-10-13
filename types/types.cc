@@ -2025,6 +2025,15 @@ struct validate_visitor {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size_bytes()));
         }
     }
+    void operator()(const decimal_type_impl&) {
+        if (v.empty()) {
+            return;
+        }
+        // a 4-byte scale followed by an unscaled varint, which needs at least one byte
+        if (v.size_bytes() < 5) {
+            throw marshal_exception(format("Expected 0 or at least 5 bytes for a decimal, got {:d}", v.size_bytes()));
+        }
+    }
     void operator()(const simple_date_type_impl& t) {
         if (v.empty()) {
             return;
