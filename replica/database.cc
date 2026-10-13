@@ -4181,10 +4181,11 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable {
-            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
-                return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query_mutations(std::move(schema), cmd, pr, {}, timeout, tombstone_gc_enabled));
+            co_return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
         });
     } else {
         auto prs = dht::partition_range_vector{pr};
@@ -4206,10 +4207,11 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
-            return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
-                return make_foreign(std::move(std::get<0>(res)));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query(std::move(schema), cmd, opts, prs, {}, timeout));
+            co_return make_foreign(std::move(std::get<0>(res)));
         });
     } else {
         auto&& [res, _] = co_await query_data_on_all_shards(db, std::move(s), cmd, prs, opts, {}, timeout);
