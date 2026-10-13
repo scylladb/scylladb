@@ -15,6 +15,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <ranges>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/memory.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
@@ -473,6 +474,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
 
     bool has_sc_statements = false;
     bool has_non_sc_statements = false;
+    auto start = seastar::memory::stats().total_bytes_allocated();
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
             first_ks = parsed->keyspace();
@@ -520,9 +522,11 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
 
-    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    auto prepared = std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
                                                       meta.get_variable_specifications(),
-                                                      std::move(partition_key_bind_indices)));
+                                                      std::move(partition_key_bind_indices));
+    _prepare_allocated_bytes = seastar::memory::stats().total_bytes_allocated() - start;
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::move(prepared));
 }
 
 audit::statement_category batch_statement::category() const {

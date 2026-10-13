@@ -811,9 +811,10 @@ prepared_cache_key_type query_processor::compute_id(
 
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
-    // Measuring allocation cost requires that no other task runs between
-    // bytes_before and bytes_after. No prepare() suspends, and the await
-    // below does not suspend on a ready future.
+    // The parsing cost is measured over segments no other task runs in:
+    // parsing, prepare() and the bookkeeping after it. A prepare() that
+    // suspends reports its own bytes. One that does not is awaited without
+    // a preemption check, so the difference around it is its own too.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
@@ -832,7 +833,9 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
         }
     }
     ++_stats.prepare_invocations;
+    auto bytes_before_prepare = seastar::memory::stats().total_bytes_allocated();
     auto p = co_await coroutine::without_preemption_check(statement->prepare(_db, _cql_stats, _cql_config));
+    auto bytes_after_prepare = seastar::memory::stats().total_bytes_allocated();
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
@@ -840,7 +843,8 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
     }
     p->statement->raw_cql_statement = std::move(query);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
-    _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
+    auto prepare_bytes = statement->prepare_allocated_bytes().value_or(bytes_after_prepare - bytes_before_prepare);
+    _parsing_cost_tracker.add_sample((bytes_before_prepare - bytes_before) + prepare_bytes + (bytes_after - bytes_after_prepare));
     co_return p;
 }
 
