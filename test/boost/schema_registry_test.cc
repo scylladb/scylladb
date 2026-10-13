@@ -368,10 +368,11 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         BOOST_REQUIRE(learned_s2->maybe_table() == s0->maybe_table());
 
         if (this_smp_shard_count() > 1) {
-            smp::submit_to(1, [&e, gs = global_schema_ptr(learned_s2)] {
+            smp::submit_to(1, [&e, gs = global_schema_ptr(learned_s2)] () -> future<> {
                 schema_ptr s0 = e.local_db().find_column_family("ks", "cf").schema();
-                BOOST_REQUIRE(gs.get()->maybe_table());
-                BOOST_REQUIRE(gs.get()->maybe_table() == s0->maybe_table());
+                auto s = co_await gs.get(db::no_timeout);
+                BOOST_REQUIRE(s->maybe_table());
+                BOOST_REQUIRE(s->maybe_table() == s0->maybe_table());
             }).get();
         }
 
