@@ -92,6 +92,94 @@
          ]
       },
       {
+         "path":"/system/minidump",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Write a minidump: an ELF core of the running process, readable by gdb, without cache and memtable contents. Each shard stops for well under a millisecond. Returns a JSON report; a failed or aborted dump returns an error carrying the report.",
+               "type":"string",
+               "nickname":"take_minidump",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"path",
+                     "description":"Output file. Defaults to <workdir>/minidumps/scylla-<timestamp>.core",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"include",
+                     "description":"Comma-separated selectors of memory to include on top of the defaults, e.g. lsa:memtable:ks.table",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"exclude",
+                     "description":"Comma-separated selectors of memory to leave out, e.g. map:*",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dry_run",
+                     "description":"Only classify memory and report what would be dumped",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"max_size_ratio",
+                     "description":"Refuse dumps bigger than this fraction of the shards' memory (default 0.15)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"number",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"min_free_disk_ratio",
+                     "description":"Refuse dumps which would leave less than this fraction of the disk free (default 0.1)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"number",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"max_stall_us",
+                     "description":"Abort when a shard's write faults wait longer than this in total, in microseconds (default 30000)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"helper_cpus",
+                     "description":"CPUs for the dumper's threads, e.g. 26-31 (default: CPUs without shards)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"write_rate_mb",
+                     "description":"Write rate limit in MB/s (default: unlimited)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/system/drop_sstable_caches",
          "operations":[
             {

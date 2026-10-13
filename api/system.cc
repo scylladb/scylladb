@@ -11,6 +11,8 @@
 #include "api/api-doc/metrics.json.hh"
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
+#include "utils/minidump/dumper.hh"
+#include "db/config.hh"
 
 #include <rapidjson/document.h>
 #include <boost/lexical_cast.hpp>
@@ -20,6 +22,11 @@
 #include <seastar/http/exception.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/seastar.hh>
+#include <fmt/chrono.h>
+#include <fmt/ranges.h>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 #include "utils/log.hh"
 
@@ -186,6 +193,60 @@ void set_system(http_context& ctx, routes& r) {
             auto format = ctx.db.local().get_user_sstables_manager().get_preferred_sstable_version();
             return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
         });
+    });
+
+    hs::take_minidump.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        minidump::options opts;
+        auto split = [] (const sstring& v) {
+            std::vector<std::string> out;
+            if (!v.empty()) {
+                boost::split(out, v, boost::is_any_of(","));
+            }
+            return out;
+        };
+        opts.include = split(req->get_query_param("include"));
+        opts.exclude = split(req->get_query_param("exclude"));
+        opts.dry_run = req->get_query_param("dry_run") == "true";
+        auto number = [&] <typename T> (const char* name, T lo, T hi, T& out) {
+            auto v = req->get_query_param(name);
+            if (v.empty()) {
+                return;
+            }
+            T n;
+            try {
+                n = boost::lexical_cast<T>(v);
+            } catch (boost::bad_lexical_cast&) {
+                throw bad_param_exception(fmt::format("{} is not a number: {}", name, v));
+            }
+            if (n < lo || n > hi) {
+                throw bad_param_exception(fmt::format("{} must be between {} and {}", name, lo, hi));
+            }
+            out = n;
+        };
+        number("max_size_ratio", 0.001, 1.0, opts.max_size_ratio);
+        number("min_free_disk_ratio", 0.0, 0.99, opts.min_free_disk_ratio);
+        number("write_rate_mb", 0u, 1000000u, opts.write_rate_mb);
+        number("max_stall_us", 100u, 10000000u, opts.max_stall_us);
+        opts.helper_cpus = req->get_query_param("helper_cpus");
+        opts.path = req->get_query_param("path");
+        if (opts.path.empty() && !opts.dry_run) {
+            auto dir = ctx.db.local().get_config().work_directory() + "/minidumps";
+            co_await recursive_touch_directory(dir);
+            opts.path = fmt::format("{}/scylla-{:%Y%m%dT%H%M%S}.core", dir, fmt::gmtime(std::time(nullptr)));
+        }
+        apilog.info("minidump: path={} include={} exclude={} dry_run={}", opts.path, opts.include, opts.exclude, opts.dry_run);
+        auto res = co_await smp::submit_to(0, [opts = std::move(opts)] () mutable {
+            return minidump::take(std::move(opts));
+        });
+        if (!res.ok) {
+            // The report says why; a non-200 status makes nodetool fail.
+            throw server_error_exception(std::string(res.report));
+        }
+        co_return json::json_return_type(json::json_return_type::body_writer_type([res = std::move(res.report)] (output_stream<char>&& os) mutable -> future<> {
+            return do_with(std::move(os), std::move(res), [] (output_stream<char>& out, sstring& res) {
+                return out.write(res).then([&out] { return out.close(); });
+            });
+        }));
     });
 
     hs::get_shard_to_numa_node_mapping.set(r, [](const_req req) {
