@@ -30,6 +30,12 @@ def test_io_throughput(rest_api, params):
     resp = rest_api.send("GET", params[0])
     resp.raise_for_status()
     assert resp.json() == 100
+    # The limits are uint32_t; the largest one must not be reported as a negative number.
+    resp = rest_api.send("POST", params[0], params={ params[1]: 2**32 - 1 })
+    resp.raise_for_status()
+    resp = rest_api.send("GET", params[0])
+    resp.raise_for_status()
+    assert resp.json() == 2**32 - 1
     resp = rest_api.send("POST", params[0], params={ params[1]: 0 })
     resp.raise_for_status()
     resp = rest_api.send("GET", params[0])

@@ -282,7 +282,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::co
     });
 
     ss::get_compaction_throughput_mb_per_sec.set(r, [&cm](std::unique_ptr<http::request> req) {
-        int value = cm.local().throughput_mbs();
+        uint32_t value = cm.local().throughput_mbs();
         return make_ready_future<json::json_return_type>(value);
     });
 }
