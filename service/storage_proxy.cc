@@ -3519,14 +3519,16 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [s = global_schema_ptr(m.schema()),
+                [gs = global_schema_ptr(m.schema()),
                  m = freeze(m),
                  gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
                  erm,
                  timeout,
                  sync,
                  shard_rate_limit] (replica::database& db) mutable -> future<> {
-            return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit).discard_result();
+            return gs.get(timeout).then([&db, &m, &gtr, timeout, sync, shard_rate_limit] (schema_ptr schema) {
+                return db.apply(std::move(schema), m, gtr.get(), sync, timeout, shard_rate_limit).discard_result();
+            });
         });
     };
     return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
@@ -3544,7 +3546,9 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
                 [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit, skip_large_data_guardrails] (replica::database& db) mutable -> future<db::large_data_violation_type> {
-            return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit, skip_large_data_guardrails);
+            return gs.get(timeout).then([&db, &m, &gtr, timeout, sync, shard_rate_limit, skip_large_data_guardrails] (schema_ptr schema) {
+                return db.apply(std::move(schema), m, gtr.get(), sync, timeout, shard_rate_limit, skip_large_data_guardrails);
+            });
         });
     };
     return apply_on_shards_with_violations(erm, *s, m.token(*s), std::move(apply));
@@ -3575,7 +3579,9 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
     auto apply = [&, erm] (unsigned shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<> {
-            return db.apply_hint(gs, m, tr_state, timeout);
+            return gs.get(timeout).then([&db, &m, &tr_state, timeout] (schema_ptr schema) {
+                return db.apply_hint(std::move(schema), m, tr_state, timeout);
+            });
         });
     };
     return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
@@ -3748,7 +3754,9 @@ storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_a
 
             return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), &fm = fm_a_s.fm, cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
                 auto p = local ? std::move(permit) : empty_service_permit(); // FIXME: either obtain a real permit on this shard or hold original one across shard
-                return sp.mutate_counter_on_leader_and_replicate(gs, fm, cl, timeout, gt.get(), std::move(p), fence, caller);
+                return gs.get(timeout).then([&sp, &fm, &gt, cl, timeout, p = std::move(p), fence, caller] (schema_ptr schema) mutable {
+                    return sp.mutate_counter_on_leader_and_replicate(std::move(schema), fm, cl, timeout, gt.get(), std::move(p), fence, caller);
+                });
             });
         });
     }
@@ -3774,10 +3782,10 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen
         utils::small_vector<foreign_counter_guard, 2> counter_locks;
         for (auto shard : lock_shards) {
             counter_locks.push_back(co_await _db.invoke_on(shard, {_write_smp_service_group, timeout},
-                    [s = global_schema_ptr(s), &fm, gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<foreign_counter_guard> {
-                return db.acquire_counter_locks(s, fm, timeout, gtr.get()).then([] (replica::counter_update_guard g) {
-                    return make_foreign(make_lw_shared<replica::counter_update_guard>(std::move(g)));
-                });
+                    [gs = global_schema_ptr(s), &fm, gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<foreign_counter_guard> {
+                auto schema = co_await coroutine::try_future(gs.get(timeout));
+                auto g = co_await coroutine::try_future(db.acquire_counter_locks(std::move(schema), fm, timeout, gtr.get()));
+                co_return make_foreign(make_lw_shared<replica::counter_update_guard>(std::move(g)));
             }));
         }
 
@@ -3786,8 +3794,10 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen
 
         auto apply = [this, erm, &m, trace_state, timeout] (shard_id shard) {
             return _db.invoke_on(shard, {_write_smp_service_group, timeout},
-                    [s = global_schema_ptr(m.schema()), fm = freeze(m), gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<> {
-                return db.apply_counter_update(s, std::move(fm), timeout, gtr.get());
+                    [gs = global_schema_ptr(m.schema()), fm = freeze(m), gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<> {
+                return gs.get(timeout).then([&db, &fm, &gtr, timeout] (schema_ptr schema) {
+                    return db.apply_counter_update(std::move(schema), fm, timeout, gtr.get());
+                });
             });
         };
         co_await apply_on_shards(erm, *s, m.token(), std::move(apply));
