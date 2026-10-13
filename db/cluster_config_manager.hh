@@ -64,6 +64,8 @@ public:
     bool is_ready() const noexcept { return _is_ready; }
 
     std::optional<sstring> resolve_config(std::string_view config_name, const lookup_context& ctx) const;
+    // resolve_config() for the local node, through the node -> rack -> dc -> cluster chain.
+    std::optional<sstring> resolve_node_config(std::string_view config_name) const;
 
     // Resolve a table-oriented option for a table, by name, in the option's native type,
     // without substituting the registered default: these report absence where the
@@ -185,6 +187,7 @@ private:
     void sweep_unregistered_callbacks() noexcept;
 
     void signal_ready();
+    lookup_context local_node_context() const;
     std::optional<sstring> get_config_for(const config_map& configs, std::string_view config_name) const;
 
     // Per-scope lookups used by resolve_config(). Deliberately private: a consumer reads an
