@@ -11,6 +11,7 @@
 #include "cql3/statements/external_search/ann_search.hh"
 #include "cql3/statements/external_search/bm25_search.hh"
 #include "index/fulltext_index.hh"
+#include "index/pattern_index.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/expr/expr-utils.hh"
@@ -23,6 +24,7 @@
 #include "index/secondary_index_manager.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
+#include "utils/on_internal_error.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +42,8 @@ secondary_index::index index_for(functions::search_family family, data_dictionar
         return ann_search::index_for(db, schema, column);
     case functions::search_family::bm25:
         return bm25_search::index_for(db, schema, column);
+    case functions::search_family::pattern:
+        utils::on_internal_error("index_for(): no search function is of the pattern family");
     }
     std::unreachable();
 }
@@ -67,6 +71,8 @@ sstring no_search_message(const functions::external_search_function& fun, search
     case functions::search_family::bm25:
         return seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
                 "ORDER BY has no BM25 search", clause == search_clause::restrictions ? "BM25" : fun.display_name(), clause_name(clause));
+    case functions::search_family::pattern:
+        utils::on_internal_error("no_search_message(): no search function is of the pattern family");
     }
     std::unreachable();
 }
@@ -81,6 +87,8 @@ sstring column_mismatch_message(const functions::external_search_function& fun, 
         return seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
                 "ORDER BY has no BM25 search on column {}", clause == search_clause::restrictions ? "BM25" : fun.display_name(),
                 clause_name(clause), column.name_as_cql_string());
+    case functions::search_family::pattern:
+        utils::on_internal_error("column_mismatch_message(): no search function is of the pattern family");
     }
     std::unreachable();
 }
@@ -117,6 +125,8 @@ sstring query_value_mismatch_message(functions::search_family family, std::strin
                 ? seastar::format("{}() in ORDER BY must use the same search term as the other BM25 calls on the same column", function_name)
                 : seastar::format("{}() in {} must match a BM25 search in ORDER BY, with the same column and search term; "
                         "the search term differs", clause == search_clause::restrictions ? "BM25" : function_name, clause_name(clause));
+    case functions::search_family::pattern:
+        utils::on_internal_error("query_value_mismatch_message(): no search function is of the pattern family");
     }
     std::unreachable();
 }
@@ -127,6 +137,8 @@ std::string_view index_type_name(functions::search_family family) {
         return secondary_index::vector_index::INDEX_TYPE_NAME;
     case functions::search_family::bm25:
         return secondary_index::fulltext_index::INDEX_TYPE_NAME;
+    case functions::search_family::pattern:
+        return secondary_index::pattern_index::INDEX_TYPE_NAME;
     }
     std::unreachable();
 }
@@ -295,6 +307,10 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
 
     auto& source = _sources.front();
     switch (source.family) {
+    case functions::search_family::pattern:
+        // The plan holds only searches introduced by a function, and no function is of this family.
+        // A pattern search's restrictions are checked where the WHERE clause builds it.
+        utils::on_internal_error("check_restrictions(): the plan holds a pattern search");
     case functions::search_family::ann:
         // Its relations were rejected above.
         return;

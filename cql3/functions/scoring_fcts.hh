@@ -51,10 +51,12 @@ shared_ptr<function> make_rrf_function(size_t arity);
 /// the call site.
 bool is_ann_function_name(const function_name& name);
 
-/// The family of external search functions a function belongs to: the vector search family (ANN) or
-/// the full-text search family (BM25). The family decides which index answers the search and what the
-/// second argument is: a query vector for ANN, a search term for BM25.
-enum class search_family { ann, bm25 };
+/// The kind of external search a query runs:
+/// - `ann`: a vector search with ANN() and its family, answered by a vector index.
+/// - `bm25`: a full-text search with BM25() and its family, answered by a full-text index.
+/// - `pattern`: a LIKE on a pattern-indexed column, answered by a pattern index. No function is of
+///   this family.
+enum class search_family { ann, bm25, pattern };
 
 /// Which value a search function returns.
 enum class search_value {

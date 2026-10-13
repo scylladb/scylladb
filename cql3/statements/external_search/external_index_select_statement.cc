@@ -9,6 +9,7 @@
 #include "cql3/statements/external_search/external_index_select_statement.hh"
 #include "cql3/statements/external_search/ann_search.hh"
 #include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/statements/external_search/pattern_search.hh"
 
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/values_provider.hh"
@@ -78,18 +79,21 @@ bool is_ann_only(const std::vector<search_source>& sources) {
     return !is_hybrid(sources) && sources.front().family == search_family::ann;
 }
 
-/// The name of the kind of query, as the messages and the paging warning spell it.
-std::string_view query_kind_name(const std::vector<search_source>& sources) {
-    if (is_hybrid(sources)) {
-        return "Hybrid search";
-    }
-    switch (sources.front().family) {
+std::string_view query_kind_name(search_family family) {
+    switch (family) {
     case search_family::ann:
         return "Vector search";
     case search_family::bm25:
         return "Full-text search";
+    case search_family::pattern:
+        return "Pattern search";
     }
     std::unreachable();
+}
+
+/// The name of the kind of query, as the messages and the paging warning spell it.
+std::string_view query_kind_name(const std::vector<search_source>& sources) {
+    return is_hybrid(sources) ? "Hybrid search" : query_kind_name(sources.front().family);
 }
 
 sstring served_by(const std::vector<search_source>& sources) {
@@ -97,7 +101,7 @@ sstring served_by(const std::vector<search_source>& sources) {
 }
 
 /// The evaluated query value of one search, in the form its index takes: a query vector for ANN, a
-/// search term for BM25.
+/// search term for BM25, a LIKE pattern for a pattern search.
 using query_value = std::variant<std::vector<float>, sstring>;
 
 query_value evaluate_query_value(const search_source& source, const query_options& options) {
@@ -117,6 +121,8 @@ query_value evaluate_query_value(const search_source& source, const query_option
         return ann_search::query_vector(*source.column, value);
     case search_family::bm25:
         return bm25_search::query_term(value);
+    case search_family::pattern:
+        return pattern_search::query_pattern(value);
     }
     std::unreachable();
 }
@@ -127,6 +133,7 @@ uint64_t request_limit(const search_source& source, uint64_t limit) {
     case search_family::ann:
         return ann_search::candidates_wanted(source.index, limit);
     case search_family::bm25:
+    case search_family::pattern:
         return limit;
     }
     std::unreachable();
@@ -218,6 +225,10 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
         case search_family::bm25:
             requests.push_back(vector_search::bm25_request{
                     .keyspace = _schema->ks_name(), .index = index_name, .term = std::get<sstring>(query_values[i]), .limit = wanted});
+            break;
+        case search_family::pattern:
+            requests.push_back(vector_search::like_request{
+                    .keyspace = _schema->ks_name(), .index = index_name, .pattern = std::get<sstring>(query_values[i]), .limit = wanted});
             break;
         }
     }

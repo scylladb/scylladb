@@ -86,6 +86,7 @@ target_sources(cql3
     statements/external_search/external_search_plan.cc
     statements/external_search/ann_search.cc
     statements/external_search/bm25_search.cc
+    statements/external_search/pattern_search.cc
     statements/external_search/values_provider.cc
     statements/external_search/filter.cc
     statements/external_search/external_function.cc
