@@ -832,9 +832,12 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
         }
     }
     ++_stats.prepare_invocations;
-    // Every prepare() returns a ready future, and awaiting it without a
-    // preemption check adds no yield point.
+    auto bytes_before_prepare = seastar::memory::stats().total_bytes_allocated();
+    // A prepare() that yields counts its own bytes, see prepare_allocated_bytes().
+    // Any other returns a ready future, and awaiting it without a preemption
+    // check adds no yield point.
     auto p = co_await coroutine::without_preemption_check(statement->prepare(_db, _cql_stats, _cql_config));
+    auto bytes_after_prepare = seastar::memory::stats().total_bytes_allocated();
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
@@ -842,7 +845,8 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
     }
     p->statement->raw_cql_statement = std::move(query);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
-    _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
+    auto prepare_bytes = statement->prepare_allocated_bytes().value_or(bytes_after_prepare - bytes_before_prepare);
+    _parsing_cost_tracker.add_sample((bytes_before_prepare - bytes_before) + prepare_bytes + (bytes_after - bytes_after_prepare));
     co_return p;
 }
 
