@@ -9,7 +9,10 @@
 #pragma once
 
 #include <memory>
+#include <span>
+#include <string_view>
 #include <seastar/core/memory.hh>
+#include <seastar/core/sstring.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "allocation_strategy.hh"
@@ -313,6 +316,13 @@ public:
     bool reclaiming_enabled() const noexcept {
         return _reclaiming_enabled;
     }
+
+    // Minidump labelling, see region::set_dump_owner().
+    std::string_view _dump_owner;
+    sstring _dump_owner_name;
+    // Scratch state of export_segments_for_dump().
+    uint64_t _dump_epoch = 0;
+    uint16_t _dump_id = 0;
 };
 
 //
@@ -385,6 +395,13 @@ public:
     // Returns the reclaimability state of this region.
     bool reclaiming_enabled() const noexcept { return _impl->reclaiming_enabled(); }
 
+    // Labels the region in minidumps, where its segments can be selected with
+    // "lsa:<owner>[:<name>]" rules. `owner` must have static storage duration.
+    void set_dump_owner(std::string_view owner, sstring name = {}) noexcept {
+        _impl->_dump_owner = owner;
+        _impl->_dump_owner_name = std::move(name);
+    }
+
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
@@ -412,6 +429,37 @@ public:
 
     friend class allocating_section;
 };
+
+// Who owns the LSA segments of a shard, for minidumps (see utils/minidump).
+struct dump_region_owner {
+    std::string_view owner;     // empty when the region is not labelled
+    char name[128];             // NUL-terminated; fits "<keyspace>.<table>" (48 + 1 + 48)
+};
+
+struct dump_segment_export {
+    // Inputs: buffers sized with dump_max_segments() and any number of regions.
+    std::span<uint16_t> segment_owner;
+    std::span<dump_region_owner> regions;
+    // Outputs.
+    uintptr_t segments_base = 0;
+    size_t nr_segments = 0;     // valid entries of segment_owner
+    size_t nr_regions = 0;      // valid entries of regions
+    bool regions_full = false;  // some regions didn't fit and are reported as unknown
+};
+
+// Values of dump_segment_export::segment_owner other than region indexes.
+constexpr uint16_t dump_segment_not_lsa = 0;
+constexpr uint16_t dump_segment_lsa_free = 1;
+constexpr uint16_t dump_segment_lsa_unknown_region = 2;
+constexpr uint16_t dump_segment_first_region = 3;   // region regions[v - dump_segment_first_region]
+
+// Number of segment slots of the calling shard.
+size_t dump_max_segments() noexcept;
+
+// Fills `e` for the calling shard. Doesn't allocate; runs in O(segments).
+// Regions which don't fit into e.regions are reported as
+// dump_segment_lsa_unknown_region.
+void export_segments_for_dump(dump_segment_export& e) noexcept;
 
 // Forces references into the region to remain valid as long as this guard is
 // live by disabling compaction and eviction.

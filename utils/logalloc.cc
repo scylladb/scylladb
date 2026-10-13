@@ -1084,6 +1084,8 @@ public:
     void prime(size_t available_memory, size_t min_free_memory);
     void use_standard_allocator_segment_pool_backend(size_t available_memory);
     segment* new_segment(region::impl* r);
+    void export_for_dump(dump_segment_export& e) noexcept;
+    size_t dump_max_segments() const noexcept { return max_segments(); }
     const segment_descriptor& descriptor(const segment* seg) const noexcept {
         uintptr_t index = idx_from_segment(seg);
         return _segments[index];
@@ -2421,6 +2423,49 @@ memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r
 region::region()
     : _impl(make_shared<impl>(shard_tracker(), this))
 { }
+
+void segment_pool::export_for_dump(dump_segment_export& e) noexcept {
+    static thread_local uint64_t epoch = 0;
+    ++epoch;
+    e.segments_base = reinterpret_cast<uintptr_t>(segment_from_idx(0));
+    e.nr_segments = std::min(e.segment_owner.size(), _segments.size());
+    e.nr_regions = 0;
+    e.regions_full = false;
+    for (size_t idx = 0; idx < e.nr_segments; ++idx) {
+        uint16_t v = dump_segment_not_lsa;
+        if (_lsa_owned_segments_bitmap.test(idx)) {
+            v = dump_segment_lsa_free;
+            if (!_lsa_free_segments_bitmap.test(idx)) {
+                v = dump_segment_lsa_unknown_region;
+                if (auto* r = _segments[idx]._region) {
+                    if (r->_dump_epoch == epoch) {
+                        v = r->_dump_id;
+                    } else if (e.nr_regions < e.regions.size()
+                            && e.nr_regions + dump_segment_first_region <= std::numeric_limits<uint16_t>::max()) {
+                        auto& out = e.regions[e.nr_regions];
+                        out.owner = r->_dump_owner;
+                        auto n = std::min(r->_dump_owner_name.size(), sizeof(out.name) - 1);
+                        std::memcpy(out.name, r->_dump_owner_name.data(), n);
+                        out.name[n] = 0;
+                        r->_dump_epoch = epoch;
+                        r->_dump_id = v = e.nr_regions++ + dump_segment_first_region;
+                    } else {
+                        e.regions_full = true;
+                    }
+                }
+            }
+        }
+        e.segment_owner[idx] = v;
+    }
+}
+
+size_t dump_max_segments() noexcept {
+    return shard_tracker().get_impl().segment_pool().dump_max_segments();
+}
+
+void export_segments_for_dump(dump_segment_export& e) noexcept {
+    shard_tracker().get_impl().segment_pool().export_for_dump(e);
+}
 
 void
 region::listen(region_listener* listener) {
