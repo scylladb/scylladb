@@ -662,15 +662,16 @@ future<object_info> client::get_object_info(sstring object_name, seastar::abort_
 }
 
 future<bool> client::object_exists(sstring object_name, seastar::abort_source* as) {
-    try {
-        co_await get_object_header(object_name, ignore_reply, as);
-    } catch (const storage_io_error& e) {
-        if (e.code().value() == ENOENT) {
-            co_return false;
-        }
-        throw;
-    }
-    co_return true;
+    using status_type = http::reply::status_type;
+    constexpr expected_status exists_or_not = {status_type::ok, status_type::not_found};
+    s3l.trace("HEAD {}", object_name);
+    auto req = http::request::make("HEAD", _host, object_name);
+    bool exists = false;
+    co_await make_request(std::move(req), [&exists] (const http::reply& rep, input_stream<char>&& in) {
+        exists = rep._status == status_type::ok;
+        return ignore_reply(rep, std::move(in));
+    }, exists_or_not, as);
+    co_return exists;
 }
 
 static rapidxml::xml_node<>* first_node_of(rapidxml::xml_node<>* root,
