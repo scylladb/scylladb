@@ -310,9 +310,9 @@ struct function_call {
     // Used to populate the cache of execution results while passing to
     // another shard (handling `bounce_to_shard` messages) in LWT statements.
     //
-    // The id is set only for the function calls that are a part of LWT
-    // statement restrictions for the partition key. Otherwise, the id is not
-    // set and the call is not considered when using or populating the cache.
+    // The id is set only for the function calls that take part in computing
+    // the partition key. Otherwise, the id is not set and the call is not
+    // considered when using or populating the cache.
     //
     // For example in a query like:
     // INSERT INTO t (pk) VALUES (uuid()) IF NOT EXISTS
@@ -320,17 +320,9 @@ struct function_call {
     // but it changes with each uuid() call.
     // uuid() call result is cached and sent to the proper shard.
     //
-    // Cache id is kept in shared_ptr because of how prepare_context works.
-    // During fill_prepare_context all function cache ids are collected
-    // inside prepare_context.
-    // Later when some condition occurs we might decide to clear
-    // cache ids of all function calls found in prepare_context.
-    // However by this time these function calls could have been
-    // copied multiple times. Prepare_context keeps a shared_ptr
-    // to function_call ids, and then clearing the shared id
-    // clears it in all possible copies.
-    // This logic was introduced back when everything was shared_ptr<term>,
-    // now a better solution might exist.
+    // The shared_ptr is a leftover: prepare_context used to clear the ids of
+    // non-conditional statements through it after the call had been copied.
+    // Nothing clears them any more, so a plain index would do.
     //
     // This field can be nullptr, it means that there is no cache id set.
     ::shared_ptr<std::optional<uint8_t>> lwt_cache_id;
