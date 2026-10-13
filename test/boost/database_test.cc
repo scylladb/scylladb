@@ -2075,49 +2075,6 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
-    auto table_gc_mode_repair1 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair1")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
-            .build();
-
-    auto table_gc_mode_repair2 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair2")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
-            .build();
-
-    // One pk to rule them all, all schemas have the same partition key, so we
-    // can reuse a single key for this test.
-    const auto pk = partition_key::from_single_value(*table_gc_mode_repair1, utf8_type->decompose(data_value("pk")));
-    const auto dk = dht::decorate_key(*table_gc_mode_repair1, pk);
-
-    shared_tombstone_gc_state shared_state;
-    shared_state.set_table_rf_one(table_gc_mode_repair1->id());
-
-    const auto now = gc_clock::now();
-    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
-
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
-
-    auto snapshot = shared_state.snapshot();
-
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
-
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
-
-    shared_state.set_table_rf_n(table_gc_mode_repair1->id());
-    shared_state.set_table_rf_one(table_gc_mode_repair2->id());
-
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), gc_clock::time_point::min());
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), now);
-
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
-}
-
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_views_being_built) {
     auto base = schema_builder(this_smp_shard_count(), "test", "base")
             .with_column("pk", utf8_type, column_kind::partition_key)
@@ -2140,10 +2097,12 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_views_being_built) {
     const auto dk = dht::decorate_key(*view_gc_mode_timeout, pk);
     const auto range = dht::token_range::make(dht::first_token(), dk.token());
 
-    shared_tombstone_gc_state shared_state;
-    shared_state.set_table_rf_one(view_gc_mode_repair->id());
-
     const auto now = gc_clock::now();
+    const auto repair_time = now - std::chrono::hours(1);
+
+    shared_tombstone_gc_state shared_state;
+    shared_state.update_repair_time(view_gc_mode_repair->id(), dht::token_range::make_open_ended_both_sides(), repair_time);
+
     const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
 
     // No view is known to be built: every view counts as being built, tables are not affected.
@@ -2171,7 +2130,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_views_being_built) {
     shared_state.set_built_views({view_built->id(), view_gc_mode_timeout->id(), view_gc_mode_immediate->id(), view_gc_mode_repair->id()});
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_timeout, dk, now), now - view_gc_mode_timeout->gc_grace_seconds());
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_immediate, dk, now), now);
-    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_repair, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_repair, dk, now), repair_time - view_gc_mode_repair->tombstone_gc_options().propagation_delay_in_seconds());
     BOOST_REQUIRE_NE(shared_state.snapshot().get_gc_before_for_key(view_gc_mode_immediate, dk, false), gc_clock::time_point::min());
 
     // The builds ran while the memtable of the older snapshot was filling. It may
@@ -2392,58 +2351,6 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     }
 
     return make_ready_future<>();
-}
-
-SEASTAR_TEST_CASE(test_tombstone_gc_rf_one) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
-        const std::string keyspace_name = get_name();
-        const std::string table_name = "tbl";
-
-        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
-                " replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}} AND"
-                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
-        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
-                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
-
-        auto& db = env.local_db();
-        auto& tbl = db.find_column_family(keyspace_name, table_name);
-        const auto schema = tbl.schema();
-
-        auto& st = tbl.get_compaction_manager().get_shared_tombstone_gc_state();
-
-        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
-
-        auto tombstone_gc = tbl.get_tombstone_gc_state();
-
-        const auto pk = partition_key::from_single_value(*schema, serialized(1));
-        const auto dk = dht::decorate_key(*schema, pk);
-
-        const auto now = gc_clock::now();
-
-        // With RF=1, tombstone-gc should act as if configured in 'immediate' mode.
-        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), now);
-
-        env.execute_cql(std::format("ALTER KEYSPACE {}"
-                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 2}}",
-                    keyspace_name)).get();
-
-        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
-
-        // After changing RF to > 1, tombstone-gc should revert to regular
-        // repair-mode behaviour. Since there was no repair yet, this should
-        // return min timepoint (no GC).
-        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), gc_clock::time_point::min());
-
-        // Altering back to RF=1 should re-add the table to the rf=1 table list
-        env.execute_cql(std::format("ALTER KEYSPACE {}"
-                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}",
-                    keyspace_name)).get();
-        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
-
-        // Dropping the table should clean up (removing the table from the rf=1 list).
-        env.execute_cql(std::format("DROP TABLE {}.{}", keyspace_name, table_name)).get();
-        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
-    });
 }
 
 SEASTAR_TEST_CASE(test_default_tombstone_gc_local_replication) {
