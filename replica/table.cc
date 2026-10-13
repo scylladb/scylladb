@@ -2294,10 +2294,11 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         old->schema(),
         compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
 
-    // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
-    // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
-    // priority inversion.
-    co_await coroutine::switch_to(default_scheduling_group());
+    // Post-flush actions cannot stay in the memtable group: the flush controller drives its
+    // shares off dirty memory, which these actions don't reduce, so they would be starved
+    // right at the end of the flush. Run them in the memtable-to-cache group, which has
+    // static shares and already hosts the cache update.
+    co_await coroutine::switch_to(_config.memtable_to_cache_scheduling_group);
     try {
         co_await std::move(f);
         co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
@@ -2305,9 +2306,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             tlogger.debug("Flushing to {} done", newtab->get_filename());
         });
 
-        co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
-            return update_cache(cg, old, newtabs);
-        });
+        co_await update_cache(cg, old, newtabs);
 
         for (const auto& sst : newtabs) {
             _large_data_guardrail->register_sstable(sst);
