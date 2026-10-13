@@ -55,13 +55,42 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
+// When no scope stores an override it falls back to the deprecated yaml options
+// auto_repair_enabled_default and auto_repair_threshold_default_in_seconds instead of the
+// registered default, until those options are removed.
 constexpr std::array registry_options = {
     option{
-        .name = "auto_repair_enabled",
+        .name = option_name::auto_repair_enabled,
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
-        .default_value = false,
+        .default_value = auto_repair_enabled_default,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_in_seconds,
+        .description = "Time in seconds since the last repair after which a tablet is eligible for automatic repair; 0 disables time-based automatic repair",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = auto_repair_threshold_default_seconds,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_size_fraction,
+        .description = "Trigger automatic repair for a tablet once the average unrepaired size of its "
+                       "replicas reaches this fraction of their average total size. 0 disables the "
+                       "size-based trigger, leaving only the time-based one",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v1,
+        .default_value = 0.0,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_min_size_in_bytes,
+        .description = "Floor for the size-based automatic repair trigger: a tablet is not repaired on "
+                       "the size threshold until the average unrepaired size of its replicas reaches "
+                       "this many bytes, however large a fraction of the tablet that is",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v1,
+        .default_value = int64_t(10 * 1024 * 1024),
     },
 };
 
@@ -227,6 +256,14 @@ bool is_table_oriented(const option& opt) {
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {
+    // The highest epoch every node supports. An option only becomes visible once its own
+    // epoch's feature is enabled cluster-wide, which is what keeps a node from accepting an
+    // ALTER for an option its peers do not know. The epochs are cumulative - a node
+    // implementing the latest version implements all older versions as well - so the
+    // highest enabled epoch is the answer.
+    if (features.cluster_config_registry_v1) {
+        return version::v1;
+    }
     if (features.cluster_config_registry_v0) {
         return version::v0;
     }

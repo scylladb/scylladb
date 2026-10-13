@@ -587,13 +587,39 @@ struct tablet_load_stats {
     uint64_t add_tablet_sizes(const tablet_load_stats& tls);
 };
 
+// Unrepaired bytes per tablet replica, in the same shape as tablet_load_stats::tablet_sizes.
+//
+// This is a struct of its own, carried beside tablet_load_stats rather than inside it,
+// because tablet_load_stats is `final` in the IDL: it is serialized without a size prefix,
+// so it cannot grow a field without breaking the wire format for a mixed-version cluster.
+// Unlike that one, this struct is not final, so it can be extended.
+// One replica's measurement of how much of a tablet incremental repair has not covered.
+struct tablet_unrepaired_size {
+    uint64_t unrepaired_size = 0;
+    // The tablet's sstables_repaired_at that the replica classified against. A consumer
+    // compares it with the tablet's current value and discards an older measurement. Load
+    // stats are refreshed periodically, so without this a tablet that was just repaired
+    // would still look wholly unrepaired until the next refresh, and a size-based trigger
+    // would select it again and again in the meantime.
+    int64_t sstables_repaired_at = 0;
+};
+
+struct tablet_unrepaired_load_stats {
+    // The token ranges must be in the form (a, b] and only such ranges are allowed
+    std::unordered_map<table_id, std::unordered_map<dht::token_range, tablet_unrepaired_size>> unrepaired_sizes;
+
+    void add_unrepaired_sizes(const tablet_unrepaired_load_stats& tus);
+};
+
 // Used as a return value for functions returning both table and tablet stats
 struct combined_load_stats {
     locator::table_load_stats table_ls;
     locator::tablet_load_stats tablet_ls;
+    locator::tablet_unrepaired_load_stats tablet_unrepaired_ls;
 };
 
 using tablet_load_stats_map = std::unordered_map<host_id, tablet_load_stats>;
+using tablet_unrepaired_load_stats_map = std::unordered_map<host_id, tablet_unrepaired_load_stats>;
 
 struct load_stats {
     std::unordered_map<table_id, table_load_stats> tables;
@@ -606,6 +632,10 @@ struct load_stats {
 
     // Size-based load balancing data
     tablet_load_stats_map tablet_stats;
+
+    // Unrepaired size per tablet replica, for the size-based auto repair trigger. Empty for
+    // a node that does not support the TABLET_UNREPAIRED_LOAD_STATS cluster feature.
+    tablet_unrepaired_load_stats_map tablet_unrepaired_stats;
 
     // Distinguishes a default-constructed (null) load_stats from one that has
     // been aggregated via operator+=.  A null element contributes nothing when
@@ -625,6 +655,13 @@ struct load_stats {
 
     // Returns average size of tablet replica of a given tablet, or nullopt if information is incomplete.
     std::optional<uint64_t> get_avg_tablet_size(const tablet_map&, global_tablet_id) const;
+
+    // Returns the average unrepaired size of a tablet's replicas, or nullopt if any replica
+    // did not report one - a node that predates the TABLET_UNREPAIRED_LOAD_STATS cluster
+    // feature, or one whose stats have not arrived yet. Unlike get_avg_tablet_size(), this
+    // does not follow a tablet in transition to its leaving or pending replica: a tablet in
+    // transition is not a candidate for repair anyway.
+    std::optional<uint64_t> get_avg_unrepaired_tablet_size(const tablet_map&, global_tablet_id) const;
 
     // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
     // other hosts based on the tablet transition info:
@@ -649,14 +686,6 @@ struct load_stats {
 };
 
 using load_stats_v2 = load_stats;
-
-struct repair_scheduler_config {
-    bool auto_repair_enabled = false;
-    // If the time since last repair is bigger than auto_repair_threshold
-    // seconds, the tablet is eligible for auto repair.
-    std::chrono::seconds auto_repair_threshold{10 * 24 * 3600};
-    bool operator==(const repair_scheduler_config&) const = default;
-};
 
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
 
@@ -762,7 +791,6 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
-    std::optional<repair_scheduler_config> _repair_scheduler_config;
     raft_info_container _raft_info;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
 
@@ -772,7 +800,6 @@ private:
                transitions_map transitions,
                resize_decision resize_decision,
                tablet_task_info resize_task_info,
-               std::optional<repair_scheduler_config> repair_scheduler_config,
                raft_info_container raft_info,
                size_t target_pow2_tablet_count)
         : _tablet_ids(std::move(ids))
@@ -780,7 +807,6 @@ private:
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
     {}
@@ -958,7 +984,6 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
-    const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 
     size_t target_pow2_tablet_count() const { return _target_pow2_tablet_count; }
     void set_target_pow2_tablet_count(size_t count) { _target_pow2_tablet_count = count; }
@@ -971,7 +996,6 @@ public:
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
-    void set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
     void set_tablet_raft_info(tablet_id, tablet_raft_info);
@@ -1248,11 +1272,6 @@ struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_metadata_change_hint> : fmt::formatter<string_view> {
     auto format(const locator::tablet_metadata_change_hint&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<locator::repair_scheduler_config> : fmt::formatter<string_view> {
-    auto format(const locator::repair_scheduler_config&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

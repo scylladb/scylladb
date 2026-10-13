@@ -510,6 +510,12 @@ ALTER KEYSPACE ks WITH auto_repair_enabled = false;
 ALTER TABLE ks.tbl WITH auto_repair_enabled = true;
 ```
 
+`auto_repair_threshold_in_seconds` (integer seconds, default `86400`, `0` disables time-based repair) is registered the same way and is set through the same forms.
+
+#### Consumer: The Tablet Repair Scheduler
+
+Both options are read on demand (the poll model) by the tablet load balancer when it builds a repair plan: once per table it resolves each option with `resolve_config` for the table's `lookup_context` and passes a stored value through the registry's `to_boolean`/`to_integer` converter. When no scope stores an override, the scheduler falls back to the node's `auto_repair_enabled_default` and `auto_repair_threshold_default_in_seconds` from `db/config.cc` rather than to the registered default, so clusters configured through `scylla.yaml` keep working and a stored override at any scope always wins over the yaml value. The yaml options are deprecated (a node that sets them warns at startup) and the fallback is temporary: once they are removed, the scheduler reads the options through the typed accessors and the registered default becomes the only default. They are not migrated through the registry because `value_status::Deprecated` in `db::config` means "accepted but ignored", which would drop the fallback in the same release.
+
 #### Introspection Limits In The Proposed First Version
 
 Read-back coverage depends on the option's scopes:
@@ -573,7 +579,7 @@ Use this path when the key is persisted in cluster config and consumed directly 
 3. Set its `min_version` to the registry epoch its batch belongs to, and gate that epoch behind the matching `CLUSTER_CONFIG_REGISTRY_V*` feature (see [Registry Versioning](#registry-versioning)).
 4. Decide whether its consumer reads the value on demand or needs a callback.
 5. If it needs a callback, register one with the manager, keep the returned registration handle alive, and make the callback idempotent — `register_config_callback(name, on_change)` (see [Live Config Application](#live-config-application)).
-6. Define clear parsing, defaulting, and restore-on-unset behavior for that consumer.
+6. Define clear parsing, defaulting, and restore-on-unset behavior for that consumer. For a period, interval or threshold option, `0` means disabled and a positive value is the period, as with the corresponding `db/config.cc` options; do not introduce a negative sentinel.
 7. Add coverage for schema persistence, resolution, and any behavioral side effects.
 
 

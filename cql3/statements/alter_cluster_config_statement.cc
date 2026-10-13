@@ -62,21 +62,21 @@ future<> ensure_superuser(const service::client_state& state) {
 const db::cluster_config_registry::option& validate_cluster_option(query_processor& qp, alter_cluster_config_statement::scope scope, std::string_view config_name, const std::optional<sstring>& value) {
     const auto* option = db::cluster_config_registry::find(config_name);
     if (!option) {
-        throw exceptions::invalid_request_exception(format("Unknown cluster config option '{}'", config_name));
+        throw exceptions::invalid_request_exception(seastar::format("Unknown cluster config option '{}'", config_name));
     }
     // Known to this node but not yet to every node: cluster config is not enabled, or the
     // option's registry version is above the one enabled cluster-wide.
     const auto current_version = db::cluster_config_registry::current_version(qp.proxy().features());
     if (!current_version || !db::cluster_config_registry::find(config_name, current_version)) {
-        throw exceptions::invalid_request_exception(format(
+        throw exceptions::invalid_request_exception(seastar::format(
                 "Cluster config option '{}' is not yet supported by this cluster. Upgrade all nodes to use it.", config_name));
     }
     if (!db::cluster_config_registry::supports_scope(*option, registry_scope(scope))) {
-        throw exceptions::invalid_request_exception(format("Cluster config '{}' does not support this scope", config_name));
+        throw exceptions::invalid_request_exception(seastar::format("Cluster config '{}' does not support this scope", config_name));
     }
     if (value) {
         if (auto error = db::cluster_config_registry::validate_value(*option, *value)) {
-            throw exceptions::invalid_request_exception(format("Invalid value for cluster config '{}': {}", config_name, *error));
+            throw exceptions::invalid_request_exception(seastar::format("Invalid value for cluster config '{}': {}", config_name, *error));
         }
     }
     return *option;
@@ -94,19 +94,19 @@ void validate_scope_target_exists(query_processor& qp,
         return;
     case alter_cluster_config_statement::scope::datacenter:
         if (!topology.get_datacenters().contains(*dc_name)) {
-            throw exceptions::invalid_request_exception(format("Datacenter '{}' does not exist", *dc_name));
+            throw exceptions::invalid_request_exception(seastar::format("Datacenter '{}' does not exist", *dc_name));
         }
         return;
     case alter_cluster_config_statement::scope::rack: {
         auto dc_it = topology.get_datacenter_racks().find(*dc_name);
         if (dc_it == topology.get_datacenter_racks().end() || !dc_it->second.contains(*rack_name)) {
-            throw exceptions::invalid_request_exception(format("Rack '{}.{}' does not exist", *dc_name, *rack_name));
+            throw exceptions::invalid_request_exception(seastar::format("Rack '{}.{}' does not exist", *dc_name, *rack_name));
         }
         return;
     }
     case alter_cluster_config_statement::scope::node:
         if (!topology.has_node(locator::host_id(*node_uuid))) {
-            throw exceptions::invalid_request_exception(format("Node '{}' does not exist", *node_uuid));
+            throw exceptions::invalid_request_exception(seastar::format("Node '{}' does not exist", *node_uuid));
         }
         return;
     }
@@ -171,35 +171,35 @@ alter_cluster_config_statement::prepare_schema_mutations(query_processor& qp, se
     switch (_scope) {
     case scope::cluster:
         if (_value) {
-            query = format("UPDATE system_schema.{} SET configs[?] = ? WHERE cluster_name = '{}'",
+            query = seastar::format("UPDATE system_schema.{} SET configs[?] = ? WHERE cluster_name = '{}'",
                     db::schema_tables::SCYLLA_CLUSTERS, db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY);
         } else {
-            query = format("DELETE configs[?] FROM system_schema.{} WHERE cluster_name = '{}'",
+            query = seastar::format("DELETE configs[?] FROM system_schema.{} WHERE cluster_name = '{}'",
                     db::schema_tables::SCYLLA_CLUSTERS, db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY);
         }
         break;
     case scope::datacenter:
         if (_value) {
-            query = format("UPDATE system_schema.{} SET configs[?] = ? WHERE dc_name = ?", db::schema_tables::SCYLLA_DATACENTERS);
+            query = seastar::format("UPDATE system_schema.{} SET configs[?] = ? WHERE dc_name = ?", db::schema_tables::SCYLLA_DATACENTERS);
         } else {
-            query = format("DELETE configs[?] FROM system_schema.{} WHERE dc_name = ?", db::schema_tables::SCYLLA_DATACENTERS);
+            query = seastar::format("DELETE configs[?] FROM system_schema.{} WHERE dc_name = ?", db::schema_tables::SCYLLA_DATACENTERS);
         }
         values.emplace_back(*_dc_name);
         break;
     case scope::rack:
         if (_value) {
-            query = format("UPDATE system_schema.{} SET configs[?] = ? WHERE dc_name = ? AND rack_name = ?", db::schema_tables::SCYLLA_RACKS);
+            query = seastar::format("UPDATE system_schema.{} SET configs[?] = ? WHERE dc_name = ? AND rack_name = ?", db::schema_tables::SCYLLA_RACKS);
         } else {
-            query = format("DELETE configs[?] FROM system_schema.{} WHERE dc_name = ? AND rack_name = ?", db::schema_tables::SCYLLA_RACKS);
+            query = seastar::format("DELETE configs[?] FROM system_schema.{} WHERE dc_name = ? AND rack_name = ?", db::schema_tables::SCYLLA_RACKS);
         }
         values.emplace_back(*_dc_name);
         values.emplace_back(*_rack_name);
         break;
     case scope::node:
         if (_value) {
-            query = format("UPDATE system_schema.{} SET configs[?] = ? WHERE host_id = ?", db::schema_tables::SCYLLA_NODES);
+            query = seastar::format("UPDATE system_schema.{} SET configs[?] = ? WHERE host_id = ?", db::schema_tables::SCYLLA_NODES);
         } else {
-            query = format("DELETE configs[?] FROM system_schema.{} WHERE host_id = ?", db::schema_tables::SCYLLA_NODES);
+            query = seastar::format("DELETE configs[?] FROM system_schema.{} WHERE host_id = ?", db::schema_tables::SCYLLA_NODES);
         }
         values.emplace_back(data_value(*_node_uuid));
         break;

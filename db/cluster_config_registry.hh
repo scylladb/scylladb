@@ -51,11 +51,24 @@ enum class value_type {
 
 enum class version : uint8_t {
     v0,
+    v1,
 };
 
 // A config value in its native type. One alternative per value_type, in the same order;
 // option::type() is the index of the active alternative.
 using config_value = std::variant<std::string_view, int64_t, double, bool>;
+
+// The names of the registered options, for the subsystems that consume them. A consumer
+// looks its option up by one of these rather than by a bare literal, so that the registry
+// entry and its reader cannot drift apart without the compiler noticing.
+namespace option_name {
+
+inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
+inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
+inline constexpr std::string_view auto_repair_threshold_size_fraction = "auto_repair_threshold_size_fraction";
+inline constexpr std::string_view auto_repair_threshold_min_size_in_bytes = "auto_repair_threshold_min_size_in_bytes";
+
+}
 
 struct option {
     std::string_view name;
@@ -82,6 +95,13 @@ bool supports_scope(const option& opt, scope s);
 // resolved per node (DATACENTER/RACK/NODE) or at CLUSTER scope only.
 bool is_table_oriented(const option& opt);
 std::optional<version> current_version(const gms::feature_service& features);
+
+// Defaults of auto_repair_enabled and auto_repair_threshold_in_seconds. Also the defaults of the
+// deprecated yaml options auto_repair_enabled_default and
+// auto_repair_threshold_default_in_seconds in db/config.cc, which the tablet repair
+// scheduler falls back to when no scope stores an override, so the two cannot drift apart.
+constexpr bool auto_repair_enabled_default = false;
+constexpr int64_t auto_repair_threshold_default_seconds = 24 * 3600;
 
 // Returns nullopt on success. On failure, returns a human-readable reason.
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value);

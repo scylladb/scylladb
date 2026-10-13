@@ -283,6 +283,10 @@ public:
     size_t live_sstable_count() const noexcept;
     // Disk space used by all the storage of this group, sstables and logstor segments alike.
     uint64_t live_disk_space_used() const noexcept;
+    // Bytes on disk held by the sstables that incremental repair has not covered yet,
+    // i.e. the ones classified as anything but repaired. Logstor data is not counted:
+    // it is not classified by repair state.
+    uint64_t unrepaired_disk_space_used() const;
     uint64_t total_disk_space_used() const noexcept;
     // Space taken by the logstor segments this group owns. Zero for a table that doesn't use logstor.
     size_t logstor_disk_space_used() const noexcept;
@@ -422,6 +426,9 @@ public:
     compaction_group_ptr& select_compaction_group(dht::token first, dht::token last, const locator::tablet_map&) noexcept;
 
     uint64_t live_disk_space_used() const;
+    // Sum of compaction_group::unrepaired_disk_space_used() over the group's
+    // compaction groups.
+    uint64_t unrepaired_disk_space_used() const;
 
     void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups_immediate();
