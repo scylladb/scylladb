@@ -4047,7 +4047,7 @@ class tablet_streaming_reader : public mutation_reader::impl {
         auto remote = co_await _db.invoke_on(t.shard,
                 [gs = global_schema_ptr(_schema), &remote_ranges = t.ranges, compaction_time = _compaction_time, buffer_size = _buffer_size] (replica::database& db)
                         -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
-            auto s = gs.get();
+            auto s = co_await gs.get(db::no_timeout);
             // Copy here, so that the copy is allocated on this shard.
             auto ranges = remote_ranges;
             auto& cf = db.find_column_family(s);
