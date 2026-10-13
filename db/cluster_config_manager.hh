@@ -62,6 +62,8 @@ public:
     future<> wait_until_ready();
 
     std::optional<sstring> resolve_config(std::string_view config_name, const lookup_context& ctx) const;
+    // resolve_config() for the local node, through the node -> rack -> dc -> cluster chain.
+    std::optional<sstring> resolve_node_config(std::string_view config_name) const;
 
     // Resolve an option and return its effective value in the option's native type, falling
     // back to the default registered for it when no scope in the chain stores an override.
@@ -172,6 +174,7 @@ private:
     void sweep_unregistered_callbacks() noexcept;
 
     void signal_ready();
+    lookup_context local_node_context() const;
     std::optional<sstring> get_config_for(const config_map& configs, std::string_view config_name) const;
 
     // Per-scope lookups used by resolve_config(). Deliberately private: a consumer reads an

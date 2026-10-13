@@ -265,18 +265,24 @@ future<> cluster_config_manager::apply_refresh(const scope_caches& caches) {
     signal_ready();
 }
 
+cluster_config_manager::lookup_context cluster_config_manager::local_node_context() const {
+    lookup_context ctx;
+    const auto& topology = _db.get_token_metadata().get_topology();
+    ctx.dc_name = topology.get_datacenter();
+    ctx.rack_name = topology.get_rack();
+    ctx.node_uuid = topology.my_host_id().uuid();
+    return ctx;
+}
+
+std::optional<sstring> cluster_config_manager::resolve_node_config(std::string_view config_name) const {
+    return resolve_config(config_name, local_node_context());
+}
+
 future<> cluster_config_manager::run_config_callbacks() {
     // Each shard fires only the callbacks registered on it (register_config_callback
     // stores per-shard). A callback registered on a single shard is invoked only there;
     // one registered on all shards is invoked on each.
-    //
-    // The local node's identity, used to resolve node-oriented options through the
-    // node -> rack -> dc -> cluster precedence chain.
-    lookup_context node_ctx;
-    const auto& topology = _db.get_token_metadata().get_topology();
-    node_ctx.dc_name = topology.get_datacenter();
-    node_ctx.rack_name = topology.get_rack();
-    node_ctx.node_uuid = topology.my_host_id().uuid();
+    const auto node_ctx = local_node_context();
 
     // At most one callback pass runs per shard at a time: all refresh execution happens
     // in shard 0's refresh_fiber(), which awaits this pass before starting the next one.
