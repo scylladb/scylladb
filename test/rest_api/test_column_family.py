@@ -143,10 +143,17 @@ def test_column_family_compaction_strategy(cql, this_dc, rest_api):
             assert resp.status_code == requests.codes.internal_server_error
             check_strategy("NullCompactionStrategy")
 
-            for strategy in [ "SizeTieredCompactionStrategy", "LeveledCompactionStrategy", "TimeWindowCompactionStrategy" ]:
+            for strategy in [ "IncrementalCompactionStrategy", "LeveledCompactionStrategy", "TimeWindowCompactionStrategy" ]:
                 resp = rest_api.send("POST", f"column_family/compaction_strategy/{table_name}", params={"class_name": strategy})
                 resp.raise_for_status()
                 check_strategy(strategy)
+
+            # SizeTieredCompactionStrategy is deprecated and is an alias of
+            # IncrementalCompactionStrategy, so that's what the table ends up
+            # running, and what this API reports back.
+            resp = rest_api.send("POST", f"column_family/compaction_strategy/{table_name}", params={"class_name": "SizeTieredCompactionStrategy"})
+            resp.raise_for_status()
+            check_strategy("IncrementalCompactionStrategy")
 
 
 # Test that get_live|total_disk_space_used returns sane values

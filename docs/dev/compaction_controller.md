@@ -54,7 +54,13 @@ Unimplemented
 
 #### SizeTiered Compaction Strategy
 
-Backlog for one SSTable under STCS:
+Note that the SizeTieredCompactionStrategy class name is deprecated and is now
+an alias of IncrementalCompactionStrategy, so a table can no longer be
+configured to use the tracker below. It is still used internally, per time
+window, by TimeWindowCompactionStrategy. IncrementalCompactionStrategy has its
+own tracker, which is not described here.
+
+Backlog for one SSTable under size-tiered compaction:
 
 
 ```math

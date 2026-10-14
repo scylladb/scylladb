@@ -501,7 +501,7 @@ def test_twcs_restrictions_mixed(cql, test_keyspace, scylla_only):
     def set_max_windows(n):
         cql.execute(f"UPDATE system.config SET value='{n}' WHERE name='twcs_max_window_count'")
     twcs = "{'class': 'TimeWindowCompactionStrategy'}"
-    stcs = "{'class': 'SizeTieredCompactionStrategy'}"
+    ics = "{'class': 'IncrementalCompactionStrategy'}"
     try:
         # Hardcode restriction to max 10 windows
         with config_value_context(cql, 'twcs_max_window_count', '10'):
@@ -539,11 +539,11 @@ def test_twcs_restrictions_mixed(cql, test_keyspace, scylla_only):
             set_max_windows(0)
             cql.execute(f"CREATE TABLE {tables[7]} (a int PRIMARY KEY, b int) WITH compaction = {twcs} AND default_time_to_live = 86400000")
             set_max_windows(50)
-            cql.execute(f"ALTER TABLE {tables[7]} WITH compaction = {stcs}")
+            cql.execute(f"ALTER TABLE {tables[7]} WITH compaction = {ics}")
 
-            # Scenario 8: No TTL TWCS table to STCS
+            # Scenario 8: No TTL TWCS table to ICS
             cql.execute(f"CREATE TABLE {tables[8]} (a int PRIMARY KEY, b int) WITH compaction = {twcs}")
-            cql.execute(f"ALTER TABLE {tables[8]} WITH compaction = {stcs}")
+            cql.execute(f"ALTER TABLE {tables[8]} WITH compaction = {ics}")
 
             # Scenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
             set_max_windows(0)
@@ -551,7 +551,7 @@ def test_twcs_restrictions_mixed(cql, test_keyspace, scylla_only):
             set_max_windows(50)
             cql.execute(f"ALTER TABLE {tables[9]} WITH gc_grace_seconds = 0")
 
-            # Scenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
+            # Scenario 10: Large TTL ICS table, fail to switch to TWCS with no TTL
             cql.execute(f"CREATE TABLE {tables[10]} (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000")
             with pytest.raises(ConfigurationException):
                 cql.execute(f"ALTER TABLE {tables[10]} WITH compaction = {twcs}")
@@ -2306,7 +2306,7 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
               ") WITH bloom_filter_fp_chance = 0.01\n"
               "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
               "    AND comment = ''\n"
-              "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+              "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
               "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
               "    AND crc_check_chance = 1\n"
               "    AND default_time_to_live = 0\n"
@@ -2327,7 +2327,7 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
                "    AND bloom_filter_fp_chance = 0.01\n"
                "    AND caching = {{'keys': 'ALL','rows_per_partition': 'ALL'}}\n"
                "    AND comment = ''\n"
-               "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+               "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
                "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
                "    AND crc_check_chance = 1\n"
                "    AND default_time_to_live = 0\n"
@@ -2348,7 +2348,7 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
                  "    AND bloom_filter_fp_chance = 0.02\n"
                  "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
                  "    AND comment = ''\n"
-                 "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                 "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
                  "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
                  "    AND crc_check_chance = 1\n"
                  "    AND default_time_to_live = 0\n"
@@ -2370,7 +2370,7 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
                  "    AND bloom_filter_fp_chance = 0.02\n"
                  "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
                  "    AND comment = ''\n"
-                 "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                 "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
                  "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
                  "    AND crc_check_chance = 1\n"
                  "    AND default_time_to_live = 0\n"
@@ -2391,7 +2391,7 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
                "     bloom_filter_fp_chance = 0.02\n"
                "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
                "    AND comment = ''\n"
-               "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+               "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
                "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
                "    AND crc_check_chance = 1\n"
                "    AND default_time_to_live = 0\n"
@@ -2431,7 +2431,7 @@ def test_describe_view_schema(cql, this_dc, scylla_only):
                   "    AND bloom_filter_fp_chance = 0.01\n"
                   "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
                   "    AND comment = ''\n"
-                  "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                  "    AND compaction = {{'class': 'IncrementalCompactionStrategy'}}\n"
                   "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
                   "    AND crc_check_chance = 1\n"
                   "    AND default_time_to_live = 0\n"
@@ -2472,7 +2472,7 @@ def test_describe_view_schema(cql, this_dc, scylla_only):
          "    AND bloom_filter_fp_chance = 0.01\n"
          "    AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}\n"
          "    AND comment = ''\n"
-         "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+         "    AND compaction = {'class': 'IncrementalCompactionStrategy'}\n"
          "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
          "    AND crc_check_chance = 1\n"
          "    AND default_time_to_live = 0\n"
@@ -2837,7 +2837,7 @@ def test_query_limit(cql, test_keyspace, scylla_only):
 # The C++ test flushed the memtables and cleared the row cache before reading;
 # here we flush and read with BYPASS CACHE, so the reads go to the sstables.
 # (The C++ test also forced sstable_format "me", which is the default.)
-@pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+@pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
     with new_test_table(cql, test_keyspace, "pk text, ck int, v text, PRIMARY KEY(pk, ck)",
                         f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
@@ -2847,7 +2847,7 @@ def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
         assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',)]
 
 
-@pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+@pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_clustering_filtering_2(cql, test_keyspace, compaction_strategy):
     with new_test_table(cql, test_keyspace, "pk text, ck int, v text, PRIMARY KEY(pk, ck)",
                         f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
@@ -2858,7 +2858,7 @@ def test_clustering_filtering_2(cql, test_keyspace, compaction_strategy):
         assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b2',)]
 
 
-@pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+@pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_clustering_filtering_3(cql, test_keyspace, compaction_strategy):
     with new_test_table(cql, test_keyspace, "pk text, ck int, v text, PRIMARY KEY(pk, ck)",
                         f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:

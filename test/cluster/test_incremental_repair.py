@@ -983,7 +983,7 @@ async def _setup_table_for_race_window(manager, servers, cql):
     """Create a fresh keyspace+table with incremental repair setup for the race window test.
 
     Creates a new keyspace (unique name each call), creates the table with
-    tombstone_gc=repair and STCS min_threshold=2, inserts keys 0-9 as baseline,
+    tombstone_gc=repair and ICS min_threshold=2, inserts keys 0-9 as baseline,
     runs repair 1 (sstables_repaired_at=1), then inserts keys 10-19 (subject
     of repair 2) and flushes all nodes.
 
@@ -994,11 +994,12 @@ async def _setup_table_for_race_window(manager, servers, cql):
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) "
                         f"WITH tombstone_gc = {{'mode':'repair'}};")
 
-    # Lower min_threshold to 2 so STCS fires as soon as two sstables appear in the
-    # UNREPAIRED compaction view, making the race easy to trigger deterministically.
+    # Lower min_threshold to 2 so compaction fires as soon as two sstables appear
+    # in the UNREPAIRED compaction view, making the race easy to trigger
+    # deterministically.
     await cql.run_async(
         f"ALTER TABLE {ks}.test WITH compaction = "
-        f"{{'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2, 'max_threshold': 4}}"
+        f"{{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2, 'max_threshold': 4}}"
     )
 
     # Insert keys 0-9 (baseline for repair 1).
@@ -1105,7 +1106,7 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     # After restart both S1' and E are loaded from disk with being_repaired=null.
     # Without the classifier fix: is_repaired(sstables_repaired_at=1, S1'{repaired_at=2})
     # is false and being_repaired is null, so S1' lands in the UNREPAIRED view where
-    # autocompaction is active.  STCS (min_threshold=2) immediately merges S1' and E into
+    # autocompaction is active.  ICS (min_threshold=2) immediately merges S1' and E into
     # F(repaired_at=max(2,0)=2, keys 10-29), wrongly promoting E into the REPAIRED set.
     # With the classifier fix: S1' has repaired_at==sstables_repaired_at+1 and the tablet
     # is still in the `repair` stage, so it is classified REPAIRING (compaction disabled),
@@ -1562,9 +1563,13 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
     servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(manager, tablets=1)
 
     # min_sstable_size=1 so tiny sstables are bucketed by size only, keeping B
-    # away from A and C.
+    # away from A and C. bucket_low/bucket_high are pinned to the wider window
+    # that size-tiered compaction used to default to, so that A and C land in
+    # one bucket however the strategy's own defaults move; the ICS defaults
+    # (0.7071/1.4142) are narrow enough to split them.
     await cql.run_async(f"ALTER TABLE {ks}.test WITH compaction = "
-                        f"{{'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2, 'min_sstable_size': 1}}")
+                        f"{{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2, "
+                        f"'min_sstable_size': 1, 'bucket_low': 0.5, 'bucket_high': 1.5}}")
     for s in servers:
         await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
         await manager.api.set_logger_level(s.ip_addr, 'compaction', 'debug')
@@ -2000,14 +2005,17 @@ async def check_no_toc_less_sstables(manager, servers, ks, stopped_ids=()):
 async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_toc_less_sstables(manager: ScyllaClusterManager):
     nr_keys = 1000
     cmdline = ['--hinted-handoff-enabled', 'false', '--logger-log-level', 'compaction=debug']
+    # The high min_threshold below holds only with compaction_enforce_min_threshold:
+    # otherwise compaction still merges any pair of similar-sized sstables.
     servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline,
-                                        config={'tablet_load_stats_refresh_interval_in_seconds': 1})
+                                        config={'tablet_load_stats_refresh_interval_in_seconds': 1,
+                                                'compaction_enforce_min_threshold': True})
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                                         "'replication_factor': 3} AND tablets = {'initial': 1}")
     # A high min_threshold keeps the repaired sstables apart until the test lowers it.
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}} "
-                        "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'min_threshold': 32}")
+                        "AND compaction = {'class': 'IncrementalCompactionStrategy', 'min_threshold': 32}")
 
     # Each round leaves one more similar-sized repaired sstable per replica.
     for i in range(4):
@@ -2029,7 +2037,7 @@ async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_t
     # Mirrors the tombstone_gc change that triggered this in the field; the lower min_threshold
     # makes the compaction it triggers on the repaired view deterministic.
     await cql.run_async(f"ALTER TABLE {ks}.test WITH tombstone_gc = {{'mode':'timeout'}} "
-                        "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2}")
+                        "AND compaction = {'class': 'IncrementalCompactionStrategy', 'min_threshold': 2}")
     deleted_while_held = await wait_for_deleted(captured, timeout=60)
     logger.info(f"{len(deleted_while_held)} of {len(captured)} captured sstables deleted before release: {deleted_while_held}")
 

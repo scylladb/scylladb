@@ -163,7 +163,7 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
     in test_materialized_view.py.
     """
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY") as table:
-        alter = cql.prepare(f"ALTER TABLE {table} WITH compaction = {{'class': 'SizeTieredCompactionStrategy'}}"
+        alter = cql.prepare(f"ALTER TABLE {table} WITH compaction = {{'class': 'LeveledCompactionStrategy'}}"
                             " AND min_index_interval = 0")
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):

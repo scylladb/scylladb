@@ -359,7 +359,7 @@ Create Table Compaction
 +----------------------------------------------------+-------------------------------------+
 | Feature                                            | Support                             |
 +====================================================+=====================================+
-| :ref:`SizeTieredCompactionStrategy <STCS>` (STCS)  | |v|                                 |
+| :ref:`SizeTieredCompactionStrategy <STCS>` (STCS)  | |v|     :sup:`**`                   |
 +----------------------------------------------------+-------------------------------------+
 |:ref:`LeveledCompactionStrategy <LCS>` (LCS)        | |v|                                 |
 +----------------------------------------------------+-------------------------------------+
@@ -369,6 +369,8 @@ Create Table Compaction
 +----------------------------------------------------+-------------------------------------+
 
 :sup:`*` No longer supported. Use TimeWindowCompactionStrategy (TWCS) instead.
+
+:sup:`**` Deprecated. It is accepted, but it is an alias of :ref:`IncrementalCompactionStrategy <ICS>` (ICS).
 
 Create Table Compression
 ........................
