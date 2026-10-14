@@ -15,6 +15,9 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/gate.hh>
+#include <deque>
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/prepared_statements_cache.hh"
@@ -143,6 +146,16 @@ private:
 
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
+
+    // Large statements are parsed one at a time, by a thread that starts with
+    // the query processor and lives until stop(). Its stack is allocated once,
+    // at startup, when memory is not fragmented yet. See parse_in_thread().
+    struct parse_job;
+    std::deque<parse_job*> _parse_jobs;
+    condition_variable _parse_jobs_cv;
+    // Entered by every parse job. stop() closes it, and so waits for them.
+    seastar::gate _parse_gate;
+    future<> _parse_thread;
 
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
@@ -609,7 +622,15 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
 
-    // get_statement() for a statement whose prepare suspends. state
+    // Runs the parse jobs until stop().
+    future<> start_parse_thread();
+
+    // Parses a large statement in the parse thread, which yields between
+    // tokens. Returns the statement and the bytes its parse allocated.
+    future<std::pair<std::unique_ptr<statements::raw::parsed_statement>, uint64_t>> parse_in_thread(
+            utils::chunked_string_view query, dialect d);
+
+    // get_statement() for a statement whose parse or prepare suspends. state
     // is a copy of the client state from before the first suspension. A batch
     // that a schema change leaves on mixed schema versions is prepared again.
     future<std::unique_ptr<statements::prepared_statement>> get_statement_with_retries(

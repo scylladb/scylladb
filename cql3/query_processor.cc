@@ -16,6 +16,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
+#include <seastar/core/thread.hh>
+#include <seastar/core/thread_cputime_clock.hh>
 
 #include "auth/authenticated_user.hh"
 #include "service/storage_proxy.hh"
@@ -96,6 +98,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _cql_config(cql_cfg)
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
+        , _parse_thread(start_parse_thread())
         , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
         , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
@@ -104,6 +107,10 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const auto& v) { _write_consistency_levels_warned = to_consistency_level_set(v); }))
         , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const auto& v) { _write_consistency_levels_disallowed = to_consistency_level_set(v); }))
         {
+    if (_parse_thread.failed()) {
+        // Without the thread, a large statement would wait forever.
+        std::rethrow_exception(_parse_thread.get_exception());
+    }
     _write_consistency_levels_warned = to_consistency_level_set(_db.get_config().write_consistency_levels_warned());
     _write_consistency_levels_disallowed = to_consistency_level_set(_db.get_config().write_consistency_levels_disallowed());
     namespace sm = seastar::metrics;
@@ -595,6 +602,10 @@ future<> query_processor::stop_remote() {
 }
 
 future<> query_processor::stop() {
+    // Waits for the parse jobs in progress and in the queue.
+    co_await _parse_gate.close();
+    _parse_jobs_cv.broken();
+    co_await std::move(_parse_thread).handle_exception_type([] (const broken_condition_variable&) {});
     co_await _mnotifier.unregister_listener(_migration_subscriber.get());
     co_await _authorized_prepared_cache.stop();
     co_await _prepared_cache.stop();
@@ -818,6 +829,82 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
+// A statement this large is parsed in a thread that yields between tokens.
+// A smaller one parses quickly, and in the thread it would wait behind a large one.
+static constexpr size_t parse_in_thread_min_size = 16 * 1024;
+
+// A thread's stack has no guard page in release builds. A statement that
+// nests too deeply fails while this much of the stack is left.
+static constexpr size_t parse_thread_stack_margin = 64 * 1024;
+
+struct query_processor::parse_job {
+    utils::chunked_string_view query;
+    dialect d;
+    scheduling_group sg;
+    promise<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>> result;
+};
+
+// Runs in the parse thread. Returns the statement and the bytes its parse
+// allocated, summed between the yields, so that no other task's bytes are
+// counted.
+static std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>
+parse_with_yields(utils::chunked_string_view query, dialect d, uintptr_t stack_limit) {
+    uint64_t allocated = 0;
+    auto segment_start = seastar::memory::stats().total_bytes_allocated();
+    noncopyable_function<void()> on_token = [&] {
+        if (reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) < stack_limit) {
+            throw exceptions::syntax_exception("statement nested too deeply");
+        }
+        // Stands in for a statement that is slow to parse.
+        utils::get_local_injector().inject("parse_statement_in_thread_spin", [] {
+            auto until = seastar::thread_cputime_clock::now() + std::chrono::milliseconds(10);
+            while (seastar::thread_cputime_clock::now() < until) {}
+        });
+        if (seastar::thread::should_yield()) {
+            allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+            seastar::thread::yield();
+            segment_start = seastar::memory::stats().total_bytes_allocated();
+        }
+    };
+    auto statement = query_processor::parse_statement(query, d, &on_token);
+    allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+    return std::pair(std::move(statement), allocated);
+}
+
+future<> query_processor::start_parse_thread() {
+    // The stack is allocated once per shard and kept, so warning about its
+    // size would only be noise.
+    seastar::memory::scoped_large_allocation_warning_disable allocated_once;
+    return seastar::async(thread_attributes{.stack_size = util::parser_stack_size}, [this] {
+        // The stack grows down, so a deeper frame has a lower address.
+        auto stack_limit = reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) - (util::parser_stack_size - parse_thread_stack_margin);
+        for (;;) {
+            // Throws once stop() breaks it, after the last job.
+            _parse_jobs_cv.wait([this] { return !_parse_jobs.empty(); }).get();
+            auto& job = *_parse_jobs.front();
+            _parse_jobs.pop_front();
+            // One thread serves every caller, so each parse runs in its caller's scheduling group.
+            auto own_sg = seastar::thread::switch_to(job.sg);
+            try {
+                job.result.set_value(parse_with_yields(job.query, job.d, stack_limit));
+            } catch (...) {
+                job.result.set_exception(std::current_exception());
+            }
+            seastar::thread::switch_to(own_sg);
+        }
+    });
+}
+
+future<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>>
+query_processor::parse_in_thread(utils::chunked_string_view query, dialect d) {
+    // Throws gate_closed_exception once stop() runs.
+    auto holder = _parse_gate.hold();
+    parse_job job{query, d, current_scheduling_group()};
+    _parse_jobs.push_back(&job);
+    _parse_jobs_cv.signal();
+    co_return co_await job.result.get_future();
+}
+
 // Whether get_statement() prepares a statement again after a failed attempt.
 static bool should_retry_prepare(std::exception_ptr& ex, unsigned attempt) {
     return attempt < statements::batch_prepare_attempts && try_catch<statements::mixed_schema_versions>(ex);
@@ -865,8 +952,14 @@ void query_processor::finish_prepare_and_track_cost(raw::parsed_statement& state
 
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
-    // A statement is ready on return, without a coroutine, unless its
-    // prepare() suspends.
+    // A USE on this connection can run while a parse or a prepare is
+    // suspended. Every attempt resolves tables against the connection's state
+    // from the start, so the state is copied before the first suspension.
+    if (query.size() >= parse_in_thread_min_size) {
+        return get_statement_with_retries(std::move(query), client_state.snapshot(), d, for_driver, std::move(pinned_plan), forced_keyspace, 1);
+    }
+    // A smaller statement is parsed here, and only the prepare() of a batch
+    // suspends. Every other statement is ready on return, without a coroutine.
     try {
         // Measuring allocation cost requires that no yield points exist
         // between bytes_before and bytes_after.
@@ -883,9 +976,6 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
             _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
             return make_ready_future<std::unique_ptr<prepared_statement>>(std::move(p));
         }
-        // A USE on this connection can run while the prepare is suspended.
-        // Every attempt resolves tables against the connection's state from
-        // the start, so the state is copied before the first suspension.
         return await_prepare(std::move(statement), std::move(prepared), bytes_before_prepare - bytes_before, bytes_before_prepare,
                 std::move(query), client_state.snapshot(), d, for_driver, std::move(pinned_plan), forced_keyspace);
     } catch (...) {
@@ -931,7 +1021,19 @@ query_processor::parse_and_prepare(utils::chunked_string& query, const service::
     // The parsing cost tracker counts only this statement's bytes, so no
     // other task may run inside a measured span.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();
-    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
+    std::unique_ptr<raw::parsed_statement> statement;
+    uint64_t parse_bytes;
+    if (query.size() >= parse_in_thread_min_size) {
+        auto parsed = co_await coroutine::as_future(parse_in_thread(query, d));
+        if (parsed.failed()) {
+            co_return coroutine::exception(parsed.get_exception());
+        }
+        std::tie(statement, parse_bytes) = parsed.get();
+    } else {
+        statement = parse_statement(query, d);
+        parse_bytes = seastar::memory::stats().total_bytes_allocated() - bytes_before;
+    }
+    auto bytes_after_parse = seastar::memory::stats().total_bytes_allocated();
 
     set_keyspace_and_plan(*statement, client_state, pinned_plan, forced_keyspace);
     ++_stats.prepare_invocations;
@@ -940,7 +1042,7 @@ query_processor::parse_and_prepare(utils::chunked_string& query, const service::
     // Any other returns a ready future, and awaiting it without a preemption
     // check adds no yield point.
     auto p = co_await coroutine::without_preemption_check(statement->prepare(_db, _cql_stats, _cql_config));
-    finish_prepare_and_track_cost(*statement, *p, query, for_driver, bytes_before_prepare - bytes_before, bytes_before_prepare);
+    finish_prepare_and_track_cost(*statement, *p, query, for_driver, parse_bytes + (bytes_before_prepare - bytes_after_parse), bytes_before_prepare);
     co_return p;
 }
 

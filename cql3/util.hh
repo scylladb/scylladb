@@ -33,6 +33,11 @@ namespace cql3 {
 namespace util {
 
 
+// Stack size of the thread that parses a large statement. It equals the
+// reactor stack size of all shards except shard 0, so the maximum nesting
+// depth is the same as when parsing on those shards.
+constexpr size_t parser_stack_size = 2 << 20;
+
 void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func,
         noncopyable_function<void()>* on_token);
 

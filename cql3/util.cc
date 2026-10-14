@@ -35,13 +35,15 @@ static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dia
     // ANTLR3 does pointer arithmetic on char* pointers, so we must linearize.
     // Use a thread-local reusable_buffer to avoid a heap allocation per call.
     using namespace std::chrono_literals;
-    static thread_local utils::reusable_buffer<seastar::lowres_clock> linearization_buffer(600s);
+    static thread_local utils::reusable_buffer<seastar::lowres_clock> linearization_buffer(600s, utils::held_across_preemption::yes);
 
     std::variant<sstring, utils::reusable_buffer_guard> buf_source;
     std::string_view  cql;
     if (linearization_buffer.used()) {
-        // Nested call to with_parser(). Such calls usually (re) parse a sub-set
-        // of the original query, so it is fine to linearize.
+        // Nested call to with_parser(), or a parse in a thread holds the buffer
+        // while it yields. Nested calls usually (re) parse a sub-set of the
+        // original query, and only one parse per shard runs in a thread, so it
+        // is fine to linearize.
         buf_source.emplace<sstring>(chunked_cql.linearize());
         cql = std::get<sstring>(buf_source);
     } else {
@@ -110,7 +112,7 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
 // is free - guard pages are never touched, so none of them is ever committed.
 class parser_stack {
     static constexpr size_t min_guard_size = 16 * 1024;
-    static constexpr size_t usable_size = 1 << 20;
+    static constexpr size_t usable_size = parser_stack_size;
 
     // mprotect() rounds the protected range up to a page boundary, so the
     // guard must be a whole number of pages or bottom() would land inside it.
