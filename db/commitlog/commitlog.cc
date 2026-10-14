@@ -2759,6 +2759,12 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
                 clogger.debug("Not safe to delete segment {}; still allocating.", *s);
             } else if (!s->is_clean()) {
                 clogger.debug("Not safe to delete segment {}; dirty is {}", *s, segment::cf_mark {*s});
+                auto held = totals.active_size_on_disk + totals.wasted_size_on_disk;
+                if (disk_usage_threshold != 0 && held >= disk_usage_threshold) {
+                    static thread_local logger::rate_limit rate_limit(std::chrono::seconds(60));
+                    clogger.log(log_level::warn, rate_limit, "Dirty segment {} blocks deletion of all newer segments ({} MB in use); dirty is {}",
+                            *s, held / (1024 * 1024), segment::cf_mark {*s});
+                }
             } else {
                 clogger.debug("Not safe to delete segment {}; disk ops pending", *s);
             }
