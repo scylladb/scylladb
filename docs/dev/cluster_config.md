@@ -11,7 +11,7 @@ This document is the design for cluster config. It first defines the shared foun
 - Options Migrated From `db::config.cc`
 - Options Migrated From Legacy Schema Properties
 
-The proposed initial implementation targets the shared foundation and native options; the two migrated categories are described here once they are designed.
+The initial implementation covers the shared foundation, native options and options migrated from `db::config.cc`. Options migrated from legacy schema properties are described here once they are designed.
 
 Read the shared foundation first, then the category section for the option you are working with.
 
@@ -180,7 +180,7 @@ The required behavior is:
 
 - `DESCRIBE KEYSPACE` and `DESCRIBE TABLE` show effective values for inheritable table-oriented config, formatted as described in [Stored Overrides and Effective Values](#stored-overrides-and-effective-values): live properties for stored overrides, commented-out properties for inherited values, each with the provenance trailer
 - `DESCRIBE SCHEMA` emits the cluster-scope overrides first, before any keyspace and in **all** tiers, as a single synthetic row (`keyspace_name = null`, `type = 'cluster_config'`) whose `create_statement` holds one `ALTER CLUSTER WITH <option> = <value>;` statement per stored option, one per line, each annotated with the provenance trailer in the plain tier and bare under `WITH INTERNALS` (cluster scope is portable operator state; emitting it only under INTERNALS would make the default dump silently lossy: live statements are stored-only, so nothing else in the dump carries the cluster scope)
-- the node-oriented introspection surfaces — `DESCRIBE DATACENTER`, `DESCRIBE RACK`, `DESCRIBE NODE`, a `config` column on `DESCRIBE CLUSTER`, and a topology block in `DESCRIBE SCHEMA WITH INTERNALS` — are planned as a follow-up; no shipping option supports the node-oriented scopes yet, so nothing is introspectable there today
+- the node-oriented introspection surfaces (`DESCRIBE DATACENTER`, `DESCRIBE RACK`, `DESCRIBE NODE`, a `config` column on `DESCRIBE CLUSTER`, and a topology block in `DESCRIBE SCHEMA WITH INTERNALS`) are planned as a follow-up; until then an option migrated from `db::config.cc` (such as `tablets_per_shard_goal`) has no `DESCRIBE` read-back surface beyond the cluster-scope `ALTER CLUSTER` lines of `DESCRIBE SCHEMA`, and its effective value on a node is read from `system.config`
 - these read surfaces require no special privileges beyond login: the config tables live in `system_schema` and are readable by any user, so a dump never silently omits config state depending on who runs it
 
 The per-object `DESCRIBE`s and the schema-dump cluster block all follow the two-form rule from [Stored Overrides and Effective Values](#stored-overrides-and-effective-values): the live property is the write view, the commented-out property is the read view.
@@ -587,3 +587,97 @@ The shared test areas and main test files are listed in [Tests](#tests) above. C
 - registry validation and scope rejection for newly added native keys
 
 The proposed v1 implementation should cover `auto_repair_enabled` in these areas: the table-oriented CQL surface and persistence in `test/boost/cql_query_test.cc`, and the schema-version/digest and prepared-statement behavior in `test/boost/schema_change_test.cc`.
+
+## Options Migrated From `db::config.cc`
+
+This section is the implementation-oriented design and developer guide for **options migrated from `db::config.cc`**: existing config-framework options that become manageable through cluster config, with multi-scope overrides and inheritance.
+
+The shared model (scopes, storage, resolution, schema-backed ownership, the manager, callbacks, the CQL management surface, and tests) is defined in the shared foundation above. This section covers only what is specific to this category.
+
+### The `db::config.cc` Migration Model
+
+A migrated option keeps `db::config` as the home of its effective value. Cluster config stores overrides in front of it and applies the resolved value to `db::config` on the node, so every existing reader of the option (the subsystem that consumes it, the REST API, `system.config`) keeps reading `db::config` and sees the effective value without being rewired. These options are purely behavioral: they affect node behavior, not schema. They belong to the node-oriented domain, `node -> rack -> datacenter -> cluster`, because a `db::config` entry is per node and has no table dimension. An option whose value one node consumes on behalf of the whole cluster, such as a tablet load balancer setting read on the group0 leader, registers only the `CLUSTER` scope of that domain: a value that differs between nodes would depend on which node happens to be the leader.
+
+The model is:
+
+- the registry entry keeps the `db::config` entry's name, declares `option_kind::db_config`, and declares the option's type through `default_value` as every option does; for an integral entry narrower than `int64_t` it also declares a `valid_range` within the entry's type (at most `[0, UINT32_MAX]` for a `uint32_t`, narrower when the consumer needs it: `tablets_per_shard_goal` excludes 0), so `ALTER ... WITH` rejects values the entry could not hold or the consumer could not use
+- stored overrides use the same `configs`-based override model and the same scope resolution as every other key
+- when the option resolves to an effective value, `db::cluster_config_db_config_bridge` applies it to the `db::config` entry on every shard with config source `ClusterConfig`
+- when the option no longer resolves to an effective value, the bridge restores the shard's pre-cluster value and source
+- the fallback when no scope stores an override is the node's own `db::config` value (yaml, command line, or built-in default), not the registry's `default_value`. The registry default only declares the option's type, and the manager's typed `resolve_*_config` accessors report an internal error for a `db_config` option so that no consumer can substitute the registry default for the node's own value
+- like every config write, a write to such an option bumps the schema version and digest, and like every node-oriented write it invalidates no prepared statements (see [Schema-Backed Ownership](#schema-backed-ownership))
+
+Only a live-updateable `db::config` entry (`liveness::LiveUpdate`) can be migrated. The bridge checks this when it binds the entry and reports an internal error otherwise, so an accepted `ALTER ... WITH ...` always takes effect immediately on every node.
+
+The yaml and command-line settings are not deprecated by the migration: they remain the per-node baseline that the override sits on top of and that `= NULL` returns to. A bootstrapping node runs on its baseline until it has received the cluster config; it also has no host ID yet that `ALTER NODE` could address.
+
+### External Surfaces
+
+A migrated option is exposed at the node-oriented scopes it registers, and never at the table-oriented ones. The first migrated option, `tablets_per_shard_goal`, registers `CLUSTER` only:
+
+```sql
+ALTER CLUSTER WITH tablets_per_shard_goal = 200;
+ALTER CLUSTER WITH tablets_per_shard_goal = NULL;
+```
+
+An option that registers the full chain is also settable per datacenter, rack and node:
+
+```sql
+ALTER DATACENTER dc1 WITH <option> = <value>;
+ALTER RACK dc1 rack1 WITH <option> = <value>;
+ALTER NODE 00000000-0000-0000-0000-000000000001 WITH <option> = <value>;
+```
+
+Value validation is the registry's: the type check plus the option's `valid_range`. The bridge converts the stored text with the same registry converters, and checks at startup that the range fits the entry's native type, so a value that passes `ALTER` cannot fail to apply on a node.
+
+On a node where an override is in effect, `system.config` shows the effective value with source `cluster_config`:
+
+```sql
+SELECT name, source, value FROM system.config WHERE name = 'tablets_per_shard_goal';
+```
+
+While an override is in effect, a node-local write of the same option through a REST setter or through `UPDATE system.config` is rejected with an error naming the `ALTER ... WITH` forms. The cluster-wide setting wins for as long as it is set; the node-local writers work again once the override is removed. A yaml reload while an override is in effect leaves the option alone, as it does today for a value set through the API, so the baseline is not refreshed from yaml: `= NULL` returns the node to the value it had when the override was first applied, and a yaml edit made in between applies on the next reload or restart.
+
+### Implementation Details
+
+#### Config Source And Restore-To-Baseline
+
+`utils::config_file::config_source` gains a `ClusterConfig` value. `named_value::restore(value, source)` sets a value and its source unconditionally, which `operator()` cannot do for a baseline whose source is `None`. The enum order matters only to a yaml reload, which skips any value whose source ranks above `SettingsFile`, so `ClusterConfig` is placed above it. Otherwise the source is a provenance tag and the framework applies values last-writer-wins; the bridge enforces "cluster config wins while set, baseline wins once unset" by applying the override on set, restoring the snapshot on clear, and rejecting the node-local writers in between.
+
+The baseline is per node, because yaml and command-line values differ per node. It is held per shard, because `db::config` holds its values per shard; the source, however, is one field shared by all shards, so only shard 0 records and restores it. The snapshot's lifecycle:
+
+- on the first applied override for an entry, the bridge snapshots the entry's current value and source
+- later overrides for the same entry and yaml reloads do not replace the snapshot
+- when the entry no longer resolves to an override, the bridge restores the snapshot and drops it
+- after a restart, `db::config` is initialized from yaml and the command line before the first cluster config refresh runs, so the snapshot is taken from the correct pre-cluster state on every boot
+
+#### The Bridge
+
+`db::cluster_config_db_config_bridge` (`db/cluster_config_db_config_bridge.{hh,cc}`) is a sharded service with one typed binding per migrated option on every shard. It is started after the cluster config manager and stopped before it, in `main()` and in the test environment. Each binding registers a callback with its shard's manager for its option (see [Live Config Application](#live-config-application)); the callback checks the delivered text with the registry's `validate_value()` and ignores a value this node rejects (during an upgrade or rollback the coordinator that accepted it may run a binary with other rules), converts the text to the entry's native type, applies it to the shard's value, or restores the shard's baseline, and logs what it did on shard 0. The callback is synchronous: a callback that suspended could resume after the binding is destroyed, since `stop()` only unregisters. A node-oriented option has the local node as its single callback target, so the callback runs once per change on each shard.
+
+The bindings are an explicit list in the bridge constructor (`bind(cfg.tablets_per_shard_goal)`), one line per option, which keeps each binding typed with its entry's native type. The constructor cross-checks the list against the registry: every `option_kind::db_config` entry must be bound, and every bound entry must be registered as `db_config` with a matching type (and, for an integral entry, a `valid_range` within the entry's type, where an option without one accepts any `int64_t`) and be live-updateable. A mismatch is an internal error at startup.
+
+A consumer that decides once at boot which entry to follow (for example an updater that picks one of two entries depending on which is set) does not see an override applied to the entry it did not pick. Such a consumer has to be changed to recompute from both entries on either change before its option is migrated.
+
+### Tests
+
+The shared test areas are listed in [Tests](#tests) above. Category-specific areas for `db::config.cc` options:
+
+- an override is applied to `db::config` on every shard with source `ClusterConfig`
+- the scopes the option does not register are rejected by `ALTER`
+- a node-local API write is rejected while an override is in effect and works again once it is removed
+- values outside the entry's range are rejected by `ALTER`
+- a stored value the node rejects is ignored and the override in effect stays
+- `= NULL` restores the pre-cluster value and source, and the baseline is captured once
+
+Cluster tests: an override is reported by `system.config` on every node with source `cluster_config` while a node-local `UPDATE system.config` is refused, removing it returns each node to its own yaml value and source, a restarted node re-applies the override, and a node that joins after the override was set applies it.
+
+The first migrated option, `tablets_per_shard_goal`, is covered in `test/boost/cluster_config_manager_test.cc` and `test/cluster/test_cluster_config.py`. The node-oriented chain itself is covered by the test-only node-oriented option in the same boost file.
+
+### Extending the Feature: Migrating a `db::config` Option
+
+1. Confirm the `db::config` entry is live-updateable (`liveness::LiveUpdate`). A `MustRestart` entry cannot be migrated.
+2. Add the registry entry in `db/cluster_config_registry.cc` with the entry's name, the scopes it supports (`node_oriented_scopes`, or `CLUSTER` only for a value one node consumes for the whole cluster), a `default_value` of the matching registry type, `.kind = option_kind::db_config`, and, for an integral entry narrower than `int64_t`, a `valid_range` that fits its native type. Nothing is declared for feature gating: the feature service advertises `CLUSTER_CONFIG_<NAME>` for the entry, as for a native option.
+3. Add `bind(cfg.<entry>)` to the bridge constructor.
+4. Check that every consumer of the entry follows it dynamically (through `observe()` or an `updateable_value`), not through a choice made once at boot.
+5. Add boost coverage for apply, the scopes the option registers and rejects, the refused node-local write, validation and restore, and cluster coverage for the override as reported by `system.config` on every node, restore, restart and join.
