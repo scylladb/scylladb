@@ -16,6 +16,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
+#include <seastar/core/thread.hh>
+#include <seastar/core/thread_cputime_clock.hh>
 
 #include "auth/authenticated_user.hh"
 #include "service/storage_proxy.hh"
@@ -590,6 +592,11 @@ future<> query_processor::stop_remote() {
 }
 
 future<> query_processor::stop() {
+    _parse_thread_stopped = true;
+    if (_parse_thread) {
+        _parse_jobs_cv.broken();
+        co_await std::move(*_parse_thread).handle_exception_type([] (const broken_condition_variable&) {});
+    }
     co_await _mnotifier.unregister_listener(_migration_subscriber.get());
     co_await _authorized_prepared_cache.stop();
     co_await _prepared_cache.stop();
@@ -811,6 +818,85 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
+// A statement this large is parsed in a thread that yields between tokens.
+// A smaller one parses quickly, and in the thread it would wait behind a large one.
+static constexpr size_t parse_in_thread_min_size = 16 * 1024;
+
+// A thread's stack has no guard page in release builds. A statement that
+// nests too deeply fails while this much of the stack is left.
+static constexpr size_t parse_thread_stack_margin = 64 * 1024;
+
+struct query_processor::parse_job {
+    utils::chunked_string_view query;
+    dialect d;
+    scheduling_group sg;
+    promise<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>> result;
+};
+
+// Runs in the parse thread. Returns the statement and the bytes its parse
+// allocated, summed between the yields, so that no other task's bytes are
+// counted.
+static std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>
+parse_with_yields(utils::chunked_string_view query, dialect d, uintptr_t stack_limit) {
+    uint64_t allocated = 0;
+    auto segment_start = seastar::memory::stats().total_bytes_allocated();
+    noncopyable_function<void()> on_token = [&] {
+        if (reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) < stack_limit) {
+            throw exceptions::syntax_exception("statement nested too deeply");
+        }
+        // Stands in for a statement that is slow to parse.
+        utils::get_local_injector().inject("parse_statement_in_thread_spin", [] {
+            auto until = seastar::thread_cputime_clock::now() + std::chrono::milliseconds(10);
+            while (seastar::thread_cputime_clock::now() < until) {}
+        });
+        if (seastar::thread::should_yield()) {
+            allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+            seastar::thread::yield();
+            segment_start = seastar::memory::stats().total_bytes_allocated();
+        }
+    };
+    auto statement = query_processor::parse_statement(query, d, &on_token);
+    allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+    return std::pair(std::move(statement), allocated);
+}
+
+future<> query_processor::start_parse_thread() {
+    // The stack is allocated once per shard and kept, so warning about its
+    // size would only be noise.
+    seastar::memory::scoped_large_allocation_warning_disable allocated_once;
+    return seastar::async(thread_attributes{.stack_size = util::parser_stack_size}, [this] {
+        auto stack_limit = reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) - (util::parser_stack_size - parse_thread_stack_margin);
+        for (;;) {
+            // Throws once stop() breaks it, after the last job.
+            _parse_jobs_cv.wait([this] { return !_parse_jobs.empty(); }).get();
+            auto& job = *_parse_jobs.front();
+            _parse_jobs.pop_front();
+            // One thread serves every caller, so each parse runs in its caller's scheduling group.
+            auto own_sg = seastar::thread::switch_to(job.sg);
+            try {
+                job.result.set_value(parse_with_yields(job.query, job.d, stack_limit));
+            } catch (...) {
+                job.result.set_exception(std::current_exception());
+            }
+            seastar::thread::switch_to(own_sg);
+        }
+    });
+}
+
+future<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>>
+query_processor::parse_in_thread(utils::chunked_string_view query, dialect d) {
+    if (_parse_thread_stopped) {
+        co_return coroutine::exception(std::make_exception_ptr(gate_closed_exception()));
+    }
+    if (!_parse_thread) {
+        _parse_thread = start_parse_thread();
+    }
+    parse_job job{query, d, current_scheduling_group()};
+    _parse_jobs.push_back(&job);
+    _parse_jobs_cv.signal();
+    co_return co_await job.result.get_future();
+}
+
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // A USE on this connection can run while this suspends. Every attempt
@@ -833,7 +919,19 @@ query_processor::parse_and_prepare(utils::chunked_string& query, const service::
     // The parsing cost tracker counts only this statement's bytes, so no
     // other task may run inside a measured span.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();
-    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
+    std::unique_ptr<raw::parsed_statement> statement;
+    uint64_t parse_bytes;
+    if (query.size() >= parse_in_thread_min_size) {
+        auto parsed = co_await coroutine::as_future(parse_in_thread(query, d));
+        if (parsed.failed()) {
+            co_return coroutine::exception(parsed.get_exception());
+        }
+        std::tie(statement, parse_bytes) = parsed.get();
+    } else {
+        statement = parse_statement(query, d);
+        parse_bytes = seastar::memory::stats().total_bytes_allocated() - bytes_before;
+    }
+    auto bytes_after_parse = seastar::memory::stats().total_bytes_allocated();
 
     // Set keyspace for statement that require login
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
@@ -864,7 +962,7 @@ query_processor::parse_and_prepare(utils::chunked_string& query, const service::
     p->statement->raw_cql_statement = std::move(query);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     auto prepare_bytes = statement->prepare_allocated_bytes().value_or(bytes_after_prepare - bytes_before_prepare);
-    _parsing_cost_tracker.add_sample((bytes_before_prepare - bytes_before) + prepare_bytes + (bytes_after - bytes_after_prepare));
+    _parsing_cost_tracker.add_sample(parse_bytes + (bytes_before_prepare - bytes_after_parse) + prepare_bytes + (bytes_after - bytes_after_prepare));
     co_return p;
 }
 

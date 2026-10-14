@@ -15,6 +15,8 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/condition-variable.hh>
+#include <deque>
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/prepared_statements_cache.hh"
@@ -141,6 +143,14 @@ private:
 
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
+
+    // Large statements are parsed one at a time, by a thread that lives until
+    // stop(), so its stack is allocated once. See parse_in_thread().
+    struct parse_job;
+    std::deque<parse_job*> _parse_jobs;
+    condition_variable _parse_jobs_cv;
+    std::optional<future<>> _parse_thread;
+    bool _parse_thread_stopped = false;
 
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
@@ -595,6 +605,14 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
+
+    // Runs the parse jobs until stop().
+    future<> start_parse_thread();
+
+    // Parses a large statement in the parse thread, which yields between
+    // tokens. Returns the statement and the bytes its parse allocated.
+    future<std::pair<std::unique_ptr<statements::raw::parsed_statement>, uint64_t>> parse_in_thread(
+            utils::chunked_string_view query, dialect d);
 
     // One attempt of get_statement(). Takes the query only on success.
     future<std::unique_ptr<statements::prepared_statement>> parse_and_prepare(
