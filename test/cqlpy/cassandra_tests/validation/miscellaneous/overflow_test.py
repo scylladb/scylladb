@@ -106,7 +106,6 @@ def testFloatWithExponent(cql, test_keyspace):
 
 # Migrated from cql_tests.py:TestCQL.conversion_functions_test()
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testConversionFunctions(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, i varint, b blob)") as table:
         execute(cql, table, "INSERT INTO %s (k, i, b) VALUES (0, blob_as_varint(bigint_as_blob(3)), text_as_blob('foobar'))")
@@ -148,7 +147,6 @@ def testEmpty(cql, test_keyspace):
 
 # Migrated from cql_tests.py:TestCQL.function_with_null_test()
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testFunctionWithNull(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t timeuuid,)") as table:
         execute(cql, table, "INSERT INTO %s (k) VALUES (0)")
@@ -190,7 +188,6 @@ def testNanInfinityValues(cql, test_keyspace):
 
 # Migrated from cql_tests.py:TestCQL.blobAs_functions_test()
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testBlobAsFunction(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v int)") as table:
         #  A blob that is not 4 bytes should be rejected
