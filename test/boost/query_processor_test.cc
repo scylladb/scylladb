@@ -549,4 +549,124 @@ SEASTAR_TEST_CASE(test_remove_prepared) {
     });
 }
 
+// A statement of 16 KiB or more is parsed in a thread that yields between
+// tokens (SCYLLADB-219). The injection makes every token burn 10 ms of CPU,
+// and the statement has a few dozen of them, so in one task the parse would
+// stall for hundreds of ms, against a 100 ms threshold.
+SEASTAR_TEST_CASE(test_large_statement_parse_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+
+        std::atomic<unsigned> stalls = 0;
+        auto old_threshold = engine().get_blocked_reactor_notify_ms();
+        auto old_report = reactor::test::get_stall_detector_report_function();
+        auto restore = defer([&] () noexcept {
+            injector.disable("parse_statement_in_thread_spin");
+            reactor::test::set_stall_detector_report_function(std::move(old_report));
+            engine().update_blocked_reactor_notify_ms(old_threshold);
+        });
+        injector.enable("parse_statement_in_thread_spin");
+        reactor::test::set_stall_detector_report_function([&] { ++stalls; });
+        engine().update_blocked_reactor_notify_ms(100ms);
+        // See test_batch_prepare_does_not_stall.
+        seastar::sleep(10ms).get();
+
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value)).get();
+
+        BOOST_REQUIRE_EQUAL(stalls, 0);
+        BOOST_REQUIRE_GT(injector.enter_count("parse_statement_in_thread_spin"), 0);
+        assert_that(e.execute_cql("SELECT v FROM ks.t WHERE pk = 1").get()).is_rows().with_rows({{utf8_type->decompose(value)}});
+    });
+}
+
+// A USE on the connection can run while a large statement is parsed in a
+// thread. The statement must resolve against the keyspace from before, as a
+// QUERY and as a PREPARE.
+SEASTAR_TEST_CASE(test_use_during_large_statement_parse) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        e.execute_cql("CREATE KEYSPACE ks2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks2.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+        auto disable = defer([&] () noexcept { injector.disable("parse_statement_in_thread_spin"); });
+        injector.enable("parse_statement_in_thread_spin");
+
+        // Runs USE ks2 while the parse that f waits for still goes on.
+        auto use_during = [&] <typename T> (future<T> f) {
+            e.execute_cql("USE ks2").get();
+            auto enters = injector.enter_count("parse_statement_in_thread_spin");
+            auto ret = f.get();
+            BOOST_REQUIRE_GT(injector.enter_count("parse_statement_in_thread_spin"), enters);
+            return ret;
+        };
+        use_during(e.execute_cql(fmt::format("INSERT INTO t (pk, v) VALUES (1, '{}')", value)));
+        auto id = use_during(e.prepare(fmt::format("INSERT INTO t (pk, v) VALUES (2, '{}')", value)));
+        e.execute_prepared(id, {}).get();
+
+        assert_that(e.execute_cql("SELECT pk FROM ks.t").get()).is_rows().with_rows_ignore_order({{int32_type->decompose(1)}, {int32_type->decompose(2)}});
+        assert_that(e.execute_cql("SELECT pk FROM ks2.t").get()).is_rows().is_empty();
+    });
+}
+
+// The CPU time the scheduling group has used on this shard, in ms.
+static uint64_t scheduler_runtime_ms(const sstring& group) {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    for (size_t i = 0; i < all_metadata.size(); ++i) {
+        if (all_metadata[i].mf.name != "scheduler_runtime_ms") {
+            continue;
+        }
+        for (size_t j = 0; j < all_metadata[i].metrics.size(); ++j) {
+            const auto& labels = all_metadata[i].metrics[j].labels();
+            if (auto found = labels.find("group"); found != labels.end() && found->second.value() == group) {
+                return all_metrics->values[i][j].ui();
+            }
+        }
+    }
+    BOOST_FAIL(fmt::format("no scheduler_runtime_ms for group {}", group));
+    return 0;
+}
+
+// One thread parses the large statements of a shard. It starts in the
+// scheduling group of the first one, but every parse must run in the group of
+// the request that sent the statement.
+SEASTAR_TEST_CASE(test_large_statement_parse_runs_in_callers_scheduling_group) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        const sstring value(20 * 1024, 'x');
+        // Starts the parse thread in this test's scheduling group.
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value)).get();
+
+        auto sg = create_scheduling_group("large_parse", 100).get();
+        auto destroy = defer([&] () noexcept { destroy_scheduling_group(sg).get(); });
+        auto& injector = utils::get_local_injector();
+        auto disable = defer([&] () noexcept { injector.disable("parse_statement_in_thread_spin"); });
+        injector.enable("parse_statement_in_thread_spin");
+
+        auto runtime_before = scheduler_runtime_ms("large_parse");
+        with_scheduling_group(sg, [&] {
+            return e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (2, '{}')", value)).discard_result();
+        }).get();
+        // The injection spins for 10 ms on each entry.
+        auto spin_ms = injector.enter_count("parse_statement_in_thread_spin") * 10;
+        BOOST_REQUIRE_GT(spin_ms, 0);
+        BOOST_REQUIRE_GE(scheduler_runtime_ms("large_parse") - runtime_before, spin_ms / 2);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
