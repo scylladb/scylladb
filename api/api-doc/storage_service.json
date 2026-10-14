@@ -1011,6 +1011,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"skip_repair",
+                     "description":"Do not repair each tablet after restoring it. By default the tablets are repaired once the cluster supports it. The repair needs every node up, so while a node is down a restore that repairs does not complete until the node is back or removed",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"backup_source_location",
                      "description":"Array of backup location objects, exactly one entry per datacenter the keyspace replicates to.",
                      "required":true,

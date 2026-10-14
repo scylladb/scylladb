@@ -1391,14 +1391,14 @@ public:
 };
 
 future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
-        std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
+        std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count, service::restore_repair repair) {
     progress.start();
     std::exception_ptr eptr;
     try {
         co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
 
         try {
-            co_await _ss.local().restore_tablets(tid, snap_name);
+            co_await _ss.local().restore_tablets(tid, snap_name, repair);
         } catch (...) {
             llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
             eptr = std::current_exception();
@@ -1452,7 +1452,8 @@ static void check_datacenter_coverage(const replica::table& t, const std::vector
     }
 }
 
-future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations,
+        service::restore_repair repair) {
     if (!_db.local().features().tablet_aware_restore) {
         throw std::runtime_error("Cannot restore tablets. Feature 'TABLET_AWARE_RESTORE' is not available in cluster");
     }
@@ -1536,8 +1537,8 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                     });
                 });
     auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
-            original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
-        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
+            original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count, repair] (tasks::task_manager::task::impl&) {
+        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count, repair);
     });
     co_return task->id();
 }

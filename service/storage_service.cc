@@ -6449,13 +6449,13 @@ future<> storage_service::abort_restore_tablets(table_id table) {
     slogger.info("Aborted tablet restore for table_id={}", table);
 }
 
-future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
+future<> storage_service::restore_tablets(table_id table, sstring snap_name, restore_repair repair) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.restore_tablets(table, snap_name);
+            return ss.restore_tablets(table, snap_name, repair);
         });
     }
 
@@ -6472,6 +6472,9 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
             if (entry.restore_table_id == table) {
                 if (entry.restore_snapshot_name != snap_name) {
                     throw std::runtime_error(fmt::format("Table {} is already being restored from a different snapshot {}", table, *entry.restore_snapshot_name));
+                }
+                if (entry.restore_repair != bool(repair)) {
+                    throw std::runtime_error(fmt::format("Table {} is already being restored with skip_repair={}", table, !entry.restore_repair));
                 }
                 ongoing = req;
                 break;
@@ -6492,6 +6495,10 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
         trbuilder.set_restore_tablets_data(table, snap_name)
                  .set("done", false)
                  .set("start_time", db_clock::now());
+        if (repair) {
+            trbuilder.set_restore_repair(true);
+            slogger.info("Restore of {} repairs each tablet after restoring it, as tablet repair task {}", table, request_id);
+        }
 
         builder.queue_global_topology_request_id(request_id);
         trbuilder.set("request_type", global_topology_request::restore_tablets);
