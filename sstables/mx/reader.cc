@@ -945,7 +945,7 @@ private:
             }
         row_body_label: {
             co_yield this->read_unsigned_vint(*_processing_data);
-            _next_row_offset = this->offset() - _processing_data->size() + this->_u64;
+            _next_row_offset = this->bytes_consumed() - _processing_data->size() + this->_u64;
             co_yield this->read_unsigned_vint(*_processing_data);
             // Ignore the result
             row_processing_result ret = _extended_flags.is_static()
@@ -960,7 +960,7 @@ private:
             }
             if (ret == row_processing_result::skip_row) {
                 _state = state::FLAGS;
-                auto current_pos = this->offset() - _processing_data->size();
+                auto current_pos = this->bytes_consumed() - _processing_data->size();
                 auto maybe_skip_bytes = this->skip(*_processing_data, _next_row_offset - current_pos);
                 if (std::holds_alternative<skip_bytes>(maybe_skip_bytes)) {
                     co_yield maybe_skip_bytes;
