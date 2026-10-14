@@ -31,6 +31,12 @@
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/state_machine.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
+#include "service/migration_manager.hh"
+#include "db/system_keyspace.hh"
+#include "test/lib/error_injection.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
 #include "idl/raft_storage.dist.hh"
@@ -81,9 +87,9 @@ table_id make_table_id() {
     return table_id(utils::UUID_gen::get_time_UUID());
 }
 
-future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
+future<> cl_test(noncopyable_function<future<>(commitlog&)> f, sstring metrics_category = "commitlog") {
     commitlog::config cfg;
-    cfg.metrics_category_name = "commitlog";
+    cfg.metrics_category_name = std::move(metrics_category);
     cfg.descriptor_tag = "variant";
     tmpdir tmp;
     cfg.commit_log_location = tmp.path().string();
@@ -1998,6 +2004,81 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
+}
+
+// Test that state_machine::apply() doesn't let the commitlog reclaim
+// the segment of an entry it failed to apply.
+//
+// apply() acquires the replay position handles of the entries before applying
+// them. A handle that isn't handed over to a memtable keeps the entry's segment
+// only if it is released, not destroyed: destroying it marks the entry clean,
+// so a closed segment holding nothing else is deleted even though the committed
+// entry has never been applied and has to be replayed after a restart.
+//
+// Reproducer of SCYLLADB-5053.
+SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future<>();
+#else
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'enabled': true} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int)");
+
+        auto& db = env.local_db();
+        const auto schema = db.find_schema("test_ks", "tbl");
+        mutation m(schema, partition_key::from_singular(*schema, 1));
+        m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
+
+        raft::command cmd;
+        ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+
+        auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = raft::term_t(1),
+            .idx = raft::index_t(1),
+            .data = std::move(cmd)
+        });
+        raft::log_entry_ptr_list entries{entry};
+
+        co_await cl_test([&] (commitlog& log) {
+            return seastar::async([&] {
+                const auto gid = make_group_id();
+                service::strong_consistency::raft_groups_storage storage(
+                        env.local_qp(), gid, raft::server_id::create_random_id(),
+                        this_shard_id(), log, schema->id(),
+                        service::strong_consistency::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+
+                storage.store_log_entries(std::vector<raft::log_entry_ptr>{entry}).get();
+                const auto segments_before = log.get_active_segment_names();
+                BOOST_REQUIRE(!segments_before.empty());
+
+                auto state_machine = service::strong_consistency::make_state_machine(
+                        locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                // Abort the apply after the handle is acquired and before the entry reaches a memtable.
+                {
+                    scoped_error_injection injection{"strong_consistency_state_machine_abort_before_apply_in_memory"};
+                    BOOST_CHECK_THROW(state_machine->apply(std::move(entries)).get(), std::runtime_error);
+                }
+
+                // Close the active segment, so it is deleted if nothing keeps it.
+                log.force_new_active_segment().get();
+                const auto segments_after = log.get_active_segment_names();
+                for (const auto& segment : segments_before) {
+                    BOOST_REQUIRE_MESSAGE(std::ranges::contains(segments_after, segment),
+                            "segment " << segment << " of an unapplied entry was reclaimed");
+                }
+            });
+        }, "raft_test_commitlog");
+    }, std::move(db_cfg_ptr));
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

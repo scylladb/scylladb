@@ -113,6 +113,7 @@ class impure_state_machine : public raft::state_machine {
     typename M::state_t _val;
     snapshots_t<typename M::state_t>& _snapshots;
 
+    bool _aborted = false;
     // Used to ensure that when `abort()` returns there are
     // no more in-progress methods running on this object.
     seastar::gate _gate;
@@ -131,7 +132,13 @@ public:
     impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
         : _id(id), _val(M::init), _snapshots(snapshots) {}
 
+    // The server must not use the state machine after aborting it.
+    void check_not_aborted() const {
+        SCYLLA_ASSERT(!_aborted);
+    }
+
     future<> apply(raft::log_entry_ptr_list cmds) override {
+        check_not_aborted();
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
             for (const auto& entry : cmds) {
                 const auto& cref = std::get<raft::command>(entry->data);
@@ -161,6 +168,7 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
+        check_not_aborted();
         auto id = raft::snapshot_id::create_random_id();
         SCYLLA_ASSERT(_snapshots.emplace(id, _val).second);
         tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
@@ -168,10 +176,12 @@ public:
     }
 
     void drop_snapshot(raft::snapshot_id id) override {
+        check_not_aborted();
         _snapshots.erase(id);
     }
 
     future<> load_snapshot(raft::snapshot_id id) override {
+        check_not_aborted();
         auto it = _snapshots.find(id);
         SCYLLA_ASSERT(it != _snapshots.end()); // dunno if the snapshot can actually be missing
         tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
@@ -180,6 +190,7 @@ public:
     }
 
     future<> abort() override {
+        _aborted = true;
         return _gate.close();
     }
 
