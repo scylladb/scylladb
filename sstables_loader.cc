@@ -728,16 +728,11 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     co_return;
 }
 
-class sstables_loader::download_task_impl : public tasks::task_manager::task::impl {
-    sharded<sstables_loader>& _loader;
-    sstring _endpoint;
-    sstring _bucket;
-    sstring _ks;
-    sstring _cf;
-    sstring _prefix;
-    sstables_loader::stream_scope _scope;
-    std::vector<sstring> _sstables;
-    const primary_replica_only _primary_replica;
+static constexpr auto download_sstables_task_type = "download_sstables";
+
+// The progress of a download task: one stream_progress per shard, fed by
+// load_and_stream(), reduced on demand.
+class download_progress {
     struct progress_holder {
         // Wrap stream_progress in a smart pointer to enable polymorphism.
         // This allows derived progress types to be passed down for per-tablet
@@ -746,7 +741,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     };
     mutable shared_mutex _progress_mutex;
     // user could query for the progress even before _progress_per_shard
-    // is completed started, and this._status.state does not reflect the
+    // is completed started, and the task's state does not reflect the
     // state of progress, so we have to track it separately.
     enum class progress_state {
         uninitialized,
@@ -754,49 +749,20 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
         finalized,
     } _progress_state = progress_state::uninitialized;
     sharded<progress_holder> _progress_per_shard;
-    tasks::task_manager::task::progress _final_progress;
-
-protected:
-    virtual future<> run() override;
 
 public:
-    download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
-            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables,
-            sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
-        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-        , _loader(loader)
-        , _endpoint(std::move(endpoint))
-        , _bucket(std::move(bucket))
-        , _ks(std::move(ks))
-        , _cf(std::move(cf))
-        , _prefix(std::move(prefix))
-        , _scope(scope)
-        , _sstables(std::move(sstables))
-        , _primary_replica(primary_replica)
-    {
-        _status.progress_units = "batches";
+    future<> start() {
+        co_await _progress_per_shard.start();
+        _progress_state = progress_state::initialized;
     }
 
-    virtual std::string type() const override {
-        return "download_sstables";
+    // This shard's progress; valid between start() and stop().
+    shared_ptr<stream_progress> local() const {
+        return _progress_per_shard.local().progress;
     }
 
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::no;
-    }
-
-    virtual tasks::is_user_task is_user_task() const noexcept override {
-        return tasks::is_user_task::yes;
-    }
-
-    tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    virtual future<> release_resources() noexcept override {
-        // preserve the final progress, so we can access it after the task is
-        // finished
-        _final_progress = co_await get_progress();
+    // The final progress is read before stop(), so get() has nothing to report afterwards.
+    future<> stop() noexcept {
         co_await with_lock(_progress_mutex, [this] -> future<> {
             if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
                 co_await _progress_per_shard.stop();
@@ -804,13 +770,12 @@ public:
         });
     }
 
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+    future<tasks::task_manager::task::progress> get() const {
         co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
             switch (_progress_state) {
             case progress_state::uninitialized:
-                co_return tasks::task_manager::task::progress{};
             case progress_state::finalized:
-                co_return _final_progress;
+                co_return tasks::task_manager::task::progress{};
             case progress_state::initialized:
                 break;
             }
@@ -829,39 +794,39 @@ public:
     }
 };
 
-future<> sstables_loader::download_task_impl::run() {
+future<> sstables_loader::download_and_stream(download_progress& progress, const sstring& endpoint, const sstring& bucket, const sstring& ks, const sstring& cf,
+        const sstring& prefix, const std::vector<sstring>& sstable_names, stream_scope scope, primary_replica_only primary_replica, abort_source& as) {
     // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
     // that might otherwise consume a significant amount of memory.
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
-    llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    llog.debug("Loading sstables from {}({}/{})", endpoint, bucket, prefix);
 
-    auto ep_type = _loader.local()._storage_manager.get_endpoint_type(_endpoint);
+    auto ep_type = _storage_manager.get_endpoint_type(endpoint);
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, ep_type, _bucket, _prefix, cfg, [&] {
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_db, ks, cf, sstable_names, endpoint, ep_type, bucket, prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
-    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    llog.debug("Streaming sstables from {}({}/{})", endpoint, bucket, prefix);
     std::exception_ptr ex;
-    named_gate g("sstables_loader::download_task_impl");
+    named_gate g("sstables_loader::download_and_stream");
     try {
-        _as.check();
+        as.check();
 
-        auto s = _as.subscribe([&]() noexcept {
+        auto s = as.subscribe([&]() noexcept {
             try {
                 auto h = g.hold();
-                (void)smp::invoke_on_all([&shard_aborts, ex = _as.abort_requested_exception_ptr()] {
+                (void)smp::invoke_on_all([&shard_aborts, ex = as.abort_requested_exception_ptr()] {
                     shard_aborts[this_shard_id()].request_abort_ex(ex);
                 }).finally([h = std::move(h)] {});
             } catch (...) {
             }
         });
-        co_await _progress_per_shard.start();
-        _progress_state = progress_state::initialized;
-        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
-                                            _progress_per_shard.local().progress);
+        co_await progress.start();
+        co_await container().invoke_on_all([&, table_id] (sstables_loader& loader) mutable -> future<> {
+            co_await loader.load_and_stream(ks, cf, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica, false, scope,
+                                            progress.local());
         });
     } catch (...) {
         ex = std::current_exception();
@@ -869,14 +834,14 @@ future<> sstables_loader::download_task_impl::run() {
 
     co_await g.close();
 
-    if (_as.abort_requested()) {
+    if (as.abort_requested()) {
         if (!ex) {
-            ex = _as.abort_requested_exception_ptr();
+            ex = as.abort_requested_exception_ptr();
         }
     }
 
     if (ex) {
-        co_await _loader.invoke_on_all([&sstables_on_shards] (sstables_loader&) {
+        co_await container().invoke_on_all([&sstables_on_shards] (sstables_loader&) {
             sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
         });
         co_await coroutine::return_exception_ptr(std::move(ex));
@@ -928,8 +893,24 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     }
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
-    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>(tasks::make_empty_task_info(), container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
-                                                                                       std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
+    auto progress = make_lw_shared<download_progress>();
+    tasks::task_manager::task_builder task_builder{_task_manager_module, download_sstables_task_type};
+    task_builder.set_scope("node")
+                .set_keyspace(ks_name)
+                .set_progress_units("batches")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] {
+                    return progress->get();
+                })
+                .set_finalizer([progress] () noexcept {
+                    return progress->stop();
+                });
+    auto task = co_await std::move(task_builder).build([this, progress, endpoint = std::move(endpoint), bucket = std::move(bucket), ks_name = std::move(ks_name), cf_name = std::move(cf_name),
+            prefix = std::move(prefix), sstables = std::move(sstables), scope, primary_replica] (tasks::task_manager::task::impl& self) {
+        return download_and_stream(*progress, endpoint, bucket, ks_name, cf_name, prefix, sstables, scope, primary_replica_only(primary_replica), self.get_abort_source());
+    });
     co_return task->id();
 }
 
@@ -1039,7 +1020,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     using sstables_col = std::vector<sstables::shared_sstable>;
     using prefix_sstables = std::vector<sstables_col>;
 
-    // Per-shard abort sources for the object-store download pipeline (cf. download_task_impl::run).
+    // Per-shard abort sources for the object-store download pipeline (cf. download_and_stream()).
     // They are wired to the session abort only after the sstables are opened (see below).
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
 
@@ -1256,28 +1237,23 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     };
 }
 
-class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
-    sharded<sstables_loader>& _loader;
+static constexpr auto restore_tablets_task_type = "restore_tablets";
+
+class tablet_restore_progress {
+    replica::database& _db;
+    db::system_distributed_keyspace& _sys_dist_ks;
     table_id _tid;
     sstring _snap_name;
-    size_t _tablet_count;
-    // Pre-restore tablet hints, recovered by restore_tablets() from the schema
-    // persisted in system_distributed.snapshot_tables; run() alters the table
-    // back to them once the restore is done.
-    std::optional<size_t> _original_min_tablet_count;
-    std::optional<size_t> _original_max_tablet_count;
     tasks::task_manager::task::progress _progress;
     seastar::named_gate _gate{"progress_updater"};
     timer<seastar::lowres_clock> _progress_update_timer;
 
     future<> update_progress() {
-        auto& loader = _loader.local();
-        auto& db = loader._db.local();
-        auto s = db.find_schema(_tid);
-        auto md = db.get_token_metadata_ptr();
+        auto s = _db.find_schema(_tid);
+        auto md = _db.get_token_metadata_ptr();
         const auto& topo = md->get_topology();
 
-        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        db::snapshot_table_helper sth(_sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
         for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
             co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
@@ -1290,16 +1266,11 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     }
 
 public:
-    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name, manifest_summary ms,
-            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) noexcept
-        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-        , _loader(loader)
+    tablet_restore_progress(replica::database& db, db::system_distributed_keyspace& sys_dist_ks, table_id tid, sstring snap_name, size_t total)
+        : _db(db)
+        , _sys_dist_ks(sys_dist_ks)
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
-        , _tablet_count(ms.tablet_count)
-        , _original_min_tablet_count(original_min_tablet_count)
-        , _original_max_tablet_count(original_max_tablet_count)
         , _progress_update_timer([this] {
             if (auto gh = _gate.try_hold()) {
                 std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
@@ -1310,81 +1281,64 @@ public:
             }
         })
     {
-        _status.progress_units = "sstables";
-        _progress.total = ms.nr_sstables;
+        _progress.total = total;
+    }
+
+    tasks::task_manager::task::progress get() const noexcept {
+        return _progress;
+    }
+
+    void start() noexcept {
         _progress_update_timer.arm(lowres_clock::now());
     }
 
-    virtual std::string type() const override {
-        return "restore_tablets";
-    }
-
-    virtual tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::no;
-    }
-
-    virtual tasks::is_user_task is_user_task() const noexcept override {
-        return tasks::is_user_task::yes;
-    }
-
-    tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    void abort() noexcept override {
-        tasks::task_manager::task::impl::abort();
-        // Closing the restore sessions makes the in-flight download RPCs fail and the
-        // topology coordinator clear the restore transitions, which lets run() (waiting
-        // on the topology request) return. Fire-and-forget: the task's own abort source,
-        // already triggered above, surfaces the abort_requested error to the caller.
-        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
-            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
-        });
-    }
-
-    future<tasks::task_manager::task::progress> get_progress() const override {
-        co_return _progress;
-    }
-
-    future<> release_resources() noexcept override {
+    // Waits for a poll in flight; only complete() may touch the progress afterwards.
+    future<> stop() noexcept {
         _progress_update_timer.cancel();
         co_await _gate.close();
     }
 
-protected:
-    virtual future<> run() override {
-        auto& loader = _loader.local();
+    // The total was known upfront. Must be called after stop(), or a late poll could undo it.
+    void complete() noexcept {
+        _progress.completed = _progress.total;
+    }
+};
 
-        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
+future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
+        std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
+    progress.start();
+    std::exception_ptr eptr;
+    try {
+        co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
 
-        std::exception_ptr eptr;
         try {
-            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+            co_await _ss.local().restore_tablets(tid, snap_name);
         } catch (...) {
-            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", _tid, std::current_exception());
+            llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
             eptr = std::current_exception();
         }
 
         try {
-            llog.info("Restoring table with tid {} to the original schema", _tid);
+            llog.info("Restoring table with tid {} to the original schema", tid);
             // remove_unset: the table saved nullopt because it had no hint of its own, and
             // passing nullopt back would leave it pinned at min == max forever.
-            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _original_min_tablet_count, _original_max_tablet_count,
+            co_await _ss.local().alter_table_with_tablet_hints(tid, original_min_tablet_count, original_max_tablet_count,
                     service::wait_balancer::no, service::remove_unset::yes);
         } catch (...) {
-            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", _tid, std::current_exception());
+            llog.error("Failed to restore original schema for table_id {}. Error: {:t}", tid, std::current_exception());
         }
-
-        if (eptr) {
-            std::rethrow_exception(eptr);
-        }
-
-        // Restore complete. The total was known upfront from manifest parsing.
-        // Mark all progress as complete and stop the background update timer.
-        _progress_update_timer.cancel();
-        _progress.completed = _progress.total;
+    } catch (...) {
+        eptr = std::current_exception();
     }
-};
+
+    co_await progress.stop();
+
+    if (eptr) {
+        std::rethrow_exception(eptr);
+    }
+
+    progress.complete();
+}
 
 // Every datacenter the table replicates to restores from its own backup location,
 // so the locations must map one-to-one to the replicated-to datacenters.
@@ -1471,7 +1425,29 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     }
     auto original_hints = original_schema->tablet_options();
 
-    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>(tasks::make_empty_task_info(), container(), keyspace, tid, std::move(snap_name), summary,
-            original_hints.min_tablet_count, original_hints.max_tablet_count);
+    auto progress = make_lw_shared<tablet_restore_progress>(_db.local(), _sys_dist_ks, tid, snap_name, summary.nr_sstables);
+    tasks::task_manager::task_builder task_builder{_task_manager_module, restore_tablets_task_type};
+    task_builder.set_scope("node")
+                .set_keyspace(keyspace)
+                .set_progress_units("sstables")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] {
+                    return make_ready_future<tasks::task_manager::task::progress>(progress->get());
+                })
+                .set_abort_fn([this, tid] (abort_source&) noexcept {
+                    // Closing the restore sessions makes the in-flight download RPCs fail and the
+                    // topology coordinator clear the restore transitions, which lets the action (waiting
+                    // on the topology request) return. Fire-and-forget: the task's own abort source,
+                    // already triggered, surfaces the abort_requested error to the caller.
+                    (void)_ss.local().abort_restore_tablets(tid).handle_exception([tid] (std::exception_ptr ex) {
+                        llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+                    });
+                });
+    auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
+            original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
+        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
+    });
     co_return task->id();
 }
