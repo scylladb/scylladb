@@ -16,6 +16,7 @@
 #include <seastar/core/when_all.hh>
 
 #include <fmt/chrono.h>
+#include <fmt/ranges.h>
 
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -217,6 +218,13 @@ future<> cluster_config_manager::refresh_fiber() {
             co_await _owner.invoke_on_all([&caches] (cluster_config_manager& manager) {
                 return manager.apply_refresh(caches);
             });
+            if (cluster_config_logger.is_enabled(logging::log_level::debug)) {
+                std::vector<sstring> cluster_scope;
+                for (const auto& [name, value] : caches.cluster_configs) {
+                    cluster_scope.push_back(format("{}={}", name, value));
+                }
+                cluster_config_logger.debug("Refreshed cluster config cache, cluster scope: {}", fmt::join(cluster_scope, ", "));
+            }
         } catch (...) {
             failure = std::current_exception();
         }

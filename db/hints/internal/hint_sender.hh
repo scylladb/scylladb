@@ -101,6 +101,12 @@ private:
     std::list<sstring> _foreign_segments_to_replay;
     replay_position _last_not_complete_rp;
     replay_position _sent_upper_bound_rp;
+    // Hints at or below this position are discarded instead of sent.
+    std::optional<replay_position> _discard_bound_rp;
+    // Discarded under the current bound, logged when it is cleared.
+    uint64_t _discarded_under_bound = 0;
+    // Last hint of the current segment counted as discarded; rereads of an unfinished segment repeat hints.
+    replay_position _last_counted_discarded_rp;
     std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
     state_set _state;
     future<> _stopped;
@@ -164,6 +170,16 @@ public:
 
     /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
     future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp);
+
+    /// \brief Marks the hints at or below `rp` for discarding.
+    ///
+    /// The sending loop discards them as it reaches them, also while the destination is DOWN, and accounts
+    /// for them as replayed, so wait_until_hints_are_replayed_up_to() resolves. Hints still in memory are
+    /// flushed to disk on the sender's next iteration. The bound is not persisted.
+    ///
+    /// \param rp a position in this shard's hint log for this endpoint, or the default position
+    /// \return true if the bound was set
+    bool set_discard_bound(db::replay_position rp) noexcept;
 
 private:
     /// \brief Gets the name of the current segment that should be sent.
@@ -253,6 +269,20 @@ private:
     /// \param m mutation to send
     /// \return future that resolves when the mutation sending processing is complete.
     future<> send_one_mutation(frozen_mutation_and_schema m);
+
+    /// \brief Moves the sent replay position up to the bound the context has reached, if it is further, and
+    /// notifies the replay waiters.
+    void advance_sent_upper_bound(const send_one_file_ctx& ctx) noexcept;
+
+    bool discard_in_effect() const noexcept;
+
+    bool under_discard_bound(db::replay_position rp) const noexcept;
+
+    /// \brief Tells if there are still hints under the discard bound to discard.
+    bool discards_pending() const noexcept;
+
+    /// \brief Clears the discard bound once the sent position has moved past it, i.e. the segment holding it is gone.
+    void clear_discard_bound_maybe() noexcept;
 
     /// \brief Notifies replay waiters for which the target replay position was reached.
     void notify_replay_waiters() noexcept;

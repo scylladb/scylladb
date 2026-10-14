@@ -60,6 +60,7 @@ public:
     future<> stop();
     future<> refresh();
     future<> wait_until_ready();
+    bool is_ready() const noexcept { return _is_ready; }
 
     std::optional<sstring> resolve_config(std::string_view config_name, const lookup_context& ctx) const;
 
