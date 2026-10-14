@@ -185,6 +185,12 @@ public:
         return _hints_dir;
     }
 
+    /// \brief Flushes all hints written so far to the disk.
+    ///  - Repopulates the _segments_to_replay list if needed.
+    ///
+    /// \return Ready future when the procedure above completes.
+    future<> flush_current_hints() noexcept;
+
 private:
     future<> do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state);
 
@@ -200,12 +206,6 @@ private:
     ///
     /// \return A new hints store object.
     future<commitlog> add_store() noexcept;
-
-    /// \brief Flushes all hints written so far to the disk.
-    ///  - Repopulates the _segments_to_replay list if needed.
-    ///
-    /// \return Ready future when the procedure above completes.
-    future<> flush_current_hints() noexcept;
 
     hint_stats& shard_stats();
 

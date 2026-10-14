@@ -269,6 +269,13 @@ public:
     /// without an endpoint manager are ignored.
     void discard_segments_up_to(const sync_point::shard_rps& rps);
 
+    /// \brief Flushes the hints written so far to the disk for all endpoints.
+    ///
+    /// The segments currently being written to are closed and new ones are created.
+    /// The closed segments become available for replay once the hint senders are done
+    /// with the segments they're already replaying.
+    future<> flush_hints();
+
 private:
     future<> compute_hints_dir_device_id();
 

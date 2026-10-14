@@ -7545,6 +7545,12 @@ future<> storage_proxy::discard_hint_segments_up_to(const db::hints::sync_point&
     });
 }
 
+future<> storage_proxy::flush_hints() {
+    co_await container().invoke_on_all([] (storage_proxy& sp) {
+        return sp._hints_manager.flush_hints();
+    });
+}
+
 void storage_proxy::on_released(const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
     //

@@ -37,10 +37,16 @@ void set_hinted_handoff_test(http_context& ctx, routes& r, sharded<service::stor
         co_await proxy.local().discard_hint_segments_up_to(sync_point);
         co_return json_void();
     });
+
+    hht::flush_hints.set(r, [&proxy] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await proxy.local().flush_hints();
+        co_return json_void();
+    });
 }
 
 void unset_hinted_handoff_test(http_context& ctx, routes& r) {
     hht::discard_hint_segments.unset(r);
+    hht::flush_hints.unset(r);
 }
 
 }

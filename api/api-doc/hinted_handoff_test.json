@@ -30,6 +30,21 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/hinted_handoff_test/flush",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Flushes the regular hints written so far to the disk. The hint segments currently being written to are closed and new ones are created.",
+               "type":"void",
+               "nickname":"flush_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
       }
    ]
 }
