@@ -1,14 +1,14 @@
     , "client_routes_entry": {
         "id": "client_routes_entry",
-        "summary": "An entry storing client routes",
+        "summary": "A client-reachable proxy endpoint for one node through one private connection",
         "properties": {
-            "connection_id": {"type": "string"},
-            "host_id": {"type": "string", "format": "uuid"},
-            "address": {"type": "string"},
-            "port": {"type": "integer"},
-            "tls_port": {"type": "integer"},
-            "alternator_port": {"type": "integer"},
-            "alternator_https_port": {"type": "integer"}
+            "connection_id": {"type": "string", "description": "Private connection identifier assigned by deployment infrastructure"},
+            "host_id": {"type": "string", "format": "uuid", "description": "Stable node UUID from cluster metadata"},
+            "address": {"type": "string", "description": "Client-reachable proxy hostname or IP address"},
+            "port": {"type": "integer", "description": "Proxy port for unencrypted CQL, from 1 to 65535"},
+            "tls_port": {"type": "integer", "description": "Proxy port for TLS-encrypted CQL, from 1 to 65535"},
+            "alternator_port": {"type": "integer", "description": "Proxy port for unencrypted Alternator, from 1 to 65535"},
+            "alternator_https_port": {"type": "integer", "description": "Proxy port for HTTPS-encrypted Alternator, from 1 to 65535"}
         },
         "required": ["connection_id", "host_id", "address"]
     }

@@ -6,6 +6,7 @@ API Reference
 
    authorization-cache
    cache-service
+   client-routes
    column-family
    commit-log
    compaction-manager

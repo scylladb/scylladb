@@ -2,10 +2,12 @@
 window.addEventListener('load', function() {
     let swaggerUi = new SwaggerUi({
         
-        url: "{{ custom_pathto(swagger_file_path, 1) }}",
+        // Swagger UI treats relative URLs as children of the current page, even for .html pages.
+        url: new URL({{ custom_pathto(swagger_file_path, 1) | tojson }}, window.location.href).href,
         dom_id: "swagger-ui-{{swagger_file_name}}",
         docExpansion: "full",
         jsonEditor: false,
+        supportedSubmitMethods: [],
         onComplete: function() {
 
             document.querySelectorAll('#swagger-ui-{{swagger_file_name}} .footer').forEach(function(element) {
