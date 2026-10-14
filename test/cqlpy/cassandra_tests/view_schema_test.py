@@ -148,7 +148,7 @@ def testReuseName(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions - here,
 # from_json()) and #7954 (from_json() can't set a tuple element to null).
-@pytest.mark.xfail(reason="SCYLLADB-5141, #7954")
+@pytest.mark.xfail(reason="#7954")
 def testAllTypes(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as myType, \
          create_table(cql, test_keyspace, "(" +
