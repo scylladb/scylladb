@@ -19,7 +19,6 @@ def testSparseTable(cql, test_keyspace):
                 execute(cql, table, "INSERT INTO %s (userid, url, day, month, year) VALUES (?, ?, 1, 'jan', 2012)", i, f"http://foo.{tld}")
         assertRowCount(execute(cql, table, "SELECT * FROM %s LIMIT 4"), 4)
 
-@pytest.mark.xfail(reason="issues #15099")
 def testPerPartitionLimit(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b))") as table:
         for i in range(5):
@@ -75,19 +74,17 @@ def testPerPartitionLimit(cql, test_keyspace):
                    row(2, 2, 2))
 
         # with ordering
-        # Reproduces #15099:
-        assertRows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (3, 2) ORDER BY b DESC PER PARTITION LIMIT ?", 2),
-                   row(2, 4, 4),
-                   row(3, 4, 4),
-                   row(2, 3, 3),
-                   row(3, 3, 3))
+        # The order of the ties (rows with equal b) isn't specified, and is
+        # different in Scylla and Cassandra (see #15099):
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (3, 2) ORDER BY b DESC PER PARTITION LIMIT ?", 2),
+                   ties(row(2, 4, 4), row(3, 4, 4)),
+                   ties(row(2, 3, 3), row(3, 3, 3)))
 
-        # Reproduces #15099:
-        assertRows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (3, 2) ORDER BY b DESC PER PARTITION LIMIT ? LIMIT ?", 3, 4),
-                   row(2, 4, 4),
-                   row(3, 4, 4),
-                   row(2, 3, 3),
-                   row(3, 3, 3))
+        # The order of the ties (rows with equal b) isn't specified, and is
+        # different in Scylla and Cassandra (see #15099):
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (3, 2) ORDER BY b DESC PER PARTITION LIMIT ? LIMIT ?", 3, 4),
+                   ties(row(2, 4, 4), row(3, 4, 4)),
+                   ties(row(2, 3, 3), row(3, 3, 3)))
 
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? ORDER BY b DESC PER PARTITION LIMIT ?", 2, 3),
                    row(2, 4, 4),
@@ -284,7 +281,6 @@ def testLimitWithDeletedRowsAndStaticColumns(cql, test_keyspace):
                    row(1, -1, 1, 1),
                    row(5, -1, 1, 1))
 
-@pytest.mark.xfail(reason="issue #15099")
 def testFilteringOnClusteringColumnsWithLimitAndStaticColumns(cql, test_keyspace):
     # With only one clustering column
     with create_table(cql, test_keyspace, "(a int, b int, s int static, c int, PRIMARY KEY (a, b))") as table:
@@ -347,15 +343,15 @@ def testFilteringOnClusteringColumnsWithLimitAndStaticColumns(cql, test_keyspace
                    row(1, 1, 1, 2),
                    row(2, 1, 2, 3))
 
-        # Reproduces #15099:
-        assertRows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (0, 1, 2, 3) AND b = 1 ORDER BY b DESC LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 1, 2),
-                   row(2, 1, 2, 3))
+        # The order of the ties (rows with equal b) isn't specified, and is
+        # different in Scylla and Cassandra (see #15099):
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (0, 1, 2, 3) AND b = 1 ORDER BY b DESC LIMIT 2 ALLOW FILTERING"),
+                   ties(row(1, 1, 1, 2), row(2, 1, 2, 3)))
 
-        # Reproduces #15099:
-        assertRows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (0, 1, 2, 3) AND b >= 1 AND b <= 1 ORDER BY b DESC LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 1, 2),
-                   row(2, 1, 2, 3))
+        # The order of the ties (rows with equal b) isn't specified, and is
+        # different in Scylla and Cassandra (see #15099):
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (0, 1, 2, 3) AND b >= 1 AND b <= 1 ORDER BY b DESC LIMIT 2 ALLOW FILTERING"),
+                   ties(row(1, 1, 1, 2), row(2, 1, 2, 3)))
 
         execute(cql, table, "SELECT * FROM %s WHERE a IN (0, 1, 2, 3)"); # Load all data in the row cache
 
