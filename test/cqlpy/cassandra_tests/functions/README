@@ -9,10 +9,8 @@ internal implementation through Java APIs instead of testing CQL:
 * MathFctsTest.java: calls the implementations of the abs(), exp(), log(),
   log10() and round() functions directly, through Java, on Cassandra's
   internal type classes.
-* NativeFunctionsTest.java: checks Cassandra's internal list of native
-  functions, that each function with an old camelCase name has a new
-  snake_case name, through Cassandra's internal function registry. Scylla's
-  lack of snake_case names is SCYLLADB-5141.
+* NativeFunctionsTest.java: checks Cassandra's internal registry of native
+  functions directly, through Java.
 * TimeFctsTest.java: calls the implementations of the time functions
   (mintimeuuid(), maxtimeuuid(), totimestamp(), tounixtimestamp(), etc.)
   directly, through Java. These functions are tested through CQL in

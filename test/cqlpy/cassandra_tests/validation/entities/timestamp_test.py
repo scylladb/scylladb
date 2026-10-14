@@ -37,11 +37,6 @@ def testTimestampTTL(cql, test_keyspace):
                 assert r[2] != None and r[3] != None
 
         # wrap writetime(), ttl() in other functions (test for CASSANDRA-8451)
-        # Cassandra's test now uses the new function names blob_as_bigint(),
-        # bigint_as_blob(), blob_as_int() and int_as_blob(), which Scylla
-        # doesn't support yet (SCYLLADB-5141). Cassandra still supports the
-        # old camelCase names, so we use those, to keep testing this on
-        # Scylla.
         res = list(execute(cql, table, "SELECT k, c, blobAsBigint(bigintAsBlob(writetime(c))), ttl(c) FROM %s"))
         assert len(res) == 2
         for r in res:

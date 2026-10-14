@@ -662,10 +662,6 @@ def testEmptyRestrictionValueWithSecondaryIndexAndCompactTables(cql, test_keyspa
         execute(cql, table, "CREATE INDEX on %s(v)")
         execute(cql, table, "INSERT INTO %s (pk, v) VALUES (?, ?)", b"foo123", b"1")
 
-        # Cassandra's tests now use the snake_case name text_as_blob(), which
-        # Scylla doesn't support yet (SCYLLADB-5141). Since Cassandra still
-        # supports the old name textAsBlob(), this file keeps using it.
-
         # Test restrictions on non-primary key value
         assertEmpty(execute(cql, table, "SELECT * FROM %s WHERE pk = textAsBlob('foo123') AND v = textAsBlob('');"))
 

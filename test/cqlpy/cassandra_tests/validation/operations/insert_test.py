@@ -111,14 +111,9 @@ def testInsertWithUnset(cql, test_keyspace):
         # for selecting the coordinator), so we can't test this:
         #assertInvalidMessage(cql, table, "Invalid unset value for column k", "UPDATE %s SET i = 0 WHERE k = ?", unset())
         #assertInvalidMessage(cql, table, "Invalid unset value for column k", "DELETE FROM %s WHERE k = ?", unset())
-        # Scylla and Cassandra have slightly different messages here. Cassandra
-        # has "Invalid unset value for argument in call to function
-        # blob_as_int", Scylla has "Invalid null or unset value for argument
-        # to system.blobasint : (blob) -> int".
-        # Cassandra's test now uses the new function name blob_as_int(),
-        # which Scylla doesn't support yet (SCYLLADB-5141). Cassandra still
-        # supports the old name blobAsInt(), so we use it, to keep testing
-        # this on Scylla.
+        # Scylla and Cassandra have different messages here. Cassandra has
+        # "Invalid unset value for argument in call to function blob_as_int",
+        # Scylla has "Unexpected unset value for bind variable 0".
         assertInvalidMessageRE(cql, table, "unset", "SELECT * FROM %s WHERE k = blobAsInt(?)", unset())
 
 # Both Scylla and Cassandra define MAX_TTL or max_ttl with the same formula,
