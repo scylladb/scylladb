@@ -1515,6 +1515,59 @@ def test_order_by_limit(cql, test_keyspace):
                     for limit in range(1, len(full) + 1):
                         assert query(what, where, order, f'limit {limit} {suffix}') == full[:limit]
 
+# CQL doesn't specify the order of "ties" - rows which are equal in all the
+# ORDER BY columns - in a query with IN on the partition key. In Scylla, when
+# the ORDER BY columns are all the clustering columns, so only rows of
+# different partitions can be ties, the result of such a query ordered in one
+# direction is exactly the reverse of its result ordered in the other
+# direction, ties included. This isn't a guarantee - Cassandra orders ties by
+# token in both directions, so its result in one direction isn't the reverse
+# of the other, and both are correct (see #15099) - but it is Scylla's current
+# behavior, which existing dtests expect, so this scylla_only test checks
+# that it doesn't change by accident. What matters is whether the requested
+# order is the clustering order or its reverse, so we check both a table with
+# ascending and one with descending clustering order. We check a plain query,
+# a query with filtering and a GROUP BY query, which are sorted by different
+# code, and check that all of them order the ties in the same way. We use
+# more than 16 rows, because for fewer rows, an unstable sort like
+# std::sort() happens to be stable, so a smaller test wouldn't notice it.
+@pytest.mark.parametrize('clustering_order', ['ASC', 'DESC'])
+def test_order_by_ties(cql, test_keyspace, scylla_only, clustering_order):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)', f'WITH CLUSTERING ORDER BY (c {clustering_order})') as table:
+        for p in range(10):
+            for c in range(3):
+                cql.execute(f'insert into {table} (p, c, v) values ({p}, {c}, 1)')
+        def query(what, where, order, suffix):
+            stmt = SimpleStatement(f'select {what} from {table} where p in ({", ".join(str(p) for p in range(10))}) {where} order by c {order} {suffix}', fetch_size=None)
+            return [tuple(r) for r in cql.execute(stmt)]
+        plain_asc = query('p, c', '', 'asc', '')
+        assert [c for p, c in plain_asc] == [0] * 10 + [1] * 10 + [2] * 10
+        for what, where, suffix in [('p, c', '', ''), ('p, c', 'and v = 1', 'allow filtering'), ('p, c, count(*)', 'group by p, c', '')]:
+            asc = query(what, where, 'asc', suffix)
+            desc = query(what, where, 'desc', suffix)
+            assert [r[:2] for r in asc] == plain_asc
+            assert desc == list(reversed(asc))
+
+
+# When ORDER BY lists only some of the clustering columns, rows of the same
+# partition can also be ties - rows equal in the ORDER BY columns. Check that
+# a query with IN on the partition key, ordered this way, returns all the rows
+# sorted in the requested direction. CQL doesn't specify the order of ties,
+# so we don't check it. Note that in Scylla, unlike in test_order_by_ties,
+# the result in one direction is not the reverse of the result in the other
+# direction: in both directions, the tied rows of each partition are ordered
+# by c2 ascending.
+def test_order_by_prefix_ties(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, PRIMARY KEY (p, c1, c2)') as table:
+        all_rows = [(p, c1, c2) for p in range(3) for c1 in range(2) for c2 in range(3)]
+        for p, c1, c2 in all_rows:
+            cql.execute(f'insert into {table} (p, c1, c2) values ({p}, {c1}, {c2})')
+        for order in ['asc', 'desc']:
+            stmt = SimpleStatement(f'select p, c1, c2 from {table} where p in (0, 1, 2) order by c1 {order}', fetch_size=None)
+            rows = [tuple(r) for r in cql.execute(stmt)]
+            assert sorted(rows) == all_rows
+            assert [r[1] for r in rows] == sorted([r[1] for r in all_rows], reverse=(order == 'desc'))
+
 def test_order_by_validate(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2)") as table:
         with pytest.raises(InvalidRequest):
