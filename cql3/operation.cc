@@ -151,6 +151,9 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
 
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
+        if (receiver.type->is_tuple()) {
+            throw exceptions::invalid_request_exception(fmt::format("Invalid operation ({}) for tuple column {}", to_string(receiver), receiver.name_as_text()));
+        }
         if (receiver.is_counter()) {
             return std::make_unique<constants::adder>(receiver, std::move(v));
         }

@@ -354,6 +354,9 @@ null-propagation semantics), so the column remains unset. To catch an
 uninitialized column, use an ``IF`` condition that checks the column directly
 (e.g. ``IF r != null``) rather than ``IF EXISTS``.
 
+Instead of ``SET col = col + value`` and ``SET col = col - value``, you can
+also use the shorthand syntax ``SET col += value`` and ``SET col -= value``.
+
 .. code-block:: cql
 
    -- Initialize a row, with numeric regular column r set to 0:
@@ -364,6 +367,9 @@ uninitialized column, use an ``IF`` condition that checks the column directly
 
    -- Increment r atomically - and visibly fail if r was not initialized:
    UPDATE mytable SET r = r + 1 WHERE pk = 1 AND ck = 1 IF r != null;
+
+   -- The same, with the shorthand syntax "r += 1":
+   UPDATE mytable SET r += 1 WHERE pk = 1 AND ck = 1 IF r != null;
 
    -- Decrement r by 5 only when the value is large enough:
    UPDATE mytable SET r = r - 5 WHERE pk = 1 AND ck = 1 IF r >= 5;
