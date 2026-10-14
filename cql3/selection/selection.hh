@@ -310,6 +310,12 @@ public:
     void accept_new_partition(const std::vector<bytes>& key);
     void accept_partition_end();
     std::unique_ptr<result_set> build();
+    // The rows completed so far (with GROUP BY, the groups completed so far,
+    // not including the group being formed). Between pages, the caller may
+    // reorder them, or drop some of them.
+    result_set& completed_rows() {
+        return *_result_set;
+    }
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
     size_t result_set_size() const;

@@ -12,7 +12,7 @@ from ...porting import *
 from datetime import datetime, timezone
 from cassandra.util import Date, Time, uuid_from_time
 
-@pytest.mark.xfail(reason="Issue #2060, #13109")
+@pytest.mark.xfail(reason="Issue #2060")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
 
@@ -607,7 +607,7 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(1, 1, 2, 2, 2),
                    row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #13109")
+@pytest.mark.xfail(reason="Issue #15099")
 def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
@@ -1071,7 +1071,9 @@ def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
                    row(2, 2, 1, 1))
 
         # Multi-partitions query with ORDER BY
-        # Reproduces #13109:
+        # Reproduces #13109, and also #15099: the groups (1, 4) and (2, 4)
+        # both have c = 3, and Scylla orders this tie differently from
+        # Cassandra.
         assertRows(execute_without_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC"),
                    row(4, 8, None, 1, 0),
                    row(1, 4, 1, 2, 2),
