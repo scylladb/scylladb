@@ -215,12 +215,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return _feature_service.auto_replication_factor && _db.get_config().enforce_rack_list();
     }
 
-    // Records the outcome of a keyspace_rf_change for the backoff above. Operator
-    // ALTERs of other keyspaces go through the same handler and are not backed off.
+    // Whether a keyspace_rf_change request is the reconciler's: it sets initiating_host
+    // (see schedule_auto_rf_change()), which ALTER KEYSPACE never does.
+    static bool is_auto_rf_request(const sstring& ks_name, const utils::UUID& initiating_host) {
+        return is_auto_rf_keyspace(ks_name) && initiating_host != utils::UUID{};
+    }
+
+    // Records the outcome of one of the reconciler's keyspace_rf_change requests for
+    // the backoff above; an operator's RF change is not counted.
     void record_auto_rf_change_outcome(const sstring& ks_name, bool failed) {
-        if (!is_auto_rf_keyspace(ks_name)) {
-            return;
-        }
         if (!failed) {
             _auto_rf_failures.erase(ks_name);
             return;
@@ -1525,6 +1528,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             sstring ks_name;
             std::unordered_map<sstring, sstring> saved_ks_props;
+            // With the legacy single global request req_entry is not loaded, and the
+            // request counts as an operator's; auto-RF only runs with the queue.
             if (_topo_sm._topology.new_keyspace_rf_change_ks_name) {
                 ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
@@ -1546,6 +1551,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             group0_update_collector updates;
 
             sstring error;
+            // A request handed to the multi-RF change procedure ends later, and its outcome
+            // is recorded then.
+            bool ends_here = true;
             if (_db.has_keyspace(ks_name)) {
                 try {
                     // Rejects every keyspace_rf_change of the keyspace while enabled.
@@ -1646,12 +1654,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             topology_mutation_builder tbuilder = tbuilder_with_request_drop();
                             tbuilder.start_rf_change_migrations(req_id);
                             updates.add(tbuilder.build());
+                            ends_here = false;
                             break;
                         }
                     }
                 } catch (const std::exception& e) {
                     error = e.what();
-                    const bool auto_rf = is_auto_rf_keyspace(ks_name);
+                    const bool auto_rf = is_auto_rf_request(ks_name, req_entry.initiating_host);
                     const auto message = seastar::format("Couldn't process global_topology_request::keyspace_rf_change for {}keyspace {}, desired new ks opts: {}, error: {}",
                             auto_rf ? "auto-RF " : "", ks_name, saved_ks_props, std::current_exception());
                     if (auto_rf) {
@@ -1681,8 +1690,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", utils::wait_for_message(30s));
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
 
-            _auto_rf_needed_stale = true;
-            record_auto_rf_change_outcome(ks_name, !error.empty());
+            if (ends_here || !error.empty()) {
+                _auto_rf_needed_stale = true;
+                if (is_auto_rf_request(ks_name, req_entry.initiating_host)) {
+                    record_auto_rf_change_outcome(ks_name, !error.empty());
+                }
+            }
         }
         break;
         case global_topology_request::truncate_table: {
@@ -2440,6 +2453,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::keyspace_rf_change)
+                 // Marks the request as the reconciler's, see is_auto_rf_request().
+                 .set("initiating_host", _raft.id().uuid())
                  .set_new_keyspace_rf_change_data(candidate.ks_name, flattened);
         builder.queue_global_topology_request_id(global_request_id);
 
@@ -2779,7 +2794,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         // Evaluated at the next should_preempt_balancing(), once this update is applied.
         _auto_rf_needed_stale = true;
-        record_auto_rf_change_outcome(completion.ks_name, !error.empty());
+        if (is_auto_rf_request(completion.ks_name, completion.initiating_host)) {
+            record_auto_rf_change_outcome(completion.ks_name, !error.empty());
+        }
 
         out.emplace_back(topology_request_tracking_mutation_builder(completion.request_id)
                 .done(error)
@@ -2803,8 +2820,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         for (auto& m : schema_muts) {
             out.add_small(m);
         }
-
-        record_auto_rf_change_outcome(abort_info.ks_name, true);
 
         out.add(topology_request_tracking_mutation_builder(abort_info.request_id)
                 .abort(abort_info.error)
