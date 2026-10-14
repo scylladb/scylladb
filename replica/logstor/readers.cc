@@ -166,12 +166,12 @@ class logstor_single_key_reader : public logstor_reader_base {
         if (record.header.key.key() != _dk.key()) [[unlikely]] {
             co_await coroutine::return_exception(key_mismatch_error(_dk.key(), record.header.key.key(), where.location));
         }
-        auto m = decode_record_value(record.value, _table_schema, record.header);
+        auto partition = to_single_row_partition(decode_record_value(record.value, _table_schema, record.header));
         if (_use_cache) {
-            _index.populate_cache(key, where.location, m);
+            _index.populate_cache(key, where.location, _table_schema, _dk.key(), partition);
         }
         tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
-        begin(to_single_row_partition(std::move(m)));
+        begin(std::move(partition));
     }
 
 public:
@@ -201,12 +201,12 @@ public:
                 _end_of_stream = true;
                 return make_ready_future<>();
             }
-            if (auto* cached = std::get_if<mutation>(&*found)) {
-                if (cached->decorated_key().key() != _dk.key()) [[unlikely]] {
-                    throw key_mismatch_error(_dk.key(), cached->decorated_key().key(), key_mismatch_error::cache_location{});
+            if (auto* cached = std::get_if<keyed_single_row_partition>(&*found)) {
+                if (cached->key.key() != _dk.key()) [[unlikely]] {
+                    throw key_mismatch_error(_dk.key(), cached->key.key(), key_mismatch_error::cache_location{});
                 }
                 tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {} from the cache", _dk);
-                begin(to_single_row_partition(std::move(*cached)));
+                begin(std::move(cached->partition));
                 return make_ready_future<>();
             }
             return read_miss(key, std::get<primary_index::guarded_location>(std::move(*found)));
@@ -381,9 +381,7 @@ class logstor_range_reader : public logstor_reader_base {
         for (const auto& entry : index_batch->entries) {
             batch_slot slot{.location = entry.get().entry().location};
             if (auto cached = _index.lookup_cached(entry.get(), *_table_schema, _use_cache)) {
-                // Copied, since to_single_row_partition() takes only the row out of the mutation.
-                auto key = cached->decorated_key();
-                slot.partition = make_pending(std::move(key), to_single_row_partition(std::move(*cached)));
+                slot.partition = make_pending(std::move(cached->key), std::move(cached->partition));
             }
             batch.slots.push_back(std::move(slot));
         }
