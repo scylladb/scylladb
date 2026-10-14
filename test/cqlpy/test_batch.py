@@ -7,7 +7,8 @@
 #############################################################################
 from cassandra import InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from .util import new_test_table
+from cassandra.query import BatchStatement
+from .util import new_test_table, new_test_keyspace, unique_name, is_scylla, is_cassandra_older_than
 from .rest_api import scylla_inject_error
 
 
@@ -25,7 +26,6 @@ def generate_big_batch(table, size_in_kb):
     return "BEGIN BATCH\n" + "\n".join(statements) + "\n APPLY BATCH\n"
 
 
-@pytest.mark.xfail(reason="Scylla does not send warnings for batch: https://github.com/scylladb/scylla/issues/10196")
 def test_warnings_are_returned_in_response(cql, table1):
     """Verifies if response contains warning messages.
     Because warning message threshold is different for Scylla and Cassandra,
@@ -44,6 +44,65 @@ def test_warnings_are_returned_in_response(cql, table1):
     # 'Batch for [cql_test_1647006065554.cql_test_1647006065623] is of size 7590,
     # exceeding specified threshold of 5120 by 2470.'
     assert "exceeding specified" in response_future.warnings[0]
+
+
+# Like test_warnings_are_returned_in_response, but sends the batch as the CQL
+# protocol's BATCH message (as drivers usually do), instead of as a "BEGIN
+# BATCH ... APPLY BATCH" statement in a QUERY message.
+# Reproduces #10196.
+def test_warnings_are_returned_in_response_to_batch_message(cql, table1):
+    insert = cql.prepare(f'INSERT INTO {table1} (k, t) VALUES (?, ?)')
+    for size_in_kb in [10, 129, 256]:
+        batch = BatchStatement()
+        for idx in range(size_in_kb):
+            batch.add(insert, [idx, 'x' * 743])
+        response_future = cql.execute_async(batch)
+        response_future.result()
+        if response_future.warnings:
+            break
+    else:
+        pytest.fail('Oversized batch did not generate a warning')
+    assert 'exceeding specified' in response_future.warnings[0]
+
+
+# The oversized-batch warning lists every table the batch writes to, so a
+# batch over a few hundred long-named tables gets a warning longer than 65535
+# bytes, the most a CQL string can hold. The batch must still succeed and
+# return the warning; Cassandra truncates it and ends it with " [truncated]".
+# This test passes on Cassandra 5, but Cassandra 6 fails to send any string
+# longer than 32767 bytes, so the client gets no response, and times out
+# (CASSANDRA-21763) - so on Cassandra 6 (only) it is marked xfail.
+# This is a slow test - it creates 303 tables, taking about 5 seconds in a dev
+# build and 50 in a debug build - because we have no other way to create a
+# very long warning: no other warning includes text of arbitrary length, and
+# this one lists every table only once, with names of at most 192 characters.
+# So it is marked tier2, which test/cqlpy/run and CI's per-PR runs skip - even
+# when the test is named explicitly. To run it, pass "-m tier2" to test/cqlpy/run.
+@pytest.mark.tier2
+def test_warning_longer_than_64k_is_returned_in_response(cql):
+    if not is_scylla(cql) and not is_cassandra_older_than(cql, (6, 0)):
+        pytest.xfail('CASSANDRA-21763')
+    with new_test_keyspace(cql, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        prefix = unique_name()
+        table_name_len = 192
+        n_tables = 65535 // (len(ks) + len('.') + table_name_len + len(', ')) + 1
+        tables = [f'{ks}.' + f'{prefix}_{i:04d}_'.ljust(table_name_len, 'x') for i in range(n_tables)]
+        for table in tables:
+            cql.execute(f'CREATE TABLE {table} (k int PRIMARY KEY, t text)')
+        for size_in_kb in [10, 256]:
+            value = 'x' * (size_in_kb * 1024 // n_tables)
+            # A distinct key per table: Cassandra merges same-key writes in a keyspace
+            # into one mutation, and doesn't check the size of a single-mutation batch.
+            batch = 'BEGIN BATCH\n' + '\n'.join(
+                f"INSERT INTO {table} (k, t) VALUES ({i}, '{value}')" for i, table in enumerate(tables)) + '\nAPPLY BATCH\n'
+            response_future = cql.execute_async(batch)
+            response_future.result()
+            if response_future.warnings:
+                break
+        else:
+            pytest.fail('Oversized batch did not generate a warning')
+        assert ks in response_future.warnings[0]
+        assert response_future.warnings[0].endswith(' [truncated]')
 
 
 def test_error_is_raised_for_batch_size_above_threshold(cql, table1):
