@@ -110,10 +110,6 @@ public:
 
 // Uses the shared row-cache LSA region and LRU list for the logstor cache.
 class cache_tracker {
-public:
-    friend class cached_partition_entry;
-
-private:
     ::cache_tracker& _shared_tracker;
     // Used by the read path to lock the LSA region without changing the current allocator
     logalloc::allocating_section _read_section;
@@ -125,6 +121,8 @@ public:
 
     void evict(const primary_index_entry&);
 
+    void populate(const primary_index_entry&, const mutation&);
+
     // The schema is taken by reference rather than as a schema_ptr: a hit needs one reference of
     // its own for the mutation it returns, and a miss needs none at all.
     std::optional<mutation> lookup(const primary_index_entry&, const schema& target_schema);
@@ -134,13 +132,8 @@ public:
     // the cached entry in place.
     std::optional<mutation> peek(const primary_index_entry&, schema_ptr);
 
-    void populate(const primary_index_entry&, const mutation&);
-
+private:
     logalloc::region& region() noexcept {
-        return _shared_tracker.region();
-    }
-
-    const logalloc::region& region() const noexcept {
         return _shared_tracker.region();
     }
 
