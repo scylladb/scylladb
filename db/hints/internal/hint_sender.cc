@@ -55,6 +55,12 @@ public:
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
+        if (utils::get_local_injector().enter("hinted_handoff_skip_periodic_flush")) {
+            // Keep the segments currently being written to open. Still update the time point
+            // of the next flush. Otherwise, the hint sender would never sleep.
+            _next_flush_tp = current_time + manager::hints_flush_period;
+            return make_ready_future<>();
+        }
         return _ep_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([this] (auto eptr) {
