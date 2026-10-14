@@ -8,6 +8,7 @@
 from __future__ import annotations                           # Type hints as strings
 
 import logging
+import uuid
 import time
 from urllib.parse import quote
 from abc import ABCMeta
@@ -603,14 +604,15 @@ class ScyllaRESTAPIClient:
         assert isinstance(data, str)
         return data
 
-    async def get_raft_leader(self, node_ip: str, group_id: Optional[str] = None) -> HostID:
-        """Returns host ID of the current leader of the given raft group as seen by the registry on the contact node.
+    async def get_raft_leader(self, node_ip: str, group_id: Optional[str] = None) -> Optional[HostID]:
+        """Returns host ID of the current leader of the given raft group as seen by the registry on the contact node,
+           or None when it knows no leader (the server reports that as the all-zero UUID).
            When group_id is not specified, group0 is used."""
         params = {}
         if group_id:
             params["group_id"] = group_id
         data = await self.client.get_json("/raft/leader_host", host=node_ip, params=params)
-        return HostID(data)
+        return None if uuid.UUID(data).int == 0 else HostID(data)
 
     async def _repair_failure_reason(self, node_ip: str, sequence_number: int) -> str:
         """Look up why a vnode repair failed.

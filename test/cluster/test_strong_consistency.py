@@ -24,7 +24,6 @@ import asyncio
 import pytest
 import logging
 import time
-import uuid
 import random
 import asyncio
 
@@ -40,7 +39,7 @@ DEFAULT_CMDLINE = [
 
 
 async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
-                          expected_host_id: str | None = None):
+                          expected_host_id: str | None = None, timeout: float = 60):
     """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
     reports that one.
 
@@ -51,11 +50,9 @@ async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id
     """
     async def get_leader_host_id():
         result = await manager.api.get_raft_leader(s.ip_addr, group_id)
-        if uuid.UUID(result).int == 0:
-            return None
         return result if expected_host_id is None or result == expected_host_id else None
     label = f"group {group_id} to be led by {expected_host_id}" if expected_host_id else f"a leader of group {group_id}"
-    return await wait_for(get_leader_host_id, time.time() + 60, label=label)
+    return await wait_for(get_leader_host_id, time.time() + timeout, label=label)
 
 async def collect_all_raft_state(cql, host):
     state = {}
@@ -1658,7 +1655,7 @@ async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
             # this early can only be the stepdown's successor.
             async def get_new_leader():
                 new_leader_host_id = await manager.api.get_raft_leader(others[0].ip_addr, group_id)
-                if uuid.UUID(new_leader_host_id).int == 0 or new_leader_host_id == leader_host_id:
+                if new_leader_host_id is None or new_leader_host_id == leader_host_id:
                     return None
                 return new_leader_host_id
             new_leader_host_id = await wait_for(get_new_leader, time.time() + 2 * tick_interval)
