@@ -64,6 +64,7 @@ table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, rep
     register_raft_rpc_stats_metrics(_metrics, *_rpc_stats, options);
     register_table_gauges(options);
     register_request_metrics(options);
+    register_apply_metrics(options);
 }
 
 // The gauges of the table itself, summed over its servers by _sample.get().
@@ -138,6 +139,19 @@ void table_metrics::register_request_metrics(const raft_metrics_options& options
         sm::make_counter("read_errors", s.read_errors_other,
             sm::description("Number of strongly consistent reads from the table that failed on this node, the reason label can be timeout or other"),
             with(error_reason_label("other"))).aggregate(aggregate).set_skip_when_empty(),
+    });
+}
+
+void table_metrics::register_apply_metrics(const raft_metrics_options& options) {
+    const auto& labels = options.labels;
+    const auto& s = *_apply_stats;
+    _metrics.add_group("strong_consistency_state_machine", {
+        sm::make_histogram("apply_latency", [&s] { return to_metrics_histogram(s.apply_latency); },
+            sm::description("Time it took to apply a raft log entry of the table to the replica on this node, including resolving the schema the entry was written with"), labels)
+            .aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_counter("schema_barrier_waits", s.schema_barrier_waits,
+            sm::description("Number of times applying the raft log entries of the table on this node waited for a group 0 read barrier, because they were written with a schema this node did not know yet"), labels)
+            .aggregate(options.aggregate_labels).set_skip_when_empty(),
     });
 }
 

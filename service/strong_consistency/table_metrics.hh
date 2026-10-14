@@ -37,12 +37,20 @@ struct table_request_stats {
     uint64_t read_errors_other = 0;
 };
 
+/// What the state machines of the tablets of one table on this shard did to apply their
+/// raft log entries to the local replica.
+struct table_apply_stats {
+    utils::time_estimated_histogram apply_latency;
+    uint64_t schema_barrier_waits = 0;
+};
+
 /// Metrics of the strongly consistent tablets of one table on this shard. At most one
 /// instance per keyspace and table name may exist at a time, or their series would collide.
 class table_metrics : public seastar::weakly_referencable<table_metrics> {
     lw_shared_ptr<raft::server_stats> _server_stats = make_lw_shared<raft::server_stats>();
     lw_shared_ptr<raft_rpc::stats> _rpc_stats = make_lw_shared<raft_rpc::stats>();
     lw_shared_ptr<table_request_stats> _request_stats = make_lw_shared<table_request_stats>();
+    lw_shared_ptr<table_apply_stats> _apply_stats = make_lw_shared<table_apply_stats>();
     std::unordered_set<const raft::server*> _servers;
 
     // What one sweep of _servers yields. All gauges of a scrape read the same
@@ -65,6 +73,7 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
 
     void register_table_gauges(const raft_metrics_options& options);
     void register_request_metrics(const raft_metrics_options& options);
+    void register_apply_metrics(const raft_metrics_options& options);
 
 public:
     enum class reporting { none, per_node, per_shard };
@@ -74,9 +83,10 @@ public:
     table_metrics(const table_metrics&) = delete;
     table_metrics& operator=(const table_metrics&) = delete;
 
-    // Shared with the raft servers and RPC modules of the tablets.
+    // Shared with the raft servers, RPC modules and state machines of the tablets.
     lw_shared_ptr<raft::server_stats> server_stats() const { return _server_stats; }
     lw_shared_ptr<raft_rpc::stats> rpc_stats() const { return _rpc_stats; }
+    lw_shared_ptr<table_apply_stats> apply_stats() const { return _apply_stats; }
     // Held by the coordinator for the length of a request.
     lw_shared_ptr<table_request_stats> request_stats() const { return _request_stats; }
 

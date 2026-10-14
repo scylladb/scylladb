@@ -176,7 +176,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft::group_id group_id,
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
-        lw_shared_ptr<raft_rpc::stats> rpc_stats);
+        lw_shared_ptr<raft_rpc::stats> rpc_stats,
+        lw_shared_ptr<table_apply_stats> apply_stats);
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);

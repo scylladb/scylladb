@@ -26,6 +26,8 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+struct table_apply_stats;
+
 struct raft_command {
     frozen_mutation mutation;
 };
@@ -35,7 +37,8 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& storage);
+    raft_groups_storage& storage,
+    lw_shared_ptr<table_apply_stats> stats);
 
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //

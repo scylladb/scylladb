@@ -23,6 +23,8 @@
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/table_metrics.hh"
+#include "utils/latency.hh"
 
 using namespace std::chrono_literals;
 
@@ -37,6 +39,7 @@ class state_machine : public raft_state_machine {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
+    lw_shared_ptr<table_apply_stats> _stats;
 
     abort_source _as;
 
@@ -46,13 +49,15 @@ public:
         replica::database& db,
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
-        raft_groups_storage& persistence)
+        raft_groups_storage& persistence,
+        lw_shared_ptr<table_apply_stats> stats)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
         , _sys_ks(sys_ks)
         , _persistence(persistence)
+        , _stats(std::move(stats))
     {
     }
 
@@ -81,6 +86,7 @@ public:
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
             schema_store schemas(_db, _sys_ks, [this]() -> future<> {
+                ++_stats->schema_barrier_waits;
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
@@ -91,6 +97,8 @@ public:
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
+                utils::latency_counter lc;
+                lc.start();
                 auto mut = detail::deserialize_to_frozen_mutation(command[i]);
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
                 if (utils::get_local_injector().enter("strong_consistency_state_machine_abort_before_apply_in_memory")) {
@@ -100,6 +108,7 @@ public:
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
                 co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                _stats->apply_latency.add(lc.stop().latency());
                 // The entry has been applied, but the handle hasn't necessarily
                 // been consumed. Prevent releasing the handle by destroying it.
                 replay_positions[i].replay_position_handle = db::rp_handle{};
@@ -262,9 +271,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& persistence)
+    raft_groups_storage& persistence,
+    lw_shared_ptr<table_apply_stats> stats)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, std::move(stats));
 }
 
 namespace detail {
