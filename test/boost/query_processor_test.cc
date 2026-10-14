@@ -527,4 +527,40 @@ SEASTAR_TEST_CASE(test_concurrent_prepare_internal_share_one_statement) {
     });
 }
 
+// A statement of 16 KiB or more is parsed in a thread that yields between
+// tokens (SCYLLADB-219). The injection makes every token burn 10 ms of CPU,
+// and the statement has a few dozen of them, so in one task the parse would
+// stall for hundreds of ms, against a 100 ms threshold.
+SEASTAR_TEST_CASE(test_large_statement_parse_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#if !defined(SCYLLA_ENABLE_ERROR_INJECTION) || defined(DEBUG)
+        fmt::print("Skipping test as it depends on error injection and on a parser that yields, which debug builds lack. Please run in dev mode.\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+
+        std::atomic<unsigned> stalls = 0;
+        auto old_threshold = engine().get_blocked_reactor_notify_ms();
+        auto old_report = reactor::test::get_stall_detector_report_function();
+        auto restore = defer([&] () noexcept {
+            injector.disable("parse_statement_in_thread_spin");
+            reactor::test::set_stall_detector_report_function(std::move(old_report));
+            engine().update_blocked_reactor_notify_ms(old_threshold);
+        });
+        injector.enable("parse_statement_in_thread_spin");
+        reactor::test::set_stall_detector_report_function([&] { ++stalls; });
+        engine().update_blocked_reactor_notify_ms(100ms);
+        // See test_batch_prepare_does_not_stall.
+        seastar::sleep(10ms).get();
+
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value)).get();
+
+        BOOST_REQUIRE_EQUAL(stalls, 0);
+        BOOST_REQUIRE_GT(injector.enter_count("parse_statement_in_thread_spin"), 0);
+        assert_that(e.execute_cql("SELECT v FROM ks.t WHERE pk = 1").get()).is_rows().with_rows({{utf8_type->decompose(value)}});
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
