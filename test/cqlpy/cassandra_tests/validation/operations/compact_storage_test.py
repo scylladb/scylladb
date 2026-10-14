@@ -1686,17 +1686,15 @@ def testGroupByWithoutPaging(cql, test_keyspace):
                    row(4, 8, 2, 12, 24))
 
         # Multi-partitions queries with ORDER BY
-        # (NYH: note that because the partition order isn't known, we can't
-        # actually check the result order here, hence I added ignoring_order.
-        # this makes this test weaker).
-        assert_rows_ignoring_order(execute_without_paging(cql, table, "SELECT a, b, c, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC"),
+        # Reproduces #13109:
+        assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC"),
                    row(4, 8, 2, 1, 24),
                    row(2, 4, 3, 1, 12),
                    row(1, 4, 2, 2, 24),
                    row(2, 2, 3, 1, 6),
                    row(1, 2, 2, 2, 12))
 
-        assert_rows_ignoring_order(execute_without_paging(cql, table, "SELECT a, b, c, d FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c ORDER BY b DESC, c DESC"),
+        assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c ORDER BY b DESC, c DESC"),
                    row(4, 8, 2, 12),
                    row(2, 4, 3, 6),
                    row(1, 4, 2, 12),
@@ -1705,19 +1703,18 @@ def testGroupByWithoutPaging(cql, test_keyspace):
                    row(1, 2, 1, 3))
 
         # Multi-partitions queries with ORDER BY and LIMIT
-        # NYH: with LIMIT, even ignoring_order is not enough, the LIMIT
-        # may cut it in the wrong place. I unfortunately had to comment
-        # out these tests.
-        #assert_rows_ignoring_order(execute_without_paging(cql, table, "SELECT a, b, c, d FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC LIMIT 3"),
-        #           row(4, 8, 2, 12),
-        #           row(2, 4, 3, 6),
-        #           row(1, 4, 2, 12))
+        # Reproduces #13109:
+        assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC LIMIT 3"),
+                   row(4, 8, 2, 12),
+                   row(2, 4, 3, 6),
+                   row(1, 4, 2, 12))
 
         # Multi-partitions with wildcard, ORDER BY and LIMIT
-        #assert_rows_ignoring_order(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c ORDER BY b DESC, c DESC LIMIT 3"),
-        #           row(4, 8, 2, 12, 24),
-        #           row(2, 4, 3, 6, 12),
-        #           row(1, 4, 2, 12, 24))
+        # Reproduces #13109:
+        assert_rows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c ORDER BY b DESC, c DESC LIMIT 3"),
+                   row(4, 8, 2, 12, 24),
+                   row(2, 4, 3, 6, 12),
+                   row(1, 4, 2, 12, 24))
 
         # Invalid queries
         assertInvalidMessage(cql, table, "Group by",
