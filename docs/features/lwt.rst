@@ -344,10 +344,11 @@ Arithmetic SET in a LWT update
 ------------------------------
 
 ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on
-non-counter numeric columns in a conditional ``UPDATE``. Because the statement
-is executed as an LWT, the read-modify-write is atomic: no separate read and
-no race condition. An ``IF`` condition is required; without it ScyllaDB
-rejects the statement.
+non-counter numeric columns in a conditional ``UPDATE``. ``SET col = col + value``
+is also allowed on string (``text`` or ``ascii``) columns, where it appends
+``value`` to the string. Because the statement is executed as an LWT, the
+read-modify-write is atomic: no separate read and no race condition. An ``IF``
+condition is required; without it ScyllaDB rejects the statement.
 
 If the column is null, the arithmetic result is also null (standard SQL
 null-propagation semantics), so the column remains unset. To catch an
