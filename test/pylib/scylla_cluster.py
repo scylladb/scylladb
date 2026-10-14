@@ -121,17 +121,6 @@ class ScyllaCluster:
             self.stopped.update(self.running)
             self.running.clear()
 
-    async def stop_gracefully(self) -> None:
-        """Stop all running servers in a clean way"""
-        if self.is_running:
-            self.is_running = False
-            self.logger.info("Cluster %s stopping gracefully", self)
-            # If self.running is empty, no-op
-            await gather_safely(*(server.stop_gracefully(graceful_stop_timeout(self.mode))
-                                  for server in self.running.values()))
-            self.stopped.update(self.running)
-            self.running.clear()
-
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
         if not self.running:
@@ -322,22 +311,6 @@ class ScyllaCluster:
         """Save the log size on all running servers"""
         for server in self.running.values():
             server.take_log_savepoint()
-
-    def read_server_log(self) -> str:
-        """Read log data of failed server"""
-        # FIXME: pick failed server
-        if self.running:
-            return next(iter(self.running.values())).read_log()
-        else:
-            return ""
-
-    def server_log_filename(self) -> Optional[pathlib.Path]:
-        """The log file name of the failed server"""
-        # FIXME: pick failed server
-        if self.running:
-            return next(server for server in self.running.values()).log_filename
-        else:
-            return None
 
     def __str__(self):
         running = ", ".join(str(server) for server in self.running.values())
