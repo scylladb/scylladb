@@ -93,6 +93,7 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    virtual rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -898,6 +899,15 @@ public:
         return _segment_manager->cfg.descriptor_tag;
     }
 
+    // Either insert can throw on a new cf, so the time entry goes first: a count no handle
+    // owns keeps the segment dirty for good, a time entry alone is a flushed cf's state.
+    void mark_dirty(const cf_id_type& cf, gc_clock::time_point time) {
+        auto [it, inserted] = _cf_min_time.emplace(cf, time);
+        if (!inserted) {
+            it->second = std::min(it->second, time);
+        }
+        ++_cf_dirty[cf];
+    }
     void release_cf_count(const cf_id_type& cf) {
         mark_clean(cf, 1);
         if (can_delete()) {
@@ -914,6 +924,24 @@ public:
     // only for whitebox testing
     void zero_sync_time() {
         _sync_time = clock_type::time_point{};
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) override {
+        // A deletable segment leaves _segments, so no flush would release a new count, and
+        // ~segment would leave the file on disk for replay.
+        if (can_delete()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} is already discarded", to, *this));
+        }
+        // Dated no later than `from`'s first write, since the clone can outlive every count
+        // of `from`. A live handle's cf always has a time entry: nothing erases _cf_min_time.
+        const auto from_it = _cf_min_time.find(from);
+        if (from_it == _cf_min_time.end()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} has no time entry for {}", to, *this, from));
+        }
+        mark_dirty(to, from_it->second);
+        // Offset 0 is the segment header, so no entry starts there and the release
+        // of this reference never erases an entry's _extended_segments.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), to, replay_position(_desc.id, 0));
     }
 
     bool must_sync() {
@@ -1385,8 +1413,7 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            _cf_dirty[id]++; // increase use count for cf.
-            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
+            mark_dirty(id, gc_clock::now());
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
@@ -4148,4 +4175,11 @@ db::rp_handle::~rp_handle() {
 
 db::replay_position db::rp_handle::release() {
     return std::exchange(_rp, {});
+}
+
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    if (!*this) {
+        on_internal_error(clogger, format("rp_handle::clone({}): the handle is empty or released", id));
+    }
+    return _h->acquire_cf_count(_cf, id);
 }
