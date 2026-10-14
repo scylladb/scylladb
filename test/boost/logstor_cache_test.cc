@@ -11,7 +11,10 @@
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/index.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "db/cache_tracker.hh"
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/util/defer.hh>
 #include <variant>
 #include "schema/schema_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
@@ -412,4 +415,64 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_sche
     expected.upgrade(new_schema);
     assert_that(new_schema, cached).is_equal_to(expected.partition());
     index.drain_cache().get();
+}
+
+static dht::decorated_key make_decorated_key(const schema& schema, sstring pk) {
+    return dht::decorate_key(schema, partition_key::from_single_value(schema, serialized(std::move(pk))));
+}
+
+// to_single_row_partition() takes the one row out of a mutation and to_mutation() puts it back: the
+// round trip is the identity for every shape a partition takes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_row_partition_round_trips_every_partition_shape) {
+    auto schema = make_logstor_schema();
+    const auto ts = api::timestamp_type(7);
+    const auto now = gc_clock::now();
+    const auto& v_def = *schema->get_column_definition("v");
+
+    // The shapes a logstor partition takes: a live row, a row with a tombstone older than its marker,
+    // a row whose marker and cell expire, a row whose marker is dead, and a partition that is only a
+    // tombstone.
+    std::vector<mutation> ms;
+
+    ms.push_back(make_mutation(schema, "live", "v0"));
+
+    auto shadowed = make_mutation(schema, "shadowed", "v0");
+    shadowed.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_tombstone(tombstone(api::timestamp_type(0), now)));
+    ms.push_back(std::move(shadowed));
+
+    mutation expiring(schema, make_decorated_key(*schema, "expiring"));
+    {
+        auto& row = expiring.partition().clustered_row(*schema, clustering_key::make_empty());
+        row.apply(row_marker(ts, std::chrono::hours(1), now + std::chrono::hours(1)));
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(sstring("v0")),
+                now + std::chrono::hours(1), std::chrono::hours(1)));
+    }
+    ms.push_back(std::move(expiring));
+
+    mutation dead_marker(schema, make_decorated_key(*schema, "dead"));
+    dead_marker.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_marker(tombstone(ts, now)));
+    ms.push_back(std::move(dead_marker));
+
+    mutation deleted(schema, make_decorated_key(*schema, "deleted"));
+    deleted.partition().apply(tombstone(ts, now));
+    ms.push_back(std::move(deleted));
+
+    for (const auto& m : ms) {
+        auto partition = to_single_row_partition(mutation(m));
+        BOOST_REQUIRE(partition.partition_tombstone == m.partition().partition_tombstone());
+        BOOST_REQUIRE_EQUAL(partition.row.has_value(), !m.partition().clustered_rows().empty());
+        assert_that(to_mutation(schema, m.decorated_key(), std::move(partition))).is_equal_to(m);
+    }
+}
+
+// A partition of a shape a logstor schema cannot produce is an internal error, not a fallback.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_row_partition_rejects_a_partition_of_another_shape) {
+    const auto abort_ie = set_abort_on_internal_error(false);
+    auto reset_abort_ie = defer([abort_ie] noexcept {
+        set_abort_on_internal_error(abort_ie);
+    });
+    auto schema = make_logstor_schema();
+    auto m = make_mutation(schema, "pk0", "v0");
+    m.partition().ensure_last_dummy(*schema);
+    BOOST_REQUIRE_THROW(to_single_row_partition(std::move(m)), std::runtime_error);
 }
