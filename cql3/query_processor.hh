@@ -13,7 +13,10 @@
 #include <string_view>
 #include <unordered_map>
 
+#include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/scheduling.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
 
@@ -141,6 +144,13 @@ private:
 
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
+
+    // A large statement is parsed in a thread, one statement at a time in
+    // each scheduling group. See parse_in_thread().
+    std::unordered_map<scheduling_group, semaphore> _large_parses;
+    // Entered by every parse in a thread. stop() closes it, and so waits for
+    // them.
+    seastar::gate _parse_gate;
 
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
@@ -630,6 +640,23 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
+
+    // get_statement() for a statement that is parsed in a thread.
+    // client_state is a copy: a USE on the connection can run during the
+    // parse, and the statement resolves its tables against the keyspace from
+    // before.
+    future<std::unique_ptr<statements::prepared_statement>> parse_in_thread_and_prepare(
+            utils::chunked_string query,
+            service::client_state client_state,
+            dialect d,
+            prepared_for_driver for_driver,
+            std::optional<service::pager::query_plan> pinned_plan,
+            std::optional<std::string_view> forced_keyspace);
+
+    // Parses a large statement in a thread, which yields between tokens.
+    // Returns the statement and the bytes its parse allocated.
+    future<std::pair<std::unique_ptr<statements::raw::parsed_statement>, uint64_t>> parse_in_thread(
+            utils::chunked_string_view query, dialect d);
 
     // The last step of get_statement(): prepares a parsed statement.
     // allocated_before_prepare: the bytes the statement allocated so far.

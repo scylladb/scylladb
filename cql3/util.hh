@@ -34,6 +34,15 @@ namespace cql3 {
 namespace util {
 
 
+// Stack size of a thread that parses with a hook, see do_with_parser(). It
+// is Seastar's default for a thread, except in debug builds, where the parser
+// needs far more stack.
+#ifdef DEBUG
+constexpr size_t parser_thread_stack_size = 1 << 20;
+#else
+constexpr size_t parser_thread_stack_size = 128 * 1024;
+#endif
+
 void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func,
         noncopyable_function<void()>* on_token);
 

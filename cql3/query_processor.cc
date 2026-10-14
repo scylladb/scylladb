@@ -12,6 +12,7 @@
 
 #include <seastar/core/metrics.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
@@ -595,6 +596,7 @@ future<> query_processor::stop_remote() {
 
 future<> query_processor::stop() {
     co_await _mnotifier.unregister_listener(_migration_subscriber.get());
+    co_await _parse_gate.close();
     co_await _authorized_prepared_cache.stop();
     co_await _prepared_cache.stop();
 }
@@ -846,8 +848,19 @@ void query_processor::finish_prepare(prepared_statement& p, utils::chunked_strin
     p.statement->raw_cql_statement = std::move(query);
 }
 
+// A statement this large is parsed in a thread that yields between tokens.
+// A smaller one parses quickly, and a thread would only add its switches.
+static constexpr size_t parse_in_thread_min_size = 16 * 1024;
+
+// A thread's stack has no guard page in release builds. A statement that
+// nests too deeply fails while this much of the stack is left.
+static constexpr size_t parse_thread_stack_margin = util::parser_thread_stack_size / 4;
+
 future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+    if (query.size() >= parse_in_thread_min_size) {
+        return parse_in_thread_and_prepare(std::move(query), client_state.snapshot(), d, for_driver, std::move(pinned_plan), forced_keyspace);
+    }
     try {
         // The parsing cost tracker counts the bytes that this statement
         // allocates. prepare() counts its own, since it may yield. The rest
@@ -861,6 +874,15 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
     }
 }
 
+future<std::unique_ptr<prepared_statement>>
+query_processor::parse_in_thread_and_prepare(utils::chunked_string query, service::client_state client_state, dialect d, prepared_for_driver for_driver,
+        std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+    auto [statement, allocated_in_parse] = co_await coroutine::try_future(parse_in_thread(query, d));
+    utils::total_bytes_allocated_counter allocated;
+    set_keyspace_and_plan(*statement, client_state, std::move(pinned_plan), forced_keyspace);
+    co_return co_await coroutine::try_future(prepare_parsed_statement(std::move(statement), allocated_in_parse + allocated.value(), std::move(query), for_driver));
+}
+
 // Fails for a statement that a BATCH message cannot contain.
 static void check_is_modification(const raw::parsed_statement& statement) {
     if (!dynamic_cast<const raw::modification_statement*>(&statement)) {
@@ -871,6 +893,12 @@ static void check_is_modification(const raw::parsed_statement& statement) {
 future<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>>
 query_processor::parse_batch_message_statement(utils::chunked_string_view query, dialect d) {
     using parsed = std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>;
+    if (query.size() >= parse_in_thread_min_size) {
+        return parse_in_thread(query, d).then([] (parsed result) {
+            check_is_modification(*result.first);
+            return result;
+        });
+    }
     try {
         utils::total_bytes_allocated_counter allocated;
         auto statement = parse_statement(query, d);
@@ -907,6 +935,45 @@ query_processor::prepare_parsed_statement(std::unique_ptr<raw::parsed_statement>
         _parsing_cost_tracker.add_sample(allocated_before_prepare + result.allocated_bytes + allocated_in_finish.value());
         return std::move(result.prepared);
     });
+}
+
+// Runs in a thread. Returns the statement and the bytes its parse allocated,
+// counted between the yields, so that no other task's bytes are counted.
+static std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>
+parse_with_yields(utils::chunked_string_view query, dialect d) {
+    // The stack grows down, so a deeper frame has a lower address.
+    const auto stack_limit = reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) - (util::parser_thread_stack_size - parse_thread_stack_margin);
+    utils::total_bytes_allocated_counter allocated;
+    // An error injection can delay each token.
+    const bool token_delay_enabled = utils::get_local_injector().is_enabled("delay_thread_parse_token");
+    noncopyable_function<void()> on_token = [&] {
+        if (reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) < stack_limit) {
+            throw exceptions::syntax_exception("statement nested too deeply");
+        }
+        if (token_delay_enabled) {
+            allocated.pause();
+            util::inject_delay("delay_thread_parse_token").get();
+            allocated.resume();
+        }
+        if (seastar::thread::should_yield()) {
+            allocated.pause();
+            seastar::thread::yield();
+            allocated.resume();
+        }
+    };
+    auto statement = query_processor::parse_statement(query, d, &on_token);
+    return std::pair(std::move(statement), allocated.value());
+}
+
+future<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>>
+query_processor::parse_in_thread(utils::chunked_string_view query, dialect d) {
+    // Throws gate_closed_exception once stop() runs.
+    auto holder = _parse_gate.hold();
+    // One large statement at a time is parsed in a scheduling group. Parsing
+    // more of them at once would not finish them sooner, and each would hold
+    // its memory for longer.
+    auto units = co_await get_units(_large_parses.try_emplace(current_scheduling_group(), 1).first->second, 1);
+    co_return co_await coroutine::try_future(seastar::async(thread_attributes{.stack_size = util::parser_thread_stack_size}, parse_with_yields, query, d));
 }
 
 std::unique_ptr<raw::parsed_statement>

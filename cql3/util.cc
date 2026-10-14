@@ -38,13 +38,15 @@ static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dia
     // ANTLR3 does pointer arithmetic on char* pointers, so we must linearize.
     // Use a thread-local reusable_buffer to avoid a heap allocation per call.
     using namespace std::chrono_literals;
-    static thread_local utils::reusable_buffer<seastar::lowres_clock> linearization_buffer(600s);
+    static thread_local utils::reusable_buffer<seastar::lowres_clock> linearization_buffer(600s, utils::held_across_preemption::yes);
 
     std::variant<sstring, utils::reusable_buffer_guard> buf_source;
     std::string_view  cql;
     if (linearization_buffer.used()) {
-        // Nested call to with_parser(). Such calls usually (re) parse a sub-set
-        // of the original query, so it is fine to linearize.
+        // Nested call to with_parser(), or a parse in a thread holds the buffer
+        // while it yields. Nested calls usually (re) parse a sub-set of the
+        // original query, so it is fine to linearize. While a parse in a
+        // thread yields, every other parse on the shard linearizes too.
         buf_source.emplace<sstring>(chunked_cql.linearize());
         cql = std::get<sstring>(buf_source);
     } else {
