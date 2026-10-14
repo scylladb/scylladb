@@ -110,11 +110,12 @@ protected:
                 p.memory.reset_to(reader_resources::with_memory(waiting_memory_usage(p.key, p.partition)));
                 return false;
             }
+            // The fragment of the row accounts for the row from now. Release the charge before the
+            // push, or the push charges the row a second time.
+            p.memory.reset_to_zero();
             if (p.partition.row) {
                 push_mutation_fragment(*_schema, _permit, clustering_row(clustering_key::make_empty(), std::move(*p.partition.row)));
             }
-            // The fragment of the row accounts for it now.
-            p.memory.reset_to_zero();
             _row_pushed = true;
         }
         if (is_buffer_full()) {
@@ -162,6 +163,8 @@ class logstor_single_key_reader : public logstor_reader_base {
 
     future<> read_miss(primary_index_key key, primary_index::guarded_location where) {
         auto guard = reader_permit::awaits_guard(_permit);
+        // The record is charged from the read until the end of this function, which frees it.
+        auto record_memory = _permit.consume_memory(where.location.size);
         auto record = co_await _segment_manager.read(where.guard, where.location);
         if (record.header.key.key() != _dk.key()) [[unlikely]] {
             co_await coroutine::return_exception(key_mismatch_error(_dk.key(), record.header.key.key(), where.location));
@@ -299,6 +302,17 @@ class logstor_range_reader : public logstor_reader_base {
     future<std::vector<pending_partition>> read_partitions_for_batch(partition_batch& batch) {
         auto guard = reader_permit::awaits_guard(_permit);
         auto& slots = batch.slots;
+
+        // The records are charged in one call until all of them are decoded, so a record decoded
+        // early stays charged next to its partition until then. The charge can fail, so it is made
+        // before the first read starts: a read in flight must not be abandoned.
+        size_t record_bytes = 0;
+        for (const auto& slot : slots) {
+            if (!slot.partition) {
+                record_bytes += slot.location.size;
+            }
+        }
+        auto record_memory = _permit.consume_memory(record_bytes);
 
         std::vector<future<>> reads;
         reads.reserve(slots.size());
