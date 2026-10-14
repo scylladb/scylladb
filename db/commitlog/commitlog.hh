@@ -398,8 +398,9 @@ public:
     replay_position min_position() const;
 
     // How far the flush requests have got: every closed segment at or below this
-    // position has had its dirty tables asked to flush, and will not be asked again.
-    // Advanced after a round's handlers run, so a handler sees the previous value.
+    // position has had its dirty tables asked to flush. Of those, only the oldest
+    // segment is asked again. Never moves backwards. Advanced after a round's
+    // handlers run, so a handler sees the previous value.
     replay_position flush_position() const;
 
     // For testing only. Returns the active segments current position
