@@ -576,7 +576,7 @@ public:
     }
 
     void init_stream_position(sstables::sstable_position start) override {
-        _stream_position = sstables::reader_position_tracker{.position = start, .offset = 0};
+        _stream_position = sstables::reader_position_tracker{.position = start, .bytes_consumed = 0};
     }
 
     sstables::sstable_position compute_relative_position(int64_t offset) override {
@@ -634,7 +634,7 @@ private:
         return b.to_logical() - a.to_logical();
     }
     void apply_position_delta(int64_t n) {
-        _stream_position.offset += n;
+        _stream_position.bytes_consumed += n;
         _stream_position.position = compute_relative_position(n);
     }
 };
@@ -823,8 +823,8 @@ public:
     }
 
     // The number of uncompressed bytes consumed since the start of the stream.
-    int64_t offset() const {
-        return _input->stream_position().offset;
+    int64_t bytes_consumed() const {
+        return _input->stream_position().bytes_consumed;
     }
 
     const sstables::reader_position_tracker& reader_position() const {
