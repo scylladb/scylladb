@@ -16,6 +16,7 @@
 #include "mutation/mutation_partition_view.hh"
 #include "readers/empty.hh"
 #include "readers/forwardable.hh"
+#include "readers/truncation_stripping.hh"
 #include "sstables/types.hh"
 #include "keys/keys.hh"
 #include "db/large_data_handler.hh"
@@ -721,6 +722,15 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
                       tracing::trace_state_ptr trace_state_ptr,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
+    // Strip the data covered by the table's truncation tombstone, as sampled by the permit
+    // (see docs/dev/eventually-consistent-truncate.md), before merging with other sources.
+    const auto truncation_tombstone = permit.truncation_tombstone(*query_schema);
+    auto maybe_strip = [&] (mutation_reader rd) {
+        if (may_hold_truncated_data(truncation_tombstone)) {
+            return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
+        }
+        return rd;
+    };
     bool is_reversed = slice.is_reversed();
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
@@ -741,26 +751,34 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
         auto rd = make_partition_snapshot_reader_from_snp_schema(is_reversed, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested, *this, _table_shared_data.read_section, shared_from_this(), fwd, *this);
         rd.upgrade_schema(query_schema);
-        return rd;
+        return maybe_strip(std::move(rd));
     } else {
         auto res = make_mutation_reader<scanning_reader>(std::move(query_schema), shared_from_this(), std::move(permit), range, slice, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
-            return make_forwardable(std::move(res));
+            return maybe_strip(make_forwardable(std::move(res)));
         } else {
-            return res;
+            return maybe_strip(std::move(res));
         }
     }
 }
 
 mutation_reader
 memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
+    // Strip the data covered by the table's truncation tombstone, so it never reaches disk.
+    const auto truncation_tombstone = permit.truncation_tombstone(*s);
+    auto maybe_strip = [&] (mutation_reader rd) {
+        if (may_hold_truncated_data(truncation_tombstone)) {
+            return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
+        }
+        return rd;
+    };
     if (!_merged_into_cache) {
         revert_flushed_memory();
-        return make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
+        return maybe_strip(make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this()));
     } else {
         auto& full_slice = s->full_slice();
-        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
-                      query::full_partition_range, full_slice, mutation_reader::forwarding::no);
+        return maybe_strip(make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
+                      query::full_partition_range, full_slice, mutation_reader::forwarding::no));
     }
 }
 

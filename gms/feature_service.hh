@@ -200,6 +200,9 @@ public:
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    // Gates the eventually-consistent TRUNCATE of tablet tables, which records
+    // a truncation tombstone in system.tablets (see docs/dev/eventually-consistent-truncate.md).
+    gms::feature eventually_consistent_truncate { *this, "EVENTUALLY_CONSISTENT_TRUNCATE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

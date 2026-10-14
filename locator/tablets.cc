@@ -443,6 +443,21 @@ table_id tablet_metadata::get_base_table(table_id id) const {
     }
 }
 
+tombstone tablet_metadata::get_truncated_at(table_id id) const {
+    if (auto it = _truncated_at.find(id); it != _truncated_at.end()) {
+        return it->second;
+    }
+    return tombstone();
+}
+
+void tablet_metadata::set_truncated_at(table_id id, tombstone t) {
+    if (t) {
+        _truncated_at[id] = t;
+    } else {
+        _truncated_at.erase(id);
+    }
+}
+
 bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
 }
@@ -472,6 +487,7 @@ future<tablet_metadata> tablet_metadata::copy() const {
 
     copy._table_groups = _table_groups;
     copy._base_table = _base_table;
+    copy._truncated_at = _truncated_at;
 
     copy._balancing_enabled = _balancing_enabled;
 
@@ -541,6 +557,7 @@ void tablet_metadata::drop_tablet_map(table_id id) {
     }
 
     _table_groups.erase(id);
+    _truncated_at.erase(id);
 
     _tablets.erase(id);
 }
@@ -567,6 +584,7 @@ future<> tablet_metadata::clear_gently() {
 
     co_await utils::clear_gently(_table_groups);
     co_await utils::clear_gently(_base_table);
+    co_await utils::clear_gently(_truncated_at);
 
     co_return;
 }
@@ -581,7 +599,7 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
             return false;
         }
     }
-    return true;
+    return _truncated_at == o._truncated_at;
 }
 
 tablet_map::tablet_map(size_t tablet_count, bool with_raft_info)
@@ -1451,7 +1469,7 @@ static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map
 }
 
 size_t tablet_metadata::external_memory_usage() const {
-    size_t result = estimate_external_memory_usage(_tablets);
+    size_t result = estimate_external_memory_usage(_tablets) + estimate_external_memory_usage(_truncated_at);
     for (auto&& [id, map] : _tablets) {
         result += map->external_memory_usage();
     }
@@ -2220,6 +2238,9 @@ auto fmt::formatter<locator::tablet_metadata>::format(const locator::tablet_meta
             out = fmt::format_to(out, ",");
         }
         out = fmt::format_to(out, "\n  {}: {}", id, *map);
+        if (auto t = tm.get_truncated_at(id)) {
+            out = fmt::format_to(out, " truncated_at={}", t);
+        }
         first = false;
     }
     return fmt::format_to(out, "\n}}");
