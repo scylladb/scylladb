@@ -367,6 +367,11 @@ public:
         return *_state.server;
     }
 
+    // Can be null only after the table is dropped.
+    lw_shared_ptr<table_request_stats> table_stats() const {
+        return _state.metrics ? _state.metrics->request_stats() : nullptr;
+    }
+
     // Possible results:
     //   timestamp_with_term - timestamp to use for a new mutation request
     //   raft::not_a_leader - this node is not a leader
