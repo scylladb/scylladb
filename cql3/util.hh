@@ -33,6 +33,12 @@ namespace cql3 {
 namespace util {
 
 
+// Stack size for a parse that does not run on the reactor's own stack: every
+// parse in debug builds, see do_with_parser_impl(), and a parse in a thread in
+// the other builds. As large as the reactor stack of every shard but shard 0,
+// so such a parse nests as deep as on those shards.
+constexpr size_t parser_stack_size = 2 << 20;
+
 void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func,
         noncopyable_function<void()>* on_token);
 

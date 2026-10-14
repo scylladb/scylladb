@@ -15,6 +15,7 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/prepared_statements_cache.hh"
@@ -141,6 +142,10 @@ private:
 
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
+
+    // A large statement is parsed in a thread. Running one at a time keeps
+    // their stacks to cql3::util::parser_stack_size per shard.
+    seastar::semaphore _parse_threads{1};
 
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;

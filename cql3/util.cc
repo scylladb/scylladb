@@ -40,8 +40,9 @@ static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dia
     std::variant<sstring, utils::reusable_buffer_guard> buf_source;
     std::string_view  cql;
     if (linearization_buffer.used()) {
-        // Nested call to with_parser(). Such calls usually (re) parse a sub-set
-        // of the original query, so it is fine to linearize.
+        // Nested call to with_parser(), or a parse that yields holds the
+        // buffer. Nested calls usually (re) parse a sub-set of the original
+        // query, so it is fine to linearize.
         buf_source.emplace<sstring>(chunked_cql.linearize());
         cql = std::get<sstring>(buf_source);
     } else {
@@ -110,7 +111,7 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
 // is free - guard pages are never touched, so none of them is ever committed.
 class parser_stack {
     static constexpr size_t min_guard_size = 16 * 1024;
-    static constexpr size_t usable_size = 1 << 20;
+    static constexpr size_t usable_size = parser_stack_size;
 
     // mprotect() rounds the protected range up to a page boundary, so the
     // guard must be a whole number of pages or bottom() would land inside it.
