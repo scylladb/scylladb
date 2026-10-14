@@ -550,3 +550,15 @@ def test_allow_filtering_clustering_key_warning(cql, test_keyspace, scylla_only)
             assert sorted(result) == [(pk, 2) for pk in range(3)]
             assert any('This query should use ALLOW FILTERING and will be rejected in future versions' in w
                        for w in result.response_future.warnings)
+
+# When the partition key column is restricted by a slice - not by EQ or
+# IN - in addition to token(p), the partition key restriction needs
+# filtering, so ALLOW FILTERING is required.
+def test_restriction_token_and_nontoken_needs_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY") as table:
+        cql.execute(f"INSERT INTO {table} (p) VALUES (1)")
+        t = list(cql.execute(f"SELECT token(p) FROM {table} WHERE p = 1"))[0][0]
+        for where, expected in [("p < 1", []), ("p <= 1", [(1,)]), ("p > 1", []), ("p >= 1", [(1,)])]:
+            with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+                cql.execute(f"SELECT p FROM {table} WHERE token(p) = {t} AND {where}")
+            assert list(cql.execute(f"SELECT p FROM {table} WHERE token(p) = {t} AND {where} ALLOW FILTERING")) == expected
