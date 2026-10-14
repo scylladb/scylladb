@@ -43,6 +43,12 @@ protected:
         reader_permit::resource_units memory;
     };
 
+    // The query's schema, _schema, is what the fragments are pushed under. The table's is what the
+    // cache is asked and a record decoded under. They differ for a reversed read, whose query
+    // schema is the reversed one: a table without clustering columns has nothing to reverse, and a
+    // cached partition upgraded to the reversed schema would only be upgraded back by the next
+    // forward read.
+    schema_ptr _table_schema;
     query::partition_slice _slice;
     // Decided once, from the slice: a slice with bypass_cache neither looks the cache up nor admits
     // what it reads from a segment.
@@ -57,6 +63,7 @@ private:
 protected:
     logstor_reader_base(schema_ptr s, reader_permit p, const query::partition_slice& slice)
         : impl(std::move(s), std::move(p))
+        , _table_schema(slice.is_reversed() ? _schema->get_reversed() : _schema)
         , _slice(slice)
         , _use_cache(!_slice.options.contains(query::partition_slice::option::bypass_cache))
     { }
@@ -70,7 +77,7 @@ protected:
     size_t waiting_memory_usage(const dht::decorated_key& key, const single_row_partition& partition) const {
         size_t usage = sizeof(pending_partition) + key.key().external_memory_usage();
         if (partition.row) {
-            usage += partition.row->cells().external_memory_usage(*_schema, column_kind::regular_column);
+            usage += partition.row->cells().external_memory_usage(*_table_schema, column_kind::regular_column);
         }
         return usage;
     }
@@ -159,7 +166,7 @@ class logstor_single_key_reader : public logstor_reader_base {
         if (record.header.key.key() != _dk.key()) [[unlikely]] {
             co_await coroutine::return_exception(key_mismatch_error(_dk.key(), record.header.key.key(), where.location));
         }
-        auto m = decode_record_value(record.value, _schema, record.header);
+        auto m = decode_record_value(record.value, _table_schema, record.header);
         if (_use_cache) {
             _index.populate_cache(key, where.location, m);
         }
@@ -189,7 +196,7 @@ public:
 
         try {
             primary_index_key key(_dk);
-            auto found = _index.lookup_for_read(key, *_schema, _use_cache);
+            auto found = _index.lookup_for_read(key, *_table_schema, _use_cache);
             if (!found) {
                 _end_of_stream = true;
                 return make_ready_future<>();
