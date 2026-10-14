@@ -13,6 +13,7 @@ concurrency:
 
 env:
   BUILD_DIR: build
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   read-toolchain:
@@ -29,12 +30,12 @@ jobs:
           - RelWithDebInfo
           - Dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
       - run: |
           rm -rf seastar
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: scylladb/seastar
           submodules: true
