@@ -165,12 +165,17 @@ to_host_id_rps(const shared_ptr<const gms::gossiper>& gossiper, const sync_point
     return result;
 }
 
-manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
+        utils::updateable_value<uint32_t> max_hint_window_ms,
         resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg)
     : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
     , _proxy(proxy)
-    , _max_hint_window_us(max_hint_window_ms * 1000)
+    , _max_hint_window_us(int64_t(max_hint_window_ms()) * 1000)
+    , _max_hint_window_observer(max_hint_window_ms.observe([this] (const uint32_t& new_max_hint_window_ms) {
+        _max_hint_window_us = int64_t(new_max_hint_window_ms) * 1000;
+        manager_logger.info("Updated max_hint_window to {} ms", new_max_hint_window_ms);
+    }))
     , _local_db(db.local())
     , _draining_eps_gate(seastar::format("hints::manager::{}", _hints_dir.native()))
     , _resource_manager(res_manager)
