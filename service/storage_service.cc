@@ -6407,17 +6407,31 @@ future<> storage_service::abort_restore_tablets(table_id table) {
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // The restore's repairs carry its request id as their task id.
+        std::optional<locator::tablet_task_id> repair_task_id;
+        for (auto req : _topology_state_machine._topology.ongoing_restore_requests) {
+            if ((co_await _sys_ks.local().get_topology_request_entry(req)).restore_table_id == table) {
+                repair_task_id = locator::tablet_task_id(req);
+                break;
+            }
+        }
+
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         group0_update_collector updates;
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto last_token = tmap.get_last_token(tid);
+            // A failed repair keeps its request even after its transition ended, and the load
+            // balancer would repair the tablet after the restore was aborted.
+            if (repair_task_id && info.repair_task_info && info.repair_task_info->tablet_task_id == *repair_task_id) {
+                builder.del_repair_task_info(last_token, _feature_service);
+            }
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
                 co_return;
             }
-            auto last_token = tmap.get_last_token(tid);
-            // Deleting the session aborts the restore: see the restore handling in the
-            // topology coordinator.
+            // Deleting the session aborts the restore, or the repair that follows it: see the
+            // restore and repair handling in the topology coordinator.
             builder.del_session(last_token);
         });
 
