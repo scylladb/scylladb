@@ -547,10 +547,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
     }
 
     // If we got here we are done with the current segment and we can remove it.
-    with_shared(_file_update_mutex, [&fname, this] {
-        auto p = _ep_manager.get_or_load().get();
-        return p->delete_segments({ fname });
-    }).get();
+    delete_segment(fname).get();
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
@@ -576,6 +573,16 @@ void hint_sender::pop_current_segment() {
     } else if (!_segments_to_replay.empty()) {
         _segments_to_replay.pop_front();
     }
+}
+
+future<> hint_sender::delete_segment_unsafe(sstring segment_name) {
+    auto entry = co_await _ep_manager.get_or_load();
+    co_await entry->delete_segments({std::move(segment_name)});
+}
+
+future<> hint_sender::delete_segment(sstring segment_name) {
+    const auto holder = co_await get_shared_lock(_file_update_mutex);
+    co_await delete_segment_unsafe(std::move(segment_name));
 }
 
 // Runs in the seastar::async context

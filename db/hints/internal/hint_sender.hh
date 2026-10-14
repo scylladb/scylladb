@@ -174,6 +174,12 @@ private:
     /// \brief Removes the current segment from the queue.
     void pop_current_segment();
 
+    /// \brief Deletes a segment file from the disk without taking any lock.
+    future<> delete_segment_unsafe(sstring segment_name);
+
+    /// \brief Deletes a segment file from the disk.
+    future<> delete_segment(sstring segment_name);
+
     /// \brief Send hints collected so far.
     ///
     /// Send hints aggregated so far. This function is going to try to deplete
