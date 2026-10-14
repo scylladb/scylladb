@@ -93,6 +93,7 @@ class db::cf_holder {
 public:
     virtual ~cf_holder() {};
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
+    virtual rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) = 0;
 };
 
 const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
@@ -517,6 +518,10 @@ public:
     void flush_segments(uint64_t size_to_remove);
     void check_no_data_older_than_allowed();
 
+    replay_position flush_position() const {
+        return _flush_position;
+    }
+
     // whitebox testing
     std::function<future<>()> _oversized_pre_wait_memory_func;
 
@@ -898,6 +903,15 @@ public:
         return _segment_manager->cfg.descriptor_tag;
     }
 
+    // Either insert can throw on a new cf, so the time entry goes first: a count no handle
+    // owns keeps the segment dirty for good, a time entry alone is a flushed cf's state.
+    void mark_dirty(const cf_id_type& cf, gc_clock::time_point time) {
+        auto [it, inserted] = _cf_min_time.emplace(cf, time);
+        if (!inserted) {
+            it->second = std::min(it->second, time);
+        }
+        ++_cf_dirty[cf];
+    }
     void release_cf_count(const cf_id_type& cf) {
         mark_clean(cf, 1);
         if (can_delete()) {
@@ -909,6 +923,24 @@ public:
     void release_cf_count(const cf_id_type& cf, const replay_position& rp) override {
         _extended_segments.erase(rp);
         release_cf_count(cf);
+    }
+
+    rp_handle acquire_cf_count(const cf_id_type& from, const cf_id_type& to) override {
+        // A deletable segment leaves _segments, so no flush would release a new count, and
+        // ~segment would leave the file on disk for replay.
+        if (can_delete()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} is already discarded", to, *this));
+        }
+        // Dated no later than `from`'s first write, since the clone can outlive every count
+        // of `from`. A live handle's cf always has a time entry: nothing erases _cf_min_time.
+        const auto from_it = _cf_min_time.find(from);
+        if (from_it == _cf_min_time.end()) {
+            on_internal_error(clogger, format("rp_handle::clone({}): segment {} has no time entry for {}", to, *this, from));
+        }
+        mark_dirty(to, from_it->second);
+        // Offset 0 is the segment header, so no entry starts there and the release
+        // of this reference never erases an entry's _extended_segments.
+        return rp_handle(static_pointer_cast<cf_holder>(shared_from_this()), to, replay_position(_desc.id, 0));
     }
 
     bool must_sync() {
@@ -1379,8 +1411,7 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            _cf_dirty[id]++; // increase use count for cf.
-            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
+            mark_dirty(id, gc_clock::now());
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
@@ -3241,57 +3272,6 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
 }
-future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
-        const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers) {
-    class cl_raft_entries_writer final : public entry_writer {
-        utils::chunked_vector<commitlog_raft_log_entry_writer> _writers;
-        cf_id_type _id;
-
-    public:
-        utils::chunked_vector<rp_handle> res;
-
-        cl_raft_entries_writer(utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers, cf_id_type id)
-            : entry_writer(force_sync::yes, entry_writers.size())
-            , _writers(std::move(entry_writers))
-            , _id(id) {
-            res.reserve(_writers.size());
-        }
-        const cf_id_type& id(size_t) const override {
-            return _id;
-        }
-        size_t size(segment&) override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        size_t size(segment&, size_t i) override {
-            return _writers.at(i).size();
-        }
-        size_t size() const override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        void write(segment&, output& out, size_t i) const override {
-            _writers.at(i).write(out);
-        }
-        void result(size_t i, rp_handle h) override {
-            SCYLLA_ASSERT(i == res.size());
-            res.emplace_back(std::move(h));
-        }
-
-        using result_type = utils::chunked_vector<db::rp_handle>;
-
-        result_type result() {
-            return std::move(res);
-        }
-    };
-    return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
-}
 
 db::commitlog::commitlog(config cfg)
         : _segment_manager(::make_shared<segment_manager>(std::move(cfg))) {
@@ -4084,6 +4064,10 @@ db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
 }
 
+db::replay_position db::commitlog::flush_position() const {
+    return _segment_manager->flush_position();
+}
+
 size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {
     return _segment_manager->sector_overhead(id, size);
 }
@@ -4131,4 +4115,11 @@ db::rp_handle::~rp_handle() {
 
 db::replay_position db::rp_handle::release() {
     return std::exchange(_rp, {});
+}
+
+db::rp_handle db::rp_handle::clone(const cf_id_type& id) const {
+    if (!*this) {
+        on_internal_error(clogger, format("rp_handle::clone({}): the handle is empty or released", id));
+    }
+    return _h->acquire_cf_count(_cf, id);
 }
