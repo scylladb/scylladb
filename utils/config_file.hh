@@ -121,6 +121,9 @@ public:
         CQL,
         Internal,
         API,
+        // Set by a cluster config override. Ranks above SettingsFile so a yaml reload
+        // leaves the value alone, like an API value.
+        ClusterConfig,
     };
 
     struct config_src {
@@ -168,6 +171,7 @@ public:
         virtual future<bool> set_value_on_all_shards(sstring, config_source) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
+        virtual liveness get_liveness() const noexcept = 0;
         sstring source_name() const noexcept;
         std::string_view status_name() const noexcept;
         json::json_return_type value_as_json() const;
@@ -187,6 +191,7 @@ public:
         };
         liveness _liveness;
         std::vector<T> _allowed_values;
+        void check_write_allowed(const T& t, config_source src) const;
     protected:
         updateable_value_source<T>& the_value();
         const updateable_value_source<T>& the_value() const;
@@ -205,10 +210,16 @@ public:
                 std::initializer_list<T> allowed_values = {});
         value_status status() const noexcept override;
         config_source source() const noexcept override;
+        liveness get_liveness() const noexcept override;
         bool is_set() const;
+        // Throws std::invalid_argument for an API or CQL write while the value is owned by
+        // a cluster config override (source() == ClusterConfig).
         MyType & operator()(const T& t, config_source src = config_source::Internal);
         MyType & operator()(T&& t, config_source src = config_source::Internal);
         void set(T&& t, config_source src = config_source::None);
+        // Sets the value and the source unconditionally (unlike operator(), which keeps the
+        // current source for src == None). Used to put back a pre-cluster-config baseline.
+        void restore(const T& t, config_source src);
         const T& operator()() const;
 
         operator updateable_value<T>() const &;
@@ -281,6 +292,9 @@ private:
         _cfgs;
     bool _initialization_completed;
 };
+
+// The name shown for a source in system.config, e.g. "config" for SettingsFile.
+sstring config_source_name(config_file::config_source src) noexcept;
 
 template <typename T>
 requires requires (const config_file::named_value<T>& nv) {
