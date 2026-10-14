@@ -6192,7 +6192,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             builder.del_repair_task_info(last_token, _feature_service);
-            if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
+            if (trinfo && trinfo->is_repairing()) {
                 builder.del_session(last_token);
             }
         });
