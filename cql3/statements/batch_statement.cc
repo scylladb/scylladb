@@ -15,11 +15,16 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <ranges>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/core/thread_cputime_clock.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
+#include "utils/error_injection.hh"
+#include "utils/stall_free.hh"
 #include "utils/unique_view.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/strong_consistency/batch_statement.hh"
@@ -458,7 +463,7 @@ void batch_statement::build_cas_result_set_metadata() {
 
 namespace raw {
 
-std::unique_ptr<prepared_statement>
+future<std::unique_ptr<prepared_statement>>
 batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     auto&& meta = get_prepare_context();
 
@@ -473,6 +478,10 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
 
     bool has_sc_statements = false;
     bool has_non_sc_statements = false;
+    // Other tasks run while this coroutine yields, so the bytes it allocates
+    // are summed over the segments between the yields.
+    uint64_t allocated = 0;
+    auto segment_start = seastar::memory::stats().total_bytes_allocated();
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
             first_ks = parsed->keyspace();
@@ -482,6 +491,11 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
         auto statement = parsed->prepare(db, meta, stats);
+        // Stands in for a sub-statement that is slow to prepare.
+        utils::get_local_injector().inject("batch_statement_prepare_spin", [] {
+            auto until = seastar::thread_cputime_clock::now() + std::chrono::milliseconds(50);
+            while (seastar::thread_cputime_clock::now() < until) {}
+        });
         if (strong_consistency::is_strongly_consistent(db, parsed->keyspace())) {
             has_sc_statements = true;
         } else {
@@ -492,6 +506,20 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             batch_audit_infos.emplace_back(*audit_info);
         }
         statements.emplace_back(std::move(statement));
+        allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+        co_await coroutine::maybe_yield();
+        co_await utils::get_local_injector().inject("batch_statement_prepare_yield", utils::wait_for_message(std::chrono::minutes(1)));
+        segment_start = seastar::memory::stats().total_bytes_allocated();
+    }
+    // A schema change during a yield can leave sub-statements of one table
+    // prepared against different versions of it.
+    for (auto& s : statements) {
+        auto& schema = *s.statement->s;
+        auto table = db.try_find_table(schema.id());
+        if (!table || table->schema()->version() != schema.version()) {
+            throw exceptions::invalid_request_exception(format("Table {}.{} changed while the batch was being prepared. Retry the batch.",
+                    schema.ks_name(), schema.cf_name()));
+        }
     }
     if (has_sc_statements && has_non_sc_statements) {
         throw exceptions::invalid_request_exception("Cannot mix strongly consistent and eventually consistent statements in a batch");
@@ -520,9 +548,14 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
 
-    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    auto prepared = std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
                                                       meta.get_variable_specifications(),
                                                       std::move(partition_key_bind_indices));
+    _prepare_allocated_bytes = allocated + seastar::memory::stats().total_bytes_allocated() - segment_start;
+    // The parsed sub-statements are not used any more, and freeing a large
+    // batch of them at once would stall.
+    co_await utils::clear_gently(_parsed_statements);
+    co_return prepared;
 }
 
 audit::statement_category batch_statement::category() const {

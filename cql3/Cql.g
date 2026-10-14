@@ -13,6 +13,7 @@ options {
 @lexer::includes {
 #include "cql3/error_collector.hh"
 #include "cql3/error_listener.hh"
+#include <seastar/util/noncopyable_function.hh>
 }
 
 @parser::includes {
@@ -254,6 +255,20 @@ inline int max_expression_nesting = 12;
         return token;
     }
 
+    // Called on every token, see cql3::util::do_with_parser().
+    seastar::noncopyable_function<void()>* _on_token = nullptr;
+
+    void set_on_token(seastar::noncopyable_function<void()>* on_token) {
+        _on_token = on_token;
+    }
+
+    const CommonTokenType* matchToken(ANTLR_UINT32 ttype, BitsetListType* follow) {
+        if (_on_token) {
+            (*_on_token)();
+        }
+        return BaseType::matchToken(ttype, follow);
+    }
+
     class nesting_guard {
         int& _nesting_ref;
     public:
@@ -295,6 +310,21 @@ inline int max_expression_nesting = 12;
 
     void set_error_listener(listener_type& listener) {
         this->listener = &listener;
+    }
+
+    // Called on every token, see cql3::util::do_with_parser().
+    seastar::noncopyable_function<void()>* _on_token = nullptr;
+
+    void set_on_token(seastar::noncopyable_function<void()>* on_token) {
+        _on_token = on_token;
+    }
+
+    // The runtime calls this for every token the lexer produces.
+    CommonTokenType* emit() {
+        if (_on_token) {
+            (*_on_token)();
+        }
+        return BaseType::emit();
     }
 
     void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex)

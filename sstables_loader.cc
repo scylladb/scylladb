@@ -1460,7 +1460,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                 keyspace, table, snap_name, static_cast<int32_t>(entry.type)));
         }
         try {
-            original_schema = table_helper::parse_new_cf_statement(_sys_dist_ks.qp(), entry.table_schema);
+            original_schema = co_await table_helper::parse_new_cf_statement(_sys_dist_ks.qp(), entry.table_schema);
         } catch (...) {
             throw std::runtime_error(fmt::format("Failed to recover the pre-restore schema of table {}.{} stored for snapshot {}: {}",
                 keyspace, table, snap_name, std::current_exception()));

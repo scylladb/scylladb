@@ -20,9 +20,15 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>
+#include <seastar/core/reactor.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/util/defer.hh>
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "utils/error_injection.hh"
+
+using namespace std::chrono_literals;
 
 BOOST_AUTO_TEST_SUITE(query_processor_test)
 
@@ -383,6 +389,177 @@ SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
         auto stat_ps8 = qp.get_cql_stats().select_partition_range_scan;
         qp.execute_internal("select * from ks.fsm where token(pk) = 1;", cql3::query_processor::cache_internal::yes).get();
         BOOST_CHECK_EQUAL(stat_ps8, qp.get_cql_stats().select_partition_range_scan);
+    });
+}
+
+// Preparing a batch yields between its sub-statements, so a batch of slow
+// sub-statements must not stall the reactor (SCYLLADB-219). The injection
+// makes every sub-statement prepare burn 50 ms of CPU. In one task the 20 of
+// them would be a 1 s stall, against a 100 ms threshold.
+SEASTAR_TEST_CASE(test_batch_prepare_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+
+        constexpr size_t n = 20;
+        std::string text = "BEGIN UNLOGGED BATCH ";
+        for (size_t i = 0; i < n; ++i) {
+            text += fmt::format("INSERT INTO ks.t (pk, v) VALUES ({}, {}); ", i, i);
+        }
+        text += "APPLY BATCH";
+        auto parsed = cql3::query_processor::parse_statement(text, cql3::internal_dialect());
+
+        std::atomic<unsigned> stalls = 0;
+        auto old_threshold = engine().get_blocked_reactor_notify_ms();
+        auto old_report = reactor::test::get_stall_detector_report_function();
+        auto restore = defer([&] () noexcept {
+            injector.disable("batch_statement_prepare_spin");
+            reactor::test::set_stall_detector_report_function(std::move(old_report));
+            engine().update_blocked_reactor_notify_ms(old_threshold);
+        });
+        injector.enable("batch_statement_prepare_spin");
+        reactor::test::set_stall_detector_report_function([&] { ++stalls; });
+        engine().update_blocked_reactor_notify_ms(100ms);
+        // The detector arms the new threshold when the next batch of tasks
+        // starts. Sleeping, unlike yielding, ends the current batch for sure.
+        seastar::sleep(10ms).get();
+
+        auto prepared = parsed->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config()).get();
+
+        BOOST_REQUIRE_EQUAL(stalls, 0);
+        auto& batch = dynamic_cast<cql3::statements::batch_statement&>(*prepared->statement);
+        BOOST_REQUIRE_EQUAL(batch.get_statements().size(), n);
+    });
+}
+
+static void wait_for_injection_enter(std::string_view name) {
+    while (utils::get_local_injector().enter_count(name) == 0) {
+        seastar::sleep(1ms).get();
+    }
+}
+
+// The prepared statements cache drops every load in progress when a schema
+// change invalidates any of its entries. So a batch PREPARE suspended across a
+// change to another table is answered but not cached, and the first EXECUTE
+// finds the id unprepared and the driver prepares again.
+SEASTAR_TEST_CASE(test_schema_change_during_batch_prepare_is_not_cached) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE TABLE ks.other (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+
+        auto id = e.prepare("BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, v) VALUES (1, 1); INSERT INTO ks.t (pk, v) VALUES (2, 2); APPLY BATCH").get();
+        BOOST_REQUIRE(qp.get_prepared(id));
+
+        injector.enable("batch_statement_prepare_yield", true);
+        auto prepare = e.prepare("BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, v) VALUES (3, 3); INSERT INTO ks.t (pk, v) VALUES (4, 4); APPLY BATCH");
+        wait_for_injection_enter("batch_statement_prepare_yield");
+        e.execute_cql("ALTER TABLE ks.other ADD c int").get();
+        injector.receive_message("batch_statement_prepare_yield");
+        auto id2 = prepare.get();
+
+        BOOST_REQUIRE(qp.get_prepared(id));
+        BOOST_REQUIRE(!qp.get_prepared(id2));
+    });
+}
+
+// A change to a batch's table while its prepare is suspended would leave the
+// sub-statements prepared against different versions of the table, so the
+// batch must fail instead of running, plain or conditional.
+SEASTAR_TEST_CASE(test_schema_change_during_batch_prepare_fails) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        auto& injector = utils::get_local_injector();
+
+        int column = 0;
+        for (auto batch : {
+                "BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, ck, v) VALUES (0, 1, 1); INSERT INTO ks.t (pk, ck, v) VALUES (0, 2, 2); APPLY BATCH",
+                "BEGIN BATCH INSERT INTO ks.t (pk, ck, v) VALUES (0, 1, 1) IF NOT EXISTS; INSERT INTO ks.t (pk, ck, v) VALUES (0, 2, 2) IF NOT EXISTS; APPLY BATCH"}) {
+            injector.enable("batch_statement_prepare_yield", true);
+            auto query = e.execute_cql(batch);
+            wait_for_injection_enter("batch_statement_prepare_yield");
+            e.execute_cql(fmt::format("ALTER TABLE ks.t ADD c{} int", column++)).get();
+            injector.receive_message("batch_statement_prepare_yield");
+            BOOST_REQUIRE_THROW(query.get(), exceptions::invalid_request_exception);
+        }
+        assert_that(e.execute_cql("SELECT * FROM ks.t").get()).is_rows().is_empty();
+    });
+}
+
+// Two callers can prepare the same internal statement at once when its
+// prepare() suspends. The second must not replace the first one's entry,
+// whose weak pointer was already handed out.
+SEASTAR_TEST_CASE(test_concurrent_prepare_internal_share_one_statement) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+        const sstring text = "BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, v) VALUES (?, ?); INSERT INTO ks.t (pk, v) VALUES (?, ?); APPLY BATCH";
+
+        injector.enable("batch_statement_prepare_yield", true);
+        auto first = qp.prepare_internal(text);
+        wait_for_injection_enter("batch_statement_prepare_yield");
+        auto second = qp.prepare_internal(text).get();
+        injector.receive_message("batch_statement_prepare_yield");
+        auto first_ptr = first.get();
+
+        BOOST_REQUIRE_EQUAL(&*first_ptr, &*second);
+        qp.execute_internal(text, {1, 1, 2, 2}, cql3::query_processor::cache_internal::yes).get();
+        assert_that(e.execute_cql("SELECT pk FROM ks.t").get()).is_rows().with_size(2);
+    });
+}
+
+// A statement of 16 KiB or more is parsed in a thread that yields between
+// tokens (SCYLLADB-219). The injection makes every token burn 10 ms of CPU,
+// and the statement has a few dozen of them, so in one task the parse would
+// stall for hundreds of ms, against a 100 ms threshold.
+SEASTAR_TEST_CASE(test_large_statement_parse_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#if !defined(SCYLLA_ENABLE_ERROR_INJECTION) || defined(DEBUG)
+        fmt::print("Skipping test as it depends on error injection and on a parser that yields, which debug builds lack. Please run in dev mode.\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+
+        std::atomic<unsigned> stalls = 0;
+        auto old_threshold = engine().get_blocked_reactor_notify_ms();
+        auto old_report = reactor::test::get_stall_detector_report_function();
+        auto restore = defer([&] () noexcept {
+            injector.disable("parse_statement_in_thread_spin");
+            reactor::test::set_stall_detector_report_function(std::move(old_report));
+            engine().update_blocked_reactor_notify_ms(old_threshold);
+        });
+        injector.enable("parse_statement_in_thread_spin");
+        reactor::test::set_stall_detector_report_function([&] { ++stalls; });
+        engine().update_blocked_reactor_notify_ms(100ms);
+        // See test_batch_prepare_does_not_stall.
+        seastar::sleep(10ms).get();
+
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value)).get();
+
+        BOOST_REQUIRE_EQUAL(stalls, 0);
+        BOOST_REQUIRE_GT(injector.enter_count("parse_statement_in_thread_spin"), 0);
+        assert_that(e.execute_cql("SELECT v FROM ks.t WHERE pk = 1").get()).is_rows().with_rows({{utf8_type->decompose(value)}});
     });
 }
 
