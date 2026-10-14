@@ -70,7 +70,9 @@ class CppFile(pytest.File, ABC):
 
     @cached_property
     def build_basedir(self) -> pathlib.Path:
-        return pathlib.Path(path_to(self.build_mode, "test", self.stash[TEST_SUITE].name))
+        # path_to() takes the path of a file: the cmake build puts the mode
+        # directory between the directory and the file name.
+        return pathlib.Path(path_to(self.build_mode, "test", self.stash[TEST_SUITE].name, self.test_name)).parent
 
     @cached_property
     def log_dir(self) -> pathlib.Path:
