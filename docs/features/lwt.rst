@@ -340,8 +340,8 @@ You can use lightweight transactions for any of the following activities:
 
       (8 rows)
 
-Arithmetic SET in a LWT update (ScyllaDB extension)
-----------------------------------------------------
+Arithmetic SET in a LWT update
+------------------------------
 
 ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on
 non-counter numeric columns in a conditional ``UPDATE``. Because the statement
@@ -376,7 +376,11 @@ also use the shorthand syntax ``SET col += value`` and ``SET col -= value``.
 
 .. note::
 
-   This syntax is a ScyllaDB extension and is not supported by Apache Cassandra.
+   Apache Cassandra also supports this syntax: ``col = col + value`` since
+   Cassandra 4.1, and ``col = col - value`` since Cassandra 6.0. One
+   difference is that when the result overflows an integer type, Cassandra
+   silently wraps around (e.g., incrementing the largest ``int`` yields the
+   smallest ``int``), while ScyllaDB rejects the update with an error.
 
 Update a table using a LWT
 --------------------------
