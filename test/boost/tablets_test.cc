@@ -6578,6 +6578,150 @@ SEASTAR_THREAD_TEST_CASE(test_intranode_balance_threshold) {
     }, cfg).get();
 }
 
+// Without the feature, system.tablets has no column for a tablet's raft group.
+static cql_test_config strongly_consistent_tablet_cql_test_config() {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+    return cfg;
+}
+
+struct sc_and_ec_balancing_result {
+    table_id sc_table;
+    table_id ec_table;
+    migration_plan plan;
+};
+
+// Runs one round of the load balancer on a node with 2 shards, which isolates intranode
+// balancing, and two tables with RF=1 and `tablet_count` tablets each: a strongly
+// consistent one and an eventually consistent one. All tablets are on shard 0, and far
+// above the target tablet size, so both tables need their tablets moved and split.
+static sc_and_ec_balancing_result balance_sc_and_ec_tables(cql_test_env& e, size_t tablet_count) {
+    topology_builder topo(e);
+
+    const unsigned shard_count = 2;
+    auto host = topo.add_node(node_state::normal, shard_count);
+    const uint64_t shard_capacity = 100UL * 1024UL * 1024UL * 1024UL;
+    topo.get_shared_load_stats().set_capacity(host, shard_capacity * shard_count);
+
+    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+    auto sc_table = add_table(e, ks_name).get();
+    auto ec_table = add_table(e, ks_name).get();
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        for (auto [table, with_raft_info] : {std::pair{sc_table, true}, std::pair{ec_table, false}}) {
+            tablet_map tmap(tablet_count, with_raft_info);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host, 0}}});
+                if (with_raft_info) {
+                    tmap.set_tablet_raft_info(tid, tablet_raft_info{raft::group_id(utils::UUID_gen::get_time_UUID())});
+                }
+            }
+            tmeta.set_tablet_map(table, std::move(tmap));
+        }
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    auto& load_stats = topo.get_shared_load_stats();
+    const uint64_t tablet_size = service::default_target_tablet_size * 10;
+    load_stats.set_tablet_sizes(stm.get(), sc_table, tablet_size);
+    load_stats.set_tablet_sizes(stm.get(), ec_table, tablet_size);
+
+    auto& talloc = e.get_tablet_allocator().local();
+    auto& topology = e.get_topology_state_machine().local()._topology;
+    auto& sys_ks = e.get_system_keyspace().local();
+    return {
+        .sc_table = sc_table,
+        .ec_table = ec_table,
+        .plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get(),
+    };
+}
+
+// Verifies that the load balancer doesn't move a strongly consistent tablet between the
+// shards of a node, which strongly consistent tablets don't support yet, while it still
+// does for an eventually consistent table next to it.
+SEASTAR_THREAD_TEST_CASE(test_strongly_consistent_tablets_stay_on_their_shard) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto [sc_table, ec_table, plan] = balance_sc_and_ec_tables(e, 16);
+
+        bool saw_ec_intranode_migration = false;
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE_MESSAGE(mig.tablet.table != sc_table,
+                fmt::format("Unexpected {} of strongly consistent tablet {}", mig.kind, mig.tablet));
+            saw_ec_intranode_migration |= mig.tablet.table == ec_table && mig.kind == tablet_transition_kind::intranode_migration;
+        }
+        BOOST_REQUIRE_MESSAGE(saw_ec_intranode_migration, "Expected intranode migrations of the eventually consistent table");
+    }, strongly_consistent_tablet_cql_test_config()).get();
+}
+
+// Verifies that the load balancer doesn't split or merge a strongly consistent table, which
+// strongly consistent tablets don't support yet, while it still splits an eventually
+// consistent table next to it.
+//
+// One tablet per table, so that both tables fit into the shards one round of resize
+// decisions may cover: a table whose tablets span more shards than are left gets no
+// decision in that round, whether it is strongly consistent or not.
+SEASTAR_THREAD_TEST_CASE(test_strongly_consistent_tables_are_not_resized) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto [sc_table, ec_table, plan] = balance_sc_and_ec_tables(e, 1);
+
+        BOOST_REQUIRE_MESSAGE(!plan.resize_plan().resize.contains(sc_table),
+            "Unexpected resize decision for the strongly consistent table");
+        BOOST_REQUIRE_MESSAGE(plan.resize_plan().resize.contains(ec_table),
+            "Expected a split decision for the eventually consistent table");
+    }, strongly_consistent_tablet_cql_test_config()).get();
+}
+
+// Verifies that the load balancer moves strongly consistent tablets between nodes, which
+// strongly consistent tablets support, when their load is uneven.
+SEASTAR_THREAD_TEST_CASE(test_strongly_consistent_tablets_move_between_nodes) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        // Two nodes of one shard each in one rack, so that balancing can only move a tablet
+        // to the other node, and the rack doesn't rule it out.
+        const uint64_t node_capacity = 100UL * 1024UL * 1024UL * 1024UL;
+        auto host1 = topo.add_node(node_state::normal, 1, topo.rack());
+        auto host2 = topo.add_node(node_state::normal, 1, topo.rack());
+        topo.get_shared_load_stats().set_capacity(host1, node_capacity);
+        topo.get_shared_load_stats().set_capacity(host2, node_capacity);
+
+        // All tablets of a strongly consistent table are on host1.
+        const size_t tablet_count = 16;
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+        auto sc_table = add_table(e, ks_name).get();
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(tablet_count, true);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host1, 0}}});
+                tmap.set_tablet_raft_info(tid, tablet_raft_info{raft::group_id(utils::UUID_gen::get_time_UUID())});
+            }
+            tmeta.set_tablet_map(sc_table, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& load_stats = topo.get_shared_load_stats();
+        load_stats.set_tablet_sizes(stm.get(), sc_table, service::default_target_tablet_size);
+
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+
+        bool saw_migration_to_host2 = false;
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE_MESSAGE(mig.kind != tablet_transition_kind::intranode_migration,
+                fmt::format("Unexpected intranode migration of strongly consistent tablet {}", mig.tablet));
+            saw_migration_to_host2 |= mig.tablet.table == sc_table && mig.kind == tablet_transition_kind::migration
+                    && mig.dst && mig.dst->host == host2;
+        }
+        BOOST_REQUIRE_MESSAGE(saw_migration_to_host2, "Expected migrations of strongly consistent tablets to the other node");
+    }, strongly_consistent_tablet_cql_test_config()).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter_for_reads) {
     simple_schema ss;
 

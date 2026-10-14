@@ -2086,9 +2086,9 @@ async def test_rf_change(manager: ScyllaClusterManager):
 async def test_tablet_migration_config_change_retried(manager: ScyllaClusterManager):
     """A raft configuration change that fails once must be re-driven.
 
-    Re-driving is the barrier's job. If it were coupled to the next token
+    Re-driving is the sync's job. If it were coupled to the next token
     metadata change instead, a failed attempt on an otherwise quiet cluster
-    would leave the coordinator failing the same barrier forever.
+    would leave the coordinator failing the same sync forever.
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + [
@@ -2171,8 +2171,9 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
     The coordinator enters sc_rollback with a plain transition, so the rollback
     is reachable even though the forward configuration change can't complete -
     here because attempts keep failing and the pending replica is dead. The
-    sc_rollback exit barrier is what repairs the group back to the old replica
-    set before anything is acknowledged.
+    forward change never landed, so the sync of sc_rollback finds the group
+    converged, and the migration parks at sc_remove_pending, whose sync has to
+    remove the dead pending replica.
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + [
@@ -2247,7 +2248,7 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
             await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
 
             # From now on every configuration change attempt fails, so the
-            # sc_become_voter barrier can't pass and the migration parks there.
+            # sync of sc_become_voter can't complete and the migration parks there.
             logger.info("Making all further configuration change attempts fail")
             for server in servers:
                 await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=False)
@@ -2266,8 +2267,8 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
             await manager.server_not_sees_other_server(servers[0].ip_addr, dst_server.ip_addr)
             await manager.api.exclude_node(servers[0].ip_addr, [dst_host_id])
 
-            logger.info("Waiting for the coordinator to enter sc_rollback")
-            await wait_for(lambda: stage_is("sc_rollback"), time.time() + 120)
+            logger.info("Waiting for the coordinator to reach sc_remove_pending")
+            await wait_for(lambda: stage_is("sc_remove_pending"), time.time() + 120)
 
             # The rollback's own configuration change has to be able to complete.
             logger.info("Letting configuration changes succeed again")
@@ -2339,6 +2340,309 @@ async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 17")
             assert len(rows) == 1
             assert rows[0].v == 7
+
+
+async def boot_cluster_led_from_rack3(manager: ScyllaClusterManager):
+    """Boot four nodes, two of them in rack3, for moving a tablet's replica from one node of
+    rack3 to the other, where the leaving replica is the raft group's leader.
+
+    With RF=3 the tablet has a replica in each rack. The nodes of rack1 and rack2 never
+    campaign, so the replica in rack3 leads until it demotes itself, and the pending one
+    can take over after it. The two rack3 nodes come first in the returned lists.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    servers += await manager.servers_add(2, cmdline=cmdline,
+                                         config=DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']},
+                                         property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+    return servers, cql, hosts, host_ids
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_requests_on_leaving_leader_after_its_demotion(manager: ScyllaClusterManager):
+    """Requests coordinated by a leaving replica after the migration demoted it must be
+    served while the migration is still at sc_become_voter (SCYLLADB-4704).
+
+    The leaving replica is the leader, so it commits its own demotion at sc_become_voter
+    and steps down. It stays a member of the group until the requests of that stage are
+    drained, so the next leader contacts it and it redirects the requests there. The
+    migration is held right after the leaving replica's sync, and the requests must
+    complete before it is let through: no raft wait may end only on topology progress.
+    """
+    servers, cql, hosts, host_ids = await boot_cluster_led_from_rack3(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)")
+
+            rack3 = host_ids[:2]
+            src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h in rack3)
+            dst_host_id = next(h for h in rack3 if h != src_host_id)
+            src_idx = host_ids.index(src_host_id)
+            src_server, src_host = servers[src_idx], hosts[src_idx]
+            dst_server = servers[host_ids.index(dst_host_id)]
+
+            await wait_for_leader(manager, src_server, group_id, expected_host_id=src_host_id)
+
+            # Park the migration in sc_snapshot_transfer, before the stage whose
+            # configuration change demotes the leaving replica. Mark the log before
+            # arming the injection: a message it emits in between would be invisible to
+            # the wait below.
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            )
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
+
+            # Hold the migration at sc_become_voter once the leaving replica has
+            # converged the configuration there, which it does by committing its own
+            # demotion: use_new is published only after the leaving replica answers.
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+            await manager.api.enable_injection(src_server.ip_addr, "sc_pause_after_config_sync", one_shot=True)
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+            await src_log.wait_for("sc_pause_after_config_sync: waiting for message", from_mark=mark, timeout=60)
+            tablet_info = await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)
+            assert tablet_info.stage == "write_both_read_new", f"Expected to be parked at sc_become_voter, got {tablet_info.stage}"
+            await src_log.wait_for(f"this replica {src_host_id} is no longer a leader", from_mark=mark, timeout=60)
+
+            logger.info(f"Sending a write and a linearizable read to the leaving replica {src_host_id}")
+            write = cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", host=src_host)
+            read = cql.run_async(
+                SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM),
+                host=src_host)
+            await asyncio.wait_for(write, timeout=30)
+            rows = await asyncio.wait_for(read, timeout=30)
+            assert len(rows) == 1 and rows[0].c in (1, 2), f"Unexpected read result {rows}"
+
+            tablet_info = await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)
+            assert tablet_info.stage == "write_both_read_new", \
+                f"The requests completed only after the migration moved on, to {tablet_info.stage}"
+
+            logger.info("Publishing use_new")
+            await manager.api.message_injection(src_server.ip_addr, "sc_pause_after_config_sync")
+            await move_task
+
+            rows = await cql.run_async(SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0",
+                                                       consistency_level=ConsistencyLevel.QUORUM))
+            assert len(rows) == 1 and rows[0].c == 2, f"Expected the write to be applied, got {rows}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_read_barrier_on_leaving_leader_across_its_demotion(manager: ScyllaClusterManager):
+    """A linearizable read whose read barrier starts on a leaving replica after the
+    migration demoted it must be served while the migration is still at sc_become_voter
+    (SCYLLADB-4704).
+
+    Unlike in test_requests_on_leaving_leader_after_its_demotion, the read arrives while
+    the leaving replica is still the leader, so it passes the coordinator's leader check
+    and only then runs into the demotion. The replica is still a member, so the read
+    barrier finds the new leader, and the replica keeps receiving the log it waits for.
+    """
+    servers, cql, hosts, host_ids = await boot_cluster_led_from_rack3(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)")
+
+            rack3 = host_ids[:2]
+            src_host_id, src_shard = next((h, s) for h, s in tablets[0].replicas if h in rack3)
+            dst_host_id = next(h for h in rack3 if h != src_host_id)
+            src_idx = host_ids.index(src_host_id)
+            src_server, src_host = servers[src_idx], hosts[src_idx]
+            dst_server = servers[host_ids.index(dst_host_id)]
+
+            await wait_for_leader(manager, src_server, group_id, expected_host_id=src_host_id)
+
+            # Park the migration in sc_snapshot_transfer. Mark the log before arming the
+            # injection: a message it emits in between would be invisible to the wait below.
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            )
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
+
+            # Let the migration reach sc_become_voter, but not demote the leaving
+            # replica yet: every configuration change attempt fails.
+            await gather_safely(*[manager.api.enable_injection(s.ip_addr, "sc_config_sync_fail", one_shot=False)
+                                  for s in servers])
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+
+            async def at_sc_become_voter():
+                tablet_info = await get_tablet_info(manager, src_server, ks, table_name, tablet_token)
+                return True if tablet_info is not None and tablet_info.stage == "write_both_read_new" else None
+            await wait_for(at_sc_become_voter, time.time() + 60)
+            # The read below has to pin the view of sc_become_voter: one that pinned the
+            # view of the previous stage would hold up the barrier of sc_become_voter, and
+            # with it the sync this test waits for. Applying a group0 entry writes
+            # system.tablets before it updates the tablet map requests use, so seeing the
+            # stage there isn't enough. A read barrier started after the entry committed
+            # waits for its whole apply.
+            await read_barrier(manager.api, src_server.ip_addr)
+
+            # The leaving replica is still the leader, so the read gets as far as the
+            # read barrier, and is held there.
+            logger.info(f"Sending a linearizable read to the leaving replica {src_host_id}")
+            await manager.api.enable_injection(src_server.ip_addr, "sc_coordinator_wait_before_query_read_barrier", one_shot=True)
+            read = cql.run_async(
+                SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM),
+                host=src_host)
+            await manager.api.wait_for_injection_enter(src_server.ip_addr, "sc_coordinator_wait_before_query_read_barrier")
+
+            # Now let the leaving replica demote itself, and hold the migration before
+            # use_new, as in test_requests_on_leaving_leader_after_its_demotion.
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+            await manager.api.enable_injection(src_server.ip_addr, "sc_pause_after_config_sync", one_shot=True)
+            await gather_safely(*[manager.api.disable_injection(s.ip_addr, "sc_config_sync_fail") for s in servers])
+            await src_log.wait_for("sc_pause_after_config_sync: waiting for message", from_mark=mark, timeout=60)
+            await src_log.wait_for(f"this replica {src_host_id} is no longer a leader", from_mark=mark, timeout=60)
+
+            logger.info("Releasing the read into its read barrier")
+            await manager.api.message_injection(src_server.ip_addr, "sc_coordinator_wait_before_query_read_barrier")
+            rows = await asyncio.wait_for(read, timeout=30)
+            assert len(rows) == 1 and rows[0].c == 1, f"Unexpected read result {rows}"
+
+            tablet_info = await get_tablet_info(manager, servers[0], ks, table_name, tablet_token)
+            assert tablet_info.stage == "write_both_read_new", \
+                f"The read completed only after the migration moved on, to {tablet_info.stage}"
+
+            logger.info("Publishing use_new")
+            await manager.api.message_injection(src_server.ip_addr, "sc_pause_after_config_sync")
+            await move_task
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_tablet_migration_during_insert(manager: ScyllaClusterManager):
+    """An INSERT that resolved its raft group on the leaving replica at sc_become_voter
+    is served, and the leaving replica keeps its raft server until the INSERT is done
+    (SCYLLADB-4703).
+
+    The INSERT pins the view of sc_become_voter, in which the leaving replica serves, and
+    is held right before acquiring the group's server. The migration moves on to use_new,
+    but the barrier of use_new waits for the INSERT, so the server is not torn down under
+    it.
+    """
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            [(src_host_id, src_shard)] = tablets[0].replicas
+            src_idx = host_ids.index(src_host_id)
+            src_server, src_host = servers[src_idx], hosts[src_idx]
+            dst_server, dst_host_id = servers[1 - src_idx], host_ids[1 - src_idx]
+
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+
+            # Park the migration in sc_snapshot_transfer, by which point the pending replica has
+            # been added to the group as a non-voter. Mark the log before arming the injection: a
+            # message it emits in between would be invisible to the wait below.
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+            logger.info(f"Migrating the tablet from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token))
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
+
+            # From now on every configuration change attempt fails, so the migration parks in
+            # sc_become_voter.
+            for server in servers:
+                await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=False)
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+
+            async def stage_is(stage):
+                tablet_info = await get_tablet_info(manager, src_server, ks, table_name, tablet_token)
+                return True if tablet_info is not None and tablet_info.stage == stage else None
+            logger.info("Waiting for the migration to reach sc_become_voter")
+            await wait_for(lambda: stage_is("write_both_read_new"), time.time() + 120)
+            # Applying a group0 entry writes system.tablets before it updates the tablet map
+            # requests use. A read barrier started after the entry committed waits for its
+            # whole apply, so the INSERT below pins the view of sc_become_voter; one that
+            # pinned the previous stage's would hold up the barrier of sc_become_voter.
+            await read_barrier(manager.api, src_server.ip_addr)
+
+            # The INSERT resolves the group from the tablet map of sc_become_voter and stops right
+            # before acquiring it.
+            await manager.api.enable_injection(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server", one_shot=True)
+            insert_fut = cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)",
+                                                       retry_policy=FallthroughRetryPolicy()), host=src_host)
+            await manager.api.wait_for_injection_enter(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server")
+
+            # Let the migration move on to use_new. Its barrier waits for the held INSERT.
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+            for server in servers:
+                await manager.api.disable_injection(server.ip_addr, "sc_config_sync_fail")
+            logger.info("Waiting for the migration to reach use_new")
+            await wait_for(lambda: stage_is("use_new"), time.time() + 120)
+            assert not await src_log.grep(f"raft server for group id {group_id} is destroyed", from_mark=mark), \
+                "The leaving replica's raft server was torn down under a request that may still enter it"
+
+            await manager.api.message_injection(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server")
+            await insert_fut
+            await move_task
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert [host for host, _ in tablets[0].replicas] == [dst_host_id]
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 1 and rows[0].v == 1
 
 
 async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaClusterManager):
