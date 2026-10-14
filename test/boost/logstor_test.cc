@@ -37,6 +37,12 @@
 #include "replica/logstor/segment_io.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
+#include "data_dictionary/user_types_metadata.hh"
+#include "db/config.hh"
+#include "db/schema_tables.hh"
+#include "gms/feature_service.hh"
+#include "init.hh"
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
@@ -3607,14 +3613,15 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 // semaphore to take read permits from. Tests fill the group with populate() and read it back
 // through make_reader().
 struct reader_test_env {
-    schema_ptr schema{make_kv_schema()};
+    schema_ptr schema;
     tmpdir dir;
     shared_logstor_cache cache;
     logstor ls{make_test_logstor_config(dir.path()), cache.shared_tracker};
     std::optional<test_logstor_group> cg;
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    explicit reader_test_env(bool cache_enabled = false) {
+    explicit reader_test_env(bool cache_enabled = false, schema_ptr s = make_kv_schema())
+            : schema(std::move(s)) {
         ls.do_recovery_for_test().get();
         ls.start().get();
         cg.emplace(schema, ls, cache_enabled);
@@ -3639,7 +3646,14 @@ struct reader_test_env {
     mutation_reader make_reader(const dht::partition_range& pr, const query::partition_slice& slice,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
-        return ls.make_reader(schema, cg->logstor_index(), semaphore.make_permit(), pr, slice, nullptr, fwd, fwd_mr);
+        return make_reader(schema, pr, slice, fwd, fwd_mr);
+    }
+
+    // Under a query schema of the caller's: the reversed one, for a reversed read.
+    mutation_reader make_reader(schema_ptr query_schema, const dht::partition_range& pr, const query::partition_slice& slice,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
+        return ls.make_reader(std::move(query_schema), cg->logstor_index(), semaphore.make_permit(), pr, slice, nullptr, fwd, fwd_mr);
     }
 
     const ::cache_tracker::stats& cache_stats() const {
@@ -4185,6 +4199,57 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_hit_survives_allocation_
         BOOST_REQUIRE_EQUAL(rows, 1);
         BOOST_REQUIRE(rd.is_end_of_stream());
     });
+}
+
+// The schema registry of the shard, initialized the way a node's is: what a reversed read needs,
+// since the reversed schema of a table comes from it.
+struct schema_registry_init {
+    std::unique_ptr<db::config> config = std::make_unique<db::config>();
+    gms::feature_service fs{{get_disabled_features_from_db_config(*config)}};
+    schema_registry_init() {
+        local_schema_registry().init(db::schema_ctxt(config->extensions(), config->murmur3_partitioner_ignore_msb_bits(),
+                std::make_shared<data_dictionary::dummy_user_types_storage>(), fs),
+                std::chrono::seconds(config->schema_registry_grace_period()));
+    }
+};
+
+// A reversed read comes under the reversed schema, and a table without clustering columns has
+// nothing to reverse: it produces what the forward read does, from the log and from the cache, and
+// the cache serves it as it serves the forward read - a reversed read of a cached key is a hit,
+// and so is the forward read that follows it.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_serves_a_reversed_read) {
+    // Registered, as a table's schema is, so that the reversed schema is the registry's and knows
+    // the table's as its own reverse.
+    schema_registry_init registry;
+    reader_test_env env(true, local_schema_registry().learn(make_kv_schema()));
+    auto ms = make_partition_shapes(env.schema);
+    env.populate(ms);
+
+    auto reversed_schema = env.schema->get_reversed();
+    BOOST_REQUIRE(reversed_schema->get_reversed() == env.schema);
+    auto reversed = partition_slice_builder(*reversed_schema).with_option<query::partition_slice::option::reversed>().build();
+    auto reversed_bypassing = partition_slice_builder(*reversed_schema, reversed).with_option<query::partition_slice::option::bypass_cache>().build();
+
+    const auto& stats = env.cache_stats();
+    for (const auto& m : ms) {
+        const auto hits = stats.partition_hits;
+        const auto misses = stats.partition_misses;
+
+        // The forward read, drained first, misses and admits the partition; the reversed read that
+        // follows is a hit, and produces the same fragments.
+        require_same_fragments(*env.schema, env.make_reader(reversed_schema, singular_range(m), reversed),
+                env.make_reader(singular_range(m)));
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 1);
+
+        // A reversed hit produces what a reversed read of the log does, and the forward read
+        // after it is a hit too.
+        require_same_fragments(*env.schema, env.make_reader(reversed_schema, singular_range(m), reversed),
+                env.make_reader(reversed_schema, singular_range(m), reversed_bypassing));
+        assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 3);
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+    }
 }
 
 // A slice whose row ranges exclude the one row a logstor partition has - an empty list of ranges,
