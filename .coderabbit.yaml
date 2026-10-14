@@ -247,6 +247,12 @@ chat:
   auto_reply: true
 
 knowledge_base:
+  # Review rules shared with the other review tools, see
+  # .agents/code-review/rules.d/README.md. AGENTS.md and
+  # .github/copilot-instructions.md are read by default.
+  code_guidelines:
+    filePatterns:
+      - ".agents/code-review/rules.d/*.md"
   learnings:
     scope: auto
   issues:
