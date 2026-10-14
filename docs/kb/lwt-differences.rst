@@ -12,7 +12,7 @@ How is it different?
 * For batch statement, ScyllaDB allows mixing `IF EXISTS`, `IF NOT EXISTS`, and other conditions for the same row.
 * Unlike Cassandra, ScyllaDB  uses per-core data partitioning, so the RPC  that is done to perform a transaction talks directly to the right core on a peer replica, avoiding the concurrency overhead. This is,  of course, true, if ScyllaDB’s own shard-aware driver is used - otherwise we  add an extra hop to the right core at the coordinator node.
 * ScyllaDB does not store  hints for lightweight transaction writes, since this is redundant as all such writes are already present in system.paxos table.
-* Both ScyllaDB and Cassandra support arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter columns inside LWT conditional updates, with some differences: Cassandra supports subtraction only since Cassandra 6.0; Cassandra also supports ``col = col + value`` on text columns (string concatenation), which ScyllaDB doesn't; and when the result overflows an integer type, Cassandra silently wraps around, while ScyllaDB rejects the update with an error.
+* Both ScyllaDB and Cassandra support arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter columns inside LWT conditional updates, with two differences: Cassandra supports subtraction only since Cassandra 6.0, and when the result overflows an integer type, Cassandra silently wraps around while ScyllaDB rejects the update with an error.
 
 
 More on :doc:`Lightweight Transactions (LWT) </features/lwt>`
@@ -24,7 +24,8 @@ Arithmetic SET operations in LWT updates
 ----------------------------------------
 
 ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on non-counter numeric
-columns inside a conditional ``UPDATE``. The Paxos read-modify-write cycle guarantees atomicity:
+columns inside a conditional ``UPDATE``, and ``SET col = col + value`` on string columns (string
+concatenation). The Paxos read-modify-write cycle guarantees atomicity:
 the old value is read in the same transaction round, the arithmetic is applied, and the result
 is written — all without a separate read or a race condition.
 

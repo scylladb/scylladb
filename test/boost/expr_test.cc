@@ -5550,12 +5550,21 @@ BOOST_AUTO_TEST_CASE(evaluate_add_nested) {
 }
 
 
-// ADD on non-numeric types should throw
-BOOST_AUTO_TEST_CASE(evaluate_add_non_numeric_type) {
-    BOOST_REQUIRE_THROW(
-        eval_add(make_text_const("hello"), make_text_const("world")),
-        exceptions::invalid_request_exception);
+// ADD on strings (text or ascii) concatenates them
+BOOST_AUTO_TEST_CASE(evaluate_add_strings) {
+    BOOST_REQUIRE_EQUAL(raw_to<sstring>(eval_add(make_text_const("hello"), make_text_const("world")), utf8_type), "helloworld");
+    BOOST_REQUIRE_EQUAL(raw_to<sstring>(eval_add(make_text_const(""), make_text_const("world")), utf8_type), "world");
+    BOOST_REQUIRE_EQUAL(raw_to<sstring>(eval_add(make_text_const("hello"), make_text_const("")), utf8_type), "hello");
+    constant ascii_const(raw_value::make_value(managed_bytes(ascii_type->decompose(sstring("abc")))), ascii_type);
+    BOOST_REQUIRE_EQUAL(raw_to<sstring>(eval_add(ascii_const, ascii_const), ascii_type), "abcabc");
 
+    constant null_text = constant::make_null(utf8_type);
+    BOOST_REQUIRE_EQUAL(eval_add(null_text, make_text_const("world")), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(eval_add(make_text_const("hello"), null_text), raw_value::make_null());
+}
+
+// ADD on types which are neither numeric nor string should throw
+BOOST_AUTO_TEST_CASE(evaluate_add_non_numeric_type) {
     constant bool_const(raw_value::make_value(managed_bytes(boolean_type->decompose(true))), boolean_type);
     BOOST_REQUIRE_THROW(
         eval_add(bool_const, bool_const),
