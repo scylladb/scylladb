@@ -24,7 +24,6 @@
 #include <boost/algorithm/string.hpp>
 #include "exceptions/exceptions.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
 #include "utils/hash.hh"
 
 namespace std {
@@ -653,8 +652,4 @@ sstring network_topology_strategy::sanity_check_read_replicas(const effective_re
     return {};
 }
 
-// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params, const topology*>;
-static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
-static registry registrator_short_name("NetworkTopologyStrategy");
 }

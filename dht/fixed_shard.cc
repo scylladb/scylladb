@@ -12,7 +12,6 @@
 #include "dht/token.hh"
 #include "schema/schema.hh"
 #include "sstables/key.hh"
-#include "utils/class_registrator.hh"
 #include "keys/keys.hh"
 #include "keys/compound_compat.hh"
 #include "utils/murmur_hash.hh"
@@ -76,10 +75,6 @@ dht::token fixed_shard_partitioner::get_token(const sstables::key_view& key) con
         return token;
     });
 }
-
-using registry = class_registrator<dht::i_partitioner, fixed_shard_partitioner>;
-static registry registrator(fixed_shard_partitioner::classname);
-static registry registrator_short_name("FixedShardPartitioner");
 
 fixed_shard_sharder& fixed_shard_sharder::instance() {
     static thread_local fixed_shard_sharder sharder;

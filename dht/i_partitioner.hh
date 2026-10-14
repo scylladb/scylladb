@@ -11,6 +11,7 @@
 
 #include <seastar/core/sstring.hh>
 #include "keys/keys.hh"
+#include <functional>
 #include <memory>
 #include <utility>
 #include "dht/token.hh"
@@ -100,6 +101,13 @@ split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& s
 // Intersect a partition_range with a shard and return the resulting sub-ranges, in sorted order
 future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const schema& s,
     const static_sharder& sharder, const dht::partition_range& pr, shard_id shard);
+
+using partitioner_factory = std::function<std::unique_ptr<i_partitioner>()>;
+
+// Makes a partitioner defined outside dht (e.g. cdc_partitioner) available to
+// make_partitioner() on the calling shard. Call it on all shards (with
+// smp::invoke_on_all()) before any schema using the partitioner is created.
+void register_partitioner(sstring name, partitioner_factory factory);
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 

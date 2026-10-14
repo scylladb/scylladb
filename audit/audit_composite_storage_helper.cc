@@ -11,7 +11,6 @@
 
 #include "audit/audit_composite_storage_helper.hh"
 
-#include "utils/class_registrator.hh"
 
 namespace audit {
 

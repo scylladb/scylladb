@@ -21,7 +21,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <fmt/format.h>
 
-#include "utils/class_registrator.hh"
 
 namespace locator {
 
@@ -144,9 +143,5 @@ future<sstring> azure_snitch::read_property_file() {
         return dc_suffix;
     });
 }
-
-using registry_default = class_registrator<i_endpoint_snitch, azure_snitch, const snitch_config&>;
-static registry_default registrator_default("org.apache.cassandra.locator.AzureSnitch");
-static registry_default registrator_default_short_name("AzureSnitch");
 
 } // namespace locator

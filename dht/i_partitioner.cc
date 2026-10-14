@@ -15,7 +15,8 @@
 #include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
+#include "dht/murmur3_partitioner.hh"
+#include "dht/fixed_shard.hh"
 #include "sstables/key.hh"
 #include "replica/database.hh"
 #include <seastar/core/thread.hh>
@@ -79,18 +80,29 @@ static_sharder::next_shard_for_reads(const token& t) const {
     return next_shard(t);
 }
 
+static std::unordered_map<sstring, partitioner_factory>& registered_partitioners() {
+    static thread_local std::unordered_map<sstring, partitioner_factory> partitioners = {
+        {"org.apache.cassandra.dht.Murmur3Partitioner", [] { return std::make_unique<murmur3_partitioner>(); }},
+        {"Murmur3Partitioner", [] { return std::make_unique<murmur3_partitioner>(); }},
+        {fixed_shard_partitioner::classname, [] { return std::make_unique<fixed_shard_partitioner>(); }},
+        {"FixedShardPartitioner", [] { return std::make_unique<fixed_shard_partitioner>(); }},
+    };
+    return partitioners;
+}
+
+void register_partitioner(sstring name, partitioner_factory factory) {
+    registered_partitioners().insert_or_assign(std::move(name), std::move(factory));
+}
+
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
-    try {
-        return create_object<i_partitioner>(partitioner_name);
-    } catch (std::exception& e) {
-        throw std::runtime_error(fmt::format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
+    const auto& partitioners = registered_partitioners();
+    auto it = partitioners.find(partitioner_name);
+    if (it == partitioners.end()) {
+        throw std::runtime_error(fmt::format("Partitioner {} is not supported, supported partitioners = {{ {} }}",
                 partitioner_name,
-                fmt::join(
-                    class_registry<i_partitioner>::classes() |
-                    std::views::keys,
-                    ", "),
-                e.what()));
+                fmt::join(partitioners | std::views::keys, ", ")));
     }
+    return it->second();
 }
 
 bool

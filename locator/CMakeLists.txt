@@ -11,8 +11,6 @@ target_sources(scylla_locator
     everywhere_replication_strategy.cc
     token_metadata.cc
     snitch_base.cc
-    simple_snitch.cc
-    rack_inferring_snitch.cc
     gossiping_property_file_snitch.cc
     production_snitch_base.cc
     ec2_snitch.cc

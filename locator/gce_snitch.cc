@@ -17,7 +17,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
-#include "utils/class_registrator.hh"
 
 namespace locator {
 
@@ -162,9 +161,5 @@ future<sstring> gce_snitch::read_property_file() {
         return dc_suffix;
     });
 }
-
-using registry_default = class_registrator<i_endpoint_snitch, gce_snitch, const snitch_config&>;
-static registry_default registrator_default("org.apache.cassandra.locator.GoogleCloudSnitch");
-static registry_default registrator_default_short_name("GoogleCloudSnitch");
 
 } // namespace locator

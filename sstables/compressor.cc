@@ -25,7 +25,7 @@
 #include "compressor.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/config_file_impl.hh"
-#include "utils/class_registrator.hh"
+#include "utils/unqualified_name.hh"
 #include "gms/feature_service.hh"
 
 // SHA256

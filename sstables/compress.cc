@@ -21,7 +21,7 @@
 #include "unimplemented.hh"
 #include "segmented_compress_params.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
+#include "utils/unqualified_name.hh"
 #include "reader_permit.hh"
 #include "data_source_types.hh"
 
