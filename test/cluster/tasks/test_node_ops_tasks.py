@@ -184,7 +184,7 @@ async def check_decommission_tasks_tree(manager: ScyllaClusterManager, tm: TaskM
     assert servers, "No servers available"
 
     decommissioned_server = servers[0]
-    injection = "streaming_task_impl_decommission_run"
+    injection = "decommission_streaming_run"
     handler = await inject_error_one_shot(manager.api, decommissioned_server.ip_addr, injection)
     logger.info(f"Decommissioning node {decommissioned_server}")
     await asyncio.gather(*(manager.decommission_node(decommissioned_server.server_id),
@@ -247,7 +247,7 @@ async def test_node_ops_task_wait(manager: ScyllaClusterManager):
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline) for _ in range(2)]
-    injection = "streaming_task_impl_decommission_run"
+    injection = "decommission_streaming_run"
     handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, injection)
 
     decommission_task = asyncio.create_task(

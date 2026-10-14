@@ -649,7 +649,7 @@ async def test_mv_resurrected_rows_after_decommission_interrupt(
         # streamed data is durable, but before reporting success to the topology
         # coordinator. Waiting here establishes the state required by this regression:
         # temporary data exists on future owners while decommission is still uncommitted.
-        injection = 'streaming_task_impl_decommission_done_wait'
+        injection = 'decommission_streaming_done_wait'
         await manager.api.enable_injection(decommissioned.ip_addr, injection, one_shot=True)
 
         logs = [await manager.server_open_log(server.server_id) for server in servers]
