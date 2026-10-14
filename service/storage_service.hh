@@ -1034,11 +1034,15 @@ public:
     // task_not_found if the tablet is no longer in that migration.
     future<> cancel_tablet_transition(locator::global_tablet_id tablet, locator::tablet_task_id task_id);
 
-    future<utils::UUID> submit_quiesce_topology_request();
+    future<utils::UUID> submit_quiesce_topology_request(global_topology_request type = global_topology_request::quiesce);
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
     // concurrent callers share a single request. Shard 0 only.
     future<> do_await_topology_quiesced();
     future<> await_topology_quiesced();
+    // Waits until auto-RF has nothing left to do: no change due, queued, running or
+    // backed off. Unlike await_topology_quiesced(), it does not wait for the tablet
+    // balancer.
+    future<> await_auto_rf_quiesced();
     // Verifies topology is not busy, and also that topology version hasn't changed since the one provided
     // by the caller.
     future<bool> verify_topology_quiesced(token_metadata::version_t expected_version);
