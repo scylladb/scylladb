@@ -98,8 +98,8 @@ bool lookup_exists(primary_index& index, const primary_index_key& key, schema_pt
     return std::holds_alternative<mutation>(*result);
 }
 
-bool evict_one(replica::logstor::cache_tracker& tracker) {
-    return tracker.region().evict_some() == seastar::memory::reclaiming_result::reclaimed_something;
+bool evict_one(shared_logstor_cache& cache) {
+    return cache.shared_tracker.region().evict_some() == seastar::memory::reclaiming_result::reclaimed_something;
 }
 
 std::vector<primary_index_key> insert_same_token_keys(primary_index& index, const schema& schema, int64_t token, int start, int count) {
@@ -179,7 +179,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     BOOST_REQUIRE(lookup_exists(index, key3, schema));
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+    BOOST_REQUIRE(evict_one(cache));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 1);
 
     auto cached_after_eviction = int(lookup_exists(index, key0, schema))
@@ -269,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+        BOOST_REQUIRE(evict_one(cache));
     }
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + hot_keys.size());
 
@@ -370,11 +370,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
 
     // Create fragmentation so full_compaction() has live cached objects to move.
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+    BOOST_REQUIRE(evict_one(cache));
+    BOOST_REQUIRE(evict_one(cache));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 2);
 
-    cache.logstor_tracker.region().full_compaction();
+    cache.shared_tracker.region().full_compaction();
 
     for (size_t i = 2; i < keys.size(); ++i) {
         BOOST_REQUIRE(lookup_exists(index, keys[i], schema));

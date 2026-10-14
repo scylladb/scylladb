@@ -55,19 +55,19 @@ void cache_tracker::evict(const primary_index_entry& pie) {
 }
 
 std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, const schema& target_schema) {
-    std::optional<mutation> cached_mut;
-    _read_section(region(), [&] {
-        if (pie._cached_entry) {
-            get_lru().touch(*pie._cached_entry);
-            if (pie._cached_entry->schema().get() != &target_schema) {
-                with_allocator(allocator(), [&] {
-                    pie._cached_entry->upgrade(target_schema.shared_from_this());
-                });
-            }
-            dht::decorated_key dk(pie.key().token(), pie._cached_entry->key());
-            cached_mut.emplace(target_schema.shared_from_this(), std::move(dk),
-                    mutation_partition(target_schema, pie._cached_entry->partition()));
+    auto cached_mut = _read_section(region(), [&] () -> std::optional<mutation> {
+        if (!pie._cached_entry) {
+            return std::nullopt;
         }
+        auto& e = *pie._cached_entry;
+        get_lru().touch(e);
+        if (e.schema().get() != &target_schema) {
+            with_allocator(allocator(), [&] {
+                e.upgrade(target_schema.shared_from_this());
+            });
+        }
+        dht::decorated_key dk(pie.key().token(), e.key());
+        return mutation(target_schema.shared_from_this(), std::move(dk), mutation_partition(target_schema, e.partition()));
     });
 
     if (cached_mut) {
@@ -80,12 +80,13 @@ std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, co
 }
 
 std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, schema_ptr target_schema) {
-    std::optional<mutation> cached_mut;
-    _read_section(region(), [&] {
-        if (pie._cached_entry) {
-            dht::decorated_key dk(pie.key().token(), pie._cached_entry->key());
-            cached_mut.emplace(pie._cached_entry->schema(), std::move(dk), pie._cached_entry->partition());
+    auto cached_mut = _read_section(region(), [&] () -> std::optional<mutation> {
+        if (!pie._cached_entry) {
+            return std::nullopt;
         }
+        const auto& e = *pie._cached_entry;
+        dht::decorated_key dk(pie.key().token(), e.key());
+        return mutation(e.schema(), std::move(dk), e.partition());
     });
 
     if (cached_mut && cached_mut->schema() != target_schema) {
