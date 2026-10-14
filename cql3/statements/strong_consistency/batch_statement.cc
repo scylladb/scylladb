@@ -93,6 +93,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
 
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             std::optional<mutation> merged;
             for (size_t i = 0; i < _statements.size(); ++i) {
@@ -116,7 +117,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
         bool is_write = true;
-        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, options.get_consistency(), coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
     co_return seastar::make_shared<result_message::void_message>();

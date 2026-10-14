@@ -2326,11 +2326,20 @@ async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
 
             await manager.api.enable_injection(servers[0].ip_addr, "sc_report_stale_leader", one_shot=False)
 
-            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
-                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (7, 23) USING TIMEOUT 100ms")
+            # The timeout must report the consistency level of the request, not a
+            # placeholder: a driver's retry policy reads it back from the error and
+            # would otherwise re-send a QUORUM read at ONE.
+            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}") as e:
+                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (7, 23) USING TIMEOUT 100ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM))
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
-            with pytest.raises(ReadTimeout, match=f"Query timed out for {table}"):
-                await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT 100ms")
+            with pytest.raises(ReadTimeout, match=f"Query timed out for {table}") as e:
+                await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT 100ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM))
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
             await manager.api.disable_injection(servers[0].ip_addr, "sc_report_stale_leader")
 
