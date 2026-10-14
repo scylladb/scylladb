@@ -60,51 +60,54 @@ future<> file_manager::stop() {
     });
 }
 
-// Formatting a new file grows the store, so its I/O deliberately does not go through
-// logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
-// must not isolate the node, while writes to already formatted files keep working.
-future<> file_manager::format_file(file_id_t file_id) {
-    auto file_path = get_file_path(file_id).string();
-    bool file_exists = co_await seastar::file_exists(file_path);
-    if (!file_exists) {
-        // Create and format a temporary file, then move it to the final location.
-        //
-        // The temporary file is deliberately not opened with O_DSYNC, unlike the file the segments
-        // are then written through: a segment write is acknowledged when it completes and has to be
-        // durable by then, while formatting only has to be durable before the rename publishes the
-        // file. Flushing once at the end rather than on every one of the writes below is worth more
-        // than an order of magnitude, and the durability of the published file is the same either
-        // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
-        // reason, see segment_manager::allocate_segment_ex().
-        auto tmp_path = file_path + ".tmp";
-        auto tmp_file = co_await seastar::open_file_dma(tmp_path,
-                seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
-        if (_sparse_files) {
-            // Reading a hole yields zeros, so the file is already formatted as
-            // far as the reader is concerned.
-            co_await tmp_file.truncate(_file_size);
-        } else {
-            co_await tmp_file.allocate(0, _file_size);
-            co_await format_file_region(tmp_file, 0, _file_size);
+std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& fname) const {
+    std::string prefix = get_file_name_prefix();
+    std::string suffix = "-Data.db";
+    if (fname.starts_with(prefix) && fname.ends_with(suffix)) {
+        // Extract file_id between prefix and suffix
+        size_t start = prefix.size();
+        size_t end = fname.size() - suffix.size();
+        std::string file_id_str = fname.substr(start, end - start);
+        try {
+            return static_cast<file_id_t>(std::stoull(file_id_str));
+        } catch (...) {
+            return std::nullopt;
         }
-        co_await tmp_file.flush();
-        co_await tmp_file.close();
-
-        // move the temp file to the final location
-        co_await seastar::rename_file(tmp_path, file_path);
     }
+    return std::nullopt;
 }
 
-// Opens every file that has been allocated, so that no read opens one during normal operation. A
-// file that is allocated later is opened by allocate_file(). Files are formatted before they are
-// allocated, so they all exist here.
-future<> file_manager::open_allocated_files() {
-    return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
-            [this] (file_id_t file_id) -> future<> {
-        if (!_open_files[file_id]) {
-            co_await do_open_file(file_id);
+void file_manager::set_actual_max_files(uint64_t actual_max_files) {
+    if (actual_max_files < _max_files.configured) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to set actual max files {} below configured max files {}", actual_max_files, _max_files.configured));
+    }
+    if (actual_max_files < _max_files.actual) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to reduce actual max files from {} to {}", _max_files.actual, actual_max_files));
+    }
+    _max_files.actual = actual_max_files;
+    _open_files.resize(static_cast<size_t>(_max_files.actual));
+}
+
+future<> file_manager::remove_file(file_id_t file_id) {
+    if (file_id != _max_files.actual - 1) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last allocated file", file_id));
+    }
+    if (_max_files.actual <= _max_files.configured) {
+        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while actual max files {} is not above configured max files {}", file_id, _max_files.actual, _max_files.configured));
+    }
+    if (file_id < _open_files.size()) {
+        if (file_id + 1 != _open_files.size()) {
+            on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while higher file {} is still allocated", file_id, file_id + 1));
         }
+        if (_open_files[file_id]) {
+            co_await _open_files[file_id].close();
+        }
+        _open_files.pop_back();
+    }
+    co_await do_io_check(logstor_error_handler, [this, file_id] {
+        return seastar::remove_file(get_file_path(file_id).string());
     });
+    _max_files.actual--;
 }
 
 future<> file_manager::recover_next_file(file_id_t next_file_id) {
@@ -133,72 +136,6 @@ future<> file_manager::recover_next_file(file_id_t next_file_id) {
                 return format_file(_next_file_id);
             });
         });
-    }
-}
-
-future<> file_manager::remove_file(file_id_t file_id) {
-    if (file_id != _max_files.actual - 1) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} that is not the last allocated file", file_id));
-    }
-    if (_max_files.actual <= _max_files.configured) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while actual max files {} is not above configured max files {}", file_id, _max_files.actual, _max_files.configured));
-    }
-    if (file_id < _open_files.size()) {
-        if (file_id + 1 != _open_files.size()) {
-            on_internal_error(logstor_logger, fmt::format("Attempted to remove file {} while higher file {} is still allocated", file_id, file_id + 1));
-        }
-        if (_open_files[file_id]) {
-            co_await _open_files[file_id].close();
-        }
-        _open_files.pop_back();
-    }
-    co_await do_io_check(logstor_error_handler, [this, file_id] {
-        return seastar::remove_file(get_file_path(file_id).string());
-    });
-    _max_files.actual--;
-}
-
-void file_manager::set_actual_max_files(uint64_t actual_max_files) {
-    if (actual_max_files < _max_files.configured) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to set actual max files {} below configured max files {}", actual_max_files, _max_files.configured));
-    }
-    if (actual_max_files < _max_files.actual) {
-        on_internal_error(logstor_logger, fmt::format("Attempted to reduce actual max files from {} to {}", _max_files.actual, actual_max_files));
-    }
-    _max_files.actual = actual_max_files;
-    _open_files.resize(static_cast<size_t>(_max_files.actual));
-}
-
-future<> file_manager::allocate_file(file_id_t file_id) {
-    if (file_id >= _max_files.actual) {
-        on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
-    }
-
-    if (file_id == _next_file_id && file_id < _max_files.configured) {
-        // allocate file_id and wait for it to be formatted, and start formatting
-        // the next file in background
-        co_await _next_file_formatter.get_future();
-
-        if (file_id == _next_file_id) {
-            // The format does not open the file, thus only the allocated files are open. If the
-            // open fails, the file stays the next one, and the next attempt opens it again.
-            if (!_open_files[file_id]) {
-                co_await do_open_file(file_id);
-            }
-            _next_file_id++;
-
-            if (_next_file_id < _max_files.configured) {
-                _next_file_formatter = with_gate(_async_gate, [this] {
-                    return with_scheduling_group(_sched_group, [this] {
-                        return format_file(_next_file_id);
-                    });
-                });
-            }
-        }
-    } else if (file_id >= _max_files.configured && file_id >= _next_file_id) {
-        on_internal_error(logstor_logger, "Disk size limit reached, cannot allocate more files");
-    } else if (file_id > _next_file_id) {
-        on_internal_error(logstor_logger, "files must be allocated in sequential order");
     }
 }
 
@@ -279,21 +216,84 @@ future<> file_manager::format_file_region(seastar::file file, uint64_t offset, u
     }
 }
 
-std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& fname) const {
-    std::string prefix = get_file_name_prefix();
-    std::string suffix = "-Data.db";
-    if (fname.starts_with(prefix) && fname.ends_with(suffix)) {
-        // Extract file_id between prefix and suffix
-        size_t start = prefix.size();
-        size_t end = fname.size() - suffix.size();
-        std::string file_id_str = fname.substr(start, end - start);
-        try {
-            return static_cast<file_id_t>(std::stoull(file_id_str));
-        } catch (...) {
-            return std::nullopt;
+// Formatting a new file grows the store, so its I/O deliberately does not go through
+// logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
+// must not isolate the node, while writes to already formatted files keep working.
+future<> file_manager::format_file(file_id_t file_id) {
+    auto file_path = get_file_path(file_id).string();
+    bool file_exists = co_await seastar::file_exists(file_path);
+    if (!file_exists) {
+        // Create and format a temporary file, then move it to the final location.
+        //
+        // The temporary file is deliberately not opened with O_DSYNC, unlike the file the segments
+        // are then written through: a segment write is acknowledged when it completes and has to be
+        // durable by then, while formatting only has to be durable before the rename publishes the
+        // file. Flushing once at the end rather than on every one of the writes below is worth more
+        // than an order of magnitude, and the durability of the published file is the same either
+        // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
+        // reason, see segment_manager::allocate_segment_ex().
+        auto tmp_path = file_path + ".tmp";
+        auto tmp_file = co_await seastar::open_file_dma(tmp_path,
+                seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
+        if (_sparse_files) {
+            // Reading a hole yields zeros, so the file is already formatted as
+            // far as the reader is concerned.
+            co_await tmp_file.truncate(_file_size);
+        } else {
+            co_await tmp_file.allocate(0, _file_size);
+            co_await format_file_region(tmp_file, 0, _file_size);
         }
+        co_await tmp_file.flush();
+        co_await tmp_file.close();
+
+        // move the temp file to the final location
+        co_await seastar::rename_file(tmp_path, file_path);
     }
-    return std::nullopt;
+}
+
+// Opens every file that has been allocated, so that no read opens one during normal operation. A
+// file that is allocated later is opened by allocate_file(). Files are formatted before they are
+// allocated, so they all exist here.
+future<> file_manager::open_allocated_files() {
+    return max_concurrent_for_each(std::views::iota(file_id_t(0), _next_file_id), 32,
+            [this] (file_id_t file_id) -> future<> {
+        if (!_open_files[file_id]) {
+            co_await do_open_file(file_id);
+        }
+    });
+}
+
+future<> file_manager::allocate_file(file_id_t file_id) {
+    if (file_id >= _max_files.actual) {
+        on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
+    }
+
+    if (file_id == _next_file_id && file_id < _max_files.configured) {
+        // allocate file_id and wait for it to be formatted, and start formatting
+        // the next file in background
+        co_await _next_file_formatter.get_future();
+
+        if (file_id == _next_file_id) {
+            // The format does not open the file, thus only the allocated files are open. If the
+            // open fails, the file stays the next one, and the next attempt opens it again.
+            if (!_open_files[file_id]) {
+                co_await do_open_file(file_id);
+            }
+            _next_file_id++;
+
+            if (_next_file_id < _max_files.configured) {
+                _next_file_formatter = with_gate(_async_gate, [this] {
+                    return with_scheduling_group(_sched_group, [this] {
+                        return format_file(_next_file_id);
+                    });
+                });
+            }
+        }
+    } else if (file_id >= _max_files.configured && file_id >= _next_file_id) {
+        on_internal_error(logstor_logger, "Disk size limit reached, cannot allocate more files");
+    } else if (file_id > _next_file_id) {
+        on_internal_error(logstor_logger, "files must be allocated in sequential order");
+    }
 }
 
 }
