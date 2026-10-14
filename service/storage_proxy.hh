@@ -874,6 +874,9 @@ public:
 
     future<db::hints::sync_point> create_hint_sync_point(std::vector<locator::host_id> target_hosts) const;
     future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline);
+    /// Makes the regular hint managers on all shards discard hint segments up to the given sync point.
+    /// See `db::hints::manager::discard_segments_up_to()`. Only meant to be used in tests.
+    future<> discard_hint_segments_up_to(const db::hints::sync_point& spoint);
 
     const stats& get_stats() const {
         return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);
