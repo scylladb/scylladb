@@ -65,3 +65,9 @@ class retrying:  # noqa: N801
             return func(*args, **kwargs)
 
         return inner
+
+
+# Restored verbatim from scylla-dtest's tools/retrying.py; it was trimmed
+# when this module was first ported in-tree, but not-yet-adapted
+# dtest/unported test modules still import it.
+retry_with_func_attempts = retrying(num_attempts=1, sleep_time=10)

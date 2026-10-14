@@ -1,0 +1,8 @@
+Statistics.db
+Summary.db
+Filter.db
+Data.db
+Digest.sha1
+CompressionInfo.db
+Index.db
+TOC.txt

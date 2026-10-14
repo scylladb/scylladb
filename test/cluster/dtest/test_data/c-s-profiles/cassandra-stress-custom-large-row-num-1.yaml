@@ -1,0 +1,68 @@
+### DML ###
+
+# Keyspace Name
+keyspace: keyspace1
+
+# The CQL for creating a keyspace (optional if it already exists)
+keyspace_definition: |
+  CREATE KEYSPACE keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+
+# Table name
+table: standard1
+
+# The CQL for creating a table you wish to stress (optional if it already exists)
+table_definition: |
+  CREATE TABLE standard1 (
+      id int,
+      name text,
+      last_name text,
+      address text,
+      account blob,
+      cn int,
+      PRIMARY KEY (id, name)
+  ) WITH bloom_filter_fp_chance = 0.01
+    AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
+    AND comment = ''
+    AND compaction = {'class': 'SizeTieredCompactionStrategy'}
+    AND compression = {}
+    AND dclocal_read_repair_chance = 0.1
+    AND default_time_to_live = 0
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair_chance = 0.0
+    AND speculative_retry = '99.0PERCENTILE';
+
+### Column Distribution Specifications ###
+columnspec:
+  - name: id
+    size: fixed(8)
+    population: uniform(1..10M)
+
+  - name: name
+    size: uniform(4..16)
+
+  - name: last_name
+    size: uniform(4..16)
+
+  - name: address
+    size: uniform(16..32)
+
+  - name: account
+    size: fixed(64)
+
+  - name: cn
+    size: fixed(1024)
+
+
+### Batch Ratio Distribution Specifications ###
+
+insert:
+  partitions: fixed(1)
+  select:    fixed(1)/1
+  batchtype: UNLOGGED
+
+queries:
+  read1:
+    cql: select * from standard2 where id = ? and name = ?

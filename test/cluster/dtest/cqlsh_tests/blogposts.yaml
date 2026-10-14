@@ -1,0 +1,61 @@
+### DML ###
+
+keyspace: stresscql
+
+keyspace_definition: |
+  CREATE KEYSPACE stresscql WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+
+table: blogposts
+
+table_definition: |
+  CREATE TABLE blogposts (
+        domain text,
+        published_date timeuuid,
+        url text,
+        author text,
+        title text,
+        body text,
+        PRIMARY KEY(domain, published_date)
+  ) WITH CLUSTERING ORDER BY (published_date DESC)
+    AND compaction = { 'class':'LeveledCompactionStrategy' }
+    AND comment='A table to hold blog posts'
+
+### Column Distribution Specifications ###
+
+columnspec:
+  - name: domain
+    size: gaussian(5..100)
+    population: uniform(1..10M)
+
+  - name: published_date
+    cluster: fixed(5000)
+
+  - name: url
+    size: uniform(30..300)
+
+  - name: title
+    size: gaussian(10..200)
+
+  - name: author
+    size: uniform(5..20)
+
+  - name: body
+    size: gaussian(10..500)
+
+### Batch Ratio Distribution Specifications ###
+
+insert:
+  partitions: fixed(1)     # insert 1 partition per batch
+
+  select:    fixed(1)/500  # insert 10 rows per partition
+
+  batchtype: UNLOGGED
+
+
+queries:
+   singlepost:
+      cql: select * from blogposts where domain = ? LIMIT 1
+      fields: samerow
+   timeline:
+      cql: select url, title, published_date from blogposts where domain = ? LIMIT 10
+      fields: samerow

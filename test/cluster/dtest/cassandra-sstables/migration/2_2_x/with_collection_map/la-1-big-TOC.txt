@@ -1,0 +1,8 @@
+Digest.adler32
+CRC.db
+Summary.db
+Data.db
+Filter.db
+TOC.txt
+Statistics.db
+Index.db

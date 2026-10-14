@@ -14,3 +14,4 @@ test modules can import from here without getting into circular import issues.
 import os
 
 ALLOW_NOISY_LOGGING = os.environ.get("ALLOW_NOISY_LOGGING", "").lower() in ("yes", "true")
+DTEST_REQUIRE = os.environ.get("DTEST_REQUIRE", "auto")

@@ -19,6 +19,7 @@ from cassandra.policies import RetryPolicy
 
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 from test.cluster.dtest.tools.misc import retry_till_success
+from test.cluster.dtest.tools.schema import describe_rf
 from test.pylib.internal_types import IPAddress
 from test.pylib.rest_client import read_barrier as read_barrier_via_api
 
@@ -150,7 +151,10 @@ def create_ks(session, name: str, rf: int | dict[str, int], tablets: int | None 
     else:
         assert len(rf) >= 0, "At least one datacenter/rf pair is needed"
         # we assume networkTopologyStrategy
-        options = ", ".join(["'%s':%d" % (dc_value, rf_value) for dc_value, rf_value in rf.items()])
+        # describe_rf renders both a plain replication factor and a rack list
+        # ({"dc1": ["rack1", "rack2"]}), which a bare %d cannot.  This is how
+        # scylla-dtest's create_ks built the option list.
+        options = ", ".join([f"'{dc_value}':{describe_rf(rf_value)}" for dc_value, rf_value in rf.items()])
         query = query % (name, "'class':'NetworkTopologyStrategy', %s" % options)
     if tablets is not None:
         if tablets:

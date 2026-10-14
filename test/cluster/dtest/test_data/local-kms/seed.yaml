@@ -1,0 +1,17 @@
+Keys:
+  Symmetric:
+    Aes:
+      - Metadata:
+          KeyId: bc436485-5092-42b8-92a3-0aa8b93536dc
+          Description: "Your key description"
+        NextKeyRotation: "2023-09-12T15:19:21+00:00"
+        BackingKeys:
+          - 34743777217A25432A46294A404E635266556A586E3272357538782F413F4428
+      - Metadata:
+          KeyId: 5ef77041-d1e6-4af1-9a41-e49a4b45efb6
+        BackingKeys:
+          - b200b324de29609558e13780160e38fc193f6bec9f9dba58a2be5b37d5098d74
+
+Aliases:
+  - AliasName: alias/Scylla-test
+    TargetKeyId: bc436485-5092-42b8-92a3-0aa8b93536dc

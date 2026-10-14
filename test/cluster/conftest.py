@@ -196,11 +196,12 @@ async def manager(request: pytest.FixtureRequest,
             except Exception:
                 logger.warning("Failed to gather logs for failed test %s", test_case_name, exc_info=True)
 
-        # Close the driver before after_test(): nothing in after_test() needs
-        # it.  after_test() runs even if closing fails: it reports what the
-        # test left behind.
+        # Close the driver, and the clusters the test made with con_gen(),
+        # before after_test(): nothing in after_test() needs them.  after_test()
+        # runs even if closing fails: it reports what the test left behind.
         try:
             mgr.driver_close()
+            mgr.close_test_clusters()
         finally:
             # Tear down (after test): notify the manager that the test finished.
             logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
