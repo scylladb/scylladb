@@ -117,7 +117,8 @@
 //   append           copy one record whose value is already encoded into the buffer of the writer
 //   serialize        what a write pays before its record reaches the buffer: `encode`,
 //                    `record-header` and `append`
-//   cache-lookup     look one cached mutation up and copy its partition out of the cache region.
+//   cache-lookup     look one cached partition up and copy it and its key out of the cache region,
+//                    as a point read takes it, without the reader that pushes it into a buffer.
 //                    Includes the lookup of the index entry the cached partition hangs off. Draws
 //                    only from the keys the cache still holds after the warming, and says how
 //                    many of the dataset those are: a dataset larger than the memory of the shard
@@ -298,6 +299,7 @@
 #include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
@@ -559,6 +561,7 @@ class logstor_bench {
     std::unique_ptr<raw_write_buffer> _serialization_buffer;
     temporary_buffer<char> _serialized_record;
     std::optional<mutation> _mutation;
+    std::optional<single_row_partition> _partition;
     std::optional<log_record> _record;
     // A writer of that record, whose value is already encoded, for the append test, which is about
     // what the copy into the buffer costs and not about what encoding the value costs.
@@ -785,27 +788,28 @@ public:
         }
     }
 
-    // What a read that the cache serves pays: the entry of the key is looked up and the partition
-    // of the cached mutation is copied out of the cache region. Draws from the keys the cache holds,
-    // which warm_cache_and_find_cached_keys() collected, rather than from the whole dataset. A
-    // lookup that finds nothing is counted by the cache tracker, see cache_misses().
+    // What a read that the cache serves pays before its reader: the entry of the key is looked up
+    // and the cached partition and its key are copied out of the cache region. Draws from the keys
+    // the cache holds, which warm_cache_and_find_cached_keys() collected, rather than from the
+    // whole dataset. A lookup that finds nothing is counted by the cache tracker, see
+    // cache_misses().
     void do_cache_lookup(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             auto result = index().lookup_for_read(primary_index_key{random_cached_key()}, *_schema, use_cache::yes);
             if (!result) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            _sink += std::holds_alternative<mutation>(*result);
+            _sink += std::holds_alternative<keyed_single_row_partition>(*result);
         }
     }
 
-    // What a read that went to a segment pays to leave its mutation in the cache. The entry is
+    // What a read that went to a segment pays to leave its partition in the cache. The entry is
     // evicted first, since a populate of an entry that is already cached does nothing, and what is
     // measured is therefore the eviction of a cached partition together with the admission of one.
     // The index evicts one entry only when a write replaces it, so the eviction is an insert of the
     // entry with its own location and a newer timestamp, which is what index-insert measures.
     // What it admits is the partition prepared for the single step tests, so that the cost of
-    // building a mutation is not part of the measurement, and it is admitted into the entry of the
+    // decoding a record is not part of the measurement, and it is admitted into the entry of the
     // key that partition belongs to: a cached partition carries its key, and a read of another key
     // that finds it rejects it as a hash collision.
     void do_cache_populate(unsigned count) {
@@ -819,7 +823,7 @@ public:
                 .location = entry->location,
                 .timestamp = api::new_timestamp(),
             });
-            if (!index().populate_cache(key, entry->location, *_mutation)) [[unlikely]] {
+            if (!index().populate_cache(key, entry->location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
                 on_internal_error(logstor_logger, "the entry of the prepared partition was not populated");
             }
         }
@@ -960,6 +964,7 @@ private:
 
     void prepare_single_step_inputs() {
         _mutation = make_mutation(_keys[0]);
+        _partition = to_single_row_partition(mutation(*_mutation));
         _record.emplace(log_record{
             .header = make_record_header(_mutation->decorated_key()),
             .value = encode_record_value(*_mutation),

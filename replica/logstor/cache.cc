@@ -14,11 +14,24 @@ namespace replica::logstor {
 
 // cached_partition_entry
 
-cached_partition_entry::cached_partition_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot)
+cached_partition_entry::cached_partition_entry(schema_ptr schema, const partition_key& key, const single_row_partition& partition, cached_entry_slot& slot)
         : _schema(std::move(schema))
         , _key(key)
-        , _partition(*_schema, partition)
+        , _partition(partition.copy(*_schema))
         , _slot_link(entangled::make_paired_with(slot._entry_link)) {
+}
+
+void cached_partition_entry::upgrade(schema_ptr schema) {
+    if (_schema == schema) {
+        return;
+    }
+    if (auto& row = _partition.row) {
+        // Built beside the old row and swapped in, so that a failed allocation leaves the entry as
+        // it was.
+        std::optional<deletable_row> upgraded(std::in_place, *schema, *_schema, *row);
+        row = std::move(upgraded);
+    }
+    _schema = std::move(schema);
 }
 
 void cached_partition_entry::on_evicted() noexcept {
@@ -54,8 +67,11 @@ void cache_tracker::evict(const primary_index_entry& pie) {
     });
 }
 
-std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, const schema& target_schema) {
-    auto cached_mut = _read_section(region(), [&] () -> std::optional<mutation> {
+std::optional<keyed_single_row_partition> cache_tracker::read_partition(const primary_index_entry& pie, const schema& target_schema) {
+    // The partition is built inside the section and returned out of it by value: an allocation
+    // failure re-runs the section's function from the start, and nothing outside it has been
+    // touched by then.
+    auto cached = _read_section(region(), [&] () -> std::optional<keyed_single_row_partition> {
         if (!pie._cached_entry) {
             return std::nullopt;
         }
@@ -66,17 +82,16 @@ std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, co
                 e.upgrade(target_schema.shared_from_this());
             });
         }
-        dht::decorated_key dk(pie.key().token(), e.key());
-        return mutation(target_schema.shared_from_this(), std::move(dk), mutation_partition(target_schema, e.partition()));
+        return keyed_single_row_partition{dht::decorated_key(pie.key().token(), e.key()), e.partition().copy(*e.schema())};
     });
 
-    if (cached_mut) {
+    if (cached) {
         _shared_tracker.on_partition_hit();
     } else {
         _shared_tracker.on_partition_miss();
     }
 
-    return cached_mut;
+    return cached;
 }
 
 std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, schema_ptr target_schema) {
@@ -86,7 +101,7 @@ std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, sche
         }
         const auto& e = *pie._cached_entry;
         dht::decorated_key dk(pie.key().token(), e.key());
-        return mutation(e.schema(), std::move(dk), e.partition());
+        return to_mutation(e.schema(), std::move(dk), e.partition().copy(*e.schema()));
     });
 
     if (cached_mut && cached_mut->schema() != target_schema) {
@@ -96,14 +111,15 @@ std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, sche
     return cached_mut;
 }
 
-void cache_tracker::populate(const primary_index_entry& pie, const mutation& m) {
+void cache_tracker::populate(const primary_index_entry& pie, const schema_ptr& schema, const partition_key& key,
+        const single_row_partition& partition) {
     _populate_section(region(), [&] {
         with_allocator(allocator(), [&] {
             if (pie._cached_entry) {
                 _shared_tracker.on_miss_already_populated();
                 return;
             }
-            auto* e = current_allocator().construct<cached_partition_entry>(m.schema(), m.decorated_key().key(), m.partition(), pie._cached_entry);
+            auto* e = current_allocator().construct<cached_partition_entry>(schema, key, partition, pie._cached_entry);
             get_lru().add(*e);
             _shared_tracker.on_partition_insert();
         });

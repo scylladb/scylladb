@@ -31,6 +31,7 @@
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"
 #include "replica/logstor/record_value.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
@@ -4120,7 +4121,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_rejects_a_cached_partiti
     primary_index_key key(ms[0].decorated_key());
     auto entry = index.get(key);
     BOOST_REQUIRE(entry);
-    BOOST_REQUIRE(index.populate_cache(key, entry->location, ms[1]));
+    BOOST_REQUIRE(index.populate_cache(key, entry->location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
 
     auto rd = env.make_reader(singular_range(ms[0]));
     auto close_rd = deferred_close(rd);

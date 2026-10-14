@@ -17,15 +17,32 @@ class mutation;
 
 namespace replica::logstor {
 
-// A logstor partition once it leaves the cache or the record decoder, in the form a reader pushes
-// into its buffer as fragments. A logstor table has no clustering columns, so its partition is at
-// most one row, with no range tombstones and no static row: the row is absent when the partition is
-// only a tombstone, and there is never more than one. The row is held without its clustering key,
-// which is always the empty one; a reader adds it when it pushes the row. The partition key is not
-// in it either; whoever holds a single_row_partition holds the key beside it.
+// A logstor partition as the cache holds it, and as a reader pushes it into its buffer as fragments
+// out of the cache or the record decoder. A logstor table has no clustering columns, so its
+// partition is at most one row, with no range tombstones and no static row: the row is absent when
+// the partition is only a tombstone, and there is never more than one. The row is held without its
+// clustering key, which is always the empty one; a reader adds it when it pushes the row. The
+// partition key is not in it either; whoever holds a single_row_partition holds the key beside it.
 struct single_row_partition {
     tombstone partition_tombstone;
     std::optional<deletable_row> row;
+
+    // A copy, in the current allocator. The row needs the schema `s` of the partition to copy its
+    // cells.
+    single_row_partition copy(const schema& s) const {
+        single_row_partition partition{.partition_tombstone = partition_tombstone};
+        if (row) {
+            partition.row.emplace(s, *row);
+        }
+        return partition;
+    }
+};
+
+// A cached partition together with its key, as a read of the cache hands it out. The index entry
+// has only the hash of the key, so a point read compares this key with its own.
+struct keyed_single_row_partition {
+    dht::decorated_key key;
+    single_row_partition partition;
 };
 
 // What a logstor schema guarantees of a partition, checked rather than fallen back from, since a

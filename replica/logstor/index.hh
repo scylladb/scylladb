@@ -157,9 +157,9 @@ public:
         index_read_guard guard;
     };
 
-    // The result of a point lookup: the cached mutation, or the location of the record if the
-    // cache does not have it.
-    using read_lookup_result = std::variant<mutation, guarded_location>;
+    // The result of a point lookup: the cached partition with its key, or the location of the
+    // record if the cache does not have it.
+    using read_lookup_result = std::variant<keyed_single_row_partition, guarded_location>;
 
     struct dump_lookup_result {
         index_entry entry;
@@ -474,20 +474,20 @@ public:
         return result;
     }
 
-    // Returns the cached mutation for an entry the caller already holds from scan(), or nullopt
-    // when the entry holds nothing, the cache is not set up or the read does not use it. Counts a
-    // hit or a miss and touches the LRU, like the read path does. The entry must belong to this
-    // index.
-    std::optional<mutation> lookup_cached(const primary_index_entry& e, const schema& target_schema, use_cache uses_cache) const {
+    // The cached partition of an entry the caller holds from scan(), with its key, or nullopt when
+    // the entry holds nothing, the cache is not enabled or the read does not use it. Counts a hit
+    // or a miss and touches the LRU, like a point read does. The entry must belong to this index.
+    std::optional<keyed_single_row_partition> lookup_cached(const primary_index_entry& e, const schema& target_schema, use_cache uses_cache) const {
         if (!_cache_tracker || !uses_cache) {
             return std::nullopt;
         }
-        return _cache_tracker->lookup(e, target_schema);
+        return _cache_tracker->read_partition(e, target_schema);
     }
 
     // Finds a key for a point read. Returns nullopt if the index does not have the key. If the
-    // read uses the cache and the cache has the key, returns the cached mutation. If not, returns
-    // the location of the record with a guard.
+    // read uses the cache and the cache has the key, returns the cached partition with its key. If
+    // not, returns the location of the record with a guard. The entry has only the hash of the key,
+    // so the caller compares the key of a cached partition with its own.
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, use_cache uses_cache) const {
         auto it = find_key(key);
         if (it == _partitions.end()) {
@@ -495,14 +495,15 @@ public:
         }
 
         if (_cache_tracker && uses_cache) {
-            if (auto cached = _cache_tracker->lookup(*it, target_schema)) {
+            if (auto cached = _cache_tracker->read_partition(*it, target_schema)) {
                 return std::move(*cached);
             }
         }
         return guarded_location{.location = it->entry().location, .guard = start_read()};
     }
 
-    bool populate_cache(const primary_index_key& key, record_location read_location, const mutation& m) const {
+    bool populate_cache(const primary_index_key& key, record_location read_location, const schema_ptr& schema, const partition_key& pk,
+            const single_row_partition& partition) const {
         if (!_cache_tracker) {
             return false;
         }
@@ -512,7 +513,7 @@ public:
             return false;
         }
 
-        _cache_tracker->populate(*it, m);
+        _cache_tracker->populate(*it, schema, pk, partition);
         return true;
     }
 
