@@ -81,6 +81,12 @@ bool supports_scope(const option& opt, scope s);
 // True for an option resolved per table (KEYSPACE and/or TABLE scope), false for one
 // resolved per node (DATACENTER/RACK/NODE) or at CLUSTER scope only.
 bool is_table_oriented(const option& opt);
+// The cluster feature that says every node knows the option called `option_name`:
+// CLUSTER_CONFIG_<NAME>. gms::feature_service advertises one for each registered option.
+seastar::sstring feature_name(std::string_view option_name);
+// Feature names of options removed from the registry. A feature once enabled on a cluster
+// must stay supported, or a node without it cannot join, so these are advertised forever.
+std::span<const std::string_view> retired_feature_names();
 std::optional<version> current_version(const gms::feature_service& features);
 
 // Returns nullopt on success. On failure, returns a human-readable reason.

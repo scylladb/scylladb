@@ -11,6 +11,7 @@
 #include "utils/log.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -46,6 +47,40 @@ feature_service::feature_service(feature_config cfg) : _config(cfg) {
         test_only_feature.enable();
         unregister_feature(test_only_feature);
     }
+
+    for (const auto& opt : db::cluster_config_registry::options()) {
+        add_cluster_config_option_feature(opt.name);
+    }
+    // A retired name must not be reused by a live option or a declared feature, or the
+    // feature would stand for two different things.
+    for (const std::string_view name : db::cluster_config_registry::retired_feature_names()) {
+        SCYLLA_ASSERT(!_registered_features.contains(sstring(name)));
+    }
+}
+
+feature& feature_service::add_cluster_config_option_feature(std::string_view option_name) {
+    if (const auto it = _cluster_config_option_features.find(option_name); it != _cluster_config_option_features.end()) {
+        return it->second.get();
+    }
+    const auto name = db::cluster_config_registry::feature_name(option_name);
+    // A clash with a declared feature would alias two unrelated things.
+    SCYLLA_ASSERT(!_registered_features.contains(name));
+    auto& f = add_feature(name);
+    _cluster_config_option_features.emplace(option_name, f);
+    return f;
+}
+
+const feature* feature_service::cluster_config_option_feature(std::string_view option_name) const {
+    const auto it = _cluster_config_option_features.find(option_name);
+    return it == _cluster_config_option_features.end() ? nullptr : &it->second.get();
+}
+
+feature& feature_service::add_feature(const sstring& name) {
+    if (const auto it = _registered_features.find(name); it != _registered_features.end()) {
+        return it->second.get();
+    }
+    const auto [it, inserted] = _dynamic_features.try_emplace(name, *this, std::string_view(name));
+    return it->second;
 }
 
 future<> feature_service::stop() {
@@ -112,6 +147,12 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "CDC_GENERATIONS_V2"sv,
         "HOST_ID_BASED_HINTED_HANDOFF"sv,
     };
+
+    // Deprecated in the same sense: the features of cluster config options that were
+    // removed, still advertised so that a cluster which enabled them stays joinable.
+    for (const std::string_view name : db::cluster_config_registry::retired_feature_names()) {
+        features.insert(name);
+    }
 
     if (is_test_only_feature_deprecated()) {
         features.insert(test_only_feature.name());
