@@ -453,7 +453,8 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '') -> str:
+    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '',
+                              skip_repair: Optional[bool] = None) -> str:
         """Restore tablets from a single backup location"""
         backup_location = [
             {
@@ -464,15 +465,18 @@ class ScyllaRESTAPIClient:
                 "manifests": manifests
             }
         ]
-        return await self.restore_tablets_multidc(node_ip, ks, cf, snap, backup_location)
+        return await self.restore_tablets_multidc(node_ip, ks, cf, snap, backup_location, skip_repair=skip_repair)
 
-    async def restore_tablets_multidc(self, node_ip: str, ks: str, cf: str, snap: str, locations: list[dict]) -> str:
+    async def restore_tablets_multidc(self, node_ip: str, ks: str, cf: str, snap: str, locations: list[dict],
+                                      skip_repair: Optional[bool] = None) -> str:
         """Restore tablets from a list of per-datacenter backup locations"""
         params = {
             "keyspace": ks,
             "table": cf,
             "snapshot": snap
         }
+        if skip_repair is not None:
+            params["skip_repair"] = "true" if skip_repair else "false"
         return await self.client.post_json(f"/storage_service/tablets/restore", host=node_ip, params=params, json=locations)
 
     async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None, ttl: Optional[str] = None) -> None:
