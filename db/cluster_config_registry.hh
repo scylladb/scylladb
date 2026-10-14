@@ -57,6 +57,18 @@ enum class version : uint8_t {
 // option::type() is the index of the active alternative.
 using config_value = std::variant<std::string_view, int64_t, double, bool>;
 
+// Who owns the effective value.
+//   native: cluster config is the only source; consumers read it through the manager.
+//   db_config: the option is an existing db::config entry. Cluster config stores overrides
+//   in front of it and db::cluster_config_db_config_bridge applies the effective value to
+//   db::config; consumers keep reading db::config. The fallback when no scope stores an
+//   override is the node's own pre-cluster db::config value, so the manager's typed
+//   accessors must not be used for such an option (they report an internal error).
+enum class option_kind : uint8_t {
+    native,
+    db_config,
+};
+
 // Inclusive bounds on the value of an integer option.
 struct integer_range {
     int64_t min;
@@ -70,9 +82,12 @@ struct option {
     version min_version;
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
+    // For a db_config option it only declares the type.
     config_value default_value;
+    option_kind kind = option_kind::native;
     // When set, validate_value() rejects an integer value outside this range. Only valid for
-    // an integer option, and the default must fall within it.
+    // an integer option, and the default must fall within it. A db_config option bound to an
+    // integral db::config entry must declare one that fits the entry's type.
     std::optional<integer_range> valid_range = std::nullopt;
 
     constexpr value_type type() const {

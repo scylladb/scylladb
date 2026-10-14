@@ -9,6 +9,7 @@
 #include "db/cluster_config_registry.hh"
 
 #include <algorithm>
+#include <limits>
 #include <array>
 #include <string>
 #include <string_view>
@@ -62,6 +63,19 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    // Migrated from the db::config option of the same name. The tablet load balancer reads
+    // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
+    // makes sense. The range matches the unsigned entry; 0 would scale every table's tablet
+    // count down to nothing.
+    option{
+        .name = "tablets_per_shard_goal",
+        .description = "The goal for the maximum number of tablet replicas per shard that the tablet load balancer tries to keep",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v0,
+        .default_value = int64_t(100),
+        .kind = option_kind::db_config,
+        .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
 };
 
