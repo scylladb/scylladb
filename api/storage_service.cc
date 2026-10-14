@@ -1677,7 +1677,12 @@ rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage
 static
 future<json::json_return_type>
 rest_quiesce_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        co_await ss.local().await_topology_quiesced();
+        auto auto_rf_only = req->get_query_param("auto_rf_only");
+        if (!auto_rf_only.empty() && parse_bool_param("auto_rf_only", auto_rf_only)) {
+            co_await ss.local().await_auto_rf_quiesced();
+        } else {
+            co_await ss.local().await_topology_quiesced();
+        }
         co_return json_void();
 }
 

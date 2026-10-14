@@ -93,6 +93,8 @@ enum class global_topology_request: uint16_t {
     finalize_migration,
     quiesce,
     restore_tablets,
+    // Answered once auto-RF has nothing to do; see storage_service::await_auto_rf_quiesced().
+    auto_rf_quiesce,
 };
 
 struct ring_slice {

@@ -3382,6 +3382,14 @@
                   "application/json"
                ],
                "parameters":[
+                  {
+                     "name":"auto_rf_only",
+                     "description":"Wait only until the automatic replication of the audit and system_traces keyspaces has nothing left to do, without waiting for the tablet load balancer",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
                ]
             }
          ]
