@@ -238,7 +238,7 @@ bool is_table_oriented(const option& opt) {
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {
-    if (features.cluster_config_registry_v0) {
+    if (features.cluster_config) {
         return version::v0;
     }
     return std::nullopt;

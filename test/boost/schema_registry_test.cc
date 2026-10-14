@@ -91,23 +91,23 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_cdc_schema) {
     BOOST_REQUIRE(s_loaded->cdc_schema()->version() == s_cdc->version());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_v0_feature_is_supported) {
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_feature_is_supported) {
     dummy_init dummy;
     auto features = dummy.fs.supported_feature_set();
-    BOOST_REQUIRE(features.contains("CLUSTER_CONFIG_REGISTRY_V0"));
+    BOOST_REQUIRE(features.contains("CLUSTER_CONFIG"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_feature_gate) {
     dummy_init dummy;
 
-    dummy.fs.cluster_config_registry_v0.enable();
+    dummy.fs.cluster_config.enable();
 
     BOOST_REQUIRE(
         db::cluster_config_registry::current_version(dummy.fs)
         == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v0));
 
     gms::feature_config cfg;
-    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    cfg.disabled_features.emplace("CLUSTER_CONFIG");
     gms::feature_service fs(cfg);
 
     BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
@@ -205,7 +205,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
 // current_version()'s answer (nullopt when disabled), which callers check before looking up.
 SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_find_filters_by_version) {
     dummy_init dummy;
-    dummy.fs.cluster_config_registry_v0.enable();
+    dummy.fs.cluster_config.enable();
     const auto current_version = db::cluster_config_registry::current_version(dummy.fs);
     BOOST_REQUIRE(current_version == db::cluster_config_registry::version::v0);
 
@@ -213,7 +213,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_find_filters_by_version) {
     BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled") != nullptr);
 
     gms::feature_config cfg;
-    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    cfg.disabled_features.emplace("CLUSTER_CONFIG");
     gms::feature_service fs(cfg);
     BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
 }
