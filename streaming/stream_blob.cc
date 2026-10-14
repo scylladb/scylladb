@@ -16,6 +16,7 @@
 #include "utils/error_injection.hh"
 #include "locator/host_id.hh"
 #include "replica/database.hh"
+#include "replica/logstor/segment_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/storage.hh"

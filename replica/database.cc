@@ -17,6 +17,8 @@
 #include "locator/tablets.hh"
 #include "locator/token_metadata_fwd.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/logstor.hh"
+#include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
@@ -80,7 +82,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
 #include "tombstone_gc.hh"
-#include "logstor/logstor.hh"
 #include "service/qos/service_level_controller.hh"
 
 #include "replica/data_dictionary_impl.hh"

@@ -17,8 +17,8 @@
 // FIXME: un-nest compaction_reenabler, so we can forward declare it and remove this include.
 #include "compaction/compaction_manager.hh"
 #include "locator/tablets.hh"
-#include "replica/logstor/compaction.hh"
-#include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/logstor_fwd.hh"
+#include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include "db/commitlog/replay_position.hh"
@@ -36,23 +36,8 @@ class effective_replication_map;
 
 namespace replica {
 
-namespace logstor {
-class primary_index;
-}
-
-class compaction_group_logstor_state final : public logstor::logstor_group {
-    compaction_group* _cg;
-public:
-    explicit compaction_group_logstor_state(compaction_group& cg) noexcept;
-
-    ::table_id table_id() const noexcept override;
-
-    logstor::primary_index& logstor_index() noexcept override;
-    const logstor::primary_index& logstor_index() const noexcept override;
-
-protected:
-    logstor::compaction_manager& logstor_compaction_manager() noexcept override;
-};
+// The logstor state of a compaction group of a logstor table. Defined in table.cc.
+class compaction_group_logstor_state;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
@@ -348,13 +333,8 @@ public:
 
     future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
 
-    logstor::segment_set& logstor_segments() noexcept {
-        return _logstor_state->logstor_segments();
-    }
-
-    const logstor::segment_set& logstor_segments() const noexcept {
-        return _logstor_state->logstor_segments();
-    }
+    logstor::segment_set& logstor_segments() noexcept;
+    const logstor::segment_set& logstor_segments() const noexcept;
 
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot();
 

@@ -25,6 +25,9 @@
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/index.hh"
+#include "replica/logstor/logstor.hh"
+#include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include "replica/query_state.hh"
 #include "sstables/shared_sstable.hh"
@@ -1207,6 +1210,28 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
 future<> compaction_group::discard_logstor_segments() {
     auto& sm = get_logstor_segment_manager();
     co_await sm.discard_segments(as_logstor_group());
+}
+
+class compaction_group_logstor_state final : public logstor::logstor_group {
+    compaction_group* _cg;
+public:
+    explicit compaction_group_logstor_state(compaction_group& cg) noexcept;
+
+    ::table_id table_id() const noexcept override;
+
+    logstor::primary_index& logstor_index() noexcept override;
+    const logstor::primary_index& logstor_index() const noexcept override;
+
+protected:
+    logstor::compaction_manager& logstor_compaction_manager() noexcept override;
+};
+
+logstor::segment_set& compaction_group::logstor_segments() noexcept {
+    return _logstor_state->logstor_segments();
+}
+
+const logstor::segment_set& compaction_group::logstor_segments() const noexcept {
+    return _logstor_state->logstor_segments();
 }
 
 logstor::logstor_group& compaction_group::as_logstor_group() noexcept {
@@ -4790,6 +4815,22 @@ void table::mark_ready_for_writes(db::commitlog* cl) {
         _commitlog = cl;
     }
     _readonly = false;
+}
+
+std::map<sstring, mutation_source> table::make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit) {
+    return _logstor->make_mutation_sources_for_dump(std::move(s), *_logstor_index, dk, std::move(permit));
+}
+
+logstor::segment_manager& table::get_logstor_segment_manager() noexcept {
+    return _logstor->get_segment_manager();
+}
+
+const logstor::segment_manager& table::get_logstor_segment_manager() const noexcept {
+    return _logstor->get_segment_manager();
+}
+
+logstor::compaction_manager& table::get_logstor_compaction_manager() noexcept {
+    return _logstor->get_compaction_manager();
 }
 
 size_t table::get_logstor_memory_usage() const {
