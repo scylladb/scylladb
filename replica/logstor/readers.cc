@@ -16,104 +16,109 @@
 #include <vector>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
+#include "mutation/mutation_fragment.hh"
 #include "query/query-request.hh"
 #include "readers/forwardable.hh"
 #include "readers/from_mutations.hh"
 #include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/single_row_partition.hh"
 
 namespace replica::logstor {
 
 namespace {
 
-class logstor_single_key_reader : public mutation_reader::impl {
-    logstor* _logstor;
-    const primary_index& _index;
-    dht::decorated_key _dk;
+// What the readers share: a single_row_partition going into the buffer as a partition start, its
+// row and a partition end. Only as far as the buffer bound allows, though - a caller that shrank
+// its buffer is owed a stop between any two fragments - so the fragments not pushed yet wait for
+// the next fill. The fragments account for themselves as they are pushed, so the reader charges a
+// partition to the permit only while its key or its row waits outside the buffer, and releases the
+// charge when it pushes the row.
+class logstor_reader_base : public mutation_reader::impl {
+protected:
+    struct pending_partition {
+        dht::decorated_key key;
+        single_row_partition partition;
+        // The charge for the partition while it waits outside the buffer, or none.
+        reader_permit::resource_units memory;
+    };
+
     query::partition_slice _slice;
-    tracing::trace_state_ptr _trace_state;
-    mutation_reader_opt _current_partition_reader;
-    // Accounts for the mutation held by _current_partition_reader. The fragments it
-    // produces are accounted by the reader's buffer, the mutation waiting to be
-    // fragmented is not.
-    reader_permit::resource_units _partition_memory;
-    // Set once the partition was read and its stream was opened. Until then the reader
-    // is positioned before the partition, which next_partition() must not skip over.
-    bool _partition_started = false;
 
-    future<> reset_current_partition_reader() {
-        if (!_current_partition_reader) {
-            return make_ready_future<>();
+private:
+    // The partition whose fragments are going into the buffer, from its start being pushed until
+    // its end is.
+    std::optional<pending_partition> _emitting;
+    bool _row_pushed = false;
+
+protected:
+    logstor_reader_base(schema_ptr s, reader_permit p, const query::partition_slice& slice)
+        : impl(std::move(s), std::move(p))
+        , _slice(slice)
+    { }
+
+    bool emitting() const noexcept {
+        return bool(_emitting);
+    }
+
+    // What a partition holds while it waits outside the buffer: the pending_partition, the bytes of
+    // its key until the partition start takes the key, and the cells of its row.
+    size_t waiting_memory_usage(const dht::decorated_key& key, const single_row_partition& partition) const {
+        size_t usage = sizeof(pending_partition) + key.key().external_memory_usage();
+        if (partition.row) {
+            usage += partition.row->cells().external_memory_usage(*_schema, column_kind::regular_column);
         }
+        return usage;
+    }
 
-        auto fut = _current_partition_reader->close();
-        _current_partition_reader = std::nullopt;
-        _partition_memory.reset_to_zero();
-        return fut;
+    // Begins a partition: pushes its start at once, so that a partition is either not begun or
+    // begun - and next_partition() drops what was begun - and then as much of the rest as the
+    // buffer takes. The buffer must have room for the start.
+    void start_partition(pending_partition&& pending) {
+        _emitting.emplace(std::move(pending));
+        auto& p = *_emitting;
+        // A slice whose row ranges exclude the one row a logstor partition has. A logstor schema
+        // has no clustering columns for a range to be built on, so a range that exists is the full
+        // one, and only an empty list excludes the row.
+        if (p.partition.row && _slice.row_ranges(*_schema, p.key.key()).empty()) {
+            p.partition.row.reset();
+        }
+        _row_pushed = false;
+        push_mutation_fragment(*_schema, _permit, partition_start(std::move(p.key), p.partition.partition_tombstone));
+        emit_rest();
+    }
+
+    // Pushes what is left of the partition being emitted, its end included, as far as the buffer
+    // allows. Returns whether the end was pushed.
+    bool emit_rest() {
+        auto& p = *_emitting;
+        if (!_row_pushed) {
+            if (is_buffer_full()) {
+                // The row waits for the next fill. The charge is set again because the partition
+                // start took the key, and the slice can have dropped the row.
+                p.memory.reset_to(reader_resources::with_memory(waiting_memory_usage(p.key, p.partition)));
+                return false;
+            }
+            if (p.partition.row) {
+                push_mutation_fragment(*_schema, _permit, clustering_row(clustering_key::make_empty(), std::move(*p.partition.row)));
+            }
+            // The fragment of the row accounts for it now.
+            p.memory.reset_to_zero();
+            _row_pushed = true;
+        }
+        if (is_buffer_full()) {
+            return false;
+        }
+        push_mutation_fragment(*_schema, _permit, partition_end{});
+        _emitting.reset();
+        return true;
+    }
+
+    void drop_partition() noexcept {
+        _emitting.reset();
     }
 
 public:
-    logstor_single_key_reader(schema_ptr s, const primary_index& idx, reader_permit p,
-            logstor* ls, dht::decorated_key dk,
-            query::partition_slice slice, tracing::trace_state_ptr ts)
-        : impl(std::move(s), std::move(p))
-        , _logstor(ls), _index(idx), _dk(std::move(dk))
-        , _slice(std::move(slice)), _trace_state(std::move(ts))
-        , _partition_memory(_permit.consume_memory()) {
-    }
-
-    virtual future<> fill_buffer() override {
-        while (!is_buffer_full() && !_end_of_stream) {
-            if (_current_partition_reader) {
-                co_await _current_partition_reader->fill_buffer();
-                _current_partition_reader->move_buffer_content_to(*this);
-                if (_current_partition_reader->is_end_of_stream()) {
-                    co_await reset_current_partition_reader();
-                    _end_of_stream = true;
-                }
-                continue;
-            }
-
-            auto guard = reader_permit::awaits_guard(_permit);
-            auto mut = co_await _logstor->read(_schema, _index, _dk, _slice);
-            if (!mut) {
-                _end_of_stream = true;
-                co_return;
-            }
-
-            tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
-
-            _partition_started = true;
-            _partition_memory = _permit.consume_memory(mut->memory_usage(*_schema));
-            _current_partition_reader = make_mutation_reader_from_mutations(
-                _schema, _permit, std::move(*mut),
-                _slice, streamed_mutation::forwarding::no
-            );
-            _current_partition_reader->set_max_buffer_size(max_buffer_size_in_bytes);
-        }
-    }
-
-    virtual future<> next_partition() override {
-        clear_buffer_to_next_partition();
-        if (!is_buffer_empty()) {
-            return make_ready_future<>();
-        }
-        if (!_partition_started) {
-            // Positioned before the partition, nothing to skip over.
-            return make_ready_future<>();
-        }
-        // The reader produces a single partition, so skipping it ends the stream.
-        _end_of_stream = true;
-        return reset_current_partition_reader();
-    }
-
-    virtual future<> fast_forward_to(const dht::partition_range&) override {
-        // This reader can only produce its own key, so it is used only when the caller
-        // will not move it to another partition range, see make_reader(). That also
-        // means _partition_started can never go stale.
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-    }
-
     virtual future<> fast_forward_to(position_range) override {
         // Clustering forwarding is served by the make_forwardable() wrapper, which
         // never forwards the underlying reader, see make_reader().
@@ -121,7 +126,80 @@ public:
     }
 
     virtual future<> close() noexcept override {
-        return reset_current_partition_reader();
+        drop_partition();
+        return make_ready_future<>();
+    }
+};
+
+class logstor_single_key_reader : public logstor_reader_base {
+    logstor* _logstor;
+    const primary_index& _index;
+    // The key read. It goes into the partition start once the partition is found: its last use.
+    dht::decorated_key _dk;
+    tracing::trace_state_ptr _trace_state;
+    // Set once the partition was found and begun. Until then the reader is positioned before
+    // the partition, which next_partition() must not skip over.
+    bool _started = false;
+
+    // The partition, found: begun in the buffer, and the stream ends with it. It goes into the
+    // buffer at once, so it has no charge unless its row has to wait for the next fill.
+    void begin(single_row_partition&& partition) {
+        _started = true;
+        start_partition(pending_partition{std::move(_dk), std::move(partition), _permit.consume_memory()});
+        _end_of_stream = !emitting();
+    }
+
+public:
+    logstor_single_key_reader(schema_ptr s, const primary_index& idx, reader_permit p,
+            logstor* ls, dht::decorated_key dk,
+            const query::partition_slice& slice, tracing::trace_state_ptr ts)
+        : logstor_reader_base(std::move(s), std::move(p), slice)
+        , _logstor(ls), _index(idx), _dk(std::move(dk))
+        , _trace_state(std::move(ts)) {
+    }
+
+    virtual future<> fill_buffer() override {
+        if (emitting()) {
+            if (emit_rest()) {
+                _end_of_stream = true;
+            }
+            co_return;
+        }
+        if (_started || _end_of_stream) {
+            co_return;
+        }
+
+        // The first call: the partition is read, and begun as a single_row_partition.
+        auto guard = reader_permit::awaits_guard(_permit);
+        auto mut = co_await _logstor->read(_schema, _index, _dk, _slice);
+        if (!mut) {
+            _end_of_stream = true;
+            co_return;
+        }
+        tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
+        begin(to_single_row_partition(std::move(*mut)));
+    }
+
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (!is_buffer_empty()) {
+            return make_ready_future<>();
+        }
+        if (!_started) {
+            // Positioned before the partition, nothing to skip over.
+            return make_ready_future<>();
+        }
+        // The reader produces a single partition, so skipping it ends the stream.
+        _end_of_stream = true;
+        drop_partition();
+        return make_ready_future<>();
+    }
+
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        // This reader can only produce its own key, so it is used only when the caller
+        // will not move it to another partition range, see make_reader(). That also
+        // means _started can never go stale.
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
 };
 
