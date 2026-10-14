@@ -22,6 +22,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/util/defer.hh>
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
@@ -634,6 +635,213 @@ SEASTAR_TEST_CASE(test_remove_prepared_keeps_newer_statement) {
         qp.remove_prepared(user, id, *stale);
         BOOST_REQUIRE(!qp.get_prepared(user, id));
         BOOST_REQUIRE(qp.get_prepared(id).get() == newer.get());
+    });
+}
+
+// A statement of 16 KiB or more is parsed in a thread that yields between
+// tokens (SCYLLADB-219). The injection makes every token burn 1 ms of CPU,
+// more than the task quota, so the parse yields after each.
+SEASTAR_TEST_CASE(test_large_statement_parse_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+
+        // Run a large INSERT with the 1 ms spin, and count the yields.
+        auto disable = defer([&] () noexcept { injector.disable("delay_thread_parse_token"); });
+        injector.enable("delay_thread_parse_token", false, {{"spin_us", "1000"}});
+        auto insert = e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value));
+        auto yields = count_yields(insert, "delay_thread_parse_token");
+        insert.get();
+
+        // The parse yielded after most tokens, and the row is there.
+        BOOST_REQUIRE_GT(yields, 1);
+        BOOST_REQUIRE_GE(yields, injector.enter_count("delay_thread_parse_token") / 2);
+        assert_that(e.execute_cql("SELECT v FROM ks.t WHERE pk = 1").get()).is_rows().with_rows({{utf8_type->decompose(value)}});
+    });
+}
+
+// A USE on the connection can run while a large statement is parsed in a
+// thread. The statement must resolve against the keyspace from before, as a
+// QUERY and as a PREPARE.
+SEASTAR_TEST_CASE(test_use_during_large_statement_parse) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        e.execute_cql("CREATE KEYSPACE ks2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks2.t (pk int PRIMARY KEY, v text)").get();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+        auto disable = defer([&] () noexcept { injector.disable("delay_thread_parse_token"); });
+
+        // Starts a statement, and runs USE ks2 while its parse is paused.
+        auto use_during = [&] (auto start) {
+            injector.enable("delay_thread_parse_token", true, {{"pause", "1"}});
+            auto f = start();
+            wait_for_injection_enter("delay_thread_parse_token").get();
+            e.execute_cql("USE ks2").get();
+            injector.receive_message("delay_thread_parse_token");
+            return f.get();
+        };
+
+        // As a QUERY.
+        use_during([&] { return e.execute_cql(fmt::format("INSERT INTO t (pk, v) VALUES (1, '{}')", value)); });
+
+        // As a PREPARE. The USE ks2 above stays in effect, so go back to ks first.
+        e.execute_cql("USE ks").get();
+        auto id = use_during([&] { return e.prepare(fmt::format("INSERT INTO t (pk, v) VALUES (2, '{}')", value)); });
+        e.execute_prepared(id, {}).get();
+
+        // Both rows went to ks.
+        assert_that(e.execute_cql("SELECT pk FROM ks.t").get()).is_rows().with_rows_ignore_order({{int32_type->decompose(1)}, {int32_type->decompose(2)}});
+        assert_that(e.execute_cql("SELECT pk FROM ks2.t").get()).is_rows().is_empty();
+    });
+}
+
+// The CPU time the scheduling group has used on this shard, in ms.
+static uint64_t scheduler_runtime_ms(const sstring& group) {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    for (size_t i = 0; i < all_metadata.size(); ++i) {
+        if (all_metadata[i].mf.name != "scheduler_runtime_ms") {
+            continue;
+        }
+        for (size_t j = 0; j < all_metadata[i].metrics.size(); ++j) {
+            const auto& labels = all_metadata[i].metrics[j].labels();
+            auto found = labels.find("group");
+            if (found != labels.end() && found->second.value() == group) {
+                return all_metrics->values[i][j].ui();
+            }
+        }
+    }
+    BOOST_FAIL(fmt::format("no scheduler_runtime_ms for group {}", group));
+    return 0;
+}
+
+// The thread that parses a large statement must run in the scheduling group
+// of the request that sent the statement.
+SEASTAR_TEST_CASE(test_large_statement_parse_runs_in_callers_scheduling_group) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        const sstring value(20 * 1024, 'x');
+
+        // A scheduling group of its own, and a 1 ms spin on every token.
+        auto sg = create_scheduling_group("large_parse", 100).get();
+        auto destroy = defer([&] () noexcept { destroy_scheduling_group(sg).get(); });
+        auto& injector = utils::get_local_injector();
+        auto disable = defer([&] () noexcept { injector.disable("delay_thread_parse_token"); });
+        injector.enable("delay_thread_parse_token", false, {{"spin_us", "1000"}});
+
+        // Run a large INSERT in that group.
+        auto runtime_before = scheduler_runtime_ms("large_parse");
+        with_scheduling_group(sg, [&] {
+            return e.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value)).discard_result();
+        }).get();
+
+        // The group used at least half of the CPU the injection spun for, 1 ms
+        // on each entry.
+        auto spin_ms = injector.enter_count("delay_thread_parse_token");
+        BOOST_REQUIRE_GT(spin_ms, 0);
+        BOOST_REQUIRE_GE(scheduler_runtime_ms("large_parse") - runtime_before, spin_ms / 2);
+    });
+}
+
+// Large statements are parsed one at a time in a scheduling group, so the
+// second one of a group starts when the first is parsed. A large statement of
+// another group does not wait for them.
+SEASTAR_TEST_CASE(test_large_statements_are_parsed_one_at_a_time_in_a_scheduling_group) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        const sstring padding(16 * 1024, 'x');
+        // Each PREPARE has a text of its own, so that it is not found cached.
+        auto slow = [&] (int i) {
+            return fmt::format("SELECT * FROM ks.t WHERE pk IN ({}) /* {} {} */", fmt::join(std::vector<int>(20, 1), ", "), i, padding);
+        };
+        auto quick = [&] (int i) {
+            return fmt::format("SELECT * FROM ks.t /* {} {} */", i, padding);
+        };
+
+        // Two scheduling groups, and a way to prepare a statement in one.
+        auto sg1 = create_scheduling_group("large_parse_1", 100).get();
+        auto destroy1 = defer([&] () noexcept { destroy_scheduling_group(sg1).get(); });
+        auto sg2 = create_scheduling_group("large_parse_2", 100).get();
+        auto destroy2 = defer([&] () noexcept { destroy_scheduling_group(sg2).get(); });
+        auto& injector = utils::get_local_injector();
+        auto disable = defer([&] () noexcept { injector.disable("delay_thread_parse_token"); });
+        auto prepare_in = [&] (scheduling_group sg, sstring text) {
+            return with_scheduling_group(sg, [&e, text = std::move(text)] {
+                return e.prepare(text).discard_result();
+            });
+        };
+
+        // In one group, the quick statement waits until the slow one is parsed,
+        // so no token is parsed after it. The injection makes every token burn
+        // 0.5 ms of CPU, and the slow statement has several times the tokens of
+        // the quick one.
+        injector.enable("delay_thread_parse_token", false, {{"spin_us", "500"}});
+        auto slow_statement = prepare_in(sg1, slow(1));
+        wait_for_injection_enter("delay_thread_parse_token").get();
+        prepare_in(sg1, quick(1)).get();
+
+        // No token of the slow statement was parsed after the quick one.
+        auto entries_after_quick = injector.enter_count("delay_thread_parse_token");
+        slow_statement.get();
+        BOOST_REQUIRE_EQUAL(injector.enter_count("delay_thread_parse_token"), entries_after_quick);
+        injector.disable("delay_thread_parse_token");
+
+        // In another group, the quick statement is parsed while the slow one's
+        // parse is paused.
+        injector.enable("delay_thread_parse_token", true, {{"pause", "1"}});
+        slow_statement = prepare_in(sg1, slow(2));
+        wait_for_injection_enter("delay_thread_parse_token").get();
+        with_timeout(lowres_clock::now() + std::chrono::seconds(30), prepare_in(sg2, quick(2))).get();
+        injector.receive_message("delay_thread_parse_token");
+        slow_statement.get();
+    });
+}
+
+// A change to the schema of any table makes the prepared statements cache
+// drop every load in progress. So a PREPARE whose statement is parsed in a
+// thread across such a change is answered but not cached. The first EXECUTE
+// finds the id unprepared, and the driver prepares again.
+SEASTAR_TEST_CASE(test_schema_change_during_large_statement_parse_is_not_cached) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v text)").get();
+        e.execute_cql("CREATE TABLE ks.other (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+        const sstring value(20 * 1024, 'x');
+
+        // The parse of a PREPARE pauses, and another table changes meanwhile.
+        auto disable = defer([&] () noexcept { injector.disable("delay_thread_parse_token"); });
+        injector.enable("delay_thread_parse_token", true, {{"pause", "1"}});
+        auto prepare = e.prepare(fmt::format("INSERT INTO ks.t (pk, v) VALUES (1, '{}')", value));
+        wait_for_injection_enter("delay_thread_parse_token").get();
+        e.execute_cql("ALTER TABLE ks.other ADD c int").get();
+        injector.receive_message("delay_thread_parse_token");
+        auto id = prepare.get();
+
+        // The PREPARE got its answer, but the statement is not cached.
+        BOOST_REQUIRE(!qp.get_prepared(id));
     });
 }
 
