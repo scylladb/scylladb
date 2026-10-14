@@ -146,6 +146,11 @@ operation::addition::to_string(const column_definition& receiver) const {
 
 std::unique_ptr<operation>
 operation::addition::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
+    // Check this before preparing the value, so that a value which doesn't
+    // match the tuple's type doesn't hide this error.
+    if (receiver.type->is_tuple()) {
+        throw exceptions::invalid_request_exception(fmt::format("Invalid operation ({}) for tuple column {}", to_string(receiver), receiver.name_as_text()));
+    }
     auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
     verify_no_aggregate_functions(v, "SET clause");
 
