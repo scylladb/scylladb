@@ -18,7 +18,9 @@ namespace compaction {
 class compaction_reenabler {
     compaction_manager& _cm;
     compaction::compaction_group_view* _table;
-    compaction::compaction_state& _compaction_state;
+    // Null if compaction was not disabled, because the manager is stopped (see the constructor),
+    // or if moved from.
+    compaction::compaction_state* _compaction_state = nullptr;
     seastar::gate::holder _holder;
 
 public:
@@ -29,10 +31,6 @@ public:
 
     compaction::compaction_group_view* compacting_table() const noexcept {
         return _table;
-    }
-
-    const compaction::compaction_state& compaction_state() const noexcept {
-        return _compaction_state;
     }
 };
 
