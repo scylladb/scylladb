@@ -86,8 +86,9 @@ insert_statement::insert_statement(
         uint32_t bound_terms,
         schema_ptr s,
         std::unique_ptr<attributes> attrs,
-        cql_stats& stats)
-    : modification_statement{statement_type::INSERT, bound_terms, std::move(s), std::move(attrs), stats}
+        cql_stats& stats,
+        const modification_executor& executor)
+    : modification_statement{statement_type::INSERT, bound_terms, std::move(s), std::move(attrs), stats, executor}
 {
     set_audit_info(std::move(audit_info));
 }
@@ -198,16 +199,14 @@ void insert_statement::execute_operations_for_key(mutation& m, const clustering_
 }
 
 utils::chunked_vector<mutation> insert_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
-    auto mutations = make_mutations(keys);
+        const modification_spec& spec,
+        const update_parameters& params) const {
+    auto mutations = make_mutations(spec.keys);
     for (auto& m : mutations) {
-        for (auto&& range : ranges) {
+        for (auto&& range : spec.ranges) {
             auto prefix = row_key(range);
             open_row(*s, type, !_column_operations.empty(), m, prefix, params);
-            execute_operations_for_key(m, prefix, params, json_cache);
+            execute_operations_for_key(m, prefix, params, spec.json_cache);
         }
     }
 
@@ -336,9 +335,10 @@ insert_statement::insert_statement(cf_name name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
-    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
+    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+    const modification_executor& executor) const
 {
-    auto stmt = ::make_shared<cql3::statements::insert_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::insert_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, executor);
 
     // Created from an INSERT
     if (stmt->is_counter()) {
@@ -410,7 +410,8 @@ insert_json_statement::insert_json_statement(cf_name name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
-    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
+    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+    const modification_executor& executor) const
 {
     // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
     (void)_if_not_exists;
@@ -419,7 +420,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
     auto prepared_json_value = prepare_expression(_json_value, db, "", nullptr, make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     expr::verify_no_aggregate_functions(prepared_json_value, "JSON clause");
     expr::fill_prepare_context(prepared_json_value, ctx);
-    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
+    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, executor, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);
     return stmt;
 }

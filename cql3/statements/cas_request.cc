@@ -25,14 +25,13 @@ namespace cql3::statements {
 using namespace std::chrono;
 
 void cas_request::add_row_update(const modification_statement& stmt_arg,
-        std::vector<query::clustering_range> ranges_arg,
-        modification_statement::json_cache_opt json_cache_arg,
+        modification_spec spec_arg,
         const query_options& options_arg) {
+    throwing_assert(spec_arg.keys.size() == 1 && query::is_single_partition(spec_arg.keys.front()));
     // TODO: reserve updates array for batches
     _updates.emplace_back(cas_row_update{
         .statement = stmt_arg,
-        .ranges = std::move(ranges_arg),
-        .json_cache = std::move(json_cache_arg),
+        .spec = std::move(spec_arg),
         .options = options_arg});
 }
 
@@ -44,7 +43,7 @@ std::optional<mutation> cas_request::apply_updates(api::timestamp_type ts) const
     for (const cas_row_update& op: _updates) {
         update_parameters params(_schema, op.options, ts, op.statement.get_time_to_live(op.options), _rows);
 
-        auto statement_mutations = op.statement.apply_updates(_key, op.ranges, params, op.json_cache);
+        auto statement_mutations = op.statement.apply_updates(op.spec, params);
         // Append all mutations (in fact only one) to the consolidated one.
         for (mutation& m : statement_mutations) {
             if (mutation_set.has_value() == false) {
@@ -76,8 +75,8 @@ lw_shared_ptr<query::read_command> cas_request::read_command(query_processor& qp
             // row will do for the check.
             continue;
         }
-        ranges.reserve(op.ranges.size());
-        std::copy(op.ranges.begin(), op.ranges.end(), std::back_inserter(ranges));
+        ranges.reserve(op.spec.ranges.size());
+        std::copy(op.spec.ranges.begin(), op.spec.ranges.end(), std::back_inserter(ranges));
     }
     uint64_t max_rows = query::partition_max_rows;
     if (ranges.empty()) {
@@ -124,10 +123,10 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
 
 cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     static const clustering_key empty_ckey = clustering_key::make_empty();
-    if (_key.empty()) {
+    if (op.spec.keys.empty()) {
         throw exceptions::invalid_request_exception("Empty partition key range");
     }
-    const partition_key& pkey = _key.front().start()->value().key().value();
+    const partition_key& pkey = op.spec.keys.front().start()->value().key().value();
     // We must ignore statement clustering column restriction when
     // choosing a row to check the conditions. If there is no
     // exact match, choose static row to check if the statement
@@ -138,10 +137,10 @@ cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
     //   INSERT INTO t(p, s) VALUES(1, 1);
     //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
-    if (op.ranges.empty()) {
+    if (op.spec.ranges.empty()) {
         throw exceptions::invalid_request_exception("Empty clustering range");
     }
-    const clustering_key& ckey = op.ranges.front().start() ?  op.ranges.front().start()->value() : empty_ckey;
+    const clustering_key& ckey = op.spec.ranges.front().start() ?  op.spec.ranges.front().start()->value() : empty_ckey;
     auto row = _rows.find_row(pkey, ckey);
     auto ckey_ptr = &ckey;
     if (row == nullptr && !ckey.is_empty() &&
@@ -159,7 +158,7 @@ seastar::shared_ptr<cql_transport::messages::result_message>
 cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
                                   const column_set& columns,
                                   bool is_applied) const {
-    const partition_key& pkey = _key.front().start()->value().key().value();
+    const partition_key& pkey = partition().front().start()->value().key().value();
     const clustering_key empty_ckey = clustering_key::make_empty();
     auto result_set = std::make_unique<cql3::result_set>(metadata);
 

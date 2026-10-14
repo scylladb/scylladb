@@ -22,8 +22,9 @@ namespace cql3 {
 
 namespace statements {
 
-delete_statement::delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats)
-        : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats}
+delete_statement::delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats,
+        const modification_executor& executor)
+        : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats, executor}
 {
     set_audit_info(std::move(audit_info));
 }
@@ -94,13 +95,11 @@ void delete_statement::validate_where_clause_for_conditions() const {
 }
 
 utils::chunked_vector<mutation> delete_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
-    auto mutations = make_mutations(keys);
+        const modification_spec& spec,
+        const update_parameters& params) const {
+    auto mutations = make_mutations(spec.keys);
     for (auto& m : mutations) {
-        for (auto&& range : ranges) {
+        for (auto&& range : spec.ranges) {
             delete_row_range(m, range, params);
         }
     }
@@ -132,8 +131,8 @@ namespace raw {
 
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
-        std::unique_ptr<attributes> attrs, cql_stats& stats) const {
-    auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+        std::unique_ptr<attributes> attrs, cql_stats& stats, const modification_executor& executor) const {
+    auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats, executor);
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column().prepare_column_identifier(*schema);

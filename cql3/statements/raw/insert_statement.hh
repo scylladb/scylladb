@@ -45,7 +45,8 @@ public:
                   bool if_not_exists);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
-                prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
+                prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+                const modification_executor& executor) const override;
 
 };
 
@@ -66,7 +67,8 @@ public:
     insert_json_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, expr::expression json_value, bool if_not_exists, bool default_unset);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
-                prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
+                prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+                const modification_executor& executor) const override;
 
 };
 

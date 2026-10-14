@@ -31,16 +31,11 @@ public:
             uint32_t bound_terms,
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
-            cql_stats& stats);
-
-    void add_key_value(const column_definition& def, expr::expression value);
+            cql_stats& stats,
+            const modification_executor& executor);
 
     /// True if the statement names the given primary key column.
     bool names(const column_definition& def) const;
-
-    /// Checks that the statement names the whole primary key, and classifies an
-    /// IF [NOT] EXISTS condition.  Call once the operations and conditions are in.
-    void validate_addressed_row();
 
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const override;
 
@@ -49,10 +44,17 @@ public:
     virtual void validate_primary_key(const query_options& options) const override;
 
     virtual utils::chunked_vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
-            const std::vector<query::clustering_range>& ranges,
-            const update_parameters& params,
-            const json_cache_opt& json_cache) const override;
+            const modification_spec& spec,
+            const update_parameters& params) const override;
+
+private:
+    friend class raw::insert_statement;
+
+    void add_key_value(const column_definition& def, expr::expression value);
+
+    /// Checks that the statement names the whole primary key, and classifies an
+    /// IF [NOT] EXISTS condition.  Call once the operations and conditions are in.
+    void validate_addressed_row();
 
 protected:
     /// The value the statement gives the column, or nullptr if it does not name it.
@@ -75,8 +77,9 @@ public:
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
             cql_stats& stats,
+            const modification_executor& executor,
             expr::expression v, bool default_unset)
-        : insert_statement(std::move(audit_info), bound_terms, s, std::move(attrs), stats)
+        : insert_statement(std::move(audit_info), bound_terms, s, std::move(attrs), stats, executor)
         , _value(std::move(v))
         , _default_unset(default_unset) {
     }
