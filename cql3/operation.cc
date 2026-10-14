@@ -158,8 +158,9 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
             return std::make_unique<constants::adder>(receiver, std::move(v));
         }
         // Allow arithmetic on numeric non-counter columns in LWT updates
-        // (issue #10568). Build an expression that constants:setter will use.
-        if (receiver.type->is_arithmetic()) {
+        // (issue #10568), and string concatenation on string columns
+        // (SCYLLADB-5384). Build an expression that constants:setter will use.
+        if (receiver.type->is_arithmetic() || receiver.type->is_string()) {
             expr::expression arith_expr = expr::binary_operator(
                 expr::column_value{&receiver},
                 expr::oper_t::ADD,

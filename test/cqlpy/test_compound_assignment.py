@@ -68,10 +68,10 @@ def test_compound_assignment_mixed_with_other_assignments(cql, table1):
 
 # "+=" and "-=" are rejected on a column which is neither a counter nor a
 # collection, exactly like "X = X + <value>" is. We check this on the
-# boolean column b. We don't use a numeric column for this test, because
-# "+=" on a numeric column is allowed in an LWT update (see
-# test_compound_assignment_lwt_addition below), and without LWT, Scylla
-# rejects it with a different error message.
+# boolean column b. We don't use a numeric or string column for this test,
+# because "+=" on such a column is allowed in an LWT update (see
+# test_compound_assignment_lwt_addition below, and test_lwt.py), and without
+# LWT, Scylla rejects it with a different error message.
 def test_compound_assignment_non_counter_column(cql, table1):
     p = unique_key_int()
     with pytest.raises(InvalidRequest, match='counter'):
