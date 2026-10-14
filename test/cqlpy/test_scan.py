@@ -22,8 +22,8 @@ from cassandra.query import SimpleStatement
 # tuples of columns - such as (c2, c3) = (2,3) or (c2, c3) < (2,3).
 # This test focuses on cases which do not need ALLOW FILTERING. The next
 # test will focus on those that do.
-# Reproduces issue #64 and #4244
-@pytest.mark.xfail(reason="issues #64 and #4244")
+# Reproduces issue #4244
+@pytest.mark.xfail(reason="issue #4244")
 def test_multi_column_restrictions_ck(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, c3 int, PRIMARY KEY (p, c1, c2, c3)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (1, ?, ?, ?)")
@@ -41,7 +41,7 @@ def test_multi_column_restrictions_ck(cql, test_keyspace):
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND c1=1 AND c2=2 and c3=1")) == [(1,2,1)]
         # Reproduces #4244:
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND (c1, c2) = (1, 2) and c3=1")) == [(1,2,1)]
-        # Reproduces #64:
+        # Reproduces #4244:
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND c1=1 AND (c2, c3) = (2, 1)")) == [(1,2,1)]
         # Multi-column restrictions are only allowed on adjacent clustering
         # columns - it cannot involved non-adjacent clustering columns, or
@@ -58,7 +58,7 @@ def test_multi_column_restrictions_ck(cql, test_keyspace):
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND c1<1")) == [(0,0,0), (0,0,1), (0,0,2), (0,1,0), (0,1,1), (0,1,2), (0,2,0), (0,2,1), (0,2,2)]
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND c1=1 AND c2<1")) == [(1,0,0), (1,0,1), (1,0,2)]
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND (c1,c2) < (0,2)")) == [(0,0,0), (0,0,1), (0,0,2), (0,1,0), (0,1,1), (0,1,2)]
-        # Reproduces #64:
+        # Reproduces #4244:
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE p=1 AND c1=1 AND (c2,c3) < (1,2)")) == [(1,0,0), (1,0,1), (1,0,2), (1,1,0), (1,1,1)]
 
 # Test that if we have multi-column restrictions on the clustering key
@@ -99,7 +99,7 @@ def test_multi_column_range_restrictions_and_filtering(cql, test_keyspace):
 # We add another clustering key column to ensure that filtering *in*
 # a long partition is really needed - not just filtering on the partitions
 # (these are two different code paths).
-@pytest.mark.xfail(reason="issue #64")
+@pytest.mark.xfail(reason="issue #4244")
 def test_multi_column_restrictions_ck_filtering(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c0 int, c1 int, c2 int, c3 int, PRIMARY KEY (p, c0, c1, c2, c3)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c0, c1, c2, c3) VALUES (1, 1, ?, ?, ?)")
@@ -111,7 +111,7 @@ def test_multi_column_restrictions_ck_filtering(cql, test_keyspace):
         # Check various equality conditions with single and multi-column
         # restrictions. The conditions do not restrict p or c0, so they
         # require ALLOW FILTERING and use Scylla's filtering code path.
-        # All of the tests below reproduce #64 because the restriction
+        # All of the tests below reproduce #4244 because the restriction
         # "skipped" c0.
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE c1=1 ALLOW FILTERING")) == [(1,0,0), (1,0,1), (1,0,2), (1,1,0), (1,1,1), (1,1,2), (1,2,0), (1,2,1), (1,2,2)]
         assert list(cql.execute(f"SELECT c1,c2,c3 FROM {table} WHERE c2=1 ALLOW FILTERING")) == [(0,1,0), (0,1,1), (0,1,2), (1,1,0), (1,1,1), (1,1,2), (2,1,0), (2,1,1), (2,1,2)]
