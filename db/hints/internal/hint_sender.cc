@@ -306,6 +306,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     manager_logger.trace("hint_sender[{}]:send_hints: Hint is too old, skipping it, "
                         "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
                         _ep_key, now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
+                    ++shard_stats().discarded;
                     return make_ready_future<>();
                 }
 

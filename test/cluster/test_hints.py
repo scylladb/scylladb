@@ -2397,6 +2397,7 @@ async def test_hints_older_than_gc_grace_are_not_replayed(manager: ScyllaCluster
 
     metrics = await get_all_hint_metrics(manager.metrics, s1.ip_addr)
     assert metrics["sent_total"] == 2, f"Unexpected number of sent hints: {metrics}"
+    assert metrics["discarded"] == 2, f"Unexpected number of discarded hints: {metrics}"
 
     await manager.server_stop_gracefully(s1.server_id)
     cql = await manager.get_cql_exclusive(s2)
