@@ -19,6 +19,10 @@
 
 #include "enum_set.hh"
 
+namespace seastar {
+template <typename T> class sharded;
+}
+
 namespace gms {
 class feature_service;
 }
@@ -49,10 +53,6 @@ enum class value_type {
     boolean,
 };
 
-enum class version : uint8_t {
-    v0,
-};
-
 // A config value in its native type. One alternative per value_type, in the same order;
 // option::type() is the index of the active alternative.
 using config_value = std::variant<std::string_view, int64_t, double, bool>;
@@ -71,7 +71,6 @@ struct option {
     std::string_view name;
     std::string_view description;
     scope_set scopes;
-    version min_version;
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
@@ -82,11 +81,9 @@ struct option {
 };
 
 std::span<const option> options();
-// The registered option called `name`, or nullptr. With a version, only an option whose
-// min_version is at or below it; without one, any registered option. Whether the cluster
-// has enabled cluster config at all (current_version() returning nullopt) is the caller's
-// check, not this function's.
-const option* find(std::string_view name, std::optional<version> max_version = std::nullopt);
+// The registered option called `name`, or nullptr. Whether the cluster supports it is the
+// caller's check (is_supported()), not this function's.
+const option* find(std::string_view name);
 bool supports_scope(const option& opt, scope s);
 // True for an option resolved per table (KEYSPACE and/or TABLE scope), false for one
 // resolved per node (DATACENTER/RACK/NODE) or at CLUSTER scope only.
@@ -97,7 +94,12 @@ seastar::sstring feature_name(std::string_view option_name);
 // Feature names of options removed from the registry. A feature once enabled on a cluster
 // must stay supported, or a node without it cannot join, so these are advertised forever.
 std::span<const std::string_view> retired_feature_names();
-std::optional<version> current_version(const gms::feature_service& features);
+// True once every node has cluster config at all: the base feature that creates the
+// config tables and the CQL surface.
+bool enabled(const gms::feature_service& features);
+// True once every node has cluster config and knows `opt`, i.e. the base feature and the
+// option's own feature are both enabled.
+bool is_supported(const option& opt, const gms::feature_service& features);
 
 // Defaults of auto_repair_enabled and auto_repair_threshold_in_seconds. Also the defaults of the
 // deprecated yaml options auto_repair_enabled_default and
@@ -137,8 +139,10 @@ seastar::sstring canonicalize_value(const option& opt, std::string_view value);
 // Production code never calls these; they exist so tests can exercise scopes/types that no
 // shipping option covers yet (e.g. node-oriented DATACENTER/RACK/NODE scopes). The injected
 // option's `name` must have static storage duration (e.g. a string literal), since the
-// registry stores it as a view. Clear the injected options when the test is done.
-seastar::future<> add_test_only_option_on_all_shards(option opt);
+// registry stores it as a view. The option's feature is created and enabled on every shard,
+// so the injected option counts as supported. Clear the injected options when the test is
+// done; the features stay, which is harmless.
+seastar::future<> add_test_only_option_on_all_shards(seastar::sharded<gms::feature_service>& features, option opt);
 seastar::future<> clear_test_only_options_on_all_shards();
 
 }

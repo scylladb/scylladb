@@ -65,9 +65,8 @@ const db::cluster_config_registry::option& validate_cluster_option(query_process
         throw exceptions::invalid_request_exception(format("Unknown cluster config option '{}'", config_name));
     }
     // Known to this node but not yet to every node: cluster config is not enabled, or the
-    // option's registry version is above the one enabled cluster-wide.
-    const auto current_version = db::cluster_config_registry::current_version(qp.proxy().features());
-    if (!current_version || !db::cluster_config_registry::find(config_name, current_version)) {
+    // option's feature is not yet enabled cluster-wide.
+    if (!db::cluster_config_registry::is_supported(*option, qp.proxy().features())) {
         throw exceptions::invalid_request_exception(format(
                 "Cluster config option '{}' is not yet supported by this cluster. Upgrade all nodes to use it.", config_name));
     }

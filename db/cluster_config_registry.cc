@@ -19,7 +19,9 @@
 
 #include <fmt/format.h>
 
+#include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/core/thread.hh>
 
 #include "gms/feature_service.hh"
 #include "types/types.hh"
@@ -65,14 +67,12 @@ constexpr std::array registry_options = {
         .name = option_name::auto_repair_enabled,
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
-        .min_version = version::v0,
         .default_value = auto_repair_enabled_default,
     },
     option{
         .name = option_name::auto_repair_threshold_in_seconds,
         .description = "Time in seconds since the start of the last successful repair of a tablet after which it is eligible for automatic repair. A repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. 0 disables time-based automatic repair",
         .scopes = table_oriented_scopes,
-        .min_version = version::v0,
         .default_value = auto_repair_threshold_default_seconds,
     },
 };
@@ -224,10 +224,10 @@ std::span<const option> options() {
     return registry_options;
 }
 
-const option* find(std::string_view name, std::optional<version> max_version) {
+const option* find(std::string_view name) {
     for (const auto& opt : options()) {
         if (opt.name == name) {
-            return (max_version && *max_version < opt.min_version) ? nullptr : &opt;
+            return &opt;
         }
     }
     return nullptr;
@@ -253,11 +253,16 @@ std::span<const std::string_view> retired_feature_names() {
     return retired_option_features;
 }
 
-std::optional<version> current_version(const gms::feature_service& features) {
-    if (features.cluster_config) {
-        return version::v0;
+bool enabled(const gms::feature_service& features) {
+    return features.cluster_config;
+}
+
+bool is_supported(const option& opt, const gms::feature_service& features) {
+    if (!enabled(features)) {
+        return false;
     }
-    return std::nullopt;
+    const auto* feature = features.cluster_config_option_feature(opt.name);
+    return feature && *feature;
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
@@ -344,9 +349,13 @@ void add_test_only_option(option opt) {
 
 }
 
-seastar::future<> add_test_only_option_on_all_shards(option opt) {
-    return seastar::smp::invoke_on_all([opt] {
+seastar::future<> add_test_only_option_on_all_shards(seastar::sharded<gms::feature_service>& features, option opt) {
+    return features.invoke_on_all([opt] (gms::feature_service& fs) {
         add_test_only_option(opt);
+        // feature::enable() runs the feature's listeners, which expect a seastar thread.
+        return seastar::async([&fs, opt] {
+            fs.add_cluster_config_option_feature(opt.name).enable();
+        });
     });
 }
 

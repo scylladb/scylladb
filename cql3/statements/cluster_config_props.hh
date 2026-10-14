@@ -25,7 +25,7 @@
 
 // Shared, scope-parameterized handling of registry-backed cluster-config
 // properties in CQL statements. cf_prop_defs (scope::table) and ks_prop_defs
-// (scope::keyspace) both funnel through these helpers so the version-gating,
+// (scope::keyspace) both funnel through these helpers so the feature-gating,
 // keyword-collection, property-classification, value-validation and
 // update-extraction logic lives in one place and cannot drift between the
 // ALTER TABLE and ALTER KEYSPACE paths.
@@ -33,50 +33,49 @@ namespace cql3::statements::cluster_config_props {
 
 using seastar::sstring;
 
-// Throw if the cluster-config feature is not yet enabled cluster-wide but the
-// property set contains any registry option registered for scope `s`.
+// Throw if the property set contains a registry option registered for scope `s`
+// whose feature is not yet enabled cluster-wide.
 inline void ensure_registry_supported(
         db::cluster_config_registry::scope s,
         const property_definitions& props,
         const gms::feature_service& feat) {
-    if (db::cluster_config_registry::current_version(feat)) {
-        return;
-    }
     for (const auto& [name, value] : props.properties()) {
         const auto* opt = db::cluster_config_registry::find(name);
-        if (opt && db::cluster_config_registry::supports_scope(*opt, s)) {
+        if (opt && db::cluster_config_registry::supports_scope(*opt, s) && !db::cluster_config_registry::is_supported(*opt, feat)) {
             throw request_validations::invalid_request(
                     "Cluster config option '{}' is not yet supported by this cluster. Upgrade all nodes to use it.", name);
         }
     }
 }
 
-// The registry option names that are valid keywords at scope `s` in the active
-// registry version (used to extend a statement's allowed-keyword set).
+// The registry option names that are valid keywords at scope `s` and supported by
+// the cluster (used to extend a statement's allowed-keyword set).
 inline std::set<sstring> supported_config_keywords(
         db::cluster_config_registry::scope s, const gms::feature_service& feat) {
     std::set<sstring> result;
-    auto current_version = db::cluster_config_registry::current_version(feat);
-    if (!current_version) {
-        return result;
-    }
     for (const auto& opt : db::cluster_config_registry::options()) {
-        if (opt.min_version <= *current_version && db::cluster_config_registry::supports_scope(opt, s)) {
+        if (db::cluster_config_registry::supports_scope(opt, s) && db::cluster_config_registry::is_supported(opt, feat)) {
             result.emplace(opt.name);
         }
     }
     return result;
 }
 
-// True iff `name` is a registry option registered for scope `s` in the active version.
+// The registry option called `name` when it is registered for scope `s` and supported by
+// the cluster, else nullptr.
+inline const db::cluster_config_registry::option* supported_config_option(
+        db::cluster_config_registry::scope s, const sstring& name, const gms::feature_service& feat) {
+    const auto* opt = db::cluster_config_registry::find(name);
+    if (opt && db::cluster_config_registry::supports_scope(*opt, s) && db::cluster_config_registry::is_supported(*opt, feat)) {
+        return opt;
+    }
+    return nullptr;
+}
+
+// True iff `name` is a registry option registered for scope `s` and supported by the cluster.
 inline bool is_config_property(
         db::cluster_config_registry::scope s, const sstring& name, const gms::feature_service& feat) {
-    auto current_version = db::cluster_config_registry::current_version(feat);
-    if (!current_version) {
-        return false;
-    }
-    const auto* opt = db::cluster_config_registry::find(name, current_version);
-    return opt && db::cluster_config_registry::supports_scope(*opt, s);
+    return supported_config_option(s, name, feat) != nullptr;
 }
 
 // Validate every registry-backed property for scope `s`; throws
@@ -87,13 +86,9 @@ inline void validate_config_values(
         db::cluster_config_registry::scope s,
         const property_definitions& props,
         const gms::feature_service& feat) {
-    auto current_version = db::cluster_config_registry::current_version(feat);
-    if (!current_version) {
-        return;
-    }
     for (const auto& [name, value] : props.properties()) {
-        const auto* opt = db::cluster_config_registry::find(name, current_version);
-        if (!opt || !db::cluster_config_registry::supports_scope(*opt, s)) {
+        const auto* opt = supported_config_option(s, name, feat);
+        if (!opt) {
             continue;
         }
         if (props.is_null_keyword(name)) {
@@ -115,13 +110,9 @@ inline std::vector<std::pair<sstring, std::optional<sstring>>> config_updates(
         const property_definitions& props,
         const gms::feature_service& feat) {
     std::vector<std::pair<sstring, std::optional<sstring>>> updates;
-    auto current_version = db::cluster_config_registry::current_version(feat);
-    if (!current_version) {
-        return updates;
-    }
     for (const auto& [name, value] : props.properties()) {
-        const auto* opt = db::cluster_config_registry::find(name, current_version);
-        if (!opt || !db::cluster_config_registry::supports_scope(*opt, s)) {
+        const auto* opt = supported_config_option(s, name, feat);
+        if (!opt) {
             continue;
         }
         if (props.is_null_keyword(name)) {
