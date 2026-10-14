@@ -40,6 +40,9 @@ const std::vector<std::pair<seastar::sstring, size_t>>& auto_rf_keyspaces();
 
 bool is_auto_rf_keyspace(std::string_view ks_name);
 
+// The names of auto_rf_keyspaces().
+const std::unordered_set<seastar::sstring>& auto_rf_keyspace_names();
+
 // For each DC, the racks in which some non-auto-RF tablets keyspace places
 // replicas. nullopt means every rack of the DC (a numeric RF was found).
 // A DC missing from the map has no such keyspace.

@@ -30,6 +30,11 @@ bool is_auto_rf_keyspace(std::string_view ks_name) {
     return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) { return e.first == ks_name; });
 }
 
+const std::unordered_set<sstring>& auto_rf_keyspace_names() {
+    static const auto names = auto_rf_keyspaces() | std::views::keys | std::ranges::to<std::unordered_set<sstring>>();
+    return names;
+}
+
 bool is_auto_rf_rack_eligible(const auto_rf_eligible_racks& eligible, const sstring& dc, const sstring& rack) {
     auto it = eligible.find(dc);
     return it != eligible.end() && (!it->second.has_value() || it->second->contains(rack));
