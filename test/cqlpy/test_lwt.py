@@ -330,6 +330,38 @@ def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, scylla_only):
             row = cql.execute(f'SELECT {col} FROM {table} WHERE p = {p}').one()
             assert getattr(row, col) == 1, f'expected 1 after subtraction for type {t}, got {getattr(row, col)}'
 
+# Two arithmetic operations on the same column, e.g., SET r = r + 1, r = r + 2
+# should not be allowed in the same UPDATE because both will use the same old
+# value of r and will give nonsensical results.
+def test_lwt_counter_syntax_double_update(cql, table1, scylla_only):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'UPDATE {table1} SET r = r + 1, r = r + 2 WHERE p={p} AND c=1 IF EXISTS')
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'UPDATE {table1} SET r = r - 1, r = r - 2 WHERE p={p} AND c=1 IF EXISTS')
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'UPDATE {table1} SET r = r + 1, r = r - 2 WHERE p={p} AND c=1 IF EXISTS')
+
+# Two arithmetic operations on the same column in separate statements of the
+# same BATCH targeting the same row also should not be allowed: both statements
+# will read the same old value of r and write back independently, giving the
+# wrong result. This is a Scylla extension (issue #10568).
+def test_lwt_counter_syntax_double_update_batch(cql, table1, scylla_only):
+    p = unique_key_int()
+    # Two separate statements in the same BATCH targeting the same row and column
+    # both use the old value of r for their arithmetic, so the result would be wrong.
+    # This must be rejected.
+    with pytest.raises(InvalidRequest, match='BATCH'):
+        cql.execute(f'BEGIN BATCH UPDATE {table1} SET r = r + 1 WHERE p={p} AND c=1 IF EXISTS; UPDATE {table1} SET r = r + 2 WHERE p={p} AND c=1 IF EXISTS; APPLY BATCH')
+    with pytest.raises(InvalidRequest, match='BATCH'):
+        cql.execute(f'BEGIN BATCH UPDATE {table1} SET r = r - 1 WHERE p={p} AND c=1 IF EXISTS; UPDATE {table1} SET r = r - 2 WHERE p={p} AND c=1 IF EXISTS; APPLY BATCH')
+    # Two statements on different rows (different c) may each do arithmetic on r - no conflict.
+    cql.execute(f'UPDATE {table1} SET r = 0 WHERE p={p} AND c=1 IF r = null')
+    cql.execute(f'UPDATE {table1} SET r = 0 WHERE p={p} AND c=2 IF r = null')
+    cql.execute(f'BEGIN BATCH UPDATE {table1} SET r = r + 1 WHERE p={p} AND c=1 IF EXISTS; UPDATE {table1} SET r = r + 2 WHERE p={p} AND c=2 IF EXISTS; APPLY BATCH')
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1'))[0].r == 1
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=2'))[0].r == 2
+
 # Currently, the syntax "SET r = p + 1" (different column on LHS and RHS) is
 # NOT allowed - the CQL grammar only allows "X = X +/- value", so mismatching
 # columns is a syntax error, regardless of whether the statement has an IF
