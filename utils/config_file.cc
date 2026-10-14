@@ -432,9 +432,7 @@ future<> utils::config_file::broadcast_to_all_shards() {
     });
 }
 
-sstring utils::config_file::config_src::source_name() const noexcept {
-    auto src = source();
-
+sstring utils::config_source_name(utils::config_file::config_source src) noexcept {
     switch (src) {
     case utils::config_file::config_source::None:
         return "default";
@@ -448,9 +446,15 @@ sstring utils::config_file::config_src::source_name() const noexcept {
         return "cql";
     case utils::config_file::config_source::API:
         return "api";
+    case utils::config_file::config_source::ClusterConfig:
+        return "cluster_config";
     }
 
     __builtin_unreachable();
+}
+
+sstring utils::config_file::config_src::source_name() const noexcept {
+    return config_source_name(source());
 }
 
 std::string_view utils::config_file::config_src::status_name() const noexcept {

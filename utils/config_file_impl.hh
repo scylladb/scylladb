@@ -257,15 +257,30 @@ utils::config_file::config_source utils::config_file::named_value<T>::source() c
 }
 
 template<typename T>
+utils::config_file::liveness utils::config_file::named_value<T>::get_liveness() const noexcept {
+    return _liveness;
+}
+
+template<typename T>
 bool utils::config_file::named_value<T>::is_set() const {
     return _source > config_source::None;
 }
 
 template<typename T>
-utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator()(const T& t, config_source src) {
+void utils::config_file::named_value<T>::check_write_allowed(const T& t, config_source src) const {
     if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
         throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
     }
+    if (_source == config_source::ClusterConfig && (src == config_source::API || src == config_source::CQL)) {
+        throw std::invalid_argument(fmt::format("{} is managed by cluster config on this node; change it with "
+                "ALTER ... WITH {} = <value> at the scope that sets it, or remove that override with = NULL",
+                name(), name()));
+    }
+}
+
+template<typename T>
+utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator()(const T& t, config_source src) {
+    check_write_allowed(t, src);
     the_value().set(t);
     if (src > config_source::None) {
         _source = src;
@@ -275,14 +290,18 @@ utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator
 
 template<typename T>
 utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator()(T&& t, config_source src) {
-    if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-        throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
-    }
+    check_write_allowed(t, src);
     the_value().set(std::move(t));
     if (src > config_source::None) {
         _source = src;
     }
     return *this;
+}
+
+template<typename T>
+void utils::config_file::named_value<T>::restore(const T& t, config_source src) {
+    the_value().set(t);
+    _source = src;
 }
 
 template<typename T>
