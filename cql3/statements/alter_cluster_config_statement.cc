@@ -8,6 +8,8 @@
 
 #include "cql3/statements/alter_cluster_config_statement.hh"
 
+#include <fmt/format.h>
+
 #include <seastar/core/coroutine.hh>
 
 #include "cql3/statements/prepared_statement.hh"
@@ -76,7 +78,9 @@ const db::cluster_config_registry::option& validate_cluster_option(query_process
     }
     if (value) {
         if (auto error = db::cluster_config_registry::validate_value(*option, *value)) {
-            throw exceptions::invalid_request_exception(format("Invalid value for cluster config '{}': {}", config_name, *error));
+            // fmt::format, not unqualified format(): with a std::string_view argument ADL picks
+            // std::format, which renders the sstring as a range of characters.
+            throw exceptions::invalid_request_exception(fmt::format("Invalid value for cluster config '{}': {}", config_name, *error));
         }
     }
     return *option;
