@@ -1428,6 +1428,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
         break;
+        case global_topology_request::auto_rf_quiesce: {
+            // The auto-RF part of a quiesce request, for callers which must not wait for
+            // the tablet balancer (whose plan is never empty with auto repair enabled, for
+            // instance). It answers whether the reconciler, evaluated now, has nothing
+            // left to do. A due change is scheduled from here, for the same reason as in
+            // the quiesce handler, and the request is evaluated again once it is queued.
+            std::optional<sstring> error;
+            std::optional<lowres_clock::time_point> retry_at;
+            auto candidate = co_await find_auto_rf_change(guard, retry_at);
+            if (retry_at) {
+                _auto_rf_retry_timer.rearm(*retry_at);
+            }
+            if (candidate) {
+                co_await schedule_auto_rf_change(std::move(guard), *candidate);
+                co_return;
+            }
+            if (retry_at) {
+                error = sstring(auto_rf_backed_off_error);
+            } else if (co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
+                error = "auto-RF change in progress";
+            }
+            utils::chunked_vector<canonical_mutation> updates;
+            updates.push_back(canonical_mutation(
+                    topology_mutation_builder(guard.write_timestamp())
+                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                         .build()));
+            updates.push_back(canonical_mutation(
+                    topology_request_tracking_mutation_builder(req_id)
+                         .set("start_time", db_clock::now())
+                         .done(error)
+                         .build()));
+            co_await update_topology_state(std::move(guard), std::move(updates),
+                    error ? seastar::format("auto-RF quiesce request deferred: {}", *error) : sstring("auto-RF quiesce request completed"));
+        }
+        break;
         case global_topology_request::snapshot_tables: {
             rtlogger.info("SNAPSHOT TABLES requested");
             topology_mutation_builder builder(guard.write_timestamp());

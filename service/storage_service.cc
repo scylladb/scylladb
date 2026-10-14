@@ -6694,7 +6694,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 }
 
-future<utils::UUID> storage_service::submit_quiesce_topology_request() {
+future<utils::UUID> storage_service::submit_quiesce_topology_request(global_topology_request type) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         auto request_id = guard.new_group0_state_id();
@@ -6704,11 +6704,12 @@ future<utils::UUID> storage_service::submit_quiesce_topology_request() {
 
         topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
         rtbuilder.set("done", false)
-                 .set("request_type", global_topology_request::quiesce);
+                 .set("request_type", type);
 
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            ::format("quiesce topology request from {}", _group0->group0_server().id()));
+            ::format("{} request from {}", type == global_topology_request::quiesce ? "quiesce topology" : "auto-RF quiesce",
+                    _group0->group0_server().id()));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
@@ -6811,6 +6812,40 @@ future<> storage_service::await_topology_quiesced() {
     // by the next run rather than by that one, so nobody is given an answer which was
     // computed before it asked.
     co_await _quiesce_topology.trigger_later();
+}
+
+future<> storage_service::await_auto_rf_quiesced() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_await container().invoke_on(0, [] (auto& ss) {
+            return ss.await_auto_rf_quiesced();
+        });
+        co_return;
+    }
+
+    if (!_feature_service.auto_replication_factor) {
+        // Auto-RF does nothing until the feature is enabled, so there is nothing to wait for.
+        co_return;
+    }
+
+    while (true) {
+        auto request_id = co_await submit_quiesce_topology_request(global_topology_request::auto_rf_quiesce);
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (error.empty()) {
+            co_return;
+        }
+        slogger.info("auto-RF quiesce request {}: {}", request_id, error);
+        // A change in progress commits topology changes as it advances, and a backed-off
+        // one is retried with one, so either signals the event. The timeout covers a
+        // signal that came before this wait started.
+        try {
+            co_await _topology_state_machine.event.wait(auto_rf_backoff_max);
+        } catch (const seastar::condition_variable_timed_out&) {
+        }
+        co_await _topology_state_machine.await_not_busy();
+    }
 }
 
 future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t expected_version) {
