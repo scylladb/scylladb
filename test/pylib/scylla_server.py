@@ -557,29 +557,6 @@ class ScyllaServer:
 
         return size
 
-    async def install_and_start(self,
-                                api: ScyllaRESTAPIClient,
-                                expected_error: Optional[str] = None,
-                                expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> None:
-        """Setup and start this server."""
-
-        await self.install()
-
-        self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
-
-        try:
-            await self.start(api, expected_error, expected_server_up_state)
-        except:
-            await self.stop()
-            raise
-
-        if self.cmd:
-            self.logger.info("started server at host %s in %s, pid %d", self.ip_addr,
-                         self.workdir.name, self.cmd.pid)
-        elif expected_error:
-            self.logger.info("starting server at host %s in %s failed with an expected error",
-                             self.ip_addr, self.workdir.name)
-
     @property
     def is_running(self) -> bool:
         """Check the server subprocess is up"""
