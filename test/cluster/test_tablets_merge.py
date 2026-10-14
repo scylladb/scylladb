@@ -10,7 +10,7 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace, feature_configs, FeatureConfigurations, \
-    FeatureConfig, count_rows
+    FeatureConfig, count_rows, quiesce_and_disable_tablet_balancing
 
 import pytest
 import asyncio
@@ -428,6 +428,11 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
 
     await check_logs("after split completion")
 
+    # A migration during the flush-and-compact loop below can move uncompacted data onto
+    # a node which already compacted, and the table then stays too large to merge. Keep
+    # the balancer still until the deletes are compacted away.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
+
     delete_keys = range(total_keys - 1)
     await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
     keys = range(total_keys - 1, total_keys)
@@ -437,6 +442,8 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
         await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+    await manager.enable_tablet_balancing()
 
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
