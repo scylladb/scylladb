@@ -481,10 +481,20 @@ class ScyllaCluster:
             server._per_server_cmdline_options = list(cmdline or [])
             self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
+            await server.install()
             if start:
-                await server.install_and_start(self.api, expected_error, expected_server_up_state)
-            else:
-                await server.install()
+                self.logger.info("starting server at host %s in %s...", server.ip_addr, server.workdir.name)
+                try:
+                    await server.start(self.api, expected_error, expected_server_up_state)
+                except:
+                    await server.stop()
+                    raise
+                if server.cmd:
+                    self.logger.info("started server at host %s in %s, pid %d", server.ip_addr,
+                                     server.workdir.name, server.cmd.pid)
+                elif expected_error:
+                    self.logger.info("starting server at host %s in %s failed with an expected error",
+                                     server.ip_addr, server.workdir.name)
         except asyncio.CancelledError:
             if server is not None:
                 # Cancelled mid-start, e.g. by the cluster's loop shutting down
