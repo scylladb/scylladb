@@ -1263,7 +1263,6 @@ def testCompactStorage(cql, test_keyspace):
         assert_rows2(execute(cql, table, "INSERT INTO %s (partition, key, owner) VALUES ('a', 'c', 'x') IF NOT EXISTS"), [row(True)], [row(True,None,None,None)])
 
 # SelectGroupByTest
-@pytest.mark.xfail(reason="issue #4244")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, 1, 3, 6)")
@@ -1485,7 +1484,7 @@ def testGroupByWithoutPaging(cql, test_keyspace):
                    row(1, 2, 2, 6),
                    row(1, 4, 2, 6))
 
-        # Reproduces #4244:
+        # Reproduces #2060 (the token part of #4244):
         assert_rows(execute(cql, table, "SELECT a, b, c, d FROM %s WHERE a = 1 and token(a) = token(1) GROUP BY b, c"),
                    row(1, 2, 1, 3),
                    row(1, 2, 2, 6),
