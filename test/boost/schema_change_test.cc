@@ -950,7 +950,7 @@ SEASTAR_TEST_CASE(test_cluster_config_schema_tables_are_registered) {
 // (and therefore schema digest/version computation) when the CLUSTER_CONFIG_TABLES
 // schema feature is set. Otherwise an upgraded node would perturb the schema digest
 // of a mixed-version cluster in which the cluster-config cluster feature
-// (CLUSTER_CONFIG_REGISTRY_V0) is not yet enabled, breaking schema agreement
+// (CLUSTER_CONFIG) is not yet enabled, breaking schema agreement
 // with nodes that predate cluster config.
 SEASTAR_TEST_CASE(test_cluster_config_tables_gated_by_schema_feature) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
