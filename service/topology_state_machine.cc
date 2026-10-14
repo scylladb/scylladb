@@ -8,6 +8,7 @@
  */
 
 #include "topology_state_machine.hh"
+#include "service/topology_utils.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
@@ -270,7 +271,7 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
     }
     auto op = locator::rf_rack_topology_operation{
             locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
-    if (!db.check_rf_rack_validity_with_topology_change(tmptr, std::move(op))) {
+    if (!db.check_rf_rack_validity_with_topology_change(tmptr, std::move(op), auto_rf_keyspace_names())) {
         return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
     }
     return node_validation_success {};

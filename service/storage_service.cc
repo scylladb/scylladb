@@ -2742,8 +2742,8 @@ future<bool> storage_service::auto_rf_may_still_fix_removal(group0_guard guard, 
         co_return false;
     }
     locator::rf_rack_topology_operation op{locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
-    static const auto ignored = auto_rf_keyspaces() | std::views::keys | std::ranges::to<std::unordered_set<sstring>>();
-    if (!_db.local().check_rf_rack_validity_with_topology_change(tmptr, std::move(op), ignored)) {
+    const auto& auto_rf_names = auto_rf_keyspace_names();
+    if (!_db.local().check_rf_rack_validity_with_topology_change(tmptr, std::move(op), auto_rf_names, auto_rf_names)) {
         co_return false;
     }
     // Auto-RF can only make the removal valid by giving the rack up. Wait only while
