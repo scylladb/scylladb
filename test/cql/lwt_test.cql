@@ -767,7 +767,7 @@ create table lwt (a list<int>, b int, c int, primary key (a, b, c));
 -- limitations of the query language
 --
 create table lwt (a int, b int, c int, primary key (a, b));
--- error: can't use token and non-token restrictions
+-- error: can't use token restrictions in UPDATE (even with restrictions on the partition key)
 update lwt set c = 1 where a = 1 and b = 1 and token(a) > 0 and token(a) < 0 if c = 1;
 -- error: can't use eq and non-eq restriction
 update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;

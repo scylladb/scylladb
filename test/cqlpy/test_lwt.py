@@ -12,6 +12,8 @@ import re
 import pytest
 from cassandra.protocol import InvalidRequest, SyntaxException
 from cassandra.cluster import NoHostAvailable
+from cassandra.query import SimpleStatement
+from cassandra import ConsistencyLevel
 
 from .util import new_test_table, unique_key_int
 
@@ -495,3 +497,37 @@ def test_lwt_counter_syntax_decimal_magnitude_difference(cql, test_keyspace, scy
         cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e100000000)")
         with pytest.raises(InvalidRequest):
             cql.execute(f"UPDATE {table} SET d = d + 1 WHERE p = {p} IF EXISTS")
+
+# A SELECT with SERIAL consistency must read a single partition. A query
+# restricting both the partition key and the token reads a single partition
+# when the partition key is restricted by EQ, also when it uses aggregation
+# (an aggregation over several partitions may be run in parallel on several
+# nodes, which isn't possible with SERIAL consistency).
+def test_token_and_partition_key_serial_count(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c) VALUES (1, 1)')
+        t = list(cql.execute(f'SELECT token(p) FROM {table} WHERE p = 1'))[0][0]
+        for where in [f'p = 1 AND token(p) = {t}', f'p = 1 AND token(p) >= {t}']:
+            stmt = SimpleStatement(f'SELECT count(*) FROM {table} WHERE {where}', consistency_level=ConsistencyLevel.SERIAL)
+            assert list(cql.execute(stmt)) == [(1,)]
+
+# Like test_token_and_partition_key_serial_count, but the SELECT reads the
+# row instead of counting it.
+def test_token_and_partition_key_serial_eq(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c) VALUES (1, 1)')
+        t = list(cql.execute(f'SELECT token(p) FROM {table} WHERE p = 1'))[0][0]
+        stmt = SimpleStatement(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) = {t}', consistency_level=ConsistencyLevel.SERIAL)
+        assert list(cql.execute(stmt)) == [(1, 1)]
+
+# A SELECT with SERIAL consistency must read a single partition. When the
+# token restriction filters out the only partition named by the partition
+# key restriction, Cassandra returns an empty result, but Scylla complains
+# that the query doesn't read a single partition.
+@pytest.mark.xfail(reason="SCYLLADB-5388")
+def test_token_and_partition_key_serial(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c) VALUES (1, 1)')
+        t = list(cql.execute(f'SELECT token(p) FROM {table} WHERE p = 1'))[0][0]
+        stmt = SimpleStatement(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) > {t}', consistency_level=ConsistencyLevel.SERIAL)
+        assert list(cql.execute(stmt)) == []

@@ -109,6 +109,10 @@ struct token_range_restrictions {
 
 struct single_column_partition_range_restrictions {
     std::vector<predicate> per_column_restrictions;
+    // Restrictions on token(), if the WHERE clause also has them: the
+    // partitions named by per_column_restrictions whose token doesn't satisfy
+    // them are dropped.
+    std::optional<predicate> token_filter;
 };
 
 using partition_range_restrictions = std::variant<
@@ -204,6 +208,11 @@ public:
 
     bool partition_range_is_simple = true; ///< False iff partition_range implies a Cartesian product.
     bool pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
+    /// True iff both token() and partition key columns are restricted, but not
+    /// all partition key columns by EQ or IN (see has_token_filter()), so the
+    /// token restrictions define the partition range and the restrictions on
+    /// the partition key columns are filtered.
+    bool pk_filtered_in_token_range = false;
     bool has_multi_column = false; ///< True iff clustering_columns_restrictions has a multi-column restriction.
     bool ck_is_on_collection = false; ///< True iff clustering_columns_restrictions has a collection restriction (CONTAINS/CONTAINS_KEY).
     bool ck_is_all_eq = true; ///< True iff all CK restrictions use EQ operator only.
@@ -263,6 +272,13 @@ public:
     /// True if the clustering restrictions name a range of rows rather than whole rows.
     bool clustering_key_restrictions_have_slice() const;
     bool has_token_restrictions() const;
+    /// True if the partition key is restricted by EQ or IN on all its columns,
+    /// and also by restrictions on token(), which filter these partitions.
+    bool has_token_filter() const;
+    /// True if both token() and partition key columns are restricted.
+    bool has_token_and_partition_key_restrictions() const {
+        return has_token_filter() || pk_filtered_in_token_range;
+    }
     bool has_eq_restriction_on_column(const column_definition&) const;
     bool has_partition_key_unrestricted_components() const;
     bool partition_key_restrictions_is_empty() const;

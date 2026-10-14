@@ -533,3 +533,15 @@ def test_allow_filtering_index_intersection_sai(cql, test_keyspace, cassandra_bu
         check_af_mandatory(cql, (table, everything),
             "x = 1 AND y = 1",
             lambda r : r.x == 1 and r.y == 1)
+
+# When the partition key column is restricted by a slice - not by EQ or
+# IN - in addition to token(p), the partition key restriction needs
+# filtering, so ALLOW FILTERING is required.
+def test_restriction_token_and_nontoken_needs_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY") as table:
+        cql.execute(f"INSERT INTO {table} (p) VALUES (1)")
+        t = list(cql.execute(f"SELECT token(p) FROM {table} WHERE p = 1"))[0][0]
+        for where, expected in [("p < 1", []), ("p <= 1", [(1,)]), ("p > 1", []), ("p >= 1", [(1,)])]:
+            with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+                cql.execute(f"SELECT p FROM {table} WHERE token(p) = {t} AND {where}")
+            assert list(cql.execute(f"SELECT p FROM {table} WHERE token(p) = {t} AND {where} ALLOW FILTERING")) == expected
