@@ -1214,7 +1214,6 @@ def testListWithElementsBiggerThan64K(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT l FROM %s WHERE k = 0"), [[largeText, "v2"]])
 
-@pytest.mark.xfail(reason="fails because of long unprepared inserted, issue #7745")
 def testMapsWithElementsBiggerThan64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m frozen<map<text, text>>)") as table:
         largeText = 'x' * (65536 + 10)
@@ -1243,7 +1242,6 @@ def testMapsWithElementsBiggerThan64K(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT m FROM %s WHERE k = 0"),
                    [{largeText: "v1", "k2": largeText}])
 
-@pytest.mark.xfail(reason="fails because of long unprepared inserted, issue #7745")
 def testSetsWithElementsBiggerThan64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s frozen<set<text>>)") as table:
         largeText = 'x' * (65536 + 10)
