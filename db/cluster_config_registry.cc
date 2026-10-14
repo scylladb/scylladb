@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -88,6 +89,9 @@ constexpr bool all_registry_options_are_single_domain() {
 static_assert(all_registry_options_are_single_domain(),
         "A cluster config option must not mix table-oriented (KEYSPACE/TABLE) and "
         "node-oriented (DATACENTER/RACK/NODE) scopes");
+
+// The feature names of options removed from the registry; see retired_feature_names().
+constexpr std::array<std::string_view, 0> retired_option_features = {};
 
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
@@ -235,6 +239,18 @@ bool supports_scope(const option& opt, scope s) {
 
 bool is_table_oriented(const option& opt) {
     return opt.scopes.intersects(table_only_scopes);
+}
+
+seastar::sstring feature_name(std::string_view option_name) {
+    static constexpr std::string_view prefix = "CLUSTER_CONFIG_";
+    seastar::sstring name(seastar::sstring::initialized_later(), prefix.size() + option_name.size());
+    const auto out = std::ranges::copy(prefix, name.begin()).out;
+    std::ranges::transform(option_name, out, [] (const unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return name;
+}
+
+std::span<const std::string_view> retired_feature_names() {
+    return retired_option_features;
 }
 
 std::optional<version> current_version(const gms::feature_service& features) {

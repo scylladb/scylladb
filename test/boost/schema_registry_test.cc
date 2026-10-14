@@ -113,6 +113,31 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_fe
     BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
 }
 
+// Each registry option is advertised as a cluster feature of its own, named after the
+// option, so that a node accepts the option only once every node knows it.
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_options_are_advertised_as_features) {
+    namespace ccr = db::cluster_config_registry;
+    dummy_init dummy;
+
+    const auto* auto_repair_enabled = ccr::find("auto_repair_enabled");
+    BOOST_REQUIRE(auto_repair_enabled != nullptr);
+    const auto name = ccr::feature_name(auto_repair_enabled->name);
+    BOOST_REQUIRE_EQUAL(name, "CLUSTER_CONFIG_AUTO_REPAIR_ENABLED");
+    BOOST_REQUIRE(dummy.fs.supported_feature_set().contains(name));
+    BOOST_REQUIRE(dummy.fs.registered_features().contains(name));
+    // The option's feature is found by option name, without building the feature name.
+    BOOST_REQUIRE(dummy.fs.cluster_config_option_feature("auto_repair_enabled") == &dummy.fs.registered_features().at(name).get());
+    BOOST_REQUIRE(dummy.fs.cluster_config_option_feature("no_such_option") == nullptr);
+
+    // add_feature() hands out the existing feature for a name already registered,
+    // declared or created.
+    BOOST_REQUIRE(&dummy.fs.add_feature(name) == &dummy.fs.registered_features().at(name).get());
+    BOOST_REQUIRE(&dummy.fs.add_feature("CLUSTER_CONFIG") == &dummy.fs.cluster_config);
+    auto& created = dummy.fs.add_feature("TEST_CREATED_FEATURE");
+    BOOST_REQUIRE(&dummy.fs.add_feature("TEST_CREATED_FEATURE") == &created);
+    BOOST_REQUIRE(dummy.fs.supported_feature_set().contains("TEST_CREATED_FEATURE"));
+}
+
 SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_declares_option_scope_and_type_rules) {
     const auto* auto_repair_enabled = db::cluster_config_registry::find("auto_repair_enabled");
     BOOST_REQUIRE(auto_repair_enabled != nullptr);
