@@ -33,14 +33,18 @@ namespace cql3 {
 namespace util {
 
 
-void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func,
+        noncopyable_function<void()>* on_token);
 
+// on_token, if set, is called on every token the lexer produces, the parser
+// matches, and the parse frees at its end. Debug builds do not accept it, see
+// do_with_parser_impl().
 template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
-Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f) {
+Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f, noncopyable_function<void()>* on_token = nullptr) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, d, [&] (cql3_parser::CqlParser& parser) {
         ret.emplace(f(parser));
-    });
+    }, on_token);
     return std::move(*ret);
 }
 

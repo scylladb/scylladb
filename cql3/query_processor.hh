@@ -184,7 +184,8 @@ public:
             std::string_view keyspace,
             dialect d);
 
-    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d);
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d,
+            noncopyable_function<void()>* on_token = nullptr);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(utils::chunked_string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,

@@ -849,7 +849,7 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
 }
 
 std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(utils::chunked_string_view query, dialect d) {
+query_processor::parse_statement(utils::chunked_string_view query, dialect d, noncopyable_function<void()>* on_token) {
     try {
         {
             const char* error_injection_key = "query_processor-parse_statement-test_failure";
@@ -860,7 +860,7 @@ query_processor::parse_statement(utils::chunked_string_view query, dialect d) {
                 }
             });
         }
-        auto statement = util::do_with_parser(query, d, std::mem_fn(&cql3_parser::CqlParser::query));
+        auto statement = util::do_with_parser(query, d, std::mem_fn(&cql3_parser::CqlParser::query), on_token);
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");
         }

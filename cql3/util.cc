@@ -30,7 +30,8 @@ void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** stack_b
 
 namespace cql3::util {
 
-static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f,
+        noncopyable_function<void()>* on_token) {
     // ANTLR3 does pointer arithmetic on char* pointers, so we must linearize.
     // Use a thread-local reusable_buffer to avoid a heap allocation per call.
     using namespace std::chrono_literals;
@@ -54,17 +55,29 @@ static void do_with_parser_impl_impl(utils::chunked_string_view chunked_cql, dia
     cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(cql.data()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(cql.size()), nullptr};
     cql3_parser::CqlLexer lexer{&input};
     lexer.set_error_listener(lexer_error_collector);
+    lexer.set_on_token(on_token);
     cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
     cql3_parser::CqlParser parser{&tstream};
     parser.set_error_listener(parser_error_collector);
     parser.set_dialect(d);
+    parser.set_on_token(on_token);
     f(parser);
+    if (on_token) {
+        // The token stream's destructor would free every token at once, which
+        // takes long for a long text. Free them one by one, calling the hook.
+        auto& tokens = tstream.get_tokens();
+        while (!tokens.empty()) {
+            tokens.pop_back();
+            (*on_token)();
+        }
+    }
 }
 
 #ifndef DEBUG
 
-void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
-    return do_with_parser_impl_impl(cql, d, std::move(f));
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f,
+        noncopyable_function<void()>* on_token) {
+    return do_with_parser_impl_impl(cql, d, std::move(f), on_token);
 }
 
 #else
@@ -143,7 +156,7 @@ static void thunk(int p1, int p2) {
     // Complete stack switch started in do_with_parser_impl()
     __sanitizer_finish_switch_fiber(nullptr, &san.stack_bottom, &san.stack_size);
     try {
-        do_with_parser_impl_impl(args->cql, args->d, std::move(args->func));
+        do_with_parser_impl_impl(args->cql, args->d, std::move(args->func), nullptr);
     } catch (...) {
         args->ex = std::current_exception();
     }
@@ -152,7 +165,11 @@ static void thunk(int p1, int p2) {
     setcontext(&args->caller_stack);
 };
 
-void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f,
+        noncopyable_function<void()>* on_token) {
+    // All parses on this shard share the large stack, so none may yield while
+    // running on it, and yielding is what the token hook is for.
+    throwing_assert(!on_token);
     static thread_local parser_stack stack;
     thunk_args args{
         .cql = cql,
@@ -165,7 +182,7 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
     if (stack.bottom() <= (char*)&uc && (char*)&uc < stack.bottom() + stack.size()) {
         // We are already running on the large stack, so just call the
         // parser directly.
-        return do_with_parser_impl_impl(cql, d, std::move(f));
+        return do_with_parser_impl_impl(cql, d, std::move(f), nullptr);
     }
     uc.uc_stack.ss_sp = stack.bottom();
     uc.uc_stack.ss_size = stack.size();
