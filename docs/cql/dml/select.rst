@@ -448,8 +448,9 @@ For example::
 .. note::
 
    Vector indexes are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
-   Vector indexes do not support all ScyllaDB features (e.g., tracing, paging, and grouping). More information
-   about Vector Search is available in the
+   Vector indexes do not support all ScyllaDB features (e.g., tracing, paging, grouping, and ``SELECT DISTINCT``).
+   ``SELECT DISTINCT`` is currently accepted in queries ordered by ``ANN OF`` or ``ANN()``, but does not remove
+   duplicate partition keys. More information about Vector Search is available in the
    `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
 
 .. _fulltext-queries:
@@ -498,6 +499,9 @@ full-text and a vector search, fuse them into one ordering in a
 
 A ``LIMIT`` clause is mandatory; queries without ``LIMIT`` are rejected. The
 specified value must not exceed 1000.
+
+``SELECT DISTINCT`` is not supported in queries ordered by ``BM25()``. It is
+currently accepted, but does not remove duplicate partition keys.
 
 **Examples:**
 
