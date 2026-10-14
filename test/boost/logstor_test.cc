@@ -4056,6 +4056,42 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_serves_a_hit_from_the_ca
     }
 }
 
+// A hit honors the buffer bound like any other read: with the smallest bound each fill_buffer()
+// delivers one fragment, and the fragments not delivered yet wait for the next call. The row is
+// charged to the permit while it waits, and the charge is released when the row is pushed.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_hit_honors_max_buffer_size) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    assert_that(env.make_reader(singular_range(ms[0]))).produces(ms[0]).produces_end_of_stream();
+
+    const auto hits = env.cache_stats().partition_hits;
+    auto rd = env.make_reader(singular_range(ms[0]));
+    auto close_rd = deferred_close(rd);
+    rd.set_max_buffer_size(1);
+
+    std::vector<mutation_fragment_v2::kind> kinds;
+    // The memory charged to the permit after each fill, when the fragments of the fill are gone.
+    std::vector<ssize_t> memory;
+    while (!rd.is_end_of_stream()) {
+        rd.fill_buffer().get();
+        while (!rd.is_buffer_empty()) {
+            kinds.push_back(rd.pop_mutation_fragment().mutation_fragment_kind());
+        }
+        memory.push_back(rd.permit().consumed_resources().memory);
+    }
+    BOOST_REQUIRE_EQUAL(env.cache_stats().partition_hits, hits + 1);
+    BOOST_REQUIRE_EQUAL(memory.size(), 3);
+    const std::vector<mutation_fragment_v2::kind> expected{
+        mutation_fragment_v2::kind::partition_start,
+        mutation_fragment_v2::kind::clustering_row,
+        mutation_fragment_v2::kind::partition_end,
+    };
+    BOOST_REQUIRE(kinds == expected);
+    BOOST_REQUIRE_GT(memory[0], memory[1]);
+    BOOST_REQUIRE_EQUAL(memory[1], memory[2]);
+}
+
 // A cached partition that does not carry the key it was looked up by - a hash collision, or a
 // corruption - is rejected by the reader with key_mismatch_error.
 SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_rejects_a_cached_partition_of_another_key) {
