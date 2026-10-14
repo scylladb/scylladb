@@ -43,6 +43,7 @@ struct hint_stats {
     uint64_t discarded                  = 0;
     uint64_t send_errors                = 0;
     uint64_t corrupted_files            = 0;
+    uint64_t discarded_segments         = 0;
 };
 
 } // namespace internal
