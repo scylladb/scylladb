@@ -419,6 +419,26 @@ away, stay on a shard after its last tablet has left it, and are dropped with th
 Gauges such as `leaders`, `uncommitted_entries` or `blocked_followers` are summed over the
 running servers of the table instead.
 
+The requests to a table are counted under the `scylla_strong_consistency_table_` prefix,
+with the same labels and flags: latency histograms of writes and of reads (with a
+`read_type` label) and error counters (with a `reason` label: `timeout`, `status_unknown`
+for writes, or `other`). A request counts only on the node it ends on, not on a node that
+redirected it, so no request is counted on more than one node. Its latency is the time it
+spent on the shard that ran it, as in the node-wide histograms. A request that fails before
+it reaches the raft group, for example one that times out while the group is still starting
+or finds no live replica, is not counted per table, and one that fails because the table
+was dropped counts only in the node-wide errors. The per-table series are not split by
+scheduling group, and the retry and bounce counters and the in-flight gauges have no
+per-table version.
+
+Applying a table's raft log entries to the replica on a node is counted under the
+`scylla_strong_consistency_state_machine_` prefix: `apply_latency` is the time to apply one
+write, including resolving the schema it was written with, and `schema_barrier_waits` counts
+the times that resolution waited for a group 0 read barrier because the node did not know
+the schema yet. Every replica applies every entry, so `apply_latency` counts each write on
+every replica, except the committed entries a node applies from its commitlog when it
+starts.
+
 # Tablet split
 
 A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
