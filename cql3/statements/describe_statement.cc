@@ -77,17 +77,14 @@ namespace statements {
 namespace {
 
 // Collects the registry options visible at `s` scope, so DESCRIBE keeps emitting the full set
-// as the registry grows instead of naming one option. Options above the cluster's registry
-// version are excluded, mirroring the write side: what ALTER refuses to store, DESCRIBE does
-// not describe. With no version (feature not enabled) no option is visible.
+// as the registry grows instead of naming one option. Options whose feature is not yet
+// enabled cluster-wide are excluded, mirroring the write side: what ALTER refuses to store,
+// DESCRIBE does not describe.
 std::vector<std::string_view> config_option_names_for_scope(db::cluster_config_registry::scope s,
-        std::optional<db::cluster_config_registry::version> current_version) {
+        const gms::feature_service& features) {
     std::vector<std::string_view> names;
-    if (!current_version) {
-        return names;
-    }
     for (const auto& opt : db::cluster_config_registry::options()) {
-        if (opt.min_version <= *current_version && db::cluster_config_registry::supports_scope(opt, s)) {
+        if (db::cluster_config_registry::supports_scope(opt, s) && db::cluster_config_registry::is_supported(opt, features)) {
             names.push_back(opt.name);
         }
     }
@@ -474,8 +471,7 @@ future<description> keyspace_description(config_snapshot& snapshot, const lw_sha
     }
 
     std::vector<described_config_option> options;
-    auto version = db::cluster_config_registry::current_version(db.features());
-    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::keyspace, version)) {
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::keyspace, db.features())) {
         if (auto described = co_await described_keyspace_config_option(snapshot, ks_meta->name(), config_name)) {
             options.push_back(std::move(*described));
         }
@@ -699,8 +695,7 @@ future<utils::chunked_vector<description>> table(config_snapshot& snapshot, cons
     auto describe_helper = replica::make_schema_describe_helper(schema, db);
     auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
     std::vector<described_config_option> table_config_options;
-    auto version = db::cluster_config_registry::current_version(db.features());
-    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table, version)) {
+    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table, db.features())) {
         if (auto described = co_await described_table_config_option(snapshot, ks_meta->name(), name, config_name)) {
             table_config_options.push_back(std::move(*described));
         }
@@ -1065,7 +1060,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
             // Cluster-scope config leads the dump, before any keyspace and in all tiers:
             // it is portable operator state that lower scopes inherit from, and emitting it
             // only under INTERNALS would make the default dump silently lossy.
-            if (db::cluster_config_registry::current_version(db.features())) {
+            if (db::cluster_config_registry::enabled(db.features())) {
                 const auto& cluster_configs = (co_await snapshot.cluster()).get();
                 if (!cluster_configs.empty()) {
                     std::vector<scope_chain_entry> chain{{config_origin::cluster, cluster_configs}};

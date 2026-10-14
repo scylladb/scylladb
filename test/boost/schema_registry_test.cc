@@ -97,20 +97,18 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_feature_is_supported) {
     BOOST_REQUIRE(features.contains("CLUSTER_CONFIG"));
 }
 
-SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_current_version_follows_feature_gate) {
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_enabled_follows_feature_gate) {
     dummy_init dummy;
 
     dummy.fs.cluster_config.enable();
 
-    BOOST_REQUIRE(
-        db::cluster_config_registry::current_version(dummy.fs)
-        == std::optional<db::cluster_config_registry::version>(db::cluster_config_registry::version::v0));
+    BOOST_REQUIRE(db::cluster_config_registry::enabled(dummy.fs));
 
     gms::feature_config cfg;
     cfg.disabled_features.emplace("CLUSTER_CONFIG");
     gms::feature_service fs(cfg);
 
-    BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
+    BOOST_REQUIRE(!db::cluster_config_registry::enabled(fs));
 }
 
 // Each registry option is advertised as a cluster feature of its own, named after the
@@ -178,7 +176,6 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     const auto integer_option = ccr::option{
         .name = "test_integer_option",
         .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
-        .min_version = ccr::version::v0,
         .default_value = int64_t(7),
     };
     BOOST_REQUIRE_EQUAL(ccr::to_integer(integer_option, std::nullopt), 7);
@@ -200,7 +197,6 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     const auto floating_point_option = ccr::option{
         .name = "test_floating_point_option",
         .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
-        .min_version = ccr::version::v0,
         .default_value = 0.25,
     };
     BOOST_REQUIRE_EQUAL(ccr::to_floating_point(floating_point_option, std::nullopt), 0.25);
@@ -216,7 +212,6 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     const auto text_option = ccr::option{
         .name = "test_text_option",
         .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
-        .min_version = ccr::version::v0,
         .default_value = std::string_view("fallback"),
     };
     BOOST_REQUIRE_EQUAL(ccr::to_text(text_option, std::nullopt), sstring("fallback"));
@@ -226,21 +221,28 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     BOOST_REQUIRE(!ccr::validate_value(text_option, "anything at all"));
 }
 
-// find() filters by registry version only; whether cluster config is enabled at all is
-// current_version()'s answer (nullopt when disabled), which callers check before looking up.
-SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_find_filters_by_version) {
+// find() looks the option up by name regardless of features; is_supported() is the gate,
+// and it needs both the registry's base feature and the option's own feature.
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_is_supported_needs_base_and_option_feature) {
+    namespace ccr = db::cluster_config_registry;
     dummy_init dummy;
+
+    const auto* auto_repair_enabled = ccr::find("auto_repair_enabled");
+    BOOST_REQUIRE(auto_repair_enabled != nullptr);
+    auto& option_feature = dummy.fs.registered_features().at(ccr::feature_name(auto_repair_enabled->name)).get();
+
+    BOOST_REQUIRE(!ccr::is_supported(*auto_repair_enabled, dummy.fs));
     dummy.fs.cluster_config.enable();
-    const auto current_version = db::cluster_config_registry::current_version(dummy.fs);
-    BOOST_REQUIRE(current_version == db::cluster_config_registry::version::v0);
+    BOOST_REQUIRE(!ccr::is_supported(*auto_repair_enabled, dummy.fs));
+    option_feature.enable();
+    BOOST_REQUIRE(ccr::is_supported(*auto_repair_enabled, dummy.fs));
 
-    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled", current_version) != nullptr);
-    BOOST_REQUIRE(db::cluster_config_registry::find("auto_repair_enabled") != nullptr);
-
+    // The option's feature alone is not enough without the base feature.
     gms::feature_config cfg;
     cfg.disabled_features.emplace("CLUSTER_CONFIG");
     gms::feature_service fs(cfg);
-    BOOST_REQUIRE(db::cluster_config_registry::current_version(fs) == std::nullopt);
+    fs.registered_features().at(ccr::feature_name(auto_repair_enabled->name)).get().enable();
+    BOOST_REQUIRE(!ccr::is_supported(*auto_repair_enabled, fs));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {
