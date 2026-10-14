@@ -276,6 +276,16 @@ note that ordering partitioners always order token values by bytes (so even if t
     SELECT * FROM posts
      WHERE token(userid) > token('tom') AND token(userid) < token('bob')
 
+Restrictions on ``TOKEN`` can also be combined with restrictions on the ``PARTITION KEY`` columns themselves. If all the
+partition key columns are restricted by ``=`` or ``IN``, the query returns the rows of the partitions they name whose
+token also satisfies the ``TOKEN`` restrictions. For example::
+
+    SELECT * FROM posts
+     WHERE userid IN ('john doe', 'jane doe') AND token(userid) > token('tom')
+
+Otherwise, the ``TOKEN`` restrictions define the range of partitions to read, and the restrictions on the partition key
+columns are applied as filtering, which requires ``ALLOW FILTERING``.
+
 Moreover, the ``IN`` relation is only allowed on the last column of the partition key and on the last column of the full
 primary key.
 

@@ -980,9 +980,11 @@ static void analyze_mutation(
                 "Invalid restrictions on clustering columns since the {} statement modifies only static columns",
                 type));
     }
-    if (analysis.has_token_restrictions()) {
+    if (analysis.has_token_restrictions() || analysis.has_token_filter()) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                expr::to_string(analysis.partition_key_restrictions)));
+                analysis.has_token_filter()
+                        ? expr::to_string(std::get<single_column_partition_range_restrictions>(analysis.partition_range).token_filter->filter)
+                        : expr::to_string(std::get<token_range_restrictions>(analysis.partition_range).token_restrictions.filter)));
     }
     if (!analysis.single_column_nonprimary_key_restrictions.empty()) {
         throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
@@ -1178,10 +1180,9 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
     bool ck_is_all_eq = true;
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
-    bool pk_is_empty = true;
     bool pk_is_all_eq = true;
     bool pk_has_slice_or_needs_filtering = false;
-    bool has_token = false;
+    bool token_is_all_eq = true;
     std::optional<predicate> token_pred;
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
     std::vector<predicate> mc_ck_preds;
@@ -1253,22 +1254,12 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                 }
             }
         } else if (std::holds_alternative<on_partition_key_token>(pred.on)) {
-            // Token always restricts the partition key
-            if (!pk_is_empty && !has_token) {
-                throw exceptions::invalid_request_exception(
-                        seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                                fmt::join(expr::get_sorted_column_defs(partition_key_restrictions) |
-                                        std::views::transform([](auto* p) {
-                                            return maybe_column_definition{p};
-                                        }),
-                                        ", ")));
-            }
-
-            partition_key_restrictions = expr::make_conjunction(partition_key_restrictions, pred.filter);
-            pk_is_empty = false;
-            has_token = true;
+            // Whether the token restrictions define the partition range or
+            // only filter the partitions named by restrictions on the
+            // partition key columns is decided below, after seeing all the
+            // predicates.
             if (!pred.equality) {
-                pk_is_all_eq = false;
+                token_is_all_eq = false;
             }
             if (token_pred) {
                 token_pred = make_conjunction(std::move(*token_pred), pred);
@@ -1285,18 +1276,7 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                             "Only EQ and IN relation are supported on the partition key "
                             "(unless you use the token() function or ALLOW FILTERING)");
                 }
-                if (has_token) {
-                    throw exceptions::invalid_request_exception(
-                            seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                                fmt::join(expr::get_sorted_column_defs(partition_key_restrictions) |
-                                            std::views::transform([](auto* p) {
-                                            return maybe_column_definition{p};
-                                            }),
-                                            ", ")));
-                }
-
                 partition_key_restrictions = expr::make_conjunction(partition_key_restrictions, pred.filter);
-                pk_is_empty = false;
                 {
                     auto [it, inserted] = single_column_partition_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
@@ -1387,6 +1367,28 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
             }
         }
     }
+    // If both token(p) and the partition key columns p are restricted (as
+    // Cassandra allows since CASSANDRA-7016): if all the partition key columns
+    // are restricted by EQ or IN, the partitions they name are filtered by the
+    // token restrictions. Otherwise, the token restrictions define the
+    // partition range, and the restrictions on the partition key columns are
+    // filtered (which needs ALLOW FILTERING). In both cases,
+    // partition_key_restrictions has all the restrictions, for code which
+    // evaluates it - only partition_range splits them.
+    bool token_is_filter = false;
+    if (token_pred) {
+        partition_key_restrictions = expr::make_conjunction(std::move(partition_key_restrictions), token_pred->filter);
+        if (!single_column_partition_key_restrictions.empty()
+                && pk_range_preds.size() == schema->partition_key_size() && !pk_has_slice_or_needs_filtering) {
+            // The partitions to read are named by the restrictions on the
+            // partition key columns alone, so the token restrictions don't
+            // affect pk_is_all_eq.
+            token_is_filter = true;
+        } else {
+            pk_is_all_eq = pk_is_all_eq && token_is_all_eq;
+            pk_filtered_in_token_range = !single_column_partition_key_restrictions.empty();
+        }
+    }
     if (!where_factors.empty()) {
         if (!mc_ck_preds.empty()) {
             clustering_prefix_restrictions = std::move(mc_ck_preds);
@@ -1408,13 +1410,14 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
             }
             clustering_prefix_restrictions = std::move(prefix);
         }
-        if (token_pred) {
+        if (token_pred && !token_is_filter) {
             partition_range = token_range_restrictions{
                 .token_restrictions = std::move(*token_pred),
             };
         } else if (pk_range_preds.size() == schema->partition_key_size()) {
             partition_range = single_column_partition_range_restrictions{
                 .per_column_restrictions = std::move(pk_range_preds) | std::views::values | std::ranges::to<std::vector>(),
+                .token_filter = token_is_filter ? std::move(token_pred) : std::nullopt,
             };
         }
     }
@@ -1451,6 +1454,15 @@ void select_restrictions::detect_queriable_indexes(
         if (!_allow_filtering && !is_empty_restriction(_analysis.nonprimary_key_restrictions)) {
             throw_pinned_plan_foreign();
         }
+        return;
+    }
+    // A query restricting both token() and the partition key columns doesn't
+    // use an index: the index paths assume the partition key is restricted
+    // either by token or by the columns, not both.
+    if (_analysis.has_token_and_partition_key_restrictions()) {
+        _has_queriable_ck_index = false;
+        _has_queriable_pk_index = false;
+        _has_queriable_regular_index = false;
         return;
     }
     auto cf = db.find_column_family(_analysis.schema);
@@ -1669,6 +1681,12 @@ where_clause_analysis::clustering_key_restrictions_have_slice() const {
 bool
 where_clause_analysis::has_token_restrictions() const {
     return std::holds_alternative<token_range_restrictions>(partition_range);
+}
+
+bool
+where_clause_analysis::has_token_filter() const {
+    const auto* r = std::get_if<single_column_partition_range_restrictions>(&partition_range);
+    return r && r->token_filter;
 }
 
 bool
@@ -1917,9 +1935,10 @@ size_t where_clause_analysis::partition_key_restrictions_size() const {
 }
 
 bool where_clause_analysis::pk_restrictions_need_filtering() const {
-     return !is_empty_restriction(partition_key_restrictions)
-         && !has_token_restrictions()
-         && (has_partition_key_unrestricted_components() || pk_has_slice_or_needs_filtering);
+     return pk_filtered_in_token_range
+         || (!is_empty_restriction(partition_key_restrictions)
+             && !has_token_restrictions()
+             && (has_partition_key_unrestricted_components() || pk_has_slice_or_needs_filtering));
 }
 
 size_t where_clause_analysis::clustering_columns_restrictions_size() const {
@@ -2030,6 +2049,27 @@ dht::partition_range_vector partition_ranges_from_token(const predicate& ex,
     return {{std::move(start), std::move(end)}};
 }
 
+/// Drops from \p key_ranges - single partitions named by EQ or IN restrictions
+/// on all the partition key columns - the partitions whose token doesn't
+/// satisfy the token restrictions \p token_filter.
+dht::partition_range_vector filter_partition_ranges_by_token(dht::partition_range_vector key_ranges,
+                                                              const predicate& token_filter,
+                                                              const query_options& options,
+                                                              const schema& table_schema) {
+    const auto token_ranges = partition_ranges_from_token(token_filter, options, table_schema);
+    const dht::ring_position_comparator cmp(table_schema);
+    std::erase_if(key_ranges, [&] (const dht::partition_range& key_range) {
+        if (!key_range.is_singular()) {
+            on_internal_error(rlogger, fmt::format("filter_partition_ranges_by_token: expected a single partition, got {}", key_range));
+        }
+        const auto& pos = key_range.start()->value();
+        return std::ranges::none_of(token_ranges, [&] (const dht::partition_range& token_range) {
+            return token_range.contains(pos, cmp);
+        });
+    });
+    return key_ranges;
+}
+
 /// Turns a partition-key value into a partition_range. \p pk must have elements for all partition columns.
 dht::partition_range range_from_bytes(const schema& schema, const std::vector<managed_bytes>& pk) {
     const auto k = partition_key::from_exploded(pk);
@@ -2117,7 +2157,14 @@ where_clause_analysis::build_partition_key_ranges_fn() const {
             };
         },
         [&] (const single_column_partition_range_restrictions& r) -> get_partition_key_ranges_fn_t {
-            if (partition_range_is_simple) {
+            if (r.token_filter) {
+                return [&] (const query_options& options) {
+                    auto ranges = partition_range_is_simple
+                            ? partition_ranges_from_EQs(r.per_column_restrictions, options, *schema)
+                            : partition_ranges_from_singles(r.per_column_restrictions, options, *schema);
+                    return filter_partition_ranges_by_token(std::move(ranges), *r.token_filter, options, *schema);
+                };
+            } else if (partition_range_is_simple) {
                 return [&] (const query_options& options) {
                     // Special case to avoid extra allocations required for a Cartesian product.
                     return partition_ranges_from_EQs(r.per_column_restrictions, options, *schema);
@@ -3186,6 +3233,12 @@ void view_restrictions::analyze_view_definition(
     // spell out ALLOW FILTERING: whatever the key order cannot express is filtered
     // when the view is refreshed, and that is the user's stated intent.
     _analysis.classify_predicates(std::move(where.predicates), /*allow_filtering=*/true);
+    // A view's WHERE clause may not restrict both token() and the partition
+    // key columns - this isn't supported yet.
+    if (_analysis.has_token_and_partition_key_restrictions()) {
+        throw exceptions::invalid_request_exception(
+                "A materialized view's WHERE clause cannot restrict both the token and the partition key columns");
+    }
     _analysis.build_key_range_fns();
 }
 
