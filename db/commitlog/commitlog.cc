@@ -2319,7 +2319,9 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
 
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
+        // The front segment holds back every newer one from deletion, so its
+        // flush is requested again even if it was requested before.
+        if (rp <= _flush_position && s != _segments.front()) {
             // already requested.
             continue;
         }
@@ -2356,7 +2358,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
     }
 
-    _flush_position = high;
+    _flush_position = std::max(_flush_position, high);
     totals.bytes_flush_requested += flushing;
 }
 
@@ -3185,9 +3187,10 @@ void db::commitlog::segment_manager::on_timer() {
 
         clogger.debug("Rate: {} / s ({} s)", rate, seconds);
 
-        // IFF a new segment was put in use since last we checked, and we're
-        // above threshold, request flush.
-        if (_new_counter > 0) {
+        // IFF a new segment was put in use since last we checked, or an
+        // allocation may be waiting for space, and we're above threshold,
+        // request flush.
+        if (_new_counter > 0 || _reserve_segments.empty()) {
             auto max = disk_usage_threshold;
             auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
             uint64_t extra = 0;

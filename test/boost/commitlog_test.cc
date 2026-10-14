@@ -1698,6 +1698,64 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
     co_await log.clear();
 }
 
+// A dirty front segment holds back every newer segment. If its table ignores
+// the first flush request, the flush must be requested again, or writes stall
+// once the disk limit is reached.
+SEASTAR_TEST_CASE(test_commitlog_rerequests_flush_of_front_segment) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    sstring data(100 * 1024, 'x');
+    auto write = [&] (table_id id) {
+        return with_timeout(timeout_clock::now() + 30s, log.add_mutation(id, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        }));
+    };
+
+    auto cold_uuid = make_table_id();
+    auto hot_uuid = make_table_id();
+    rp_set cold_rps, hot_rps;
+    int cold_requests = 0;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        if (id == hot_uuid) {
+            log.discard_completed_segments(id, std::exchange(hot_rps, {}));
+        } else if (id == cold_uuid && ++cold_requests > 1) {
+            log.discard_completed_segments(id, std::exchange(cold_rps, {}));
+        }
+    });
+
+    try {
+        cold_rps.put(co_await write(cold_uuid));
+        // Write enough to fill the disk limit several times over.
+        for (uint64_t i = 0; i < 4 * 10 * cfg.commitlog_total_space_in_mb / this_smp_shard_count(); ++i) {
+            hot_rps.put(co_await write(hot_uuid));
+        }
+    } catch (timed_out_error&) {
+        BOOST_ERROR("log write timed out. front segment flush was not requested again? Will not free log. ASAN errors and leaks will follow...");
+        abort();
+    }
+
+    BOOST_REQUIRE_GT(cold_requests, 1);
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
 static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
     commitlog::config cfg;
 
