@@ -132,8 +132,11 @@ The replacing node streams its data from the other replicas, so this method carr
 See :doc:`Replace a Running Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-running-node>`,
 or :doc:`Replace a Dead Node in a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/replace-dead-node>` if the node is down.
 
+.. _sstable-quarantine:
+
 Method 2: Quarantine and Drop
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. warning::
 
     The last step of this procedure is unsafe and may lead to data resurrection.

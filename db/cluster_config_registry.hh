@@ -65,6 +65,13 @@ struct option {
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
+    // Optional per-option custom parser.
+    // When defined, it is used instead of the type-specific parser and validator.
+    // The parser must return the declared type.
+    //
+    // If set, the custom_excpected_description will be used in validation errors.
+    config_value (*custom_parser)(std::string_view) = nullptr;
+    std::string_view custom_expected_description = "";
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());

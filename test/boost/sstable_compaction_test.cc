@@ -187,7 +187,7 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-void compaction_manager_basic(test_env& env) {
+static table_for_tests compaction_manager_basic_prepare(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
@@ -195,7 +195,6 @@ void compaction_manager_basic(test_env& env) {
                 .with_column("r1", int32_type)
                 .build();
     auto cf = env.make_table_for_tests(s);
-    auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
     auto sst_gen = env.make_sst_factory(s);
@@ -218,6 +217,14 @@ void compaction_manager_basic(test_env& env) {
     }
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
+    close_cf.cancel();
+    return cf;
+}
+
+void compaction_manager_basic(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
     cf->trigger_compaction();
     // wait for submitted job to finish and there is no pending tasks
     do_until([&cm] {
@@ -253,6 +260,160 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    test_env_config{
                                        .storage = make_test_object_storage_options("GS"),
                                    });
+}
+
+static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    simple_schema ss;
+    schema_builder builder(ss.schema());
+    if (!compress) {
+        builder.set_compressor_params(compression_parameters::no_compression());
+    }
+    auto cf = env.make_table_for_tests(builder.build());
+    auto& cm = cf->get_compaction_manager();
+    auto close_cf = deferred_stop(cf);
+    cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+    auto ssts = add_same_size_sstables(env, cf, ss, version, cf->schema()->min_compaction_threshold());
+    auto malformed = ssts[1];
+    slightly_corrupt_sstable(malformed);
+
+    cf->trigger_compaction();
+    BOOST_REQUIRE(eventually_true([&] {
+        return malformed->is_quarantined() && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+    }));
+
+    BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+    for (auto& sst : ssts) {
+        if (sst != malformed) {
+            BOOST_REQUIRE(!sst->is_quarantined());
+        }
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_me_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::me, compress_sstable::yes); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_me_uncompressed_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::me, compress_sstable::no); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_mt_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::mt, compress_sstable::yes); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_malformed_sstable_mt_uncompressed_test) {
+    return test_env::do_with_async([](test_env& env) { regular_compaction_quarantines_malformed_sstable(env, sstable_version_types::mt, compress_sstable::no); });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantines_multiple_malformed_sstables_test) {
+    return test_env::do_with_async([](test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        simple_schema ss;
+        auto cf = env.make_table_for_tests(ss.schema());
+        auto& cm = cf->get_compaction_manager();
+        auto close_cf = deferred_stop(cf);
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+        auto ssts = add_same_size_sstables(env, cf, ss, sstables::get_highest_sstable_version(), cf->schema()->min_compaction_threshold() + 2);
+        auto malformed = std::vector{ssts[1], ssts[3]};
+        for (auto& sst : malformed) {
+            slightly_corrupt_sstable(sst);
+        }
+
+        cf->trigger_compaction();
+        BOOST_REQUIRE(eventually_true([&] {
+            return std::ranges::all_of(malformed, &sstables::sstable::is_quarantined)
+                    && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }));
+
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, malformed.size());
+        for (auto& sst : ssts) {
+            if (!std::ranges::contains(malformed, sst)) {
+                BOOST_REQUIRE(!sst->is_quarantined());
+                // Compacted once both malformed sstables were out of the way.
+                BOOST_REQUIRE(!cf->get_sstables()->contains(sst));
+            }
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_quarantine_failure_test) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([](test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        scoped_error_injection quarantine_error{"regular_compaction_quarantine_fail"};
+        simple_schema ss;
+        auto cf = env.make_table_for_tests(ss.schema());
+        auto& cm = cf->get_compaction_manager();
+        auto close_cf = deferred_stop(cf);
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+
+        auto ssts = add_same_size_sstables(env, cf, ss, sstables::get_highest_sstable_version(), cf->schema()->min_compaction_threshold());
+        auto malformed = ssts[1];
+        slightly_corrupt_sstable(malformed);
+
+        cf->trigger_compaction();
+        BOOST_REQUIRE(eventually_true([&] {
+            return cm.get_stats().errors > 0 && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }));
+
+        // Counted once by maybe_retry() for the abort, not again for the malformed sstable.
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+        for (auto& sst : ssts) {
+            BOOST_REQUIRE(!sst->is_quarantined());
+            BOOST_REQUIRE(cf->get_sstables()->contains(sst));
+        }
+    });
+}
+
+void regular_compaction_validate_test(test_env& env, bool auto_scrub_enabled) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto ssts = cf->get_sstables();
+    BOOST_REQUIRE(!ssts->empty());
+    auto sst = ssts->begin()->get()->shared_from_this();
+    sst->set_scrub_time(db_clock::from_time_t(0));
+    slightly_corrupt_sstable(sst, component_type::TOC);
+
+    if (auto_scrub_enabled) {
+        cf->set_scrub_period(std::chrono::hours(1));
+    }
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm, auto_scrub_enabled] {
+        if (auto_scrub_enabled) {
+            return cm.get_stats().errors > 0 && cm.get_stats().pending_tasks == 0;
+        }
+        return cm.get_stats().completed_tasks > 0 && cm.get_stats().pending_tasks == 0;
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    if (auto_scrub_enabled) {
+        BOOST_REQUIRE(sst->is_quarantined());
+    } else {
+        BOOST_REQUIRE(!sst->is_quarantined());
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_enabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, true);
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_disabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, false);
+    });
 }
 
 void compact(test_env& env) {
@@ -6664,6 +6825,42 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) {
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
+}
+
+// Component rewrite bypasses the regular compaction machinery, so it has to
+// fill in the result consumed by compaction_manager::update_history() by itself.
+SEASTAR_TEST_CASE(test_component_rewrite_compaction_result) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto mut = mutation(s, ss.make_pkey());
+        mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+        table->add_sstable_and_update_cache(sst).get();
+
+        auto desc = compaction::compaction_descriptor({sst});
+        desc.options = compaction::compaction_type_options::make_component_rewrite(component_type::Statistics,
+                [] (sstable& new_sst) { new_sst.mutate_sstable_level(5); });
+        auto res = compact_sstables(env, std::move(desc), table, [&] { return env.make_sstable(s); }).get();
+
+        BOOST_REQUIRE_EQUAL(res.new_sstables.size(), 1);
+        auto new_sst = res.new_sstables.front();
+        BOOST_REQUIRE_EQUAL(res.shard_id, this_shard_id());
+        BOOST_REQUIRE(res.type == compaction::compaction_type::RewriteComponent);
+        BOOST_REQUIRE_EQUAL(res.sstables_in.size(), 1);
+        BOOST_REQUIRE(res.sstables_in[0].generation == sst->generation());
+        BOOST_REQUIRE_EQUAL(res.sstables_in[0].size, sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.sstables_out.size(), 1);
+        BOOST_REQUIRE(res.sstables_out[0].generation == new_sst->generation());
+        BOOST_REQUIRE_EQUAL(res.sstables_out[0].size, new_sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.stats.start_size, sst->bytes_on_disk());
+        BOOST_REQUIRE_EQUAL(res.stats.end_size, new_sst->bytes_on_disk());
+        BOOST_REQUIRE(res.stats.started_at.time_since_epoch().count() > 0);
+        BOOST_REQUIRE(res.stats.started_at <= res.stats.ended_at);
+    });
 }
 
 void do_test_component_rewrite_failure(test_env& env) {

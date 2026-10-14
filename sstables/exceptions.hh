@@ -10,9 +10,11 @@
 #pragma once
 
 #include <concepts>
+#include <string_view>
 #include <seastar/core/format.hh>
 
 #include "sstables/component_type.hh"
+#include "sstables/generation_type.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -63,6 +65,28 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
         malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
     {}
 };
+
+// A malformed_sstable_exception which identifies the sstable it was raised for.
+class attributed_malformed_sstable_exception : public malformed_sstable_exception {
+    generation_type _generation;
+public:
+    attributed_malformed_sstable_exception(sstring msg, generation_type generation)
+        : malformed_sstable_exception(std::move(msg))
+        , _generation(generation)
+    {}
+    generation_type generation() const noexcept {
+        return _generation;
+    }
+};
+
+// If ex holds a malformed_sstable_exception, returns an attributed_malformed_sstable_exception
+// for generation's sstable with the original message.
+// Other exceptions are returned unchanged.
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, generation_type generation);
+// If ex holds a malformed_sstable_exception, returns an attributed_malformed_sstable_exception
+// for filename's sstable with the message "<context> <filename> due to <original message>".
+// Other exceptions are returned unchanged.
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, component_name filename, std::string_view context);
 
 // Controls whether malformed sstable errors abort the process (generating a coredump) or throw an
 // exception. Aborting is useful when the malformed sstable error is caused by memory corruption

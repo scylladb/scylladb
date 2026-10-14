@@ -40,6 +40,7 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
@@ -159,6 +160,21 @@ bool components_are_missing(std::exception_ptr ex) {
 
 [[noreturn]] void throw_bufsize_mismatch_exception(size_t size, size_t expected) {
     throw_malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected));
+}
+
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, generation_type generation) {
+    if (auto e = try_catch<malformed_sstable_exception>(ex); e) {
+        return std::make_exception_ptr(attributed_malformed_sstable_exception(e->what(), generation));
+    }
+    return ex;
+}
+
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, component_name filename, std::string_view context) {
+    if (auto e = try_catch<malformed_sstable_exception>(ex); e) {
+        return std::make_exception_ptr(attributed_malformed_sstable_exception(
+                fmt::format("{} {} due to {}", context, filename, e->what()), filename.sst.generation()));
+    }
+    return ex;
 }
 
 scoped_no_abort_on_malformed_sstable_error::scoped_no_abort_on_malformed_sstable_error() noexcept
@@ -1640,6 +1656,19 @@ std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
     return it->second;
 }
 
+std::optional<db_clock::time_point> sstable::get_scrub_time() const {
+    auto& metadata = _components->scylla_metadata;
+    return metadata ? metadata->get_scrub_time() : std::nullopt;
+}
+
+void sstable::set_scrub_time(db_clock::time_point scrub_time) {
+    auto& metadata = _components->scylla_metadata;
+    if (!has_scylla_component() || !metadata) {
+        on_internal_error(sstlog, fmt::format("Cannot set scrub time for sstable {}, missing scylla-metadata component", shared_from_this()));
+    }
+    metadata->set_scrub_time(scrub_time);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
@@ -1692,7 +1721,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     }
 
     if (!has_scylla_component()) {
-        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+        on_internal_error(sstlog, fmt::format("SSTable must have Scylla component to rewrite the {} component.", component));
     }
 
     if (_storage->is_object_storage() && !update_id) {
@@ -1776,9 +1805,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
             new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
         })).get();
 
-        modifier(*new_sst);
-
-        new_sst->write_component_with_metadata(component);
+        new_sst->write_component_with_metadata_and_modifier(component, std::move(modifier));
 
         new_sst->_shards = this->_shards;
 
@@ -1796,24 +1823,22 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
-// 1. Write the component file (e.g., Statistics-*.db)
+// 1. Update Scylla metadata sstable identifier.
+// 2. Apply the modifier.
+// 3. Write the component file (e.g., Statistics-*.db)
 //    - This calculates and stores the component's digest in _components_digests.map[type]
-// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
-// 3. Calculate the Scylla metadata's own digest based on its updated data
-// 4. Write the Scylla metadata component file
-void sstable::write_component_with_metadata(component_type type) {
+// 4. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 5. Calculate the Scylla metadata's own digest based on its updated data
+void sstable::write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, "Only Statistics and Scylla components can be rewritten.");
     }
     if (!_components->scylla_metadata) {
-        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+        on_internal_error(sstlog, fmt::format("SSTable must have Scylla component to rewrite the {} component.", type));
     }
 
     auto& metadata = *_components->scylla_metadata;
 
-    write_component(type);
-
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
     // The sstable's identifier is authoritative: make sure the sstable_identifier
     // we store in scylla_metadata is the one the sstable is known by.  This must
     // happen before the digest below is computed over metadata.data.
@@ -1823,6 +1848,15 @@ void sstable::write_component_with_metadata(component_type type) {
                 get_filename(), component_name(*this, type)));
     }
     metadata.set_sstable_identifier(*sid);
+    metadata.digest = std::nullopt;
+
+    modifier(*this);
+
+    if (type != component_type::Scylla) {
+        write_component(type);
+        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
+
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -1830,7 +1864,7 @@ void sstable::write_component_with_metadata(component_type type) {
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
-    _features = _components->scylla_metadata->get_features();
+    _features = metadata.get_features();
 }
 
 future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
@@ -2222,6 +2256,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
@@ -2629,6 +2664,8 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
     _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+
+    _components->scylla_metadata->set_scrub_time(db_clock::now());
 
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
@@ -4588,6 +4625,7 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    bool _update_scrub_time;
     checksum _checksum;
     uint32_t _digest;
 public:
@@ -4596,10 +4634,11 @@ public:
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _update_scrub_time(cfg.update_scrub_time)
         , _checksum(DEFAULT_CHUNK_SIZE, {})
         , _digest(crc32_utils::init_checksum())
     {
-        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={} update_scrub_time={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed, _update_scrub_time);
     }
 private:
     future<> load_metadata() const {
@@ -4628,6 +4667,16 @@ private:
             write(_sst->get_version(), w, metadata);
             w.close();
         });
+    }
+
+    future<> update_scrub_time() const {
+        co_await load_metadata();
+        auto& metadata = _sst->get_shared_components().scylla_metadata;
+        if (!metadata) {
+            co_return;
+        }
+        metadata->set_scrub_time(db_clock::now());
+        co_await save_metadata();
     }
 
     // Validate digest in the sstable. Used instead of sstable::validate_component_digest, as
@@ -4693,6 +4742,9 @@ public:
     }
     future<shared_sstable> close() override {
         if (_last_component) {
+            if (_update_scrub_time) {
+                co_await update_scrub_time();
+            }
             // If we are the last component in a sequence, we can seal the table.
             if (!_leave_unsealed) {
                 co_await _sst->_storage->seal(*_sst);

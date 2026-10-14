@@ -564,6 +564,7 @@ The content is dumped in JSON, using the following schema:
         "ext_timestamp_stats": {"$key": int64, ...}
         "sstable_identifier": String, // UUID
         "large_data_records": [$LARGE_DATA_RECORD, ...]
+        "scrub_time": int64
     }
 
     $SHARDING_METADATA := {
