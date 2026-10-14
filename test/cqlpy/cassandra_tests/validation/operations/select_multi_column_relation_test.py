@@ -114,7 +114,7 @@ def testMultiClusteringInvalidQueries(cql, test_keyspace):
         assertInvalidMessage(cql, table, "Column \"c\" cannot be restricted by two inequalities not starting with the same column",
                              "SELECT * FROM %s WHERE a = ? AND (b, c) > (?, ?) AND (c) < (?)", 0, 0, 0, 0)
 
-@pytest.mark.xfail(reason="Issue #64, #4244")
+@pytest.mark.xfail(reason="Issue #4244")
 def testMultiAndSingleColumnRelationMix(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
@@ -125,7 +125,7 @@ def testMultiAndSingleColumnRelationMix(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 1, 1, 0)
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 1, 1, 1)
 
-        # Reproduces #64:
+        # Reproduces #4244:
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and b = ? and (c, d) = (?, ?)", 0, 1, 0, 0),
                    row(0, 1, 0, 0))
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and b IN (?, ?) and (c, d) = (?, ?)", 0, 0, 1, 0, 0),
@@ -190,7 +190,7 @@ def testMultiAndSingleColumnRelationMix(cql, test_keyspace):
                    row(0, 0, 0, 0),
                    row(0, 0, 1, 0))
 
-@pytest.mark.xfail(reason="Issue #64, #4244")
+@pytest.mark.xfail(reason="Issue #4244")
 def testSeveralMultiColumnRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 0, 0, 0)
@@ -201,7 +201,7 @@ def testSeveralMultiColumnRelation(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 1, 1, 0)
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 0, 1, 1, 1)
 
-        # Reproduces #64:
+        # Reproduces #4244:
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and (b) = (?) and (c, d) = (?, ?)", 0, 1, 0, 0),
                    row(0, 1, 0, 0))
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and (b) IN ((?), (?)) and (c, d) = (?, ?)", 0, 0, 1, 0, 0),
@@ -251,7 +251,7 @@ def testSeveralMultiColumnRelation(cql, test_keyspace):
                    row(0, 0, 0, 0),
                    row(0, 0, 1, 0))
 
-        # Reproduces #64:
+        # Reproduces #4244:
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and (d) < (1) and (b, c) = (?, ?) and (d) >= (?)", 0, 0, 1, 0),
                    row(0, 0, 1, 0))
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE a = ? and (d) < (1) and (b, c) IN ((?, ?), (?, ?)) and (d) >= (?)", 0, 0, 1, 0, 0, 0),
@@ -1824,7 +1824,7 @@ def testMixedOrderColumnsInReverse(cql, test_keyspace):
 
 # Check select on tuple relations, see CASSANDRA-8613
 # migrated from cql_tests.py:TestCQL.simple_tuple_query_test()
-@pytest.mark.xfail(reason="Issue #64")
+@pytest.mark.xfail(reason="Issue #4244")
 def testSimpleTupleQuery(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d, e))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (0, 2, 0, 0, 0)")
@@ -1835,7 +1835,7 @@ def testSimpleTupleQuery(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (0, 0, 3, 3, 3)")
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (0, 0, 1, 1, 1)")
 
-        # Reproduces #64:
+        # Reproduces #4244:
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE b=0 AND (c, d, e) > (1, 1, 1) ALLOW FILTERING"),
                    row(0, 0, 2, 2, 2),
                    row(0, 0, 3, 3, 3))
