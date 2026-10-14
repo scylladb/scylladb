@@ -391,6 +391,16 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 }
 
+void manager::discard_segments_up_to(const sync_point::shard_rps& rps) {
+    const auto host_id_rps = to_host_id_rps(_gossiper_anchor, rps);
+    for (const auto& [ep, rp] : host_id_rps) {
+        auto it = _ep_managers.find(ep);
+        if (it != _ep_managers.end()) {
+            it->second.discard_segments_up_to(rp);
+        }
+    }
+}
+
 hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id) {
     if (auto it = _ep_managers.find(host_id); it != _ep_managers.end()) {
         return it->second;

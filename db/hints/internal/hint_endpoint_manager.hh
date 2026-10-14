@@ -167,6 +167,11 @@ public:
         return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
     }
 
+    /// \brief Makes the hint sender discard segments containing hints at or below a given replay position.
+    void discard_segments_up_to(db::replay_position rp) {
+        _sender.discard_segments_up_to(rp);
+    }
+
     /// \brief Safely runs a given functor under the file_update_mutex of \ref this object.
     ///
     /// Runs a given functor under the file_update_mutex of this hint_endpoint_manager instance.
