@@ -60,7 +60,6 @@ def testInvalidCollectionsMix(cql, test_keyspace):
         assert_invalid(cql, table, "UPDATE %s SET m = m - { 'a': 'b', 'c': 'd' } WHERE k = 0")
 
 
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testSets(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s set<text>)") as table:
         execute(cql, table, "INSERT INTO %s(k, s) VALUES (0, ?)", {"v1", "v2", "v3", "v4"})
@@ -111,7 +110,6 @@ def testSets(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT s FROM %s WHERE k = 0"),
                    [None])
 
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testMaps(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<text, int>)") as table:
         # Cassandra's and Scylla's messages are completely different here. Cassandra has
@@ -206,7 +204,6 @@ def testMaps(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT m FROM %s WHERE k = 0"),
             [None])
 
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testLists(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l list<text>)") as table:
         execute(cql, table, "INSERT INTO %s(k, l) VALUES (0, ?)", ["v1", "v2", "v3"])
