@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -112,8 +113,9 @@ public:
         _total_size += data.size();
         _md5.update(reinterpret_cast<const char*>(data.data()), data.size());
     }
-    // For sinks which know the etag the storage assigned to the object - the S3 sink has to ask S3
-    // for it, because an object uploaded in several parts gets an etag which is not the md5 of its content.
+    // An object uploaded in several parts gets an etag which is not the md5 of its content, so the
+    // S3 sink cannot compute the etag itself and passes in the one from S3's reply to the request
+    // that created the object. This function is meant for such sinks.
     export_pipeline_interface::result finalize(sstring etag) {
         return build(std::move(etag), _md5.finalize());
     }
@@ -277,8 +279,6 @@ public:
     }
 };
 
-// TODO: uncomment this function after #31703 is merged
-#if 0
 // S3 reports the etag as an RFC 9110 entity-tag, i.e. wrapped in double quotes. The manifest
 // files report it the way DynamoDB does - as a bare string - so drop the quotes.
 // The returned view points into the caller's buffer, which has to outlive it.
@@ -289,24 +289,46 @@ static std::string_view strip_etag_quotes(std::string_view etag) {
     }
     return etag;
 }
-#endif
 
 /// Writes data to an S3 object. The data is passed to `s3::client` object, which will upload it to S3 asynchronously.
 /// The upload is completed when `flush_and_close()` is called.
 class s3_storage_sink : public storage_sink_interface {
-    shared_ptr<s3::client> _client;
     sstring _object_name;
-    abort_source* _as;
     std::unique_ptr<output_stream<char>> _upload_stream;
+    // A future that will produce the ETag value once the underlying sink's flush() resolves.
+    // If the upload fails, it resolves exceptionally instead - with the flush()'s exception, or
+    // with broken_promise if the sink got closed without ever being flushed. Whenever closing
+    // the stream throws, flush_and_close() discards this future - with whatever exception it
+    // carries - and propagates the close()'s exception instead, as that is the one describing
+    // why the upload failed.
+    future<sstring> _etag_future;
     sink_result_builder _result;
     bool _closed = false;
 
+    // The target of the delegating constructor below - the sink and the etag future have to be
+    // created before the member initialization starts, as a future has no default constructor.
+    // If the allocation of the stream throws, sink_and_etag is destroyed while unwinding. A pair
+    // destroys its members in reverse order, so the future goes away first - detaching itself
+    // from its promise - and the sink, carrying that promise, only afterwards: nothing is left
+    // to wait for and no exception is ever produced. The opposite order would not do: destroying
+    // the sink first breaks the promise and leaves an exceptional future to be dropped. The
+    // future cannot be ignore_ready_future()-d either: at this point it is still unresolved and
+    // ignoring an unresolved future asserts.
+    s3_storage_sink(sstring&& object_name, std::pair<data_sink, future<sstring>> sink_and_etag)
+        : _object_name(std::move(object_name))
+        , _upload_stream(std::make_unique<output_stream<char>>(std::move(sink_and_etag.first)))
+        , _etag_future(std::move(sink_and_etag.second))
+    {
+    }
+
 public:
+    // The constructor above takes object_name by rvalue reference, so it stays intact until
+    // it runs - the second argument may use it no matter in which order the arguments happen
+    // to be evaluated. The client is not kept here: the sink the stream holds keeps it alive
+    // for as long as the upload needs it.
     s3_storage_sink(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
-        : _client(std::move(client))
-        , _object_name(std::move(object_name))
-        , _as(as)
-        , _upload_stream(std::make_unique<output_stream<char>>(_client->make_upload_jumbo_sink(_object_name, s3::object_metadata{}, std::nullopt, as)))
+        : s3_storage_sink(std::move(object_name),
+                          client->make_upload_jumbo_sink_and_get_etag(object_name, s3::object_metadata{}, std::nullopt, as))
     {
     }
     ~s3_storage_sink() {
@@ -319,6 +341,7 @@ public:
             // to close the sink fails on its own, without taking the whole node down with it.
             on_internal_error_noexcept(xlogger, fmt::format("s3_storage_sink {} destroyed without calling flush_and_close() - it will leave leftovers in S3", _object_name));
             [[maybe_unused]] auto* leaked = _upload_stream.release();
+            // _etag_future is destroyed unresolved, as the leaked sink never sets its promise.
         }
     }
 
@@ -336,19 +359,30 @@ public:
             on_internal_error(xlogger, fmt::format("s3_storage_sink {} already closed", _object_name));
         }
         _closed = true;
-        co_await _upload_stream->close();
-        // The sink uploads the object in multiple parts, so its S3 etag is not the md5 of the
-        // content that sink_result_builder computed - it is the md5 of the concatenated part
-        // md5s with the part count appended. Only S3 knows how the data was split into parts,
-        // so ask it for the etag instead of trying to reproduce it here.
-        auto info = co_await _client->get_object_info(_object_name, _as);
-        
-        // TODO: replace default return with this line after #31703 is merged
-#if 0
-            co_return _result.finalize(sstring(strip_etag_quotes(info.etag)));
-#endif
-
-        co_return _result.finalize(sstring(""));
+        try {
+            co_await _upload_stream->close();
+        }
+        catch(...) {
+            // We will ignore _etag_future if the upload failed, as the tag holds no interest
+            // then - but it has to be ignored explicitly, or seastar reports the exception it
+            // carries as an ignored one. It is resolved by now even though close() threw:
+            // output_stream::close() closes the sink whether flushing it succeeded or not,
+            // and the sink resolves the tag before it finishes closing (see
+            // make_upload_jumbo_sink_and_get_etag()).
+            _etag_future.ignore_ready_future();
+            throw;
+        }
+        auto etag = co_await std::move(_etag_future);
+        auto stripped_etag = strip_etag_quotes(etag);
+        // The upload itself succeeded, but S3 reported no tag the client could make sense of
+        // (see make_upload_jumbo_sink_and_get_etag()) - the caller is the one expected to check
+        // for that. The manifest describing the export has to carry the tag of the object, so
+        // an export with no tag to report is of no use to anybody - fail it instead of handing
+        // out a result with an empty etag.
+        if (stripped_etag.empty()) {
+            throw std::runtime_error(fmt::format("S3 reported no usable etag for the uploaded object {}", _object_name));
+        }
+        co_return _result.finalize(sstring(stripped_etag));
     }
 };
 
