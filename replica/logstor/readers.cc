@@ -162,10 +162,13 @@ class logstor_single_key_reader : public logstor_reader_base {
     }
 
     future<> read_miss(primary_index_key key, primary_index::guarded_location where) {
-        auto guard = reader_permit::awaits_guard(_permit);
         // The record is charged from the read until the end of this function, which frees it.
         auto record_memory = _permit.consume_memory(where.location.size);
+        // The permit awaits only while the record is read from the disk, and not while it is
+        // decoded and put in the cache, so that the semaphore does not admit readers for CPU work.
+        std::optional<reader_permit::awaits_guard> awaits(std::in_place, _permit);
         auto record = co_await _segment_manager.read(where.guard, where.location);
+        awaits.reset();
         if (record.header.key.key() != _dk.key()) [[unlikely]] {
             co_await coroutine::return_exception(key_mismatch_error(_dk.key(), record.header.key.key(), where.location));
         }
@@ -258,6 +261,8 @@ class logstor_range_reader : public logstor_reader_base {
     struct batch_slot {
         record_location location;
         std::optional<pending_partition> partition;
+        // The record read from the log, kept from the read until it is decoded into partition.
+        std::optional<log_record> record;
     };
 
     struct partition_batch {
@@ -299,8 +304,9 @@ class logstor_range_reader : public logstor_reader_base {
     // Reads the records the cache did not have, filling each slot in place so that the batch
     // keeps the index order the scan produced. A range read does not populate the cache: a
     // scan would pull a whole table through it and evict what the point reads rely on.
+    // The records are all read first and then decoded, so that the permit awaits only while
+    // the reads are in flight, and not while a record is decoded.
     future<std::vector<pending_partition>> read_partitions_for_batch(partition_batch& batch) {
-        auto guard = reader_permit::awaits_guard(_permit);
         auto& slots = batch.slots;
 
         // The records are charged in one call until all of them are decoded, so a record decoded
@@ -314,24 +320,31 @@ class logstor_range_reader : public logstor_reader_base {
         }
         auto record_memory = _permit.consume_memory(record_bytes);
 
-        std::vector<future<>> reads;
-        reads.reserve(slots.size());
+        {
+            auto awaits = reader_permit::awaits_guard(_permit);
+            std::vector<future<>> reads;
+            reads.reserve(slots.size());
 
-        for (auto& slot : slots) {
-            if (slot.partition) {
-                continue;
+            for (auto& slot : slots) {
+                if (slot.partition) {
+                    continue;
+                }
+                reads.push_back(_segment_manager.read(batch.guard, slot.location).then([&slot] (log_record record) {
+                    slot.record = std::move(record);
+                }));
             }
-            reads.push_back(_segment_manager.read(batch.guard, slot.location).then([this, &slot] (log_record record) {
-                auto partition = decode_record_value(record.value, *_table_schema, record.header);
-                slot.partition = make_pending(std::move(record.header.key), std::move(partition));
-            }));
-        }
 
-        co_await when_all_succeed(reads.begin(), reads.end());
+            co_await when_all_succeed(reads.begin(), reads.end());
+        }
 
         std::vector<pending_partition> partitions;
         partitions.reserve(slots.size());
         for (auto& slot : slots) {
+            if (slot.record) {
+                auto partition = decode_record_value(slot.record->value, *_table_schema, slot.record->header);
+                slot.partition = make_pending(std::move(slot.record->header.key), std::move(partition));
+                slot.record.reset();
+            }
             partitions.push_back(std::move(*slot.partition));
         }
         co_return partitions;
