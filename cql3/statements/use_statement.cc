@@ -48,11 +48,6 @@ audit::statement_category use_statement::category() const {
 
 }
 
-bool use_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
-{
-    return false;
-}
-
 future<> use_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
     state.validate_login();

@@ -34,7 +34,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    virtual std::vector<dependent_table> dependent_tables() const override;
 
     // TRUNCATE is an administrative operation a driver never runs on its control
     // connection, so we should reclassify on it.

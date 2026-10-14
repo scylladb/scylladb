@@ -18,6 +18,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
+#include "schema/schema_fwd.hh"
 
 namespace service {
 
@@ -48,6 +49,19 @@ class query_options;
 
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;
+
+// A table a statement depends on: the statement depends on the table, not
+// the other way around, so it's identified by its (stable) table_id rather
+// than a (keyspace, table) name pair. ks_name/cf_name are kept alongside so
+// the prepared-statement cache can still be driven by migration_listener's
+// name-based notifications (on_drop_column_family() etc. only get names,
+// since by the time they fire the dropped table's schema is no longer
+// registered and can't be looked up to recover its id).
+struct dependent_table {
+    table_id id;
+    sstring ks_name;
+    sstring cf_name;
+};
 
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
@@ -118,7 +132,10 @@ public:
         return execute(qp, state, options, std::move(guard));
     }
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
+    // The tables this statement depends on. Used to index the
+    // prepared-statement cache by table, so a schema change only has to look
+    // up the affected table's statements instead of scanning the whole cache.
+    virtual std::vector<dependent_table> dependent_tables() const = 0;
 
     // The plan this statement scans, to be checked against the one a paging state
     // pins. Disengaged for statements that are never paged. See #18992.
