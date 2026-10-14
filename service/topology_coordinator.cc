@@ -2230,69 +2230,191 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return ks_md;
     }
 
+    // For each DC, the racks holding replicas of the keyspace's tablets, most replicas
+    // first. A conversion to a rack list prefers them, so that it moves as little data
+    // as it can.
+    future<std::unordered_map<sstring, std::vector<sstring>>> auto_rf_replica_racks(const data_dictionary::keyspace_metadata& ks_md) {
+        auto tm = get_token_metadata_ptr();
+        std::unordered_map<sstring, std::unordered_map<sstring, size_t>> counts;
+        for (const auto& [name, schema] : ks_md.cf_meta_data()) {
+            if (!tm->tablets().has_tablet_map(schema->id())) {
+                continue;
+            }
+            co_await tm->tablets().get_tablet_map(schema->id()).for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& ti) {
+                for (const auto& r : ti.replicas) {
+                    if (auto* node = tm->get_topology().find_node(r.host)) {
+                        ++counts[node->dc()][node->rack()];
+                    }
+                }
+                return make_ready_future<>();
+            });
+        }
+        std::unordered_map<sstring, std::vector<sstring>> ret;
+        for (auto& [dc, rack_counts] : counts) {
+            auto racks = rack_counts | std::views::keys | std::ranges::to<std::vector<sstring>>();
+            std::ranges::sort(racks, [&] (const sstring& a, const sstring& b) {
+                return rack_counts[a] != rack_counts[b] ? rack_counts[a] > rack_counts[b] : a < b;
+            });
+            ret.emplace(dc, std::move(racks));
+        }
+        co_return ret;
+    }
+
     // The replication options auto-RF gives the keyspace next, or nullopt if it has
     // nothing to change. One step per change, tried in this order: convert numeric RFs
-    // to rack lists, give up a rack which is no longer eligible, add a rack to a DC
-    // below the goal, add a DC.
+    // to rack lists where rack lists are used, lower a numeric RF or give up a rack
+    // which is no longer eligible, raise a numeric RF or add a rack to a DC below the
+    // goal, add a DC. Which form a DC uses is decided by get_auto_rf_dc_mode().
     static std::optional<locator::replication_strategy_config_options> next_auto_rf_change(
-            const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks) {
+            const data_dictionary::keyspace_metadata& ks_md, size_t goal, const auto_rf_racks& racks,
+            const std::unordered_map<sstring, std::vector<sstring>>& replica_racks = {}) {
         const auto& ks_name = ks_md.name();
         const auto& options = ks_md.strategy_options();
 
-        // Every DC with enough allowed racks is converted in the same change.
+        // Rack lists are required but the cluster cannot use them yet (RACK_LIST_RF is
+        // still being enabled during an upgrade): any change would either be rejected or,
+        // raising a numeric RF, make the keyspace RF-rack-invalid. Wait for the feature.
+        if (racks.rack_lists_required && !racks.rack_lists_enabled) {
+            return std::nullopt;
+        }
+
+        // The goal in one DC. Where the other tablets keyspaces of the DC all use numeric
+        // RFs, it is at most the largest of those: auto-RF never needs more racks than
+        // they do, so it never keeps a rack from being removed which they could leave.
+        auto goal_in = [&] (const sstring& dc) -> size_t {
+            auto it = racks.max_numeric_rf.find(dc);
+            if (it == racks.max_numeric_rf.end() || racks.rack_list_dcs.contains(dc)) {
+                return goal;
+            }
+            return std::min(goal, it->second);
+        };
+        auto available_racks = [&] (const sstring& dc) -> size_t {
+            auto it = racks.allowed.find(dc);
+            return it == racks.allowed.end() ? 0 : it->second.size();
+        };
+        // In numeric mode: the RF auto-RF raises the keyspace to, and the RF above which
+        // it lowers it. The goal does not bound the latter, so that an operator who raised
+        // the RF above the goal, within what the other keyspaces use, is not undone.
+        auto numeric_target = [&] (const sstring& dc) -> size_t {
+            return std::max<size_t>(1, std::min(goal_in(dc), available_racks(dc)));
+        };
+        auto numeric_bound = [&] (const sstring& dc) -> size_t {
+            auto it = racks.max_numeric_rf.find(dc);
+            const size_t user_rf = it == racks.max_numeric_rf.end() ? 1 : it->second;
+            return std::max<size_t>(1, std::min(user_rf, available_racks(dc)));
+        };
+        // The racks a numeric RF of a DC is converted to, in order of preference.
+        auto conversion_racks = [&] (const sstring& dc) -> std::vector<sstring> {
+            if (auto it = racks.allowed.find(dc); it != racks.allowed.end()) {
+                return it->second | std::ranges::to<std::vector<sstring>>();
+            }
+            if (racks.eligible.contains(dc)) {
+                return {};
+            }
+            // No other tablets keyspace uses the DC, and rack lists are required: any rack
+            // with token owners will do, preferably the ones the replicas are already on.
+            std::vector<sstring> ret;
+            auto owners = racks.token_owner_racks.find(dc);
+            if (owners == racks.token_owner_racks.end()) {
+                return ret;
+            }
+            if (auto it = replica_racks.find(dc); it != replica_racks.end()) {
+                std::ranges::copy_if(it->second, std::back_inserter(ret), [&] (const sstring& r) { return owners->second.contains(r); });
+            }
+            std::ranges::copy_if(owners->second, std::back_inserter(ret), [&] (const sstring& r) { return !std::ranges::contains(ret, r); });
+            return ret;
+        };
+
+        auto with = [&] (const sstring& dc, locator::replication_strategy_config_option value) {
+            auto new_options = options;
+            new_options[dc] = std::move(value);
+            return new_options;
+        };
+        auto numeric = [] (size_t rf) {
+            return locator::replication_strategy_config_option(seastar::format("{}", rf));
+        };
+
+        // Every DC which has enough racks is converted in the same change. A numeric RF
+        // above the number of racks it could be converted to is lowered first, since a
+        // conversion has to keep the replica count; where rack lists are required a
+        // numeric RF cannot be changed at all, so it is left for the operator then.
         auto converted = options;
         bool any_converted = false;
+        std::optional<locator::replication_strategy_config_options> lowered;
         for (const auto& [dc, rf] : options) {
             auto rf_data = locator::replication_factor_data(rf);
-            auto it = racks.allowed.find(dc);
-            if (rf_data.is_numeric() && it != racks.allowed.end() && it->second.size() >= rf_data.count()) {
+            if (!rf_data.is_numeric() || get_auto_rf_dc_mode(racks, dc) != auto_rf_dc_mode::rack_list) {
+                continue;
+            }
+            auto candidates = conversion_racks(dc);
+            if (candidates.size() >= rf_data.count()) {
                 rtlogger.debug("Keyspace {} has a numeric replication factor for DC {}, converting it to a rack list", ks_name, dc);
-                converted[dc] = it->second | std::views::take(rf_data.count()) | std::ranges::to<locator::rack_list>();
+                converted[dc] = candidates | std::views::take(rf_data.count()) | std::ranges::to<locator::rack_list>();
                 any_converted = true;
+            } else if (!candidates.empty() && !lowered && !racks.rack_lists_required) {
+                rtlogger.debug("Keyspace {} has a numeric replication factor {} for DC {}, which has only {} rack(s) to convert it to, lowering it",
+                        ks_name, rf_data.count(), dc, candidates.size());
+                lowered = with(dc, numeric(rf_data.count() - 1));
             }
         }
         if (any_converted) {
             return converted;
         }
-
-        auto with_racks = [&] (const sstring& dc, locator::rack_list rack_list) {
-            auto new_options = options;
-            new_options[dc] = std::move(rack_list);
-            return new_options;
-        };
+        if (lowered) {
+            return lowered;
+        }
 
         for (const auto& [dc, rf] : options) {
             auto rf_data = locator::replication_factor_data(rf);
-            if (!rf_data.is_rack_based()) {
-                continue;
-            }
-            if (auto rack = find_ineligible_auto_rf_rack(racks.eligible, dc, rf_data.get_rack_list())) {
+            if (rf_data.is_numeric()) {
+                const auto mode = get_auto_rf_dc_mode(racks, dc);
+                const size_t bound = mode == auto_rf_dc_mode::numeric ? numeric_bound(dc) : 1;
+                if ((mode == auto_rf_dc_mode::numeric || (mode == auto_rf_dc_mode::keep && !racks.eligible.empty()))
+                        && rf_data.count() > bound) {
+                    rtlogger.debug("Keyspace {} has replication factor {} in DC {}, above {}, lowering it", ks_name, rf_data.count(), dc, bound);
+                    return with(dc, numeric(rf_data.count() - 1));
+                }
+            } else if (auto rack = find_ineligible_auto_rf_rack(racks.eligible, dc, rf_data.get_rack_list())) {
                 rtlogger.debug("Keyspace {} replicates to rack {} of DC {}, which is no longer eligible, removing it", ks_name, *rack, dc);
                 auto rack_list = rf_data.get_rack_list();
                 std::erase(rack_list, *rack);
-                return with_racks(dc, std::move(rack_list));
+                return with(dc, std::move(rack_list));
             }
         }
 
         for (const auto& [dc, rf] : options) {
             auto rf_data = locator::replication_factor_data(rf);
             auto it = racks.allowed.find(dc);
-            if (!rf_data.is_rack_based() || rf_data.get_rack_list().size() >= goal || it == racks.allowed.end()) {
+            if (it == racks.allowed.end()) {
+                continue;
+            }
+            if (rf_data.is_numeric()) {
+                if (get_auto_rf_dc_mode(racks, dc) == auto_rf_dc_mode::numeric && rf_data.count() < numeric_target(dc)) {
+                    rtlogger.debug("Keyspace {} is below its target {} in DC {}, raising its replication factor to {}", ks_name, numeric_target(dc), dc, rf_data.count() + 1);
+                    return with(dc, numeric(rf_data.count() + 1));
+                }
                 continue;
             }
             auto rack_list = rf_data.get_rack_list();
+            if (rack_list.size() >= goal_in(dc)) {
+                continue;
+            }
             auto rack = std::ranges::find_if(it->second, [&] (const sstring& r) { return !std::ranges::contains(rack_list, r); });
             if (rack != it->second.end()) {
-                rtlogger.debug("Keyspace {} is below the RF goal {} on DC {}, adding rack {}", ks_name, goal, dc, *rack);
+                rtlogger.debug("Keyspace {} is below the RF goal {} on DC {}, adding rack {}", ks_name, goal_in(dc), dc, *rack);
                 rack_list.push_back(*rack);
-                return with_racks(dc, std::move(rack_list));
+                return with(dc, std::move(rack_list));
             }
         }
 
         for (const auto& [dc, dc_racks] : racks.allowed) {
             if (!options.contains(dc)) {
+                if (get_auto_rf_dc_mode(racks, dc) == auto_rf_dc_mode::numeric) {
+                    rtlogger.debug("Keyspace {} does not replicate to DC {}, adding it with replication factor 1", ks_name, dc);
+                    return with(dc, numeric(1));
+                }
                 rtlogger.debug("Keyspace {} does not replicate to DC {}, adding rack {}", ks_name, dc, *dc_racks.begin());
-                return with_racks(dc, locator::rack_list{*dc_racks.begin()});
+                return with(dc, locator::rack_list{*dc_racks.begin()});
             }
         }
         return std::nullopt;
@@ -2341,7 +2463,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_return std::nullopt;
         }
         const auto racks = get_auto_rf_racks();
-        if (racks.eligible.empty()) {
+        // Where rack lists are required, a numeric RF is converted even while no other
+        // tablets keyspace exists to follow (enforce_rack_list may have just been set on
+        // such a cluster); nothing else is done then.
+        if (racks.eligible.empty() && !(racks.rack_lists_required && racks.rack_lists_enabled)) {
             rtlogger.debug("auto-rf: no tablets keyspace to follow");
             co_return std::nullopt;
         }
@@ -2353,7 +2478,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             if (!ks_md) {
                 continue;
             }
-            if (auto new_options = next_auto_rf_change(*ks_md, goal, racks)) {
+            if (auto new_options = next_auto_rf_change(*ks_md, goal, racks, co_await auto_rf_replica_racks(*ks_md))) {
                 auto old_options = ks_md->strategy_options();
                 old_options.emplace("class", ks_md->strategy_name());
                 new_options->emplace("class", ks_md->strategy_name());
