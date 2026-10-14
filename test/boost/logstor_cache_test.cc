@@ -12,6 +12,7 @@
 
 #include "replica/logstor/index.hh"
 #include "db/cache_tracker.hh"
+#include <variant>
 #include "schema/schema_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
@@ -79,8 +80,9 @@ void populate(primary_index& index, const primary_index_key& key, const mutation
 mutation lookup_mutation(primary_index& index, const primary_index_key& key, schema_ptr schema) {
     auto result = index.lookup_for_read(key, *schema, true);
     BOOST_REQUIRE(result);
-    BOOST_REQUIRE(result->cached_mutation);
-    return std::move(*result->cached_mutation);
+    auto* cached = std::get_if<mutation>(&*result);
+    BOOST_REQUIRE(cached);
+    return std::move(*cached);
 }
 
 mutation_partition lookup(primary_index& index, const primary_index_key& key, schema_ptr schema) {
@@ -90,7 +92,7 @@ mutation_partition lookup(primary_index& index, const primary_index_key& key, sc
 bool lookup_exists(primary_index& index, const primary_index_key& key, schema_ptr schema) {
     auto result = index.lookup_for_read(key, *schema, true);
     BOOST_REQUIRE(result);
-    return bool(result->cached_mutation);
+    return std::holds_alternative<mutation>(*result);
 }
 
 bool evict_one(replica::logstor::cache_tracker& tracker) {

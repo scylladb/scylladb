@@ -35,6 +35,7 @@ namespace logstor {
 class compaction_manager;
 class segment_set;
 class primary_index;
+class index_read_guard;
 
 static constexpr uint64_t default_segment_size = 128 * 1024;
 static constexpr uint64_t default_file_size = 32 * 1024 * 1024;
@@ -118,7 +119,9 @@ public:
 
     future<> write(write_buffer& wb);
 
-    future<log_record> read(record_location location);
+    // Reads the record at a location from the index. Keep the guard of the location until the
+    // read is complete, so that the segment stays allocated.
+    future<log_record> read(const index_read_guard&, record_location location);
 
     void on_add_record(record_location location) noexcept override;
     void on_free_record(record_location location) noexcept override;

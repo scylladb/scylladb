@@ -15,6 +15,7 @@ target_sources(replica
     logstor/compaction.cc
     logstor/segment_manager.cc
     logstor/logstor.cc
+    logstor/readers.cc
     logstor/write_buffer.cc
     logstor/record_value.cc
     multishard_query.cc

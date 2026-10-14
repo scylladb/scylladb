@@ -19,6 +19,7 @@
 #include "utils/phased_barrier.hh"
 #include "utils/small_vector.hh"
 #include <utility>
+#include <variant>
 #include "replica/logstor/cache.hh"
 
 namespace replica::logstor {
@@ -122,6 +123,18 @@ struct primary_index_key_cmp {
     }
 };
 
+// The segments of the locations that came with this guard stay allocated while the guard exists.
+// Compaction and the separator move the records out of a segment and update the index. Then they
+// wait for all guards that exist, and then they free the segment. Only the index makes a guard. It
+// gives one with each location from a lookup or a scan. segment_manager::read() requires one.
+class index_read_guard {
+    utils::phased_barrier::operation _op;
+
+    explicit index_read_guard(utils::phased_barrier::operation op) noexcept : _op(std::move(op)) {}
+
+    friend class primary_index;
+};
+
 class primary_index final {
 public:
     using partitions_type = double_decker<int64_t, primary_index_entry,
@@ -130,10 +143,15 @@ public:
 
     using entry_reference = std::reference_wrapper<const primary_index_entry>;
 
-    struct read_lookup_result {
-        index_entry entry;
-        std::optional<mutation> cached_mutation;
+    // A record location and the guard that keeps the location readable.
+    struct guarded_location {
+        record_location location;
+        index_read_guard guard;
     };
+
+    // The result of a point lookup: the cached mutation, or the location of the record if the
+    // cache does not have it.
+    using read_lookup_result = std::variant<mutation, guarded_location>;
 
     struct dump_lookup_result {
         index_entry entry;
@@ -190,6 +208,9 @@ public:
         // meant for immediate consumption. Do not keep them across yields or index mutations.
         // The scan only saves token position, not entry handles.
         //
+        // `guard` keeps the locations of the entries readable. Hold it until all reads of the
+        // records are complete.
+        //
         // `first_token` and `last_token` are useful for tracing and resume bookkeeping.
         // `entry_count` is the number of entries in `entries`.
         // `exhausted` tells whether this batch reached the end of the requested range.
@@ -199,6 +220,7 @@ public:
         // token group in half (except if the first token itself exceeds `max_entries`, in which
         // case the batch will contain only that token).
         struct batch {
+            index_read_guard guard;
             utils::small_vector<entry_reference, 16> entries;
             dht::token first_token;
             dht::token last_token;
@@ -243,6 +265,7 @@ public:
             }
 
             batch next{
+                .guard = _index->start_read(),
                 .first_token = current->key().token(),
                 .last_token = current->key().token(),
                 .exhausted = false,
@@ -375,6 +398,10 @@ private:
                 : self._partitions.end();
     }
 
+    index_read_guard start_read() const {
+        return index_read_guard(_reads_phaser.start());
+    }
+
     const_iterator upper_bound(dht::token token) const {
         return _partitions.upper_bound(token.raw(), primary_index_key_cmp{});
     }
@@ -398,10 +425,6 @@ public:
         }
     }
 
-    utils::phased_barrier::operation start_read() const {
-        return _reads_phaser.start();
-    }
-
     future<> await_pending_reads() {
         return _reads_phaser.advance_and_await();
     }
@@ -410,6 +433,7 @@ public:
         return token_range_scan(*this, tr);
     }
 
+    // Returns the entry of a key without a guard. Do not read from it.
     std::optional<index_entry> get(const primary_index_key& key) const {
         auto it = find_key(key);
         if (it != _partitions.end()) {
@@ -445,17 +469,21 @@ public:
         return _cache_tracker->lookup(e, target_schema);
     }
 
+    // Finds a key for a point read. Returns nullopt if the index does not have the key. If
+    // `cache_enabled` and the cache has the key, returns the cached mutation. If not, returns the
+    // location of the record with a guard.
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, bool cache_enabled) const {
         auto it = find_key(key);
         if (it == _partitions.end()) {
             return std::nullopt;
         }
 
-        read_lookup_result result{.entry = it->entry()};
         if (cache_enabled) {
-            result.cached_mutation = lookup_cached(*it, target_schema);
+            if (auto cached = lookup_cached(*it, target_schema)) {
+                return std::move(*cached);
+            }
         }
-        return result;
+        return guarded_location{.location = it->entry().location, .guard = start_read()};
     }
 
     bool populate_cache(const primary_index_key& key, record_location read_location, const mutation& m) const {
