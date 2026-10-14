@@ -37,7 +37,7 @@ struct reader_position_tracker {
     // counted, so this is not a position in the data file. It is meant for
     // distances within one stream. Read monitors measure their
     // progress with `position` and read_progress_estimator instead.
-    int64_t offset = 0;
+    int64_t bytes_consumed = 0;
 };
 
 // Converts a reader position into read progress through the data file, in
