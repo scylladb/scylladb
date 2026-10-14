@@ -29,10 +29,6 @@ def testNowToUUIDCompatibility(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (0, now())")
         assert len(list(execute(cql, table, "SELECT * FROM %s WHERE a=0 AND b < now()"))) == 1
 
-# Cassandra's test uses the new function names to_unix_timestamp() and
-# to_timestamp(), which Scylla doesn't support yet (SCYLLADB-5141). Cassandra
-# still supports the old names toUnixTimestamp() and toTimestamp(), so we
-# use those, to keep testing the rest of this test on Scylla.
 def testDateCompatibility(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b timestamp, c bigint, d varint, PRIMARY KEY (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (0, toUnixTimestamp(now()), toTimestamp(now()), toTimestamp(now()))")

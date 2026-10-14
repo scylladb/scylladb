@@ -2283,9 +2283,6 @@ def testGroupByTimeRangesWithTimeUUIDAndWithoutPaging(cql, test_keyspace, compac
                            row(2, toTimestamp("2016-09-27 16:25:00 UTC"), 10, 10, 1),
                            row(2, toTimestamp("2016-09-27 16:30:00 UTC"), 11, 11, 1))
 
-                # The Java test uses the new function name to_timestamp(),
-                # which Scylla doesn't support yet (SCYLLADB-5141). Cassandra
-                # still supports the old name toTimestamp(), so we use it.
                 assertRows(execute(cql, table, "SELECT pk, floor(toTimestamp(time), 5m" + startingTime + "), min(v), max(v), count(v) FROM %s GROUP BY pk, floor(toTimestamp(time), 5m" + startingTime + ")"),
                            row(1, toTimestamp("2016-09-27 16:10:00 UTC"), 1, 3, 3),
                            row(1, toTimestamp("2016-09-27 16:15:00 UTC"), 4, 4, 1),

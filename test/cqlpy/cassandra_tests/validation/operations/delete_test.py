@@ -1015,11 +1015,6 @@ def testDeleteAndReverseQueries(cql, test_keyspace):
             row(9), row(8), row(1), row(0)
         )
 
-# Cassandra's tests testDeleteWithEmptyRestrictionValue and
-# testDeleteWithMultipleClusteringColumnsAndEmptyRestrictionValue now use the
-# new function name text_as_blob(), which Scylla doesn't support yet
-# (SCYLLADB-5141). Cassandra still supports the old name textAsBlob(), so we
-# use it, to keep testing these tests on Scylla.
 def testDeleteWithEmptyRestrictionValue(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, primary key (pk, c))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", b"foo123", b"", b"1")
