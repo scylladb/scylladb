@@ -4522,7 +4522,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                         if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
                                 locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::add,
-                                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+                                    to_host_id(node.id), node.rs->datacenter, node.rs->rack}, auto_rf_keyspace_names())) {
                             _rollback = fmt::format("Cannot add the node because its addition would make some existing keyspace RF-rack-invalid");
                             break;
                         }
