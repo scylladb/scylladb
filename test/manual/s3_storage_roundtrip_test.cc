@@ -112,13 +112,9 @@ SEASTAR_TEST_CASE(test_s3_storage_sink_source_roundtrip) {
             std::rethrow_exception(std::move(exception));
         }
 
-        // TODO: reenable this check after #31703 is merged
-#if 0
         auto etag = (co_await client->get_object_info(object_name)).etag;
         // The etag returned by the S3 client includes quotes, so we need to add quotes around the res.etag for comparison.
         BOOST_CHECK_EQUAL(sstring{ "\"" } + res.etag + sstring{ "\"" }, etag);
-#endif
-
 
         // Read back via s3_storage_source and verify data integrity.
         std::vector<rjson::value> received;
