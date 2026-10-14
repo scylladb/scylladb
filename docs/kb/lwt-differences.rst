@@ -12,7 +12,7 @@ How is it different?
 * For batch statement, ScyllaDB allows mixing `IF EXISTS`, `IF NOT EXISTS`, and other conditions for the same row.
 * Unlike Cassandra, ScyllaDB  uses per-core data partitioning, so the RPC  that is done to perform a transaction talks directly to the right core on a peer replica, avoiding the concurrency overhead. This is,  of course, true, if ScyllaDB’s own shard-aware driver is used - otherwise we  add an extra hop to the right core at the coordinator node.
 * ScyllaDB does not store  hints for lightweight transaction writes, since this is redundant as all such writes are already present in system.paxos table.
-* ScyllaDB supports arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter numeric columns inside LWT conditional updates. Cassandra does not support this syntax.
+* Both ScyllaDB and Cassandra support arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter columns inside LWT conditional updates, with some differences: Cassandra supports subtraction only since Cassandra 6.0; Cassandra also supports ``col = col + value`` on text columns (string concatenation), which ScyllaDB doesn't; and when the result overflows an integer type, Cassandra silently wraps around, while ScyllaDB rejects the update with an error.
 
 
 More on :doc:`Lightweight Transactions (LWT) </features/lwt>`
@@ -32,10 +32,9 @@ If the column is null, the arithmetic result is also null (standard SQL null-pro
 semantics), so the column remains unset. To catch an uninitialized column, use an ``IF``
 condition that checks the column value (e.g. ``IF score != null``) rather than ``IF EXISTS``.
 
-This syntax is a ScyllaDB extension; Cassandra rejects it with an ``InvalidRequest`` error.
+Apache Cassandra supports the same syntax, with the differences listed above.
 An ``IF`` condition (``IF EXISTS`` or a column predicate) is required; omitting the ``IF``
-clause is rejected even in ScyllaDB, because without LWT atomicity the read-modify-write
-would not be safe.
+clause is rejected, because without LWT atomicity the read-modify-write would not be safe.
 
 Example — atomic counter on a regular column:
 

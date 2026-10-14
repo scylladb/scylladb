@@ -265,10 +265,14 @@ def test_counter_syntax_non_counter_prepare(cql, table1):
         cql.prepare(f'UPDATE {table1} SET r = r - 1 WHERE p = ? AND c = ?')
 
 # Test that the counter syntax SET r = r + 1 IS allowed in an LWT update
-# on non-counter integer columns (issue #10568). This is a Scylla extension
-# (Cassandra rejects it). The underlying CAS mechanism reads the old value
-# and writes the incremented result atomically.
-def test_lwt_counter_syntax(cql, table1, scylla_only):
+# on non-counter integer columns (issue #10568). The underlying CAS mechanism
+# reads the old value and writes the incremented result atomically.
+# Cassandra also supports this syntax, but only for addition since Cassandra
+# 4.1 (commit 951d72cd92, "[CEP-10] Phase 4: Support CAS Add Operations"),
+# and for subtraction only since Cassandra 6.0 (CASSANDRA-20477). This test,
+# and the following ones using subtraction, are therefore skipped on older
+# versions of Cassandra.
+def test_lwt_counter_syntax(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     # Insert a row with r explicitly set to 0. Arithmetic on a null column
     # is an error, so the column must have a value before using arithmetic SET.
@@ -302,7 +306,7 @@ def test_lwt_counter_syntax(cql, table1, scylla_only):
 # expressions work in SQL, but can be considered a footgun; In contrast,
 # DynamoDB does throw an error when an expression uses an uninitialized
 # attribute.
-def test_lwt_counter_syntax_null_column(cql, table1, scylla_only):
+def test_lwt_counter_syntax_null_column(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c) VALUES ({p}, 1) IF NOT EXISTS')
     # At this point, the row (p, 1) exists but has r is null.
@@ -332,8 +336,8 @@ def test_lwt_counter_syntax_null_column(cql, table1, scylla_only):
     assert cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1').one().r == 1
 
 # Test that the LWT counter syntax is allowed for all numeric types, not just
-# integers. This is a Scylla extension (issue #10568).
-def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, scylla_only):
+# integers.
+def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, new_to_cassandra_6):
     # All CQL numeric types that should support arithmetic SET in LWT updates.
     numeric_types = ['tinyint', 'smallint', 'int', 'bigint', 'varint', 'float', 'double', 'decimal']
     # Build a table with one column per numeric type, all named col_<type>.
@@ -391,7 +395,7 @@ def test_lwt_counter_forbidden_key_columns(cql, table1):
 
 # Test that the LWT counter syntax works in prepared statements, including
 # the operand coming from a bind variable.
-def test_lwt_counter_syntax_prepared(cql, table1, scylla_only):
+def test_lwt_counter_syntax_prepared(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c, r) VALUES ({p}, 1, 10)')
     # Prepare a statement with a bind variable for the increment delta.
@@ -417,6 +421,10 @@ def test_lwt_counter_syntax_prepared(cql, table1, scylla_only):
 # Test that the LWT counter syntax (add and subtract) catches overflows and
 # underflows for fixed-width integer types (tinyint, smallint, int, bigint)
 # and doesn't allow them to wrap around.
+# This test is scylla_only because Cassandra deliberately lets the result
+# wrap around, as Java's integer arithmetic does - here, and also in its
+# arithmetic operators in SELECT (see testOverflow in
+# cassandra_tests/functions/operation_fcts_test.py).
 def test_lwt_counter_syntax_overflow(cql, test_keyspace, scylla_only):
     # (type name, bits) for each fixed-width signed integer type.
     integer_types = [
@@ -452,7 +460,7 @@ def test_lwt_counter_syntax_overflow(cql, test_keyspace, scylla_only):
 
 # Test that adding a float literal (3.5) to an int column is rejected at
 # because 3.5 is not a valid integer value.
-def test_lwt_counter_syntax_float_on_integer(cql, table1, scylla_only):
+def test_lwt_counter_syntax_float_on_integer(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c, r) VALUES ({p}, 1, 0)')
     with pytest.raises(InvalidRequest, match='of type int'):
