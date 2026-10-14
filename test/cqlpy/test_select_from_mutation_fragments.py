@@ -706,13 +706,24 @@ def test_many_partitions(cql, test_keyspace, scylla_only):
         assert len(pks) == num_partitions
 
 
-@pytest.mark.xfail(reason="issue #18768; token() filtering doesn't work with MUTATION_FRAGMENTS")
+# Test that token() can be used on SELECT FROM MUTATION_FRAGMENTS(), both
+# in a restriction and as a selector, and gives the same tokens as on the
+# table itself. Reproduces #18768, where any use of token() was rejected
+# because the output schema of MUTATION_FRAGMENTS() is not a real table.
 def test_mutation_fragments_vs_token(cql, test_keyspace, scylla_only):
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, c int') as table:
-        print(f'INSERT INFO {table} (pk, c) VALUES (0, 0)')
-        cql.execute(f'INSERT INTO {table} (pk, c) VALUES (0, 0)')
-        # FIXME add some reasonable validation of selected keys vs tokens
-        cql.execute(f'SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE token(pk) <= -1')
+        for pk in range(10):
+            cql.execute(f'INSERT INTO {table} (pk, c) VALUES ({pk}, {pk})')
+        tokens = {r.pk: r.system_token_pk for r in cql.execute(f'SELECT pk, token(pk) FROM {table}')}
+        assert len(tokens) == 10
+        mf = f'MUTATION_FRAGMENTS({table})'
+        # MUTATION_FRAGMENTS() returns several rows (fragments) for each
+        # partition, so we compare sets.
+        assert {(r.pk, r.system_token_pk) for r in cql.execute(f'SELECT pk, token(pk) FROM {mf}')} == set(tokens.items())
+        t = sorted(tokens.values())[5]
+        assert {r.pk for r in cql.execute(f'SELECT pk FROM {mf} WHERE token(pk) <= {t}')} == {pk for pk, tok in tokens.items() if tok <= t}
+        assert {r.pk for r in cql.execute(f'SELECT pk FROM {mf} WHERE token(pk) > {t}')} == {pk for pk, tok in tokens.items() if tok > t}
+        assert {r.pk for r in cql.execute(f'SELECT pk FROM {mf} WHERE token(pk) = {t}')} == {pk for pk, tok in tokens.items() if tok == t}
 
 
 def test_mutation_fragments_scan_includes_dead_partitions(cql, test_keyspace, scylla_only):
