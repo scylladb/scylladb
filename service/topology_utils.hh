@@ -17,6 +17,7 @@
 #include <set>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -59,7 +60,34 @@ struct auto_rf_racks {
     // The eligible racks with a token-owning, non-excluded normal node: the racks
     // an auto-RF keyspace may be extended into. Always a subset of `eligible`.
     std::unordered_map<seastar::sstring, std::set<seastar::sstring>> allowed;
+    // The racks with a token-owning, non-excluded normal node, eligible or not.
+    std::unordered_map<seastar::sstring, std::set<seastar::sstring>> token_owner_racks;
+    // The largest numeric RF of a non-auto-RF tablets keyspace in each DC; a DC
+    // missing from the map has none.
+    std::unordered_map<seastar::sstring, size_t> max_numeric_rf;
+    // The DCs in which some non-auto-RF tablets keyspace uses a rack list.
+    std::unordered_set<seastar::sstring> rack_list_dcs;
+    // rf_rack_valid_keyspaces or enforce_rack_list is set.
+    bool rack_lists_required = false;
+    // The RACK_LIST_RF cluster feature is enabled.
+    bool rack_lists_enabled = false;
 };
+
+// The form of an auto-RF keyspace's replication in one DC.
+enum class auto_rf_dc_mode {
+    // A numeric RF, at most the largest numeric RF of the other tablets keyspaces in
+    // the DC. Used where they all use numeric RFs and rack lists are not required: a
+    // numeric RF names no rack, so it never keeps a rack from being removed which
+    // those keyspaces could leave.
+    numeric,
+    // A rack list following the racks of the other tablets keyspaces.
+    rack_list,
+    // No other tablets keyspace uses the DC and rack lists are not required: the
+    // keyspace keeps its form, shrunk to a single replica.
+    keep,
+};
+
+auto_rf_dc_mode get_auto_rf_dc_mode(const auto_rf_racks& racks, const seastar::sstring& dc);
 
 auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology);
 
