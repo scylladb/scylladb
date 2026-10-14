@@ -44,6 +44,9 @@ protected:
     };
 
     query::partition_slice _slice;
+    // Decided once, from the slice: a slice with bypass_cache neither looks the cache up nor admits
+    // what it reads from a segment.
+    const use_cache _use_cache;
 
 private:
     // The partition whose fragments are going into the buffer, from its start being pushed until
@@ -55,6 +58,7 @@ protected:
     logstor_reader_base(schema_ptr s, reader_permit p, const query::partition_slice& slice)
         : impl(std::move(s), std::move(p))
         , _slice(slice)
+        , _use_cache(!_slice.options.contains(query::partition_slice::option::bypass_cache))
     { }
 
     bool emitting() const noexcept {
@@ -132,7 +136,7 @@ public:
 };
 
 class logstor_single_key_reader : public logstor_reader_base {
-    logstor* _logstor;
+    segment_manager& _segment_manager;
     const primary_index& _index;
     // The key read. It goes into the partition start once the partition is found: its last use.
     dht::decorated_key _dk;
@@ -149,12 +153,26 @@ class logstor_single_key_reader : public logstor_reader_base {
         _end_of_stream = !emitting();
     }
 
+    future<> read_miss(primary_index_key key, primary_index::guarded_location where) {
+        auto guard = reader_permit::awaits_guard(_permit);
+        auto record = co_await _segment_manager.read(where.guard, where.location);
+        if (record.header.key.key() != _dk.key()) [[unlikely]] {
+            co_await coroutine::return_exception(key_mismatch_error(_dk.key(), record.header.key.key(), where.location));
+        }
+        auto m = decode_record_value(record.value, _schema, record.header);
+        if (_use_cache) {
+            _index.populate_cache(key, where.location, m);
+        }
+        tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
+        begin(to_single_row_partition(std::move(m)));
+    }
+
 public:
     logstor_single_key_reader(schema_ptr s, const primary_index& idx, reader_permit p,
-            logstor* ls, dht::decorated_key dk,
+            segment_manager& sm, dht::decorated_key dk,
             const query::partition_slice& slice, tracing::trace_state_ptr ts)
         : logstor_reader_base(std::move(s), std::move(p), slice)
-        , _logstor(ls), _index(idx), _dk(std::move(dk))
+        , _segment_manager(sm), _index(idx), _dk(std::move(dk))
         , _trace_state(std::move(ts)) {
     }
 
@@ -163,21 +181,31 @@ public:
             if (emit_rest()) {
                 _end_of_stream = true;
             }
-            co_return;
+            return make_ready_future<>();
         }
         if (_started || _end_of_stream) {
-            co_return;
+            return make_ready_future<>();
         }
 
-        // The first call: the partition is read, and begun as a single_row_partition.
-        auto guard = reader_permit::awaits_guard(_permit);
-        auto mut = co_await _logstor->read(_schema, _index, _dk, _slice);
-        if (!mut) {
-            _end_of_stream = true;
-            co_return;
+        try {
+            primary_index_key key(_dk);
+            auto found = _index.lookup_for_read(key, *_schema, _use_cache);
+            if (!found) {
+                _end_of_stream = true;
+                return make_ready_future<>();
+            }
+            if (auto* cached = std::get_if<mutation>(&*found)) {
+                if (cached->decorated_key().key() != _dk.key()) [[unlikely]] {
+                    throw key_mismatch_error(_dk.key(), cached->decorated_key().key(), key_mismatch_error::cache_location{});
+                }
+                tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {} from the cache", _dk);
+                begin(to_single_row_partition(std::move(*cached)));
+                return make_ready_future<>();
+            }
+            return read_miss(key, std::get<primary_index::guarded_location>(std::move(*found)));
+        } catch (...) {
+            return current_exception_as_future();
         }
-        tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
-        begin(to_single_row_partition(std::move(*mut)));
     }
 
     virtual future<> next_partition() override {
@@ -204,7 +232,7 @@ public:
 };
 
 class logstor_range_reader : public mutation_reader::impl {
-    logstor* _logstor;
+    segment_manager& _segment_manager;
     const primary_index& _index;
     dht::partition_range _pr;
     primary_index::token_range_scan _scan;
@@ -276,7 +304,7 @@ class logstor_range_reader : public mutation_reader::impl {
             if (slot.mut) {
                 continue;
             }
-            reads.push_back(_logstor->get_segment_manager().read(batch.guard, slot.location).then([this, &slot] (log_record record) {
+            reads.push_back(_segment_manager.read(batch.guard, slot.location).then([this, &slot] (log_record record) {
                 auto mut = decode_record_value(record.value, _schema, record.header);
                 auto memory = _permit.consume_memory(mut.memory_usage(*_schema));
                 slot.mut = pending_mutation{std::move(mut), std::move(memory)};
@@ -420,10 +448,10 @@ class logstor_range_reader : public mutation_reader::impl {
 
 public:
     logstor_range_reader(schema_ptr s, const primary_index& idx, reader_permit p,
-                logstor* ls, dht::partition_range pr,
+                segment_manager& sm, dht::partition_range pr,
                 query::partition_slice slice, tracing::trace_state_ptr ts)
         : impl(std::move(s), std::move(p))
-        , _logstor(ls), _index(idx), _pr(std::move(pr))
+        , _segment_manager(sm), _index(idx), _pr(std::move(pr))
         , _scan(_index.scan(partition_range_to_token_range(_pr)))
         , _slice(std::move(slice))
         , _use_cache(!_slice.options.contains(query::partition_slice::option::bypass_cache))
@@ -506,11 +534,11 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
     // reader serves a singular range correctly too, it just does more work for it.
     if (!fwd_mr && pr.is_singular() && pr.start()->value().has_key()) {
         return maybe_make_forwardable(make_mutation_reader<logstor_single_key_reader>(
-            std::move(schema), index, std::move(permit), this, pr.start()->value().as_decorated_key(), slice, std::move(trace_state)
+            std::move(schema), index, std::move(permit), _segment_manager, pr.start()->value().as_decorated_key(), slice, std::move(trace_state)
         ), fwd);
     } else {
         return maybe_make_forwardable(make_mutation_reader<logstor_range_reader>(
-            std::move(schema), index, std::move(permit), this, pr, slice, std::move(trace_state)
+            std::move(schema), index, std::move(permit), _segment_manager, pr, slice, std::move(trace_state)
         ), fwd);
     }
 }

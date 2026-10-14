@@ -17,6 +17,7 @@
 #include <span>
 #include <vector>
 #include <fmt/format.h>
+#include <seastar/core/memory.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/format.hh>
@@ -4156,6 +4157,34 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_partition_navigation_on_
             .produces_end_of_stream();
 
     BOOST_REQUIRE_EQUAL(env.cache_stats().partition_hits, hits + 2);
+}
+
+// The partition of a hit is built inside the cache's allocating section and pushed outside it, so
+// an allocation failure that makes the section retry duplicates nothing: whatever allocation
+// fails, a read that completes produces exactly one partition.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_hit_survives_allocation_failures) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    assert_that(env.make_reader(singular_range(ms[0]))).produces(ms[0]).produces_end_of_stream();
+
+    memory::with_allocation_failures([&] {
+        auto rd = env.make_reader(singular_range(ms[0]));
+        auto close_rd = deferred_close(rd);
+        // The hit path does not yield, so this neither suspends the thread nor lets another task
+        // consume the injected failure.
+        rd.fill_buffer().get();
+        unsigned partition_starts = 0;
+        unsigned rows = 0;
+        while (!rd.is_buffer_empty()) {
+            auto mf = rd.pop_mutation_fragment();
+            partition_starts += mf.is_partition_start();
+            rows += mf.is_clustering_row();
+        }
+        BOOST_REQUIRE_EQUAL(partition_starts, 1);
+        BOOST_REQUIRE_EQUAL(rows, 1);
+        BOOST_REQUIRE(rd.is_end_of_stream());
+    });
 }
 
 // A slice whose row ranges exclude the one row a logstor partition has - an empty list of ranges,
