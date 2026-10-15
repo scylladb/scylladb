@@ -329,6 +329,12 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
     }
 
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(db.extensions());
+    if (is_colocated) {
+        auto gc_opts = _view_properties.properties()->get_tombstone_gc_options(exts);
+        if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
+            throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on co-located secondary indexes.");
+        }
+    }
     _view_properties.apply_to_builder(view_prop_defs::op_type::create, builder, exts, db, keyspace(), is_colocated);
 
     return view_ptr{builder.build()};

@@ -12,6 +12,7 @@ import uuid
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.cqlpy.util import new_test_table, unique_name
+from test.pylib.skip_types import skip_env
 
 # Verify that creating a named index with simple valid view properties finishes successfully,
 # and that the options are really applied, which should be reflected in `system_schema.views`.
@@ -204,6 +205,22 @@ def test_create_index_extensions(cql, test_keyspace, scylla_only):
 
         do_test("'mode': 'timeout', 'propagation_delay_in_seconds': '4200'")
         do_test("'mode': 'disabled', 'propagation_delay_in_seconds': '4200'")
+
+# The 'repair' tombstone_gc mode is not supported for tables co-located with
+# their base table, so it is rejected for co-located materialized views and for
+# CDC log tables. A local index in a tablets keyspace is backed by a co-located
+# view, so setting the 'repair' mode on it has to be rejected too, while a
+# global index, which is not co-located, can have it.
+def test_create_colocated_index_repair_tombstone_gc(cql, test_keyspace_tablets, scylla_only):
+    if test_keyspace_tablets is None:
+        skip_env("tablets are not enabled")
+    with new_test_table(cql, test_keyspace_tablets, "p int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match="'repair' mode for tombstone_gc is not allowed"):
+            cql.execute(f"CREATE INDEX {unique_name()} ON {table}((p), v) WITH tombstone_gc = {{'mode': 'repair'}}")
+
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH tombstone_gc = {{'mode': 'repair'}}")
+        cql.execute(f"DROP INDEX {test_keyspace_tablets}.{index_name}")
 
 # Verify that we can set the ID of an index, and that it will be successfully applied to
 # the underlying materialized view. That should be reflected in `system_schema.views`.
