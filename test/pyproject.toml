@@ -41,6 +41,10 @@ dependencies = [
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "packaging==26.3",
+    "pyfakefs==6.0.0",
+    "distro==1.9.0",
+    "pyudev==0.24.3",
+    "traceback-with-variables==2.2.0",
 ]
 
 [dependency-groups]
