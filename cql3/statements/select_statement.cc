@@ -12,6 +12,7 @@
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/external_search/external_index_select_statement.hh"
+#include "cql3/statements/external_search/pattern_search.hh"
 #include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -26,6 +27,7 @@
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
 #include "index/fulltext_index.hh"
+#include "index/pattern_index.hh"
 #include "locator/tablets.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/cql_protocol_extension.hh"
@@ -275,6 +277,9 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         }
         if (secondary_index::fulltext_index::has_index(*base_schema)) {
             additional_permissions.set<auth::permission::TEXT_SEARCH_INDEXING>();
+        }
+        if (secondary_index::pattern_index::has_index(*base_schema)) {
+            additional_permissions.set<auth::permission::PATTERN_SEARCH_INDEXING>();
         }
         co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT, auth::command_desc::type::OTHER, additional_permissions);
     } catch (const data_dictionary::no_such_column_family& e) {
@@ -2144,7 +2149,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             plan.resolve_ordering(prepared_ordering);
         }
     }
-    const bool is_external_search = !plan.empty();
+    bool is_external_search = !plan.empty();
 
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || plan.ordering_expr())) {
         // We have a "SELECT * GROUP BY", or a "SELECT *" whose rows have to be ranked by a score
@@ -2216,8 +2221,32 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
+    // A LIKE on a pattern-indexed column is an external search too, one that runs alone.
+    // WHERE introduces it rather than ORDER BY, so it is looked for here, before the restrictions
+    // are prepared.
+    // As for ANN and BM25, the restrictions are then prepared with filtering allowed, so a LIKE
+    // the index cannot serve is rejected as a pattern search, not asked for ALLOW FILTERING.
+    auto pattern_index = _parameters->is_mutation_fragments() ? std::nullopt : pattern_search::index_for(db, schema, _where_clause);
+    auto combined_search = [] {
+        return exceptions::invalid_request_exception("Pattern search queries cannot be combined with ANN or BM25");
+    };
+    if (pattern_index) {
+        if (is_external_search) {
+            throw combined_search();
+        }
+        is_external_search = true;
+    }
+
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, _parameters->allow_filtering() || is_external_search,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
+
+    std::optional<search_source> pattern_source;
+    if (pattern_index) {
+        if (!restrictions->get_scoring_function_restrictions().empty()) {
+            throw combined_search();
+        }
+        pattern_source = pattern_search::source_for(std::move(*pattern_index), *schema, *restrictions, !_parameters->orderings().empty());
+    }
 
     plan.check_restrictions(*restrictions);
 
@@ -2348,7 +2377,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 stats,
                 std::move(prepared_attrs));
     } else if (is_external_search) {
-        stmt = external_index_select_statement::prepare(plan.sources(), external_statement_args{
+        auto sources = pattern_source ? std::vector{std::move(*pattern_source)} : plan.sources();
+        stmt = external_index_select_statement::prepare(std::move(sources), external_statement_args{
                 .schema = schema,
                 .bound_terms = ctx.bound_variables_size(),
                 .parameters = _parameters,

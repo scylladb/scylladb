@@ -10,6 +10,7 @@
 #include "exceptions/exceptions.hh"
 #include "index/external_index.hh"
 #include "index/fulltext_index.hh"
+#include "index/pattern_index.hh"
 #include "index/vector_index.hh"
 #include "utils/UUID_gen.hh"
 
@@ -17,7 +18,7 @@ namespace secondary_index {
 
 namespace {
 
-using external_index_types = std::tuple<fulltext_index, vector_index>;
+using external_index_types = std::tuple<fulltext_index, vector_index, pattern_index>;
 
 template <typename Fn>
 void for_each_external_index_type(Fn&& fn) {

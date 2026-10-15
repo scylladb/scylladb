@@ -34,9 +34,14 @@ struct external_statement_args {
     std::unique_ptr<cql3::attributes> attrs;
 };
 
-/// A SELECT served by one or more external searches (ANN, BM25): asks each index for ranked keys,
-/// reads those rows from the base table, fills in the values each search reported for every row,
-/// and emits the rows in order. What differs by family lives in ann_search and bm25_search.
+/// A SELECT served by external searches: one or more ANN and BM25 searches, or a single pattern
+/// search. It:
+/// 1. asks each index for keys,
+/// 2. reads those rows from the base table,
+/// 3. fills in the values each search reported for every row,
+/// 4. emits the rows in order.
+///
+/// What differs by family lives in ann_search, bm25_search and pattern_search.
 class external_index_select_statement : public select_statement {
     std::vector<search_source> _sources;
     /// The restrictions a vector search prefilters by. Empty for any other query.

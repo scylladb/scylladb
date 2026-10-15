@@ -132,6 +132,7 @@ def test_oversampling_multiplies_limit_for_vector_store_query(cql, test_keyspace
     schema = "id int primary key, embedding vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index' WITH OPTIONS = {{'oversampling': '3.4'}}")
+        vector_store_mock.set_next_ann_response(200, json.dumps({"primary_keys": {"id": []}, "similarity_scores": []}))
 
         cql.execute(f"SELECT * FROM {table} {ann_order_by} LIMIT 3")
 

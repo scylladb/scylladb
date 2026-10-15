@@ -11,9 +11,11 @@
 #include <boost/algorithm/string.hpp>
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "cql3/statements/external_search/external_index_select_statement.hh"
 #include "db/config.hh"
 #include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
+#include "index/pattern_index.hh"
 #include "index/vector_index.hh"
 #include "locator/token_metadata_fwd.hh"
 #include "prepared_statement.hh"
@@ -781,6 +783,17 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
         // already-taken name. This should be an error, not a silent success.
         throw exceptions::invalid_request_exception(format("Index {} cannot be created, because table {} already exists", accepted_name, index_table_name));
     }
+
+    // A new pattern index changes the results of existing `LIKE` queries on its column.
+    if (secondary_index::secondary_index_manager::is_custom_index<secondary_index::pattern_index>(index)) {
+        warnings.emplace_back(format(
+            "Every LIKE on column {} will be served by this pattern index instead of by filtering, even with ALLOW FILTERING. "
+            "Such a query must have the LIKE as its only restriction and a LIMIT of at most {}, otherwise it fails. "
+            "It is not paged, returns its rows in an unspecified order, and is eventually consistent. "
+            "Dropping the index restores filtered LIKE.",
+            targets[0]->column_name(), external_index_select_statement::max_query_limit));
+    }
+
     ++_cql_stats->secondary_index_creates;
     schema_builder builder{schema};
     builder.with_index(index);

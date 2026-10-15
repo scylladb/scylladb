@@ -86,6 +86,8 @@ public:
     using ann_error_visitor = error_visitor;
     using fts_error = ann_error;
     using fts_error_visitor = ann_error_visitor;
+    using like_error = ann_error;
+    using like_error_visitor = ann_error_visitor;
 
     explicit vector_store_client(config const& cfg);
     ~vector_store_client();
@@ -202,6 +204,11 @@ public:
     /// more relevant).
     auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, fts_error>>;
+
+    /// Request the vector store service for the primary keys of the rows
+    /// whose indexed value matches the `LIKE` `pattern`. The results are not scored.
+    auto like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, like_error>>;
 
     /// Request a fragment of each of the given documents, with the terms of `fts_query` marked.
     ///

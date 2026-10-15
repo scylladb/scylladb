@@ -38,6 +38,8 @@ enum class search_clause {
 /// column, elsewhere with the search ORDER BY introduced.
 sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name, search_clause clause);
 
+std::string_view index_type_name(functions::search_family family);
+
 /// A query value that prepare could not compare with the search's own because of a bind marker.
 /// Execution compares the bound values; `function_name` and `clause` describe the call it was
 /// written in, for the error message.
