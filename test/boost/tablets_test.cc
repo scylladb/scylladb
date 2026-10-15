@@ -30,6 +30,7 @@
 #include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
+#include "db/consistency_level.hh"
 #include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
@@ -8807,6 +8808,249 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     }
 
     return make_ready_future<>();
+}
+
+// Replication factor of a tablet erm is derived from the tablet's read replica set.
+SEASTAR_THREAD_TEST_CASE(test_tablet_erm_replication_factor) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID()); // local node, resolved through the topology config
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h4 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h5 = host_id(utils::UUID_gen::get_time_UUID()); // dc2
+    auto h6 = host_id(utils::UUID_gen::get_time_UUID()); // dc2
+    auto unknown = host_id(utils::UUID_gen::get_time_UUID()); // not in the topology
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_host_id = h1;
+    tm_cfg.topo_cfg.local_dc_rack = {"dc1", "r1"};
+    semaphore sem(1);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        topo.add_node(h2, {"dc1", "r2"}, node::state::normal, 1);
+        topo.add_node(h3, {"dc1", "r3"}, node::state::normal, 1);
+        topo.add_node(h4, {"dc1", "r4"}, node::state::normal, 1);
+        topo.add_node(h5, {"dc2", "r1"}, node::state::normal, 1);
+        topo.add_node(h6, {"dc2", "r2"}, node::state::normal, 1);
+        // The topology constructor indexes the local node. Drop it so that h1 resolves
+        // through the topology config instead, like it does for a shallow-copied topology.
+        topo.remove_node(h1);
+        return make_ready_future<>();
+    }).get();
+
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto token = dht::token::get_random_token(); // every token maps to the only tablet
+    auto replicas = [] (const std::vector<host_id>& hosts) {
+        tablet_replica_set result;
+        for (auto h : hosts) {
+            result.push_back(tablet_replica{h, 0});
+        }
+        return result;
+    };
+    auto make_erm = [&] (tablet_map tmap, replication_strategy_config_options options = {{"dc1", sstring("3")}, {"dc2", sstring("2")}}) {
+        auto tablet_count = tmap.tablet_count();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.tablets().set_tablet_map(table, std::move(tmap));
+            return make_ready_future<>();
+        }).get();
+        auto tmptr = stm.get();
+        replication_strategy_params params(options, tablet_count, std::nullopt);
+        auto rs = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+        return rs->maybe_as_tablet_aware()->make_replication_map(table, tmptr);
+    };
+
+    // All replicas resolve, the local node through the config.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h5, h6})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 3u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc3"), 0u);
+    }
+
+    // A transition adding a dc1 replica: the read replica set follows the stage.
+    for (auto [stage, dc1_rf] : {std::pair<tablet_transition_stage, size_t>{tablet_transition_stage::allow_write_both_read_old, 3},
+                                 {tablet_transition_stage::use_new, 4}}) {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h5, h6})});
+        tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info{
+            stage, tablet_transition_kind::migration, replicas({h1, h2, h3, h4, h5, h6}), tablet_replica{h4, 0}});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), dc1_rf + 2);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), dc1_rf);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+    }
+
+    // A replica whose host is not in the topology is counted in the datacenter being
+    // asked about, but never takes the count above the configured replication factor.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, unknown, h5})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), 4u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 3u); // h1, h2, unknown
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u); // h5, unknown
+        // A datacenter the schema does not replicate to configures a replication factor of
+        // 0, so a replica which cannot be placed is not counted there. LOCAL_QUORUM relies
+        // on the 0 to reject a keyspace which is not replicated to the local datacenter.
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc3"), 0u);
+    }
+
+    // Unplaceable replicas never push a datacenter above its configured replication
+    // factor, and never below the replicas which could be placed.
+    {
+        auto unknown2 = host_id(utils::UUID_gen::get_time_UUID());
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h2, h3, h4, unknown, unknown2})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 3u); // capped at the configured 3
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u); // capped at the configured 2
+    }
+
+    // A tablet which lags behind a replication factor decrease keeps more dc1 replicas
+    // than the schema configures. The cap never drops the count below them.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h4, unknown})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 4u); // h1, h2, h3, h4, above the configured 3
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 1u); // unknown alone, below the configured 2
+    }
+
+    // A keyspace which does not replicate to the local datacenter has no cache slot for
+    // it, so every query takes the counting path. Repeated to cover both the first query
+    // and a repeat.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h5, h6})});
+        auto erm = make_erm(std::move(tmap), {{"dc2", sstring("2")}});
+        for (int round = 0; round < 2; ++round) {
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 0u);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+        }
+    }
+
+    // A tablet which lags behind a replication factor drop to 0 still reports the dc1
+    // replicas it kept, although dc1 has no cache slot.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h2, h5, h6})});
+        auto erm = make_erm(std::move(tmap), {{"dc2", sstring("2")}});
+        for (int round = 0; round < 2; ++round) {
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc1"), 1u);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), 2u);
+        }
+    }
+
+    // Tablets with different replica counts, queried repeatedly and interleaved across
+    // datacenters, so that every tablet and datacenter pair is both filled and read back.
+    {
+        std::vector<std::vector<host_id>> tablet_replicas = {
+            {h1, h2, h5},     // dc1: 2, dc2: 1
+            {h2, h3, h4, h5}, // dc1: 3, dc2: 1
+            {h5, h6},         // dc1: 0, dc2: 2
+            {h1, h5, h6},     // dc1: 1, dc2: 2
+        };
+        tablet_map tmap(tablet_replicas.size());
+        auto tid = tmap.first_tablet();
+        std::vector<dht::token> tokens;
+        for (const auto& hosts : tablet_replicas) {
+            tmap.set_tablet(tid, tablet_info{replicas(hosts)});
+            tokens.push_back(tmap.get_last_token(tid));
+            if (auto next = tmap.next_tablet(tid)) {
+                tid = *next;
+            }
+        }
+        auto erm = make_erm(std::move(tmap));
+
+        auto expected_dc1 = std::vector<size_t>{2, 3, 0, 1};
+        auto expected_dc2 = std::vector<size_t>{1, 1, 2, 2};
+        for (int round = 0; round < 2; ++round) {
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i], "dc1"), expected_dc1[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i], "dc2"), expected_dc2[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(tokens[i]), tablet_replicas[i].size());
+            }
+        }
+    }
+
+    // EACH_QUORUM: a tablet lagging behind dc1's drop to RF 0 still holds a dc1 replica,
+    // which gets no quota, so the per-datacenter quotas add up to block_for.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h2, h5, h6})});
+        auto erm = make_erm(std::move(tmap), {{"dc2", sstring("2")}});
+        BOOST_REQUIRE_EQUAL(db::local_quorum_for(*erm, "dc1", token, db::operation_type::write), 1u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, "dc1", token, db::operation_type::write), 0u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, "dc2", token, db::operation_type::write), 2u);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::EACH_QUORUM, token, db::operation_type::write),
+                            db::each_quorum_block_for_dc(*erm, "dc1", token, db::operation_type::write) + db::each_quorum_block_for_dc(*erm, "dc2", token, db::operation_type::write));
+    }
+
+    // EACH_QUORUM: a tablet lagging behind dc1's increase from RF 0 has no dc1 replica yet,
+    // so dc1's quota is 0 although the schema replicates to dc1.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h5, h6})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, "dc1", token, db::operation_type::write), 0u);
+        BOOST_REQUIRE_EQUAL(db::each_quorum_block_for_dc(*erm, "dc2", token, db::operation_type::write), 2u);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::EACH_QUORUM, token, db::operation_type::write), 2u);
+    }
+
+    // Rebuilds for an RF change while the schema still holds the old RF, as with rack lists.
+    // Writes count the write replica set; the handler adds the pending replica on top.
+    struct rf_case {
+        tablet_transition_stage stage;
+        size_t read_dc2;
+        size_t write_dc2;
+    };
+    auto check_rf = [&] (tablet_replica_set prev, tablet_replica_set next, std::optional<tablet_replica> pending,
+                         replication_strategy_config_options options, const rf_case& c) {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{std::move(prev)});
+        tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info{
+            c.stage, tablet_transition_kind::rebuild_v2, std::move(next), pending});
+        auto erm = make_erm(std::move(tmap), std::move(options));
+        BOOST_TEST_CONTEXT(fmt::format("stage {}", c.stage)) {
+            using enum db::operation_type;
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token), 3 + c.read_dc2);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_writing(token), 3 + c.write_dc2);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_reading(token, "dc2"), c.read_dc2);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_writing(token, "dc2"), c.write_dc2);
+            BOOST_REQUIRE_EQUAL(erm->get_replication_factor_for_writing(token, "dc1"), 3u);
+            BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::QUORUM, token, read), (3 + c.read_dc2) / 2 + 1);
+            BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::QUORUM, token, write), (3 + c.write_dc2) / 2 + 1);
+            BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::ALL, token, write), 3 + c.write_dc2);
+            BOOST_REQUIRE_EQUAL(db::block_for(*erm, db::consistency_level::LOCAL_QUORUM, token, write), 2u);
+        }
+    };
+
+    // dc2 goes from RF 0 to 1. In write_both_read_new the write set is still {h1, h2, h3}
+    // and h5 is pending, so QUORUM needs 2 + 1 acks out of 4 targets, not 3 + 1.
+    for (const auto& c : {rf_case{tablet_transition_stage::allow_write_both_read_old, 0, 0},
+                          rf_case{tablet_transition_stage::write_both_read_old, 0, 0},
+                          rf_case{tablet_transition_stage::streaming, 0, 0},
+                          rf_case{tablet_transition_stage::write_both_read_new, 1, 0},
+                          rf_case{tablet_transition_stage::use_new, 1, 1},
+                          rf_case{tablet_transition_stage::cleanup, 1, 1}}) {
+        check_rf(replicas({h1, h2, h3}), replicas({h1, h2, h3, h5}), tablet_replica{h5, 0}, {{"dc1", sstring("3")}}, c);
+    }
+
+    // dc2 goes from RF 1 to 0. In write_both_read_new h5 still takes writes, so QUORUM
+    // needs 3 of 4 acks, or the ack of h5 and one dc1 replica could complete a write.
+    for (const auto& c : {rf_case{tablet_transition_stage::allow_write_both_read_old, 1, 1},
+                          rf_case{tablet_transition_stage::write_both_read_old, 1, 1},
+                          rf_case{tablet_transition_stage::write_both_read_new, 0, 1},
+                          rf_case{tablet_transition_stage::use_new, 0, 0},
+                          rf_case{tablet_transition_stage::cleanup, 0, 0}}) {
+        check_rf(replicas({h1, h2, h3, h5}), replicas({h1, h2, h3}), std::nullopt, {{"dc1", sstring("3")}, {"dc2", sstring("1")}}, c);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
