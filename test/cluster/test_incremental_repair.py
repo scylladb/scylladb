@@ -10,6 +10,7 @@ from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.rest_client import read_barrier
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
 
@@ -251,6 +252,100 @@ async def test_tablet_incremental_repair(manager: ManagerClient):
         disable, enable = await get_compaction_status("Second", log)
         assert len(disable) == 2
         assert len(enable) == 2
+
+async def do_tablet_rebuild_incremental_repair(manager: ManagerClient, compact_during_repair: bool):
+    """Repairs the tablet incrementally, writes more data, and writes a third batch with one of
+    the two replicas down so that only the other one has it. Then adds a third replica, which
+    runs a rebuild. With compact_during_repair, the rebuild repair is paused after it selected
+    its sstables while the remaining replicas run a major compaction.
+
+    Checks that the rebuild repair skipped the repaired sstables, did not lock compaction or
+    mark sstables, synced the third batch to the replica that missed it, that every replica
+    has all keys, and that a later incremental repair still runs.
+    """
+    cfg = {'enable_tablets': True, 'hinted_handoff_enabled': False}
+    cmdline = ['--logger-log-level', 'compaction=debug']
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": rack}) for rack in ["r1", "r1", "r2"]]
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    table_id = await manager.get_table_id(ks, "test")
+
+    await insert_keys(cql, ks, 0, 100)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
+    # The repair returns before the tablet's end_repair stage, which needs both replicas.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
+    await insert_keys(cql, ks, 100, 200)
+
+    tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 'test'))[0]
+    replica_hosts = [r[0] for r in tablet.replicas]
+    replicas = [s for s, h in zip(servers, host_ids) if h in replica_hosts]
+    new_host = next(h for h in host_ids if h not in replica_hosts)
+    assert len(replicas) == 2
+
+    # Keys 200..300 reach only replicas[0].
+    await manager.server_stop_gracefully(replicas[1].server_id)
+    await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});", consistency_level=ConsistencyLevel.ONE)) for k in range(200, 300)])
+    await manager.server_start(replicas[1].server_id)
+    cql = await reconnect_driver(manager)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    map0 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    if compact_during_repair:
+        await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", replicas)
+        rebuild = asyncio.create_task(manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_host, 0, tablet.last_token))
+        replica_logs = [(log, mark) for s, log, mark in zip(servers, logs, marks) if s in replicas]
+        for log, mark in replica_logs:
+            await log.wait_for('wait_after_prepare_sstables_for_incremental_repair: waiting for message', from_mark=mark)
+        # Compacts the sstables the paused rebuild repair is reading. It would wait for the
+        # repair if the repair held the incremental repair compaction lock.
+        for s in replicas:
+            await manager.api.keyspace_compaction(s.ip_addr, ks, 'test')
+        for log, mark in replica_logs:
+            assert await log.grep(rf'\[Major {ks}\.test .*\] Compacted .*:repaired_at=0\]', from_mark=mark)
+        for s in replicas:
+            await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+        await rebuild
+        await inject_error_off(manager, "wait_after_prepare_sstables_for_incremental_repair", replicas)
+    else:
+        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_host, 0, tablet.last_token)
+
+    for log, mark in zip(logs, marks):
+        assert not await log.grep(r'Disabled compaction for .*for incremental repair', from_mark=mark)
+        assert not await log.grep(r'Marking .*for incremental repair', from_mark=mark)
+    for s, log, mark in zip(servers, logs, marks):
+        if s in replicas:
+            assert await log.grep(r'Enable incremental repair for table=.* for_tablet_rebuild=true', from_mark=mark)
+            assert await log.grep(r'Skipped adding sst=.*for incremental repair', from_mark=mark)
+
+    map1 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
+    assert map1 == map0
+
+    for s, h in zip(servers, hosts):
+        await read_barrier(manager.api, s.ip_addr)
+        rows = await cql.run_async(f"SELECT pk FROM MUTATION_FRAGMENTS({ks}.test)", host=h)
+        assert {r.pk for r in rows} == set(range(300)), f"replica {s.ip_addr} misses keys"
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
+    map2 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
+    assert get_sstables_repaired_at(map2, tablet.last_token) == get_sstables_repaired_at(map0, tablet.last_token) + 1
+
+async def test_tablet_rebuild_incremental_repair(manager: ManagerClient):
+    """Check that the repair of a tablet rebuild reads only the unrepaired sstables and leaves
+    no repair state behind."""
+    await do_tablet_rebuild_incremental_repair(manager, compact_during_repair=False)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_rebuild_incremental_repair_with_compaction(manager: ManagerClient):
+    """Check that a major compaction of the sstables a tablet rebuild repair is reading neither
+    waits for the repair nor loses data."""
+    await do_tablet_rebuild_incremental_repair(manager, compact_during_repair=True)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
