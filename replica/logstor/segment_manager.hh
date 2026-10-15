@@ -29,14 +29,13 @@
 
 namespace replica {
 
-class database;
-
 namespace logstor {
 
 class compaction_manager;
 class segment_set;
 class primary_index;
 class index_read_guard;
+class recovery_catalog;
 
 static constexpr uint64_t default_segment_size = 128 * 1024;
 static constexpr uint64_t default_file_size = 32 * 1024 * 1024;
@@ -113,7 +112,7 @@ public:
     segment_manager(const segment_manager&) = delete;
     segment_manager& operator=(const segment_manager&) = delete;
 
-    future<> do_recovery(replica::database&);
+    future<> do_recovery(recovery_catalog&);
     future<> do_recovery_for_test();
 
     // The index a record found on disk goes into, or nullptr to drop the record.
@@ -161,7 +160,7 @@ public:
 
     // Create an output stream to write a segment (for receiving from remote node)
     // Allocates a new local segment and returns an output stream for writing to the segment.
-    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
+    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(recovery_catalog&);
 
     friend class segment_manager_impl;
 
