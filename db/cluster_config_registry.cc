@@ -81,6 +81,13 @@ constexpr std::array registry_options = {
         .min_version = version::v1,
         .default_value = int64_t(1) << 30,
     },
+    option{
+        .name = option_name::tablet_streaming_max_token_space_percentage,
+        .description = "Percentage of a table's token space, between 0 and 100, which may be in transition (migrating or rebuilding) at the same time. A migration may start while the table is within it, so it may be exceeded by one tablet. Values outside the range are clamped to it, and 0 allows one migration per table at a time",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v1,
+        .default_value = 5.0,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
