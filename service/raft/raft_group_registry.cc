@@ -412,7 +412,15 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     }
 
     if (ex) {
-        co_await server.abort();
+        try {
+            co_await server.abort();
+        } catch (...) {
+            // Just log the exception and throw the first error so that no error
+            // is permanently lost.
+            rslog.warn("Failed to abort raft server of group {} after startup failure: {:t}",
+                    gid, std::current_exception());
+        }
+
         std::rethrow_exception(ex);
     }
 
@@ -452,7 +460,7 @@ future<> raft_group_registry::do_abort_server(raft::group_id gid, raft_server_fo
         });
         co_await s.server->abort(std::move(reason));
     } catch (...) {
-        rslog.warn("Failed to abort raft group server {}: {:t}", gid, std::current_exception());
+        rslog.warn("Failed to abort raft server of group {}: {:t}", gid, std::current_exception());
     }
 }
 
