@@ -73,8 +73,8 @@ logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     });
 }
 
-future<> logstor::do_recovery(recovery_catalog& catalog) {
-    co_await _segment_manager.do_recovery(catalog);
+future<recovery_summary> logstor::do_recovery(recovery_catalog& catalog) {
+    return _segment_manager.do_recovery(catalog);
 }
 
 future<> logstor::do_recovery_for_test() {

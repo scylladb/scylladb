@@ -59,7 +59,7 @@ public:
     logstor(const logstor&) = delete;
     logstor& operator=(const logstor&) = delete;
 
-    future<> do_recovery(recovery_catalog&);
+    future<recovery_summary> do_recovery(recovery_catalog&);
     future<> do_recovery_for_test();
 
     future<> start();
