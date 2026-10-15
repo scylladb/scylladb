@@ -509,7 +509,6 @@ def test_blocktune(blockdev, capsys, argv):
     assert 'tuning: /sys/dev/block/slaves/sda/queue/scheduler noop\n' in out
 
 
-@pytest.mark.xfail(strict=True, reason="check_sched() doesn't treat '[none]' (blk-mq) as tuned and tries to write 'noop'")
 def test_blocktune_scheduler_none(blockdev, capsys):
     blockdev.run('scylla-blocktune')
     assert 'already tuned: /sys/dev/block/queue/scheduler' in capsys.readouterr().out

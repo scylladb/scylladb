@@ -51,7 +51,7 @@ def tune_blockdev(path, nomerges):
     tuned_blockdevs.add(path)
 
     def check_sched(current):
-        return current == 'none' or '[noop]' in current
+        return current == 'none' or '[none]' in current or '[noop]' in current
 
     if not nomerges:
         tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
