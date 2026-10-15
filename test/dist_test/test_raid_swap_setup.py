@@ -124,7 +124,6 @@ def test_raid_level1_starts_md_service(raid, unit):
     assert raid.read('/etc/mdadm/mdadm.conf').endswith('MAILADDR root')
 
 
-@pytest.mark.xfail(strict=True, reason="mount unit gets the literal 'md_service' instead of the unit name")
 def test_raid_level1_mount_unit_after_md_service(raid):
     raid.run('scylla_raid_setup', '--disks', '/dev/sdb,/dev/sdc', '--raid-level', '1')
     assert 'After=mdmonitor.service\nWants=mdmonitor.service\n' in mount_unit(raid)

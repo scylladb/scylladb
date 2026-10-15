@@ -308,7 +308,7 @@ if __name__ == '__main__':
     after = ''
     wants = ''
     if raid and args.raid_level != '0':
-        after = wants = 'md_service'
+        after = wants = str(md_service)
     opt_discard = ''
     if args.online_discard:
         opt_discard = ',discard'
