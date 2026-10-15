@@ -559,13 +559,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // Validate that the table exists
     arn_parts parts;
     try {
-        parts = parse_arn(table_arn, "TableArn", "table", "");
+        parts = parse_arn_reporting_validation(table_arn, "TableArn", "table", "");
     }
     catch (api_error& e) {
-        if (e._type == "AccessDeniedException") {
-            // Unfortunately AWS returns ValidationException here, so we convert error type, leaving message as is.
-            e._type = "ValidationException";
-        }
         co_return std::move(e);
     }
     maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
