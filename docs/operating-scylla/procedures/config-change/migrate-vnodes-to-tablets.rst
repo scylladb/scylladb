@@ -60,12 +60,20 @@ Cluster state
 Keyspace and table configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* The keyspace's replication strategy must be the **NetworkTopologyStrategy**,
-  and its replication factor must equal the number of racks to ensure that the
-  keyspace will be :term:`RF-rack-valid <RF-rack-valid keyspace>` after the
-  migration. If your configuration requires changes, see
-  :doc:`Update Topology Strategy From Simple to Network </operating-scylla/procedures/cluster-management/update-topology-strategy-from-simple-to-network>`
-  and :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
+* The keyspace's replication strategy must be the **NetworkTopologyStrategy**.
+  To change it, see
+  :doc:`Update Topology Strategy From Simple to Network </operating-scylla/procedures/cluster-management/update-topology-strategy-from-simple-to-network>`.
+* In every datacenter, the keyspace's replication factor must equal the number
+  of racks in that datacenter, to ensure that the keyspace will be
+  :term:`RF-rack-valid <RF-rack-valid keyspace>` after the migration.
+  Racks that contain only :doc:`zero-token nodes </architecture/zero-token-nodes>`
+  are not counted. A datacenter can also have a replication factor of zero
+  (RF=0), in which case it holds no replicas of the keyspace. For example, a
+  keyspace with replication ``{'dc1': 3, 'dc2': 2, 'dc3': 0}`` can be migrated
+  if ``dc1`` has three racks and ``dc2`` has two racks. An
+  :doc:`arbiter datacenter </operating-scylla/procedures/cluster-management/arbiter-dc>`,
+  which contains only zero-token nodes, must have RF=0. To change the
+  replication factor, see :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
 * All tables in the keyspace should have ``tombstone_gc`` mode set to ``repair``
   to prevent tombstone garbage collection from running during migration.
   For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
@@ -74,12 +82,6 @@ Limitations
 -----------
 
 The current migration procedure has the following limitations:
-
-* **Multi-DC clusters** are supported, but every datacenter in the migrating
-  keyspace's replication strategy must have a replication factor of at least one.
-  Datacenters with a replication factor of zero (RF=0) are not yet supported.
-* Clusters with :doc:`zero-token nodes </architecture/zero-token-nodes>` are
-  not yet supported.
 
 * **No schema changes** during the migration. Do not create, alter, or drop
   tables in the migrating keyspace until the migration is finished.
