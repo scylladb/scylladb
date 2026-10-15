@@ -92,7 +92,7 @@ if __name__ == '__main__':
         if swapsize > half_of_diskfree:
             # out of disk space, abort setup
             if half_of_diskfree <= GB(1):
-                print('swap directory {} does not have enough disk space.')
+                print('swap directory {} does not have enough disk space.'.format(args.swap_directory))
                 sys.exit(1)
             swapsize = half_of_diskfree
 
