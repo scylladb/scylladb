@@ -120,7 +120,7 @@ The current migration procedure has the following limitations:
   are migrated as :term:`co-located tables <Colocated Table>` with their base
   table (sharing its tablets). Other views, including the backing views of
   global secondary indexes, get tablets of their own.
-* Tables with **counters** or **LWTs** cannot be migrated.
+* Tables with **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
 
