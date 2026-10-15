@@ -37,7 +37,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterMan
         * The node has an unclean restart, the pinned segments are replayed and
           data is resurrected, as the tombstone is already purged.
 
-        This test uses gc_grace_seconds=0 to make the test fast.
+        This test uses tombstone_gc mode 'immediate' to make the test fast.
 
         See https://github.com/scylladb/scylladb/issues/14870
         """
@@ -63,7 +63,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterMan
         tbl1 = f"{ks1}.tbl1"
         tbl2 = f"{ks2}.tbl2"
         await cql.run_async(f"create table {tbl1} (pk int, ck int, primary key(pk, ck))")
-        await cql.run_async(f"create table {tbl2} (pk int, ck int, v text, primary key(pk, ck)) WITH gc_grace_seconds = 0")
+        await cql.run_async(f"create table {tbl2} (pk int, ck int, v text, primary key(pk, ck)) WITH tombstone_gc = {{'mode': 'immediate'}}")
 
         cl_path = commitlog_path()
         segments_before_writes = await get_segments_num()

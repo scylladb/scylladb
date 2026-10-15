@@ -928,6 +928,9 @@ future<> repair_service::repair_range(shard_repair_state& rstate, const dht::tok
         }
         neighbors.swap(live_neighbors);
     }
+    if ((neighbors.empty() || rstate.small_table_optimization) && co_await repair_single_replica_range(rstate, table.name, table.id, range, neighbors, flush_time)) {
+        co_return;
+    }
     if (neighbors.empty()) {
         auto status = "skipped_no_followers";
         rlogger.warn("repair[{}]: Repair {} out of {} ranges,  keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
@@ -2583,6 +2586,21 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         } else {
             master_shard_id = r.shard;
         }
+    }
+
+    // Single-replica tablet (e.g. RF=1): there is nothing to repair, but hints
+    // and batchlog still have to be flushed, so the returned flush time can be
+    // recorded as the tablet's repair time, allowing repair-mode tombstone gc
+    // to purge tombstones written before the flush.
+    if (!rebuild_replicas && replicas.size() == 1 && master_shard_id && hosts_filter.empty() && dcs_filter.empty()) {
+        auto [needs_flush_before_repair, hints_batchlog_flushed, flush_time] = co_await flush_hints(id, keyspace_name, table_names, {});
+        if (needs_flush_before_repair && !hints_batchlog_flushed) {
+            throw std::runtime_error(fmt::format("Flush is needed for repair {} of tablet {} of table={}.{} with a single replica, but failed",
+                    id.uuid(), gid, keyspace_name, table_name));
+        }
+        rlogger.info("repair[{}]: Skipped tablet repair for table={}.{} range={} replicas={} global_tablet_id={}: single replica, flush_time={}",
+                id.uuid(), keyspace_name, table_name, range, replicas, gid, flush_time);
+        co_return flush_time;
     }
 
     if (nodes.empty() || !master_shard_id) {

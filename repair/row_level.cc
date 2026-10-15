@@ -3907,6 +3907,68 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
     });
 }
 
+future<bool> repair_service::repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range,
+        const std::vector<locator::host_id>& followers, gc_clock::time_point flush_time) {
+    // Only for regular repairs: node operations (also using the small table
+    // optimization) have to sync the data to the new replicas.
+    if (rstate.reason() != streaming::stream_reason::repair) {
+        co_return false;
+    }
+    auto erm = rstate.get_erm();
+    auto my_host_id = erm->get_topology().my_host_id();
+    // The nodes to record the repair history on.
+    std::vector<locator::host_id> nodes;
+    if (rstate.small_table_optimization) {
+        const auto& tm = erm->get_token_metadata();
+        const auto& token_owners = tm.get_normal_token_owners();
+        std::unordered_set<locator::host_id> participants(followers.begin(), followers.end());
+        participants.insert(my_host_id);
+        if (participants != token_owners) {
+            co_return false;
+        }
+        for (const auto& token : tm.sorted_tokens()) {
+            co_await coroutine::maybe_yield();
+            if (erm->get_natural_replicas(token).size() != 1) {
+                co_return false;
+            }
+        }
+        nodes = participants | std::ranges::to<std::vector>();
+    } else {
+        if (!followers.empty()) {
+            co_return false;
+        }
+        auto end_token = range.end() ? range.end()->value() : dht::maximum_token();
+        auto replicas = erm->get_natural_replicas(end_token);
+        if (replicas.size() != 1 || replicas.front() != my_host_id) {
+            co_return false;
+        }
+        nodes.push_back(my_host_id);
+    }
+
+    rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, status=skipped_single_replica, hints_batchlog_flushed={}, flush_time={}",
+            rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), cf_name, range, rstate.hints_batchlog_flushed, flush_time);
+
+    // Same condition as in row_level_repair::update_system_repair_table().
+    if (!rstate.hints_batchlog_flushed) {
+        co_return true;
+    }
+
+    auto repair_time_opt = co_await update_history(rstate.global_repair_id.uuid(), table_id, range, flush_time, false);
+    if (!repair_time_opt) {
+        co_return true;
+    }
+    repair_update_system_table_request req{rstate.global_repair_id.uuid(), table_id, rstate.get_keyspace(), std::move(cf_name), range, *repair_time_opt};
+    co_await coroutine::parallel_for_each(nodes, [&rstate, &req] (locator::host_id node) -> future<> {
+        try {
+            co_await ser::repair_rpc_verbs::send_repair_update_system_table(&rstate.messaging.local(), node, req);
+            rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", rstate.global_repair_id.uuid(), node);
+        } catch (...) {
+            rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {:t}", rstate.global_repair_id.uuid(), node, std::current_exception());
+        }
+    });
+    co_return true;
+}
+
 future<> repair_service::cleanup_history(tasks::task_id repair_id) {
     auto shard = repair_id_to_shard(repair_id);
     return container().invoke_on(shard, [repair_id] (repair_service& rs) mutable {
