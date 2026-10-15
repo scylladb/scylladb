@@ -1166,6 +1166,51 @@ async def test_tablet_intranode_migration(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
+async def test_recovery_after_tablet_migration(manager: ScyllaClusterManager):
+    """
+    After a tablet migrates to another shard, the source shard still holds the tablet's records on
+    disk: the originals sit in the mixed segments they were written to, which the separator freed
+    without erasing once it had moved them. Recovery must neither fail the node on them nor revive
+    them - they belong to no compaction group of that shard - and it counts what it dropped.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=2']
+    cfg = {'experimental_features': ['logstor']}
+    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    servers = [s1]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        nrows = 10
+        value = 'x' * (30 * 1024)
+        for i in range(nrows):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}_{value}')")
+
+        # Moves the records into the tablet's own segments, which is what the migration streams,
+        # and frees the mixed segments with the originals still in them.
+        await manager.api.logstor_flush(s1.ip_addr)
+
+        tablet_token = 0
+        h1, src_shard = await get_tablet_replica(manager, s1, ks, 'test', tablet_token)
+        await manager.api.move_tablet(s1.ip_addr, ks, "test", h1, src_shard, h1, 1 - src_shard, tablet_token)
+
+        server_log = await manager.server_open_log(s1.server_id)
+        log_mark = await server_log.mark()
+        await manager.server_stop_gracefully(s1.server_id)
+        await manager.server_start(s1.server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        for i in range(nrows):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Expected 1 row for key {i} after recovery, but got {len(rows)}"
+            assert rows[0].v == f"{i}_{value}", f"Wrong value for key {i} after recovery"
+
+        matches = await server_log.grep(r"Recovery dropped (\d+) records", from_mark=log_mark)
+        assert sum(int(m.group(1)) for _, m in matches) >= nrows
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     """
