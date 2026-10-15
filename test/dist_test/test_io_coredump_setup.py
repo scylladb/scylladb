@@ -211,8 +211,7 @@ def test_coredump_setup_old_systemd(coredump):
 
 
 @pytest.mark.parametrize('modules', ['', 'systemd-container-coredump', pytest.param(
-    'abc\nsystemd-container-coredump', marks=pytest.mark.xfail(
-        strict=True, reason='re.match() only looks at the 1st line of `semodule -l`, so the module is reloaded'))])
+    'abc\nsystemd-container-coredump')])
 def test_coredump_setup_rhel9_selinux(coredump, monkeypatch, modules):
     coredump.distro('rhel', version='9')
     monkeypatch.setattr('shutil.which', lambda x: None)
