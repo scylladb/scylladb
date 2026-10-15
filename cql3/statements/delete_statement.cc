@@ -137,7 +137,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column().prepare_column_identifier(*schema);
         auto def = get_column_definition(*schema, *id);
-        if (!def) {
+        if (!def || def->is_hidden_from_cql()) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
 

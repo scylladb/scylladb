@@ -72,6 +72,9 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
     }
     auto prepared_map = handle_case_sensitivity(std::move(parsed));
     for (const auto& def : expected_receivers) {
+        if (def.is_hidden_from_cql()) {
+            continue;
+        }
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
         if (value_it == prepared_map.end()) {
@@ -380,7 +383,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         auto&& col = _column_names[i];
         auto id = col->prepare_column_identifier(*schema);
         auto def = get_column_definition(*schema, *id);
-        if (!def) {
+        if (!def || def->is_hidden_from_cql()) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
         if (column_ids.contains(id->name())) {

@@ -708,3 +708,12 @@ def test_insert_json_invalid(cql, table1):
     # A null bound value is also an InvalidRequest error.
     with pytest.raises(InvalidRequest):
         cql.execute(stmt, [None])
+
+# A COMPACT STORAGE table without regular columns has, internally, a hidden
+# regular column named "value", which INSERT JSON must not accept, just like
+# the other forms of INSERT don't. Reproduces #12815. It's scylla_only
+# because Cassandra no longer allows creating COMPACT STORAGE tables.
+def test_insert_json_compact_storage_hidden_column(cql, test_keyspace, compact_storage, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, b int, PRIMARY KEY (a, b)', 'WITH COMPACT STORAGE') as table:
+        with pytest.raises(InvalidRequest, match='value'):
+            cql.execute(f"""INSERT INTO {table} JSON '{{"a": 1, "b": 1, "value": 2}}'""")
