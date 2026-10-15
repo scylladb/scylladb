@@ -432,7 +432,12 @@ public:
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
         std::optional<sstring> finalize_migration_ks_name;
+        // Set when only this table of the keyspace is being finalized.
+        std::optional<sstring> finalize_migration_table_name;
         std::optional<sstring> prepare_migration_ks_name;
+        // Set when only this table of the keyspace, and the tables belonging to it,
+        // are being prepared.
+        std::optional<sstring> prepare_migration_table_name;
         // The tables which had no tablet map when the request was made, each with the
         // tablet count target it was given then, 0 for none.
         std::optional<std::unordered_map<table_id, int64_t>> prepare_migration_tables;

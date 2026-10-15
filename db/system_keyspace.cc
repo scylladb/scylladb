@@ -345,7 +345,9 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("snapshot_expiry", timestamp_type)
             .with_column("snapshot_skip_flush", boolean_type)
             .with_column("finalize_migration_ks_name", utf8_type)
+            .with_column("finalize_migration_table_name", utf8_type)
             .with_column("prepare_migration_ks_name", utf8_type)
+            .with_column("prepare_migration_table_name", utf8_type)
             .with_column("prepare_migration_tables", map_type_impl::get_instance(uuid_type, long_type, false))
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
@@ -3690,8 +3692,14 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("finalize_migration_ks_name")) {
         entry.finalize_migration_ks_name = row.get_as<sstring>("finalize_migration_ks_name");
     }
+    if (row.has("finalize_migration_table_name")) {
+        entry.finalize_migration_table_name = row.get_as<sstring>("finalize_migration_table_name");
+    }
     if (row.has("prepare_migration_ks_name")) {
         entry.prepare_migration_ks_name = row.get_as<sstring>("prepare_migration_ks_name");
+    }
+    if (row.has("prepare_migration_table_name")) {
+        entry.prepare_migration_table_name = row.get_as<sstring>("prepare_migration_table_name");
     }
     if (row.has("prepare_migration_tables")) {
         std::unordered_map<table_id, int64_t> tables;
