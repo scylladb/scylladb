@@ -85,6 +85,8 @@ The current migration procedure has the following limitations:
   tables in the migrating keyspace until the migration is finished.
 * **No topology changes** during the migration. Do not add, remove, decommission,
   replace, or rebuild nodes while a migration is in progress.
+* **No ScyllaDB version upgrades** during the migration. Every node must run the
+  same version from the moment a migration is started until it is finalized.
 * **No repair** operations during the migration. Do not run ``nodetool repair``
   on the migrating keyspace while a migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
