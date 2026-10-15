@@ -412,7 +412,15 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     }
 
     if (ex) {
-        co_await server.abort();
+        try {
+            co_await server.abort();
+        } catch (...) {
+            // Just log the exception and throw the first error so that no error
+            // is permanently lost.
+            rslog.warn("Aborting a Raft server for gid={} has failed: {:t}",
+                    gid, std::current_exception());
+        }
+
         std::rethrow_exception(ex);
     }
 
