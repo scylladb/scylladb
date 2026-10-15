@@ -186,7 +186,6 @@ def test_raid_blk_discard(raid):
     assert 'blkdiscard /dev/sdc' not in raid.cmd
 
 
-@pytest.mark.xfail(strict=True, reason='--blk-discard is a string, so the default "False" is truthy')
 def test_raid_no_blk_discard_by_default(raid):
     raid.file('/sys/block/sdb/queue/discard_granularity', '512')
     raid.run('scylla_raid_setup', '--disks', '/dev/sdb')

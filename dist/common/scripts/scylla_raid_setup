@@ -155,6 +155,7 @@ if __name__ == '__main__':
 
     # Allow args.online_discard to be used as a boolean value
     args.online_discard = strtobool(args.online_discard)
+    args.blk_discard = strtobool(args.blk_discard)
 
     root = args.root.rstrip('/')
     if args.volume_role == 'all':
