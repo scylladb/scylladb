@@ -101,8 +101,10 @@ Overview
 
 The migration consists of three phases:
 
-1. **Prepare**: Create tablet maps for all tables in the keyspace. Each tablet
+1. **Prepare**: Create tablet maps for the tables being migrated. Each tablet
    inherits its token range and replica set from the corresponding vnode range.
+   You can prepare all tables of the keyspace at once, or one table at a time
+   (see :ref:`migrating-one-table-at-a-time`).
 2. **Storage upgrade**: Restart each node one at a time, upgrading its storage
    from vnodes to tablets. Upon restart, the node begins resharding data into
    tablets. This is a storage-layer operation and is unrelated to ScyllaDB
@@ -130,7 +132,7 @@ Procedure
 
          scylla nodetool migrate-to-tablets start <keyspace>
 
-   #. Verify that the keyspace is in ``migrating_to_tablets`` state and all nodes are still using vnodes:
+   #. Verify that the keyspace is in ``migrating_to_tablets`` state and no node needs a restart yet:
 
       .. code-block:: console
 
@@ -143,12 +145,14 @@ Procedure
          $ scylla nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
+         Migrating Tables: All
+         Direction: tablets
 
          Nodes:
          Host ID                                Address    Status
-         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   uses vnodes
-         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   uses vnodes
-         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Restarted
+         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Restarted
+         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
    .. _upgrade-nodes:
 
@@ -174,7 +178,7 @@ Procedure
 
          scylla nodetool -h <node-ip> migrate-to-tablets upgrade
 
-   #. Verify that the node status changed from ``vnodes`` to ``migrating to tablets``:
+   #. Verify that the node status changed to ``Needs restart``:
 
       .. code-block:: console
 
@@ -187,12 +191,14 @@ Procedure
          $ scylla nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
+         Migrating Tables: All
+         Direction: tablets
 
          Nodes:
          Host ID                                Address    Status
-         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   migrating to tablets  <---
-         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   uses vnodes
-         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Needs restart  <---
+         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Restarted
+         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
    #. Drain and stop the node:
 
@@ -214,7 +220,7 @@ Procedure
 
          scylla nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
 
-   #. Verify that the node status changed from ``migrating to tablets`` to ``uses tablets``:
+   #. Verify that the node status changed to ``Restarted``:
 
       .. code-block:: console
 
@@ -227,12 +233,14 @@ Procedure
          $ scylla nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
+         Migrating Tables: All
+         Direction: tablets
 
          Nodes:
          Host ID                                Address    Status
-         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   uses tablets  <---
-         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   uses vnodes
-         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Restarted  <---
+         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Restarted
+         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
    #. Move to the next node and repeat from step a until all nodes are upgraded.
 
@@ -293,6 +301,80 @@ Procedure
          t2      converging   2176      2048
          t3      converged    2048      -
 
+.. _migrating-one-table-at-a-time:
+
+Migrating One Table at a Time
+-----------------------------
+
+Preparing a table makes every node reshard it on its next restart. For a
+keyspace with many tables, or with very large ones, resharding them all in a
+single restart can take a long time and put the node under heavy load.
+
+A keyspace can instead be migrated in rounds, a few tables at a time. Each
+round follows the same three phases as the main procedure, and ends by
+finalizing the tables it migrated.
+
+Procedure
+~~~~~~~~~
+
+#. Prepare the tables for this round, naming one table at a time:
+
+   .. code-block:: console
+
+      scylla nodetool migrate-to-tablets start <keyspace>.<table>
+
+   Repeat for each table you want in this round. As with a whole keyspace,
+   tables can only be prepared before any node has been marked for upgrade.
+
+#. Upgrade and restart the nodes, as in step 2 of the main procedure. Each
+   node reshards the tables prepared in this round.
+
+#. Finalize each table:
+
+   .. code-block:: console
+
+      scylla nodetool migrate-to-tablets finalize <keyspace>.<table>
+
+   A finalized table runs on tablets for good. It is handed to the load
+   balancer, which begins converging it to its final tablet count, and it can
+   no longer be rolled back.
+
+#. Repeat for the remaining tables. Finalizing the last table of the keyspace
+   also switches the keyspace itself to tablets, so no extra step is needed.
+
+``status`` names the tables currently being migrated - those prepared but not
+yet finalized - and says which nodes still owe a restart for them. It prints
+``All`` instead of a list when every table of the keyspace is being migrated:
+
+.. code-block:: console
+
+   $ scylla nodetool migrate-to-tablets status ks
+   Keyspace: ks
+   Status: migrating_to_tablets
+   Migrating Tables: t3
+   Direction: tablets
+
+   Nodes:
+   Host ID                                Address    Status
+   99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Restarted
+   0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Needs restart
+
+Rolling back
+~~~~~~~~~~~~
+
+Tables that have been prepared but not yet finalized can be rolled back with
+the `Rollback Procedure`_: their tablet maps are dropped and they return to
+vnodes. Tables finalized in an earlier round keep their tablets and are not
+affected, and tables that were never prepared are untouched.
+
+Finalizing is the point of no return, for a table just as for a keyspace.
+
+.. note::
+
+   The restrictions in `Limitations`_ apply until the keyspace itself has
+   switched to tablets, which happens when its last table is finalized - not
+   merely until the tables you care about have been migrated.
+
 Rollback Procedure
 ------------------
 
@@ -305,8 +387,9 @@ If you need to abort the migration **before finalization**, you can roll back
 by downgrading each node back to vnodes. The rollback procedure is the
 following:
 
-#. Find all nodes that have been upgraded to tablets (status: ``uses tablets``)
-   or they are in the process of upgrading to tablets (status: ``migrating to tablets``):
+#. List the nodes. Every node that was marked for upgrade has to be downgraded
+   and restarted, whether or not it has already restarted, so the list is simply
+   every node shown:
 
    .. code-block:: console
 
@@ -319,12 +402,14 @@ following:
       $ scylla nodetool migrate-to-tablets status ks
       Keyspace: ks
       Status: migrating_to_tablets
+      Migrating Tables: All
+      Direction: tablets
 
       Nodes:
       Host ID                                Address    Status
-      99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   uses tablets  <---
-      0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   migrating to tablets  <---
-      017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+      99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Restarted  <---
+      0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Needs restart  <---
+      017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
 #. For **each upgraded or upgrading node** in the cluster, perform a downgrade
    (one node at a time):
@@ -335,10 +420,9 @@ following:
 
          scylla nodetool -h <node-ip> migrate-to-tablets downgrade
 
-   #. Check the node status. The status for a previously upgraded node should
-      change from ``uses tablets`` to ``migrating to vnodes``. The status for a
-      previously upgrading node should change from ``migrating to tablets`` to
-      ``uses vnodes`` or ``migrating to vnodes``:
+   #. Check the node status. A node that has anything to revert shows
+      ``Needs restart``; one that was never restarted after being marked shows
+      ``Restarted``, having nothing to revert:
 
       .. code-block:: console
 
@@ -351,17 +435,19 @@ following:
          $ scylla nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
+         Migrating Tables: All
+         Direction: vnodes
 
          Nodes:
          Host ID                                Address    Status
-         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   migrating to vnodes  <---
-         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   migrating to tablets
-         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+         99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Needs restart  <---
+         0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Needs restart
+         017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
-   #. If the node status is ``uses vnodes``, the downgrade is complete. Move to
+   #. If the node status is ``Restarted``, the downgrade is complete. Move to
       the next node and repeat from step a.
 
-   #. If the node is ``migrating to vnodes``, restart it to complete the
+   #. If the node shows ``Needs restart``, restart it to complete the
       downgrade:
 
       #. Drain and stop the node:
@@ -384,7 +470,7 @@ following:
 
             scylla nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
 
-      #. Verify that the node status changed from ``migrating to vnodes`` to ``uses vnodes``:
+      #. Verify that the node status changed to ``Restarted``:
 
          .. code-block:: console
 
@@ -397,12 +483,14 @@ following:
             $ scylla nodetool migrate-to-tablets status ks
             Keyspace: ks
             Status: migrating_to_tablets
+            Migrating Tables: All
+            Direction: vnodes
 
             Nodes:
             Host ID                                Address    Status
-            99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   uses vnodes  <---
-            0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   migrating to tablets
-            017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   uses vnodes
+            99d8de76-3954-4727-911a-6a07251b180c   10.0.0.1   Restarted  <---
+            0b5fd6f6-9670-4faf-a480-ad58cf119007   10.0.0.2   Needs restart
+            017dd39a-3d06-4c8a-8ac4-379f9e595607   10.0.0.3   Restarted
 
       #. Move to the next node and repeat from step a until all nodes are
          downgraded.
