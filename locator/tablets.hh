@@ -343,6 +343,8 @@ struct tablet_migration_info {
 
 class tablet_map;
 
+using table_group_set = utils::small_vector<table_id, 2>;
+
 /// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
 tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
 // If filter returns true, the replica can be chosen as primary replica.
@@ -518,19 +520,16 @@ struct load_stats {
     // In case any pre-resize tablet replica is not found, the function returns nullptr
     lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& base_tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 
-    // Modifies the tablet sizes in load_stats by moving the size of a tablet from leaving to pending host.
-    // The function returns modified load_stats if the tablet size was successfully migrated.
-    // It returns nullptr if any of the following is true:
-    // - tablet was not found on the leaving host
-    // - tablet was found on the pending host
-    // - pending and leaving hosts are equal (in case of intranode migration)
-    // - pending host is not found in load_stats.tablet_stats
-    lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+    // Moves the size of a tablet from the leaving to the pending host, for
+    // every table in the co-location group `tables`. Returns nullptr if it
+    // moves no size, e.g., on an intranode migration or if the pending host
+    // is missing from the stats.
+    lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const;
 
     // Estimates the size of a rebuilt tablet on the pending host as the
-    // average over the read_from replicas. Returns nullptr if the pending
-    // host is missing from the stats or a read_from replica lacks a size.
-    lw_shared_ptr<load_stats> rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange) const;
+    // average over the read_from replicas, for every table in the
+    // co-location group `tables`. Returns nullptr if it estimates no size.
+    lw_shared_ptr<load_stats> rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const;
 };
 
 using load_stats_v2 = load_stats;
@@ -855,8 +854,6 @@ public:
 private:
     void check_tablet_id(tablet_id) const;
 };
-
-using table_group_set = utils::small_vector<table_id, 2>;
 
 /// Holds information about all tablets in the cluster.
 ///

@@ -2117,7 +2117,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
             if (load_stats && mig.src && mig.dst) {
                 global_tablet_id gid {mig.tablet.table, mig.tablet.tablet};
                 dht::token_range trange {tmap.get_token_range(mig.tablet.tablet)};
-                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange);
+                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange, tm.tablets().get_table_group(gid.table));
                 if (new_stats) {
                     load_stats->stats = std::move(*new_stats);
                 }
@@ -5456,11 +5456,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_res
     }).get();
 }
 
-// Reproducer for SCYLLADB-5244.
+// Regression test for SCYLLADB-5244.
 //
 // A migration of a co-located group driven by the balancer must leave the
 // tablet sizes of every table complete on the new host.
-SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_migration, *boost::unit_test::expected_failures(1)) {
+SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_migration) {
     do_with_cql_env_thread([] (auto& e) {
         // The setup follows test_load_balancing_with_colocated_tablets:
         // two co-located groups start on host1, and the balancer is expected
@@ -5981,6 +5981,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
     tablet_map tmap(8);
     tablet_id tid(1);
     const uint64_t tablet_size = 42;
+    const table_group_set tables {table};
     range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
     global_tablet_id gid{table, tid};
 
@@ -5990,7 +5991,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(new_load_stats);
 
         // Check tablet size is on host2
@@ -6012,7 +6013,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1] = {};
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -6022,7 +6023,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -6032,7 +6033,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -6041,7 +6042,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         load_stats stats;
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -6059,6 +6060,7 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
     range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
     global_tablet_id gid{table, tid};
     const std::unordered_set<tablet_replica> read_from {tablet_replica{host1, 0}, tablet_replica{host2, 0}};
+    const table_group_set tables {table};
 
     // Check the rebuilt tablet gets the average size of the replicas it was rebuilt from
     {
@@ -6067,7 +6069,7 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
         stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = 60;
         stats.tablet_stats[host3] = {};
 
-        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range);
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
         BOOST_REQUIRE(new_load_stats);
         BOOST_REQUIRE(new_load_stats->get_tablet_size(host3, rb_tid) == 50);
         BOOST_REQUIRE(new_load_stats->get_tablet_size(host1, rb_tid) == 40);
@@ -6081,7 +6083,7 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
         stats.tablet_stats[host2] = {};
         stats.tablet_stats[host3] = {};
 
-        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range);
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -6091,17 +6093,17 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = 40;
         stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = 60;
 
-        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range);
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
     return make_ready_future<>();
 }
 
-// Reproducer for SCYLLADB-5244.
+// Regression test for SCYLLADB-5244.
 //
 // The sizes of the co-located tables must move along with the base table's.
-SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated, *boost::unit_test::expected_failures(1)) {
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated) {
     auto base = table_id(utils::UUID_gen::get_time_UUID());
     auto colocated = table_id(utils::UUID_gen::get_time_UUID());
     auto host1 = host_id(utils::UUID_gen::get_time_UUID());
@@ -6113,13 +6115,14 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated, *boost::unit_te
     range_based_tablet_id base_rb_tid{base, trange};
     range_based_tablet_id colocated_rb_tid{colocated, trange};
     global_tablet_id gid{base, tid};
+    const table_group_set tables {base, colocated};
 
     load_stats stats;
     stats.tablet_stats[host1].tablet_sizes[base][trange] = 42;
     stats.tablet_stats[host1].tablet_sizes[colocated][trange] = 43;
     stats.tablet_stats[host2] = {};
 
-    auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, trange);
+    auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, trange, tables);
     BOOST_REQUIRE(new_load_stats);
 
     // The base table's size moves in any case.
@@ -6135,10 +6138,10 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated, *boost::unit_te
     return make_ready_future<>();
 }
 
-// Reproducer for SCYLLADB-5244.
+// Regression test for SCYLLADB-5244.
 //
 // The co-located tables need a size estimate along with the base table's.
-SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated, *boost::unit_test::expected_failures(1)) {
+SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated) {
     auto base = table_id(utils::UUID_gen::get_time_UUID());
     auto colocated = table_id(utils::UUID_gen::get_time_UUID());
     auto host1 = host_id(utils::UUID_gen::get_time_UUID());
@@ -6152,6 +6155,7 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated, *boost::unit_te
     range_based_tablet_id colocated_rb_tid{colocated, trange};
     global_tablet_id gid{base, tid};
     const std::unordered_set<tablet_replica> read_from {tablet_replica{host1, 0}, tablet_replica{host2, 0}};
+    const table_group_set tables {base, colocated};
 
     load_stats stats;
     stats.tablet_stats[host1].tablet_sizes[base][trange] = 40;
@@ -6160,7 +6164,7 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated, *boost::unit_te
     stats.tablet_stats[host2].tablet_sizes[colocated][trange] = 30;
     stats.tablet_stats[host3] = {};
 
-    auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, trange);
+    auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, trange, tables);
     BOOST_REQUIRE(new_load_stats);
 
     // The base table's size gets an estimate in any case.

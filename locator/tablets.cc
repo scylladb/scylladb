@@ -1445,18 +1445,24 @@ static void migrate_table_tablet_size(load_stats& stats, host_id leaving, host_i
     }
 }
 
-lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const {
     lw_shared_ptr<load_stats> result;
 
     if (leaving == pending || !tablet_stats.contains(pending)) {
         return result;
     }
 
-    range_based_tablet_id rb_tid {gid.table, trange};
-    if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid)) {
-        tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
-        result = make_lw_shared<locator::load_stats>(*this);
-        migrate_table_tablet_size(*result, leaving, pending, rb_tid);
+    // Co-located tables share the migration of their base table, so the
+    // tablet sizes of every table in the group move along.
+    for (auto table : tables) {
+        range_based_tablet_id rb_tid {table, trange};
+        if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid)) {
+            tablet_logger.debug("Moving tablet size for tablet: {} of table: {} from: {} to: {}", gid, table, leaving, pending);
+            if (!result) {
+                result = make_lw_shared<locator::load_stats>(*this);
+            }
+            migrate_table_tablet_size(*result, leaving, pending, rb_tid);
+        }
     }
 
     return result;
@@ -1480,18 +1486,24 @@ static std::optional<uint64_t> average_tablet_size(const load_stats& stats, cons
     return replica_count ? tablet_size_sum / replica_count : 0;
 }
 
-lw_shared_ptr<load_stats> load_stats::rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange) const {
+lw_shared_ptr<load_stats> load_stats::rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const {
     lw_shared_ptr<load_stats> result;
 
     if (!tablet_stats.contains(pending)) {
         return result;
     }
 
-    range_based_tablet_id rb_tid {gid.table, trange};
-    if (auto size = average_tablet_size(*this, read_from, rb_tid)) {
-        tablet_logger.debug("Estimating tablet size for rebuilt tablet: {} on: {} as {}", gid, pending, *size);
-        result = make_lw_shared<locator::load_stats>(*this);
-        result->tablet_stats.at(pending).tablet_sizes[gid.table][trange] = *size;
+    // Co-located tables share the rebuild of their base table, so the
+    // tablet of every table in the group gets an estimate.
+    for (auto table : tables) {
+        range_based_tablet_id rb_tid {table, trange};
+        if (auto size = average_tablet_size(*this, read_from, rb_tid)) {
+            tablet_logger.debug("Estimating tablet size for rebuilt tablet: {} of table: {} on: {} as {}", gid, table, pending, *size);
+            if (!result) {
+                result = make_lw_shared<locator::load_stats>(*this);
+            }
+            result->tablet_stats.at(pending).tablet_sizes[table][trange] = *size;
+        }
     }
 
     return result;
