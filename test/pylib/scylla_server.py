@@ -1104,22 +1104,6 @@ class ScyllaServer:
         if self.cmd:
             self.cmd.send_signal(signal.SIGCONT)
 
-    async def uninstall(self) -> None:
-        """Clear all files left from a stopped server, including the
-        data files and log files."""
-
-        self.logger.info("Uninstalling server at %s", self.workdir)
-
-        try:
-            await async_rmtree(self.workdir, ignore_errors=True)
-        except FileNotFoundError:
-            pass
-        self.log_filename.unlink(missing_ok=True)
-        if self.log_file:
-            self.log_file.close()
-            self.log_file = None
-        self.maintenance_socket_dir.cleanup()
-
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""
         self.log_file.seek(0, 2)  # seek to file end

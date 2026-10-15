@@ -4,21 +4,26 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-"""Tests for the two guarantees of the per-test cluster lifecycle that only
-show when something has already gone wrong, and that the default test run
-never exercises:
+"""Tests for the guarantees of the cluster lifecycle that only show when
+something has already gone wrong, and that the default test run never
+exercises:
 
 - the after-cluster cleanups of test/cluster's scylla_cluster_teardowns run
   once the cluster is recycled (SCYLLADB-2471);
-- a cluster whose fixture never recycled it is swept up at session finish.
+- a cluster whose fixture never recycled it is swept up at session finish;
+- a recycled cluster's server logs outlive the report of the phase that
+  recycled it, so a failure in a module's last teardown still gets them.
 """
 
 import asyncio
+import pathlib
 import textwrap
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
 
+from test.pylib import runner
 from test.pylib.runner import CLUSTER_KEY, recycle_leftover_clusters
 
 pytest_plugins = ["pytester"]
@@ -123,3 +128,122 @@ def test_leftover_clusters_are_recycled_at_session_finish(pytester: pytest.Pytes
 
     assert (per_test.stops, per_test.recycles) == (1, 1)
     assert (shared.stops, shared.recycles) == (1, 1)
+
+
+# Registers the real module-scoped scylla_cluster fixture, its cluster factory
+# and the report hook, with just enough of test.py's options, stash entries
+# and fixtures around them to run without a suite.
+HARNESS_CONFTEST = textwrap.dedent("""\
+    import logging
+    import pathlib
+    from types import SimpleNamespace
+
+    import pytest
+
+    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, scylla_cluster,
+                                   testpy_cluster_factory)
+
+    def pytest_addoption(parser):
+        parser.addoption("--tmpdir")
+        parser.addoption("--save-log-on-success", action="store_true", dest="save_log_on_success")
+        parser.addoption("--coverage", action="store_true")
+        parser.addoption("--extra-scylla-cmdline-options", default="")
+
+    def pytest_collection_modifyitems(items):
+        for item in items:
+            item.stash[BUILD_MODE] = "dev"
+            item.parent.stash[TEST_SUITE] = SimpleNamespace(cfg={})
+
+    @pytest.fixture(scope="module")
+    def build_mode():
+        return "dev"
+
+    @pytest.fixture(scope="module")
+    def suite_log_dir(request):
+        return pathlib.Path(request.config.getoption("--tmpdir"), "dev")
+
+    @pytest.fixture(scope="module")
+    def scylla_binary():
+        return "scylla"
+
+    @pytest.fixture(scope="module")
+    def testpy_uname(request):
+        return request.module.__name__
+
+    @pytest.fixture(scope="module")
+    def testpy_logger(testpy_uname):
+        return logging.getLogger(testpy_uname)
+    """)
+
+
+class LogWritingCluster:
+    """Stands in for ScyllaCluster: one server, whose directory and log are named after the module, and a record of
+    the server logs already on disk when each cluster is created."""
+
+    save_log_on_success = False
+
+    def __init__(self, events: list[str], logger, vardir: pathlib.Path, **kwargs) -> None:
+        self.events = events
+        self.name = logger.name
+        self.workdir = vardir / self.name
+        self.servers = {}
+
+    async def add_server(self) -> None:
+        self.workdir.mkdir(parents=True)
+        log = self.workdir.with_suffix(".log")
+        self.events.append(f"create {self.name} next to {sorted(p.name for p in log.parent.glob('*.log'))}")
+        log.write_text("server log\n")
+        self.servers[1] = SimpleNamespace(workdir=self.workdir, log_filename=log)
+
+    def take_log_savepoint(self) -> None:
+        pass
+
+    async def recycle(self) -> None:
+        pass
+
+
+def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch,
+                           **modules: str) -> tuple[pytest.RunResult, list[str], pathlib.Path]:
+    """Run the modules against the harness; return the result, the cluster events and the failed_test dir."""
+    events = []
+    monkeypatch.setattr(runner, "ScyllaCluster", partial(LogWritingCluster, events))
+    pytester.makeconftest(HARNESS_CONFTEST)
+    pytester.makeini(
+        "[pytest]\n"
+        "addopts = -p no:sugar -p no:xdist\n"
+        "asyncio_mode = auto\n"
+        "asyncio_default_fixture_loop_scope = session\n"
+    )
+    pytester.makepyfile(**modules)
+    tmpdir = pytester.path / "testlog"
+    (tmpdir / "pytest_tests_logs").mkdir(parents=True)
+    return pytester.runpytest(f"--tmpdir={tmpdir}"), events, tmpdir / "dev" / "failed_test"
+
+
+def test_failed_teardown_keeps_the_logs_of_a_recycled_cluster(pytester: pytest.Pytester,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """A module whose last teardown fails after its cluster was recycled gets
+    the server log in failed_test/; a passing module's cluster is deleted
+    before the next module's cluster is created, and the failed one after
+    its log is copied."""
+    result, events, failed_test_dir = run_with_stub_clusters(
+        pytester, monkeypatch,
+        test_a="def test_a(scylla_cluster): pass\n",
+        test_b=textwrap.dedent("""\
+            import pytest
+
+            @pytest.fixture(scope="module")
+            def failing_teardown(scylla_cluster):
+                yield
+                raise RuntimeError("deliberate teardown failure")
+
+            def test_b(failing_teardown): pass
+            """),
+    )
+
+    result.assert_outcomes(passed=2, errors=1)
+    assert sorted(p.name for p in failed_test_dir.iterdir()) == ["test_b"]
+    assert (failed_test_dir / "test_b" / "test_b.log").read_text() == "server log\n"
+    assert "deliberate teardown failure" in (failed_test_dir / "test_b" / "stacktrace.txt").read_text()
+    assert events == ["create test_a next to []", "create test_b next to []"]
+    assert sorted(p.name for p in failed_test_dir.parent.iterdir()) == ["failed_test"]
