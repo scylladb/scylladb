@@ -1532,8 +1532,8 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
         logstor_logger.trace("Discard segment {}", seg_id);
         auto [file_id, file_offset] = segment_id_to_file_location(seg_id);
-        // The segments being discarded were written, so their file is allocated and open.
-        co_await _file_mgr.zero_region(_file_mgr.get_open_file(file_id), file_offset, block_alignment);
+        // The segments being discarded were written, so their file is allocated.
+        co_await _file_mgr.zero_region(file_id, file_offset, block_alignment);
         free_segment(seg_id);
     });
 }

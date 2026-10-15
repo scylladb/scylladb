@@ -133,14 +133,14 @@ public:
         return _open_files[file_id];
     }
 
-    // Writes zeros over the region.
-    future<> zero_region(seastar::file file, uint64_t offset, uint64_t size);
+    // Writes zeros over a region of an allocated file (I6). The region must be in the file.
+    future<> zero_region(file_id_t file_id, uint64_t offset, uint64_t size);
 
     uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
 
 private:
     // The zero buffer is written in one request over as much of a region as the disk takes in one,
-    // see zero_region(). 128 KiB is large enough that the vector of a request is short, and
+    // see write_zeros(). 128 KiB is large enough that the vector of a request is short, and
     // small enough that the buffer costs nothing.
     static constexpr size_t zero_buffer_size = 128 * 1024;
 
@@ -188,6 +188,9 @@ private:
     // after it in the background. The caller must give the next file (I1), below the configured
     // count (I4), and must not call this again before it returns.
     future<> allocate_file(file_id_t);
+    // Writes zeros over the region. The file can be a file that is not allocated, such as the
+    // temporary file of a format.
+    future<> write_zeros(seastar::file file, uint64_t offset, uint64_t size);
     future<> format_file(file_id_t);
     // Formats and opens the configured files that are not allocated, in order. Each file counts
     // as allocated after it is open (I2).

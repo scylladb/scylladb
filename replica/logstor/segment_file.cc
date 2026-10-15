@@ -222,7 +222,15 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
     co_return get_open_file(file_id);
 }
 
-future<> file_manager::zero_region(seastar::file file, uint64_t offset, uint64_t size) {
+future<> file_manager::zero_region(file_id_t file_id, uint64_t offset, uint64_t size) {
+    if (offset > _file_size || size > _file_size - offset) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to zero bytes {} to {} of file {}, which has {} bytes",
+                offset, offset + size, file_id, _file_size));
+    }
+    co_await write_zeros(get_open_file(file_id), offset, size);
+}
+
+future<> file_manager::write_zeros(seastar::file file, uint64_t offset, uint64_t size) {
     // One request covers as much as the disk takes in one, up to max_format_write_size, which the
     // zero buffer is repeated across rather than held in memory: a request an order of magnitude
     // larger than the buffer is worth most of the difference between a stream of small writes and
@@ -281,7 +289,7 @@ future<> file_manager::format_file(file_id_t file_id) {
             co_await tmp_file.truncate(_file_size);
         } else {
             co_await tmp_file.allocate(0, _file_size);
-            co_await zero_region(tmp_file, 0, _file_size);
+            co_await write_zeros(tmp_file, 0, _file_size);
         }
         co_await tmp_file.flush();
         co_await tmp_file.close();
