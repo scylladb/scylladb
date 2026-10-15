@@ -77,6 +77,12 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // Position in segment_set::_segment_list, set to no_index when the segment has no owner.
     static constexpr uint32_t no_index = std::numeric_limits<uint32_t>::max();
     uint32_t index_in_set{no_index};
+    // The sequence of the latest use of the segment: set when get_segment() gives the segment out,
+    // and by recovery from the chunk headers on disk. reset() does not change it, and a free segment
+    // keeps it until it is used again, which is the sequence of the chunks it still holds. So for a
+    // segment with a valid chunk on disk, the chunk's sequence and this one are equal, except
+    // between get_segment() and the first chunk written to the segment.
+    segment_sequence seq{0};
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
