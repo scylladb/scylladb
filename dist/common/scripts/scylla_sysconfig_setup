@@ -102,7 +102,7 @@ if __name__ == '__main__':
     if cfg.get('ETHPCIID') != ethpciid:
         cfg.set('ETHPCIID', ethpciid)
     if args.nr_hugepages:
-        cfg.set('NR_HUGEPAGES', args.nr_hugepages)
+        cfg.set('NR_HUGEPAGES', str(args.nr_hugepages))
     if args.user:
         cfg.set('USER', args.user)
     if args.group:
