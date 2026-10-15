@@ -2224,6 +2224,12 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     const uint64_t found_segment_count = found_file_count * _segments_per_file;
     _segment_descs.resize(std::max(_segment_descs.size(), static_cast<size_t>(found_segment_count)));
 
+    // A found segment is not new, so a new segment comes after the found segments. Set it before
+    // recovery fills the free list, so that no segment counts as both free and new, and
+    // segments_in_use() does not go below zero while recovery runs. A retired file is at or above
+    // the configured count, and a new segment is only below it, so retiring files changes nothing.
+    _next_new_segment_id = found_segment_count;
+
     std::vector<segment_sequence> segment_seqs(static_cast<size_t>(found_segment_count), segment_sequence(0));
     segment_sequence max_segment_seq = segment_sequence(0);
 
@@ -2308,10 +2314,6 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
         }
     }
 
-    // A new segment comes after the segments of the files that recovery kept. Read the file count
-    // before files.finish(), because with format_on_startup it allocates more files, and their
-    // segments are new.
-    _next_new_segment_id = _file_mgr.allocated_file_count() * _segments_per_file;
     _next_segment_seq = max_segment_seq + 1;
 
     co_await files.finish();
