@@ -581,6 +581,8 @@ struct separator_task {
 
 class segment_manager_impl {
 
+    class recovery;
+
     struct stats {
         std::array<uint64_t, write_source_count> bytes_written{0};
         std::array<uint64_t, write_source_count> data_bytes_written{0};
@@ -2251,99 +2253,158 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
     co_await buf.release();
 }
 
-future<recovery_summary> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
-    logstor_logger.info("Starting recovery for shard {} in directory {}", this_shard_id(), _cfg.base_dir.string());
+// One recovery of the segments of the shard. do_recovery() makes one and runs it. The steps run in
+// the order of run(), and each step starts from the state that the step before it leaves.
+class segment_manager_impl::recovery {
+    // A progress line is logged each time this many used segments are placed.
+    static constexpr uint64_t placement_progress_step = 1000;
 
-    auto files = _file_mgr.start_recovery();
-    const file_id_t found_file_count = co_await files.open_found_files();
+    segment_manager_impl& _sm;
+    recovery_catalog& _catalog;
+    file_manager::recovery _files;
+    recovery_summary _summary;
+    recovery_stats _stats;
+    // The highest segment sequence on disk.
+    segment_sequence _max_segment_seq{0};
+    // The found segments that hold a record of an index.
+    utils::dynamic_bitset _used_segments;
+    // The count of the files from the first one to the last one that holds a used segment.
+    file_id_t _used_file_count{0};
+
+public:
+    recovery(segment_manager_impl& sm, recovery_catalog& catalog)
+        : _sm(sm)
+        , _catalog(catalog)
+        , _files(sm._file_mgr.start_recovery())
+        , _used_segments(0)
+    {}
+
+    future<recovery_summary> run();
+
+private:
+    future<> open_found_files();
+    future<> index_found_segments();
+    future<> find_used_segments();
+    future<> fill_free_list();
+    future<> place_used_segments();
+    void resume_segment_sequence();
+};
+
+future<recovery_summary> segment_manager_impl::recovery::run() {
+    logstor_logger.info("Starting recovery for shard {} in directory {}", this_shard_id(), _sm._cfg.base_dir.string());
+
+    co_await open_found_files();
+    co_await index_found_segments();
+    co_await find_used_segments();
+    co_await fill_free_list();
+    co_await _files.retire_unused_files(_used_file_count);
+    co_await place_used_segments();
+    resume_segment_sequence();
+    co_await _files.finish();
+
+    logstor_logger.info("Recovery complete");
+
+    _summary.dropped_records = _stats.dropped_records;
+    _summary.separated_segments = _stats.separated_segments;
+    co_return _summary;
+}
+
+// Opens the found files, and makes every segment in them an empty segment that is not new.
+future<> segment_manager_impl::recovery::open_found_files() {
+    const file_id_t found_file_count = co_await _files.open_found_files();
 
     // Recovery reads every found segment, so each of them needs a descriptor.
-    const uint64_t found_segment_count = found_file_count * _segments_per_file;
-    _segment_descs.resize(std::max(_segment_descs.size(), static_cast<size_t>(found_segment_count)));
+    const uint64_t found_segment_count = found_file_count * _sm._segments_per_file;
+    _summary.found_segments = found_segment_count;
+    _sm._segment_descs.resize(std::max(_sm._segment_descs.size(), static_cast<size_t>(found_segment_count)));
 
     // A found segment is not new, so a new segment comes after the found segments. Set it before
     // recovery fills the free list, so that no segment counts as both free and new, and
     // segments_in_use() does not go below zero while recovery runs. A retired file is at or above
     // the configured count, and a new segment is only below it, so retiring files changes nothing.
-    _next_new_segment_id = found_segment_count;
+    _sm._next_new_segment_id = found_segment_count;
 
-    // Every segment starts out empty; the records the scan below puts in the index charge their
+    // Every segment starts out empty. The records that the scan puts in the index charge their
     // segments through on_add_record().
     for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
-        get_segment_descriptor(log_segment_id(seg_idx)).reset(_cfg.segment_size);
+        _sm.get_segment_descriptor(log_segment_id(seg_idx)).reset(_sm._cfg.segment_size);
         co_await coroutine::maybe_yield();
     }
+}
 
-    recovery_stats stats;
-    const auto rebuilt = co_await rebuild_index(found_segment_count, make_index_resolver(catalog, stats));
-    if (stats.dropped_records) {
-        logstor_logger.warn("Recovery dropped {} records that belong to no compaction group of this shard", stats.dropped_records);
+// Scans every found segment into the indexes of the catalog.
+future<> segment_manager_impl::recovery::index_found_segments() {
+    const auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats));
+    _max_segment_seq = rebuilt.max_segment_seq;
+    if (_stats.dropped_records) {
+        logstor_logger.warn("Recovery dropped {} records that belong to no compaction group of this shard", _stats.dropped_records);
     }
-    logstor_logger.info("Recovery indexed {} live records", _stats.live_record_count);
+    logstor_logger.info("Recovery indexed {} live records", _sm._stats.live_record_count);
+}
 
-    // Mark the segments that an index entry points into. The scan started every found segment
-    // empty, and the indexes charge a segment for each entry that points into it and free the
-    // charge when the entry is replaced, so a segment is used exactly when it holds records. The
-    // set is fixed before the placement, which can write new segments.
-    utils::dynamic_bitset used_segments(static_cast<size_t>(found_segment_count));
-    for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
-        if (get_segment_descriptor(log_segment_id(seg_idx)).record_count > 0) {
-            used_segments.set(seg_idx);
+// Marks the segments that an index entry points into. The scan started every found segment empty,
+// and the indexes charge a segment for each entry that points into it and free the charge when the
+// entry is replaced, so a segment is used exactly when it holds records. The set is fixed before the
+// placement, which can write new segments.
+future<> segment_manager_impl::recovery::find_used_segments() {
+    _used_segments = utils::dynamic_bitset(static_cast<size_t>(_summary.found_segments));
+    for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
+        if (_sm.get_segment_descriptor(log_segment_id(seg_idx)).record_count > 0) {
+            _used_segments.set(seg_idx);
         }
         co_await coroutine::maybe_yield();
     }
+}
 
-    // put used segments in compaction groups, and put the rest in the free list.
-    uint64_t free_segment_count = 0;
-    uint64_t used_segment_count = 0;
+// Puts the unused segments below the configured count on the free list. An unused segment at or
+// above it is in a file that an earlier, larger configuration made, and is not used again.
+future<> segment_manager_impl::recovery::fill_free_list() {
     uint64_t max_used_seg_idx = 0;
-    for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
+    for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
-        if (!used_segments.test(seg_idx)) {
-            if (seg_idx < _configured_max_segments) {
-                _free_segments.push_back(seg_id);
-                free_segment_count++;
+        if (!_used_segments.test(seg_idx)) {
+            if (seg_idx < _sm._configured_max_segments) {
+                _sm._free_segments.push_back(seg_id);
+                _summary.free_segments++;
             }
         } else {
-            used_segment_count++;
+            _summary.used_segments++;
             max_used_seg_idx = seg_idx;
         }
     }
-    logstor_logger.info("Found {} used segments and {} free segments", used_segment_count, free_segment_count);
+    logstor_logger.info("Found {} used segments and {} free segments", _summary.used_segments, _summary.free_segments);
 
-    const file_id_t used_file_count = used_segment_count > 0 ? max_used_seg_idx / _segments_per_file + 1 : 0;
-    co_await files.retire_unused_files(used_file_count);
+    _used_file_count = _summary.used_segments > 0 ? max_used_seg_idx / _sm._segments_per_file + 1 : 0;
+}
 
-    uint64_t recovered_used_segment_count = 0;
-    if (used_segments.size() > 0) {
-        for (auto seg_idx = used_segments.find_first_set(); seg_idx != utils::dynamic_bitset::npos; seg_idx = used_segments.find_next_set(seg_idx)) {
+// Gives each used segment back to its compaction group.
+future<> segment_manager_impl::recovery::place_used_segments() {
+    uint64_t placed_segment_count = 0;
+    if (_used_segments.size() > 0) {
+        for (auto seg_idx = _used_segments.find_first_set(); seg_idx != utils::dynamic_bitset::npos; seg_idx = _used_segments.find_next_set(seg_idx)) {
             co_await coroutine::maybe_yield();
             log_segment_id seg_id(seg_idx);
-            auto& desc = get_segment_descriptor(seg_id);
+            auto& desc = _sm.get_segment_descriptor(seg_id);
             logstor_logger.trace("Recovering used segment {}", seg_id);
-            if (recovered_used_segment_count % 1000 == 0) {
-                logstor_logger.info("Recovering used segments: {}%", 100 * recovered_used_segment_count / used_segment_count);
+            if (placed_segment_count % placement_progress_step == 0) {
+                logstor_logger.info("Recovering used segments: {}%", 100 * placed_segment_count / _summary.used_segments);
             }
-            co_await add_segment_to_compaction_group(catalog, desc, stats);
-            recovered_used_segment_count++;
+            co_await _sm.add_segment_to_compaction_group(_catalog, desc, _stats);
+            placed_segment_count++;
         }
     }
+}
 
-    _next_segment_seq = rebuilt.max_segment_seq + 1;
+// New segments get sequences above every sequence on disk.
+void segment_manager_impl::recovery::resume_segment_sequence() {
+    _sm._next_segment_seq = _max_segment_seq + 1;
+    _summary.next_segment_seq = _sm._next_segment_seq;
+}
 
-    co_await files.finish();
-
-    logstor_logger.info("Recovery complete");
-
-    co_return recovery_summary{
-        .found_segments = found_segment_count,
-        .used_segments = used_segment_count,
-        .free_segments = free_segment_count,
-        .dropped_records = stats.dropped_records,
-        .separated_segments = stats.separated_segments,
-        .next_segment_seq = _next_segment_seq,
-    };
+future<recovery_summary> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
+    recovery r(*this, catalog);
+    co_return co_await r.run();
 }
 
 future<> segment_manager_impl::do_recovery_for_test() {
