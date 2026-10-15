@@ -355,7 +355,7 @@ def test_swap_explicit_size_on_ext4(swap, argv):
     ('swapfile', [], 'swapfile /swapfile already exists'),
     ('unit', [], 'swap unit /etc/systemd/system/swapfile.swap already exists'),
     (None, ['--swap-size', '200'], 'does not have enough disk space. 200.00GB space required.'),
-    ('small_disk', [], 'does not have enough disk space'),
+    ('small_disk', [], 'swap directory / does not have enough disk space.'),
 ], ids=['swap-exists', 'both-sizes', 'swapfile-exists', 'unit-exists', 'too-big', 'small-disk'])
 def test_swap_errors(swap, capsys, setup, argv, message):
     """Conflicting options, an existing swap, or too little disk space must stop setup with a clear message."""
