@@ -87,6 +87,8 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
+static constexpr expected_status whole_or_ranged_object = {http::reply::status_type::ok, http::reply::status_type::partial_content};
+
 client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs,
                std::unique_ptr<throttling_controller> tc)
         : _host(std::move(host))
@@ -499,12 +501,15 @@ future<> client::rebalance_connections() {
 
 http::client::reply_handler client::wrap_handler(http::request& request,
                                                                http::client::reply_handler handler,
-                                                               std::optional<http::reply::status_type> expected) {
+                                                               expected_status expected) {
     return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto _in = std::move(in);
+        // An accepted status reaches the handler even when it is an error class, and
+        // nothing is thrown, so the connection goes back to the pool instead of dropped.
+        const bool accepted = expected.accepts(rep._status);
         auto status_class = seastar::http::reply::classify_status(rep._status);
         std::optional<aws_error> possible_error;
-        if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
+        if (!accepted && status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
             possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
             if (!possible_error || possible_error->get_error_type() == aws_error_type::UNKNOWN) {
                 // The parsed error carries no useful classification. Adopt the HTTP-derived error
@@ -546,7 +551,7 @@ http::client::reply_handler client::wrap_handler(http::request& request,
                 aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
         }
 
-        if (expected && rep._status != *expected) {
+        if (!accepted) {
             throw seastar::httpd::unexpected_status_error(rep._status);
         }
         std::exception_ptr eptr;
@@ -573,7 +578,7 @@ http::client::reply_handler client::wrap_handler(http::request& request,
 
 future<> client::make_request(http::request req,
                               http::client::reply_handler handle,
-                              std::optional<http::reply::status_type> expected,
+                              expected_status expected,
                               seastar::abort_source* as) {
     return make_request(
         std::move(req), std::move(handle), *_retry_strategy, [](std::exception_ptr ex) {
@@ -585,7 +590,7 @@ future<> client::make_request(http::request req,
                               http::client::reply_handler handle,
                               const http::retry_strategy& rs,
                               error_handler err_handler,
-                              std::optional<http::reply::status_type> expected,
+                              expected_status expected,
                               seastar::abort_source* as) {
     // Held for the whole request. close() waits for the gate before closing
     // the http clients, so no http connection can outlive them.
@@ -611,7 +616,7 @@ future<> client::make_request(http::request req,
                               reply_handler_ext handle_ex,
                               const http::retry_strategy& rs,
                               error_handler err_handler,
-                              std::optional<http::reply::status_type> expected,
+                              expected_status expected,
                               seastar::abort_source* as) {
     // Held across the lookup as well: find_or_create_client() can suspend and
     // insert into _https, which close() must not drain in that window.
@@ -623,7 +628,7 @@ future<> client::make_request(http::request req,
     co_await make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
 }
 
-future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, expected_status expected, seastar::abort_source* as) {
     return make_request(
         std::move(req), std::move(handle_ex), *_retry_strategy, [](std::exception_ptr ex) {
             map_s3_client_exception(std::move(ex));
@@ -699,15 +704,16 @@ future<object_info> client::get_object_info(sstring object_name, seastar::abort_
 }
 
 future<bool> client::object_exists(sstring object_name, seastar::abort_source* as) {
-    try {
-        co_await get_object_header(object_name, ignore_reply, as);
-    } catch (const storage_io_error& e) {
-        if (e.code().value() == ENOENT) {
-            co_return false;
-        }
-        throw;
-    }
-    co_return true;
+    using status_type = http::reply::status_type;
+    constexpr expected_status exists_or_not = {status_type::ok, status_type::not_found};
+    s3l.trace("HEAD {}", object_name);
+    auto req = http::request::make("HEAD", _host, object_name);
+    bool exists = false;
+    co_await make_request(std::move(req), [&exists] (const http::reply& rep, input_stream<char>&& in) {
+        exists = rep._status == status_type::ok;
+        return ignore_reply(rep, std::move(in));
+    }, exists_or_not, as);
+    co_return exists;
 }
 
 static tag_set parse_tagging(sstring& body) {
@@ -800,7 +806,7 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
 
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, range download_range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
-    http::reply::status_type expected = http::reply::status_type::ok;
+    expected_status expected = http::reply::status_type::ok;
     if (download_range != s3::full_range) {
         if (download_range.length() == 0) {
             co_return temporary_buffer<char>();
@@ -892,9 +898,14 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
 }
 
 future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
+    // Deleting is idempotent and every caller wants it that way: AWS answers 204 whether
+    // or not the key was there, S3-compatible servers answer 404 for one that wasn't. A
+    // missing *bucket* answers 404 as well and is tolerated with it -- callers cannot tell
+    // the two apart, and the gcp backend ignores it here too.
+    constexpr expected_status deleted_or_absent = {http::reply::status_type::no_content, http::reply::status_type::not_found};
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
-    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
+    co_await make_request(std::move(req), ignore_reply, deleted_or_absent, as);
 }
 
 future<> client::create_bucket(sstring bucket_name, seastar::abort_source* as) {
@@ -1628,10 +1639,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     std::move(req),
                     [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
                         group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
-                        if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
-                            s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
-                            throw httpd::unexpected_status_error(reply._status);
-                        }
                         gc.prefetch_bytes += pf_length;
                         if (discover_size) {
                             // A zero length here needs no special case: the read loop
@@ -1686,7 +1693,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     },
                     no_retry,
                     [](std::exception_ptr ex) { std::rethrow_exception(std::move(ex)); },
-                    {},
+                    whole_or_ranged_object,
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (...) {
@@ -1806,17 +1813,13 @@ auto client::download_source::request_body() -> future<external_body> {
 
     (void)_client->make_request(std::move(req), [this, &p] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         s3l.trace("GET {} got the body ({} {} bytes)", _object_name, rep._status, rep.content_length);
-        if (rep._status != http::reply::status_type::partial_content && rep._status != http::reply::status_type::ok) {
-            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
-        }
-
         auto in = std::move(in_);
         external_body xb(in);
         auto f = xb.done.get_future();
         p->set_value(std::move(xb));
         p.reset();
         co_await std::move(f);
-    }, {}, _as).handle_exception([&p] (auto ex) {
+    }, whole_or_ranged_object, _as).handle_exception([&p] (auto ex) {
         if (p.has_value()) {
             p->set_exception(std::move(ex));
         }
