@@ -71,6 +71,7 @@ mutation colocated_tablet_map_to_mutation(table_id,
                                         table_id base_table,
                                         api::timestamp_type);
 
+mutation make_tablet_migration_finalized_mutation(table_id, api::timestamp_type);
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 
 /// Stores a given tablet_metadata in system.tablets.

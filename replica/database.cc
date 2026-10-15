@@ -1247,8 +1247,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
         auto metadata_ptr = not_commited_new_metadata ? not_commited_new_metadata : _shared_token_metadata.get();
-        auto table_is_migrating = metadata_ptr->tablets().has_tablet_map(schema->id());
-        if (table_is_migrating && storage_mode.has_value() && storage_mode.value() == service::storage_mode::tablets) {
+        if (table_runs_on_tablets(*metadata_ptr, schema->id(), storage_mode)) {
             // Table under vnode-to-tablet migration: the keyspace uses vnode-based
             // replication but this table already has a tablet map persisted in group0.
             // Build a tablet-aware RS with the same replication options so the table
