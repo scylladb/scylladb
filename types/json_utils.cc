@@ -145,6 +145,17 @@ template <typename T> static T to_int(const rjson::value& value) {
             throw marshal_exception(format("Value {} out of range", double_value));
         }
 
+        // A double holds every integer only below 2^53 (e.g., 2^53+1 is read
+        // as 2^53), so a larger number read as a double may have lost its
+        // lower digits. Reject it rather than silently store a different
+        // number. Such a number can still be written as an integer, without
+        // an exponent or a decimal point, which RapidJSON reads exactly.
+        constexpr double exact_limit = double(int64_t(1) << 53);
+        if (std::abs(double_value) >= exact_limit) {
+            throw marshal_exception(format("Value {} is too large to be read exactly as an integer when written "
+                "with an exponent or a decimal point", value));
+        }
+
         return double_value;
     }
     else {
