@@ -517,23 +517,42 @@ std::optional<sstring> cluster_config_manager::resolve_config(std::string_view c
     return get_cluster_config(config_name);
 }
 
+namespace {
+
+// A db_config option's effective value lives in db::config, and its fallback when no scope
+// stores an override is the node's own db::config value rather than the registry default,
+// so the typed accessors would hand a consumer the wrong value for it.
+void check_not_db_config(const cluster_config_registry::option& opt) {
+    if (opt.kind == cluster_config_registry::option_kind::db_config) {
+        utils::on_internal_error(format(
+                "cluster config '{}' is backed by db::config; read it through db::config, not the manager",
+                opt.name));
+    }
+}
+
+}
+
 // An option's default is compiled in, so these are usable before the cluster enables the
 // registry feature. Until then no scope can store an override for it (the ALTER path
 // rejects the option), so resolution yields absence and these return the default, which is
 // the value the node should be using anyway.
 bool cluster_config_manager::resolve_boolean_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_boolean(opt, resolve_config(opt.name, ctx));
 }
 
 int64_t cluster_config_manager::resolve_integer_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_integer(opt, resolve_config(opt.name, ctx));
 }
 
 double cluster_config_manager::resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_floating_point(opt, resolve_config(opt.name, ctx));
 }
 
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
 }
 

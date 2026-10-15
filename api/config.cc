@@ -181,13 +181,22 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
 
     ss::set_compaction_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
         auto value = get_query_param<uint32_t>(*req, "value");
-        cfg.compaction_throughput_mb_per_sec(value, utils::config_file::config_source::API);
+        try {
+            cfg.compaction_throughput_mb_per_sec(value, utils::config_file::config_source::API);
+        } catch (const std::invalid_argument& e) {
+            // Rejected by the config framework, e.g. while a cluster config override is in effect.
+            throw httpd::bad_param_exception(e.what());
+        }
         return make_ready_future<json::json_return_type>(json::json_void());
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
         auto value = get_query_param<uint32_t>(*req, "value");
-        cfg.stream_io_throughput_mb_per_sec(value, utils::config_file::config_source::API);
+        try {
+            cfg.stream_io_throughput_mb_per_sec(value, utils::config_file::config_source::API);
+        } catch (const std::invalid_argument& e) {
+            throw httpd::bad_param_exception(e.what());
+        }
         return make_ready_future<json::json_return_type>(json::json_void());
     });
 }
