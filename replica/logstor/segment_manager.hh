@@ -61,6 +61,25 @@ struct segment_manager_config {
     seastar::scheduling_group split_compaction_sg;
 };
 
+// What a recovery found on disk, and what it did with it.
+struct recovery_summary {
+    // The segments of the files that recovery found.
+    uint64_t found_segments{0};
+    // The segments that hold a record of an index. Recovery gives them back to their compaction
+    // groups.
+    uint64_t used_segments{0};
+    // The segments that recovery puts on the free list: the found segments below the configured
+    // count that hold no record of an index.
+    uint64_t free_segments{0};
+    // The records of a tablet that is not on this shard, which recovery drops.
+    uint64_t dropped_records{0};
+    // The full segments that fit no single compaction group of this shard. Recovery separates their
+    // records one by one.
+    uint64_t separated_segments{0};
+    // The sequence of the first segment that is allocated after recovery.
+    segment_sequence next_segment_seq{0};
+};
+
 // What the logstor of one shard is using. Every field is shard wide and covers every table, unlike
 // the statistics of the segments a compaction group owns. Kept in one struct, read through a single
 // accessor, so that the shard wide usage numbers stay in one place and another one can join them
@@ -112,7 +131,7 @@ public:
     segment_manager(const segment_manager&) = delete;
     segment_manager& operator=(const segment_manager&) = delete;
 
-    future<> do_recovery(recovery_catalog&);
+    future<recovery_summary> do_recovery(recovery_catalog&);
     future<> do_recovery_for_test();
 
     // The index a record found on disk goes into, or nullptr to drop the record.
