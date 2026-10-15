@@ -13,6 +13,7 @@ import pathlib
 import platform
 import random
 import shutil
+import signal
 import sys
 import time
 import urllib.parse
@@ -403,6 +404,16 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         await cluster.add_server()
         cluster.take_log_savepoint()
         yield cluster
+        processes = [(server, server.cmd) for server in cluster.running.values() if server.cmd]
+
+    # Nothing stops these servers before recycle() does, and it kills each one
+    # still running with SIGKILL and waits for it, so any other exit status
+    # means the server died, which would otherwise pass unnoticed.  0 follows
+    # a shutdown asked for from outside, e.g. a Ctrl-C that reaches the
+    # servers too.
+    if exits := [f"{server} exited with status code {process.returncode}" for server, process in processes
+                 if process.returncode not in (0, -signal.SIGKILL)]:
+        raise RuntimeError("; ".join(exits))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:

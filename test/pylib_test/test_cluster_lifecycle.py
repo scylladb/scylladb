@@ -12,11 +12,13 @@ exercises:
   once the cluster is recycled (SCYLLADB-2471);
 - a cluster whose fixture never recycled it is swept up at session finish;
 - a recycled cluster's server logs outlive the report of the phase that
-  recycled it, so a failure in a module's last teardown still gets them.
+  recycled it, so a failure in a module's last teardown still gets them;
+- a module whose server exited on its own fails, with the server log.
 """
 
 import asyncio
 import pathlib
+import signal
 import textwrap
 from functools import partial
 from types import SimpleNamespace
@@ -182,31 +184,34 @@ class LogWritingCluster:
 
     save_log_on_success = False
 
-    def __init__(self, events: list[str], logger, vardir: pathlib.Path, **kwargs) -> None:
+    def __init__(self, events: list[str], exit_status: int | None, logger, vardir: pathlib.Path, **kwargs) -> None:
         self.events = events
+        self.exit_status = exit_status
         self.name = logger.name
         self.workdir = vardir / self.name
-        self.servers = {}
+        self.servers = self.running = {}
 
     async def add_server(self) -> None:
         self.workdir.mkdir(parents=True)
         log = self.workdir.with_suffix(".log")
         self.events.append(f"create {self.name} next to {sorted(p.name for p in log.parent.glob('*.log'))}")
         log.write_text("server log\n")
-        self.servers[1] = SimpleNamespace(workdir=self.workdir, log_filename=log)
+        self.servers[1] = SimpleNamespace(workdir=self.workdir, log_filename=log, cmd=SimpleNamespace(returncode=None))
 
     def take_log_savepoint(self) -> None:
         pass
 
     async def recycle(self) -> None:
-        pass
+        for server in self.running.values():
+            server.cmd.returncode = -signal.SIGKILL if self.exit_status is None else self.exit_status
 
 
-def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch,
+def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, exit_status: int | None = None,
                            **modules: str) -> tuple[pytest.RunResult, list[str], pathlib.Path]:
-    """Run the modules against the harness; return the result, the cluster events and the failed_test dir."""
+    """Run the modules against the harness, with every server ending with exit_status when recycled, or with
+    SIGKILL's if it is None; return the result, the cluster events and the failed_test dir."""
     events = []
-    monkeypatch.setattr(runner, "ScyllaCluster", partial(LogWritingCluster, events))
+    monkeypatch.setattr(runner, "ScyllaCluster", partial(LogWritingCluster, events, exit_status))
     pytester.makeconftest(HARNESS_CONFTEST)
     pytester.makeini(
         "[pytest]\n"
@@ -246,4 +251,20 @@ def test_failed_teardown_keeps_the_logs_of_a_recycled_cluster(pytester: pytest.P
     assert (failed_test_dir / "test_b" / "test_b.log").read_text() == "server log\n"
     assert "deliberate teardown failure" in (failed_test_dir / "test_b" / "stacktrace.txt").read_text()
     assert events == ["create test_a next to []", "create test_b next to []"]
+    assert sorted(p.name for p in failed_test_dir.parent.iterdir()) == ["failed_test"]
+
+
+def test_module_whose_server_exited_on_its_own_fails(pytester: pytest.Pytester,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server that exited with SIGABRT's status before recycle() stopped it
+    fails the module's last teardown, and its log lands in failed_test/; the
+    passing module of the test above is the twin without an exit status."""
+    result, _, failed_test_dir = run_with_stub_clusters(
+        pytester, monkeypatch, exit_status=-6,
+        test_c="def test_c(scylla_cluster): pass\n",
+    )
+
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["E *RuntimeError: namespace(*) exited with status code -6"])
+    assert (failed_test_dir / "test_c" / "test_c.log").read_text() == "server log\n"
     assert sorted(p.name for p in failed_test_dir.parent.iterdir()) == ["failed_test"]
