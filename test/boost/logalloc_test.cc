@@ -829,6 +829,15 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
         fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
         BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
     }
+
+    // Raising the goal makes the reclaimer free more memory.
+    auto higher_goal = 2 * default_background_reclaim_goal;
+    logalloc::shard_tracker().set_background_reclaim_goal(higher_goal);
+    auto deadline = std::chrono::steady_clock::now() + 30s;
+    while (memory::free_memory() < higher_goal && std::chrono::steady_clock::now() < deadline) {
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
+    BOOST_REQUIRE_GE(memory::free_memory(), higher_goal);
 }
 
 inline
