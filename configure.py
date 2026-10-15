@@ -1811,22 +1811,12 @@ deps['test/boost/combined_tests'] += [
     'test/lib/dummy_sharder.cc',
 ]
 
-deps['test/boost/bytes_ostream_test'] = [
-    "test/boost/bytes_ostream_test.cc",
-    "bytes.cc",
-    "utils/managed_bytes.cc",
-    "utils/logalloc.cc",
-    "utils/labels.cc",
-    "utils/dynamic_bitset.cc",
-    "test/lib/log.cc",
-]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
 deps['test/boost/interval_index_test'] = ['test/boost/interval_index_test.cc']
 deps['test/boost/UUID_test'] = ['clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
 deps['test/boost/url_parse_test'] = ['utils/http.cc', 'test/boost/url_parse_test.cc', ]
 deps['test/boost/hwlb_test'] = ['db/heat_load_balance.cc', 'test/boost/hwlb_test.cc']
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
-deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']

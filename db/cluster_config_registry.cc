@@ -24,6 +24,7 @@
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
 #include "utils/log.hh"
+#include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db::cluster_config_registry {
@@ -42,8 +43,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -62,6 +62,13 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    option{
+        .name = "lsa_background_reclaim_goal_in_mb",
+        .description = "Amount of free memory per shard, in MiB, which the background reclaimer tries to maintain. 0 disables background reclaiming",
+        .scopes = node_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = int64_t(logalloc::default_background_reclaim_goal >> 20),
     },
 };
 

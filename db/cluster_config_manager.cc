@@ -167,6 +167,20 @@ cluster_config_manager::config_callback_registration cluster_config_manager::reg
     return config_callback_registration(*this, callback_id);
 }
 
+cluster_config_manager::config_callback_registration cluster_config_manager::connect_config(sstring config_name,
+        std::function<void(std::optional<sstring>)> on_change) {
+    const auto* opt = db::cluster_config_registry::find(config_name);
+    if (!opt || db::cluster_config_registry::is_table_oriented(*opt)) {
+        utils::on_internal_error(format("connect_config() called for '{}', which is not a node-oriented option", config_name));
+    }
+    on_change(resolve_node_config(config_name));
+    return register_config_callback(std::move(config_name),
+            [on_change = std::move(on_change)] (const lookup_context&, std::optional<sstring> value) {
+        on_change(std::move(value));
+        return make_ready_future<>();
+    });
+}
+
 void cluster_config_manager::request_refresh() {
     // Must run on shard 0, where the refresh fiber lives.
     if (this_shard_id() != 0) {
@@ -265,18 +279,24 @@ future<> cluster_config_manager::apply_refresh(const scope_caches& caches) {
     signal_ready();
 }
 
+cluster_config_manager::lookup_context cluster_config_manager::local_node_context() const {
+    lookup_context ctx;
+    const auto& topology = _db.get_token_metadata().get_topology();
+    ctx.dc_name = topology.get_datacenter();
+    ctx.rack_name = topology.get_rack();
+    ctx.node_uuid = topology.my_host_id().uuid();
+    return ctx;
+}
+
+std::optional<sstring> cluster_config_manager::resolve_node_config(std::string_view config_name) const {
+    return resolve_config(config_name, local_node_context());
+}
+
 future<> cluster_config_manager::run_config_callbacks() {
     // Each shard fires only the callbacks registered on it (register_config_callback
     // stores per-shard). A callback registered on a single shard is invoked only there;
     // one registered on all shards is invoked on each.
-    //
-    // The local node's identity, used to resolve node-oriented options through the
-    // node -> rack -> dc -> cluster precedence chain.
-    lookup_context node_ctx;
-    const auto& topology = _db.get_token_metadata().get_topology();
-    node_ctx.dc_name = topology.get_datacenter();
-    node_ctx.rack_name = topology.get_rack();
-    node_ctx.node_uuid = topology.my_host_id().uuid();
+    const auto node_ctx = local_node_context();
 
     // At most one callback pass runs per shard at a time: all refresh execution happens
     // in shard 0's refresh_fiber(), which awaits this pass before starting the next one.

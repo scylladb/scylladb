@@ -83,6 +83,7 @@ target_link_libraries(utils
   PRIVATE
     Boost::regex
 	crypto
+    db
     cryptopp::cryptopp
     rapidxml::rapidxml
     yaml-cpp::yaml-cpp
