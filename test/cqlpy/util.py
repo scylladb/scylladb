@@ -402,26 +402,30 @@ class config_value_context:
     """Change the value of a config item while the context is active.
 
     The config item has to be live-updatable.
+    system.config is node-local: if `host` is given, the config item is
+    changed (and restored) on that node, otherwise on whichever node the
+    driver picks.
     """
-    def __init__(self, cql, key, value):
+    def __init__(self, cql, key, value, host=None):
         self._cql = cql
         self._key = key
         self._value = value
+        self._host = host
         self._original_value = None
         self._select = cql.prepare("SELECT value FROM system.config WHERE name=?")
         self._update = cql.prepare("UPDATE system.config SET value=? WHERE name=?")
 
     def __enter__(self):
-        self._original_value = self._cql.execute(self._select, (self._key,)).one().value
+        self._original_value = self._cql.execute(self._select, (self._key,), host=self._host).one().value
         # system.config returns values in JSON, but an UPDATE of a string
         # option takes the raw string, so to be able to restore the original
         # value of a string option we need to decode it.
         if self._original_value.startswith('"'):
             self._original_value = json.loads(self._original_value)
-        self._cql.execute(self._update, (self._value, self._key))
+        self._cql.execute(self._update, (self._value, self._key), host=self._host)
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        self._cql.execute(self._update, (self._original_value, self._key))
+        self._cql.execute(self._update, (self._original_value, self._key), host=self._host)
 
 class ScyllaMetrics:
     def __init__(self, lines):

@@ -12,7 +12,9 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table
+import socket
+from .util import new_test_table, new_test_keyspace, config_value_context, ScyllaMetrics
+from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
@@ -215,3 +217,68 @@ def test_scan_ending_with_static_row(cql, test_keyspace):
         # results. The success criteria for this test is the query finishing
         # without errors.
         res = list(cql.execute(statement))
+
+# A paged full scan reads the token ranges (vnodes or tablets) of the table in
+# rounds, doubling the number of ranges read in parallel each round, until the
+# page is filled. When a replica cuts its result short because it reached the
+# page's memory limit (a "short read"), the page ends there: the results of
+# the ranges after the short one are discarded. So the coordinator must not
+# read any more ranges after a short read. It used to continue reading all the
+# remaining ranges of the table on every page, multiplying the replica work.
+# This test makes every page a short read by lowering query_page_size_in_bytes
+# and checks that the number of replica reads per page stays low.
+# Reproduces SCYLLADB-5417.
+def do_test_scan_stops_on_short_read(cql, keyspace, table_extra=""):
+    nrows = 2000
+    value = 'x' * 1024
+    page_size_in_bytes = 4096
+    # The metrics are scraped from the first contact point, so every page is
+    # coordinated by that node, and both its local and its remote replica
+    # reads are counted; otherwise, on a cluster, pages coordinated by
+    # another node or served by another replica would go unnoticed. The page
+    # size limit is that of the coordinator, so it is lowered on that node.
+    coordinator = cql.cluster.metadata.get_host(socket.gethostbyname(cql.cluster.contact_points[0]))
+    with new_test_table(cql, keyspace, "p int PRIMARY KEY, v text", table_extra) as table, \
+            config_value_context(cql, 'query_page_size_in_bytes', str(page_size_in_bytes), host=coordinator):
+        stmt = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        execute_concurrent_with_args(cql, stmt, [(p, value) for p in range(nrows)], concurrency=100)
+
+        def replica_reads():
+            metrics = ScyllaMetrics.query(cql)
+            return sum(metrics.get(f'scylla_storage_proxy_coordinator_reads_{where}_node') or 0 for where in ('local', 'remote'))
+
+        reads_before = replica_reads()
+        rs = cql.execute(SimpleStatement(f"SELECT * FROM {table}", fetch_size=1000), host=coordinator)
+        pages = 0
+        rows = 0
+        while True:
+            pages += 1
+            rows += len(rs.current_rows)
+            if not rs.has_more_pages:
+                break
+            rs.fetch_next_page()
+        reads_after = replica_reads()
+
+        assert rows == nrows
+        # Check that the pages were indeed cut by the memory limit, not by
+        # fetch_size: each page holds ~page_size_in_bytes worth of rows.
+        assert pages > nrows * len(value) // page_size_in_bytes // 2
+        # A page starts with reading a single range and only reads more ranges
+        # if the ones read so far ran out of rows before filling the page.
+        # Here the ranges hold many pages worth of rows each, so there is
+        # ~1 read per page. Without the fix every page read all the remaining
+        # ranges: ~3-5 reads per page on average. The bound leaves room for
+        # unrelated background reads counted by the same metric.
+        reads = reads_after - reads_before
+        # Make sure the metrics did count the reads of the scan.
+        assert reads >= pages, f"{reads} replica reads for {pages} pages"
+        assert reads < 2 * pages, f"{reads} replica reads for {pages} pages"
+
+def test_scan_stops_on_short_read_tablets(cql, this_dc, scylla_only, skip_without_tablets):
+    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 8}}"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        # Pin the tablet count, so the load balancer doesn't merge the tablets.
+        do_test_scan_stops_on_short_read(cql, keyspace, " WITH tablets = {'min_tablet_count': '8', 'max_tablet_count': '8'}")
+
+def test_scan_stops_on_short_read_vnodes(cql, test_keyspace_vnodes, scylla_only):
+    do_test_scan_stops_on_short_read(cql, test_keyspace_vnodes)
