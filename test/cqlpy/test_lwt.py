@@ -578,3 +578,26 @@ def test_negative_paxos_grace_seconds(cql, test_keyspace, scylla_only):
     with pytest.raises(ConfigurationException, match=r'paxos_grace_seconds cannot be smaller than 0'):
         with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int', 'WITH paxos_grace_seconds = -1'):
             pass
+
+# A COMPACT STORAGE table without regular columns has, internally, a hidden
+# regular column, which holds the table's cells. A conditional write with
+# IF EXISTS or IF NOT EXISTS returns the existing row's columns, which must
+# not include this hidden column - its type, "empty", can't even be sent to
+# the client - but the hidden column's cell is still what makes the row
+# exist. Check this for an INSERT, a DELETE, a prepared statement and a
+# batch. Reproduces #12815. It's scylla_only because Cassandra no longer
+# allows creating COMPACT STORAGE tables.
+def test_lwt_compact_storage_hidden_column(cql, test_keyspace, compact_storage, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, b int, PRIMARY KEY (a, b)', 'WITH COMPACT STORAGE') as table:
+        assert cql.execute(f'INSERT INTO {table} (a, b) VALUES (1, 1) IF NOT EXISTS').one()[0] == True
+        rs = cql.execute(f'INSERT INTO {table} (a, b) VALUES (1, 1) IF NOT EXISTS')
+        assert rs.column_names == ['[applied]', 'a', 'b']
+        assert tuple(rs.one()) == (False, 1, 1)
+        stmt = cql.prepare(f'INSERT INTO {table} (a, b) VALUES (?, ?) IF NOT EXISTS')
+        assert tuple(cql.execute(stmt, [1, 1]).one()) == (False, 1, 1)
+        rs = cql.execute(f'BEGIN BATCH INSERT INTO {table} (a, b) VALUES (1, 1) IF NOT EXISTS; INSERT INTO {table} (a, b) VALUES (1, 2) IF NOT EXISTS; APPLY BATCH')
+        assert rs.column_names == ['[applied]', 'a', 'b']
+        assert tuple(rs.one()) == (False, 1, 1)
+        assert cql.execute(f'DELETE FROM {table} WHERE a = 1 AND b = 1 IF EXISTS').one()[0] == True
+        assert cql.execute(f'DELETE FROM {table} WHERE a = 1 AND b = 1 IF EXISTS').one()[0] == False
+        assert list(cql.execute(f'SELECT * FROM {table}')) == []
