@@ -4219,7 +4219,6 @@ def testDeleteWithCompactStaticFormat(cql, test_keyspace):
 
 # Test for CASSANDRA-13917
 # Reproduces #12815
-@pytest.mark.xfail(reason="issue #12815")
 def testDeleteWithCompactNonStaticFormat(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
@@ -4268,11 +4267,6 @@ def testInsertWithCompactStaticFormat(cql, test_keyspace):
 
 # Test for CASSANDRA-13917
 # Reproduces #12815.
-# Because it currently crashes Scylla we have to skip it instead of xfail...
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/12815",
-    reason="test currently crashes Scylla we have to skip it instead of xfail",
-)
 def testInsertWithCompactNonStaticFormat(cql, test_keyspace):
     do_testInsertWithCompactTable(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE")
     do_testInsertWithCompactTable(cql, test_keyspace, "(a int, b int, v int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE")
@@ -4345,11 +4339,6 @@ def testSelectWithCompactStaticFormat(cql, test_keyspace):
 
 # Test for CASSANDRA-13917
 # Reproduces #12815.
-# Because it currently crashes Scylla we have to skip it instead of xfail...
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/12815",
-    reason="currently crashes Scylla we have to skip it instead of xfail",
-)
 def testSelectWithCompactNonStaticFormat(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a,b)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
@@ -4412,11 +4401,6 @@ def testUpdateWithCompactStaticFormat(cql, test_keyspace):
 
 # Test for CASSANDRA-13917
 # Reproduces #12815.
-# Because it currently crashes Scylla we have to skip it instead of xfail...
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/12815",
-    reason="currently crashes Scylla we have to skip it instead of xfail",
-)
 def testUpdateWithCompactNonStaticFormat(cql, test_keyspace):
     do_testUpdateWithCompactFormat(cql, test_keyspace, "(a int, b int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE")
     do_testUpdateWithCompactFormat(cql, test_keyspace, "(a int, b int, v int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE")
