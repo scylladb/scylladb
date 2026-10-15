@@ -989,8 +989,18 @@ static bool may_publish_tablet_routing_info(const table& t) {
     // A table stored in tablets under a keyspace still replicating by vnodes is mid-migration.
     // The migration can still be rolled back, and routing info handed out now would outlive
     // the rollback in the driver's cache. A dropped table has no keyspace, and nothing to route to.
+    // Once its migration is finalized there is no rollback to outlive, and its tablets start
+    // moving, so routing info is both safe and needed.
     auto ks = t.as_data_dictionary().keyspace();
-    return ks && ks->uses_tablets();
+    if (!ks) {
+        return false;
+    }
+    if (ks->uses_tablets()) {
+        return true;
+    }
+    const auto& tmeta = t.get_effective_replication_map()->get_token_metadata().tablets();
+    auto id = t.schema()->id();
+    return tmeta.has_tablet_map(id) && tmeta.get_tablet_map(id).migration_finalized();
 }
 
 std::optional<locator::tablet_routing_info> table::tablet_routing_info_for(dht::token token, unsigned original_shard) const {

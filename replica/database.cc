@@ -1219,7 +1219,14 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     } else {
         auto metadata_ptr = not_commited_new_metadata ? not_commited_new_metadata : _shared_token_metadata.get();
         auto table_is_migrating = metadata_ptr->tablets().has_tablet_map(schema->id());
-        if (table_is_migrating && storage_mode.has_value() && storage_mode.value() == service::storage_mode::tablets) {
+        // A finalized table keeps its tablets whatever the node was asked to run:
+        // its migration is over, so the node storage mode no longer describes it.
+        // That is what lets the modes be cleared between rounds, and what lets a
+        // table prepared later be rolled back while this one stays on tablets.
+        auto table_is_finalized = table_is_migrating
+                && metadata_ptr->tablets().get_tablet_map(schema->id()).migration_finalized();
+        if (table_is_migrating && (table_is_finalized
+                || (storage_mode.has_value() && storage_mode.value() == service::storage_mode::tablets))) {
             // Table under vnode-to-tablet migration: the keyspace uses vnode-based
             // replication but this table already has a tablet map persisted in group0.
             // Build a tablet-aware RS with the same replication options so the table
