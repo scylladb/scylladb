@@ -339,9 +339,10 @@ class ScyllaRESTAPIClient:
     async def disable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
 
-    async def create_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
-        """Start vnodes-to-tablets migration for all tables in a keyspace"""
-        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip)
+    async def create_vnode_tablet_migration(self, node_ip: str, ks: str, table: str | None = None) -> None:
+        """Start vnodes-to-tablets migration for a keyspace, or for a single table in it"""
+        params = {"table": table} if table else {}
+        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip, params=params)
 
     async def upgrade_node_to_tablets(self, node_ip: str) -> None:
         """Set the node's intended storage mode to tablets"""
@@ -356,9 +357,11 @@ class ScyllaRESTAPIClient:
         params = {"include": "tablet_status"} if with_tablet_status else {}
         return await self.client.get_json(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip, params=params)
 
-    async def finalize_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
-        """Finalize vnodes-to-tablets migration for all tables in a keyspace"""
-        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}/finalization", host=node_ip)
+    async def finalize_vnode_tablet_migration(self, node_ip: str, ks: str, table: str | None = None) -> None:
+        """Finalize vnodes-to-tablets migration for a keyspace, or for a single table in it"""
+        params = {"table": table} if table else {}
+        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}/finalization",
+                               host=node_ip, params=params)
 
     async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
         await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)

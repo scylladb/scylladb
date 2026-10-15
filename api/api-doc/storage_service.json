@@ -3229,7 +3229,7 @@
          "path":"/storage_service/vnode_tablet_migrations/keyspaces/{keyspace}",
          "operations":[{
              "method":"POST",
-             "summary":"Start vnodes-to-tablets migration for all tables in a keyspace",
+             "summary":"Start vnodes-to-tablets migration for a keyspace, or for a single table in it",
              "type":"void",
              "nickname":"create_vnode_tablet_migration",
              "produces":["application/json"],
@@ -3241,6 +3241,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                 },
+                 {
+                     "name":"table",
+                     "description":"Migrate only this table. When omitted, all tables in the keyspace are migrated at once.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                  }
              ]
          },
@@ -3306,6 +3314,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                 },
+                 {
+                     "name":"table",
+                     "description":"Finalize only this table. When omitted, the whole keyspace is finalized, which when finalizing forward requires every one of its tables to have been prepared.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                  }
              ]
          }]
@@ -4009,6 +4025,24 @@
             }
          }
       },
+      "vnode_tablet_migration_table_status":{
+         "id":"vnode_tablet_migration_table_status",
+         "description":"Per-table migration state during vnodes-to-tablets migration",
+         "properties":{
+            "table":{
+               "type":"string",
+               "description":"The table name"
+            },
+            "prepared":{
+               "type":"boolean",
+               "description":"Whether the table has a tablet map. Tables without one still use vnodes."
+            },
+            "finalized":{
+               "type":"boolean",
+               "description":"Whether the table's migration is finalized. Such a table runs on tablets for good, even while its keyspace still replicates by vnodes."
+            }
+         }
+      },
       "vnode_tablet_migration_status":{
          "id":"vnode_tablet_migration_status",
          "description":"Vnodes-to-tablets migration status for a keyspace",
@@ -4021,12 +4055,23 @@
                "type":"string",
                "description":"The migration status: `vnodes` (not started), `migrating_to_tablets` (in progress), or `tablets` (complete)"
             },
+            "direction":{
+               "type":"string",
+               "description":"Which way the migration is going: `tablets`, `vnodes` when it is being rolled back, or empty when no node has been marked"
+            },
             "nodes":{
                "type":"array",
                "items":{
                   "$ref":"vnode_tablet_migration_node_status"
                },
                "description":"Per-node storage mode information. Empty if the keyspace is not being migrated."
+            },
+            "tables":{
+               "type":"array",
+               "items":{
+                  "$ref":"vnode_tablet_migration_table_status"
+               },
+               "description":"Per-table migration state, sorted by table name."
             },
             "tablets":{
                "type":"tablet_status",
