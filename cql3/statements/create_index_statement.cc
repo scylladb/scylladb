@@ -558,8 +558,11 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
 }
 
 void create_index_statement::validate_for_local_index(const schema& schema) const {
-    if (!_raw_targets.empty()) {
-            if (const auto* index_pk = std::get_if<std::vector<::shared_ptr<column_identifier::raw>>>(&_raw_targets.front()->value)) {
+    if (_raw_targets.empty()) {
+        return;
+    }
+    const auto* index_pk = std::get_if<index_target::raw::multiple_columns>(&_raw_targets.front()->value);
+            if (index_pk) {
                 auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
                     return raw_ident->prepare_column_identifier(schema);
                 });
@@ -603,14 +606,13 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
                     throw exceptions::invalid_request_exception(format("Local index definition must provide an indexed column, not just partition key"));
                 }
             }
-        }
         for (unsigned i = 1; i < _raw_targets.size(); ++i) {
             if (std::holds_alternative<index_target::raw::multiple_columns>(_raw_targets[i]->value)) {
                 throw exceptions::invalid_request_exception(format("Multi-column index targets are currently only supported for partition key"));
             } else if (auto* raw_ident = std::get_if<index_target::raw::single_column>(&_raw_targets[i]->value)) {
                 auto ident = (*raw_ident)->prepare_column_identifier(schema);
                 auto it = schema.columns_by_name().find(ident->name());
-                if (it != schema.columns_by_name().end() && it->second->is_static()) {
+                if (index_pk && it != schema.columns_by_name().end() && it->second->is_static()) {
                     throw exceptions::invalid_request_exception("Local indexes containing static columns are not supported.");
                 }
             }

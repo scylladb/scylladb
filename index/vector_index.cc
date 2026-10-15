@@ -265,6 +265,14 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
                 return;
             }
 
+            // An update to a static column alone gives a CDC row with a null clustering key,
+            // which the Vector Store skips, so the filtering value of each row would go stale.
+            if (c_def->is_static()) {
+                throw exceptions::invalid_request_exception(
+                    fmt::format("Creating a {} index requires a non-static filtering column, but column {} is a static column",
+                    index.index_type_name(), c_name));
+            }
+
             if (!is_supported_filtering_column(*type)) {
                 throw exceptions::invalid_request_exception(format("Unsupported vector index filtering column {} type", c_name));
             }
