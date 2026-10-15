@@ -250,3 +250,112 @@ belong to the table rather than to a group: they keep their values when a tablet
 away, stay on a shard after its last tablet has left it, and are dropped with the table.
 Gauges such as `leaders`, `uncommitted_entries` or `blocked_followers` are summed over the
 running servers of the table instead.
+
+# Leader placement
+
+Reads and writes for a strongly consistent tablet go through the leader of its Raft
+group, so which replica leads decides how many hops a request takes. A caller can name
+the replicas it would rather see leading: the sections below bias elections towards the
+best of them, bootstrap a fresh group on it, and move the leadership back once it has
+ended up elsewhere.
+
+## Preferred replicas
+
+`fsm_config::get_priority_members` names the servers which should lead, best first. The
+first of them which can vote in the current configuration is the preferred leader
+(`fsm::preferred_leader()`): `fsm::reset_election_timeout()` gives it a reserved slot, one
+tick after `ELECTION_TIMEOUT`, while every other server randomizes over the slots behind
+it. The preferred leader therefore starts campaigning before anybody else and, alone in
+its slot, cannot split the vote. It is a bias rather than a guarantee: election timers run
+independently on each node, so a slow node can still be beaten to it.
+
+Only the head of the list gets a slot. The rest of the list matters for the handover
+described below.
+
+Two things to keep in mind when building such a list:
+
+- a server which cannot vote in the group is skipped rather than given the slot: it cannot
+  win an election, so a slot for it would only delay the one which can;
+- a server whose own clock is unusable while leases are on declines the slot, and the
+  fast bootstrap below, and randomizes with everybody else: it could serve no lease
+  reads, and the group would only hand the leadership away from it again;
+- the list has to be a property of the group, identical on all its replicas. If two
+  replicas disagree about its head they both take the reserved slot and split a vote,
+  which costs an election round. If they disagree about the order, a leader may hand
+  the leadership to a server which ranks it higher and hands it straight back; the
+  handover below only ever moves the leadership up the list, so with one list there is
+  no such cycle.
+
+The callback is invoked whenever the election timer is armed and whenever a handover
+target is asked for, so its answer may follow state which changes while the group runs.
+In exchange it runs in the fsm's synchronous context and must neither block nor throw.
+
+## The dedicated rack
+
+`groups_manager::preferred_leaders()` is the callback for tablet groups. Today it has a
+single rule: if the keyspace sets `dedicated_rack` (see the `consistency` option in the
+CQL documentation), it names the tablet's replica in that rack, which is the cheapest one
+to serve a strongly consistent read from. There is at most one, because a rack list places
+one replica per rack. It is rebuilt on every call, so a migrated tablet or a changed
+topology is picked up without restarting the group, and it names nobody for a group the
+tablet map no longer describes - the stale side of a split or a merge - which it tells by
+the group id. Keyspaces without a dedicated rack name nobody and keep ordinary Raft,
+which spreads leadership over all the replicas.
+
+## Bootstrapping a fresh group
+
+A fresh group has no leader and no log, and waiting out an election timeout to get one is
+pure delay, so `raft::server` starts a single member as a candidate right away
+(`fsm_config::fast_bootstrap_seed`). That member is the preferred leader when the group
+has one - bootstrapping the leadership anywhere else would only make the group hand it
+over afterwards. Without a preference it is the voter at rank `seed % voters` in ascending
+`server_id` order, and `groups_manager` derives the seed from the group id, so that a
+table starting with many tablets spreads their initial leadership over its replicas
+instead of electing the smallest-id node everywhere.
+
+Note that a group is bootstrapped this way whenever its log is empty, which is also the
+case for a replica whose entries have all been applied and which has taken no snapshot -
+so such a replica may call an election on restart and take the leadership from a healthy
+leader.
+
+## Handing the leadership over
+
+The slot steers elections, and a group holds an election only while it has no leader. Once
+it has one, nothing moves the leadership on its own: a follower which can see a live leader
+keeps resetting its election timer (`has_stable_leader()` in `fsm::tick()`) and never times
+out. A group which elected a leader outside the dedicated rack - because the replica there
+was down, behind, or just slower to campaign - would keep it for as long as it lives, since
+a healthy leader is never re-elected.
+
+Raft tells whom the leadership should go to, and the groups manager moves it. A leader
+answers `server::preferred_handover_target()` with the first server on the list ahead of
+it which can vote, which the failure detector considers alive and - while leases are in
+use - whose clock works (`clock_ok` in its progress). Passing over the ones which are gone
+matters once a caller names more than one server: the second choice should lead while the
+first is down. A server whose clock does not work could hold no lease, so the group would
+serve no local read from it - and LeaseGuard, which hands the leadership away from a
+leader whose clock has failed, would give it straight back.
+
+`groups_manager::leader_placement_fiber()` runs on every shard once the strongly
+consistent tables feature is on, which on a fresh node happens after `start()`, during the
+join. Every `leader_placement_interval`, stretched by a random part of
+`leader_placement_jitter`, it
+walks the groups the shard leads and transfers the leadership of each one which names a
+target there, through `server::stepdown()` aimed at that target. Aiming it is what keeps
+the handover from making things worse:
+
+- nobody else is sent a `timeout_now`, so a group whose preferred server cannot take over
+  keeps its current leader instead of passing it to a third one - which would find the
+  same answer and pass it on again, leaving the group churning;
+- a server which doesn't catch up before `leader_placement_timeout` is given up on, as in
+  any other stepdown, and asked again at the next check.
+
+Like any stepdown it holds the group's writes back while it waits for the target to catch
+up - which is also what lets the target catch up while the group is busy. That is why both
+the interval and the timeout are coarse, and why the check lives in the groups manager
+rather than in the Raft state machine: a group led from the wrong place is a latency
+problem, not a correctness one, and when to pay for moving it - how often, how many groups
+at once, whether to wait for a quiet moment - is policy which may change without touching
+Raft. The jitter also keeps the nodes which restarted together from handing over in
+lockstep. The fiber is stopped before `stepdown_leaders()` hands everything away on
+shutdown, since only one stepdown may be in progress per group.
