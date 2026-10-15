@@ -512,11 +512,11 @@ struct load_stats {
     // - if the tablet is being rebuilt, we will return the average tablet size of all the replicas
     std::optional<uint64_t> get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const;
 
-    // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
-    // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
-    // corresponding to the post-resize tablet_map.
+    // Modifies the tablet sizes in load_stats after a split or merge of the given base tables and of the
+    // tables co-located with them. The old_tm argument has to contain the token_metadata pre-resize.
+    // The function returns load_stats with tablet token ranges corresponding to the post-resize tablet_map.
     // In case any pre-resize tablet replica is not found, the function returns nullptr
-    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
+    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& base_tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 
     // Modifies the tablet sizes in load_stats by moving the size of a tablet from leaving to pending host.
     // The function returns modified load_stats if the tablet size was successfully migrated.
@@ -926,6 +926,11 @@ public:
 
     // Returns the base tables of the keyspace's co-location groups (see is_base_table()).
     std::vector<schema_ptr> base_tables(const data_dictionary::keyspace_metadata& ksm) const;
+
+    // Returns the co-location group of the given table: its base table and
+    // every table co-located with it. A table unknown to the metadata forms
+    // a group of its own.
+    table_group_set get_table_group(table_id id) const;
 
 public:
     tablet_metadata() = default;

@@ -5381,11 +5381,11 @@ static bool load_stats_complete(token_metadata_ptr tmptr, const shared_load_stat
     return complete;
 }
 
-// Reproducer for SCYLLADB-5244.
+// Regression test for SCYLLADB-5244.
 //
 // A co-located table shares the tablet map of its base table, so a resize
 // driven by the balancer must leave its tablet sizes complete too.
-SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_resize, *boost::unit_test::expected_failures(1)) {
+SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_resize) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
 
@@ -5866,11 +5866,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
     }, cfg).get();
 }
 
-// Reproducer for SCYLLADB-5244.
+// Regression test for SCYLLADB-5244.
 //
 // The coordinator passes only base tables to the reconciliation, so it must
 // rewrite the sizes of their co-located tables too.
-SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_colocated, *boost::unit_test::expected_failures(1)) {
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_colocated) {
     auto cfg = tablet_cql_test_config();
 
     do_with_cql_env_thread([] (auto& e) {

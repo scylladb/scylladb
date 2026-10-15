@@ -464,6 +464,13 @@ std::vector<schema_ptr> tablet_metadata::base_tables(const data_dictionary::keys
     return result;
 }
 
+table_group_set tablet_metadata::get_table_group(table_id id) const {
+    if (auto it = _table_groups.find(get_base_table(id)); it != _table_groups.end()) {
+        return it->second;
+    }
+    return table_group_set{id};
+}
+
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
@@ -1400,22 +1407,26 @@ static bool reconcile_table_resize(load_stats& new_stats, table_id table, const 
     return true;
 }
 
-lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
+lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& base_tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
     lw_shared_ptr<load_stats> reconciled_stats { make_lw_shared<load_stats>(*this) };
     load_stats& new_stats = *reconciled_stats;
 
-    for (table_id table : tables) {
-        if (!new_tm.tablets().has_tablet_map(table)) {
-            // Table has been dropped, remove it from stats
-            for (auto& [host, tls] : new_stats.tablet_stats) {
-                tls.tablet_sizes.erase(table);
+    for (table_id base_table : base_tables) {
+        // Co-located tables share the tablet map of their base table, so the
+        // resize of a base table resizes every table of its group.
+        for (table_id table : old_tm.tablets().get_table_group(base_table)) {
+            if (!new_tm.tablets().has_tablet_map(table)) {
+                // Table has been dropped, remove it from stats
+                for (auto& [host, tls] : new_stats.tablet_stats) {
+                    tls.tablet_sizes.erase(table);
+                }
+                continue;
             }
-            continue;
-        }
-        const auto& old_tmap = old_tm.tablets().get_tablet_map(table);
-        const auto& new_tmap = new_tm.tablets().get_tablet_map(table);
-        if (!reconcile_table_resize(new_stats, table, old_tmap, new_tmap)) {
-            return nullptr;
+            const auto& old_tmap = old_tm.tablets().get_tablet_map(table);
+            const auto& new_tmap = new_tm.tablets().get_tablet_map(table);
+            if (!reconcile_table_resize(new_stats, table, old_tmap, new_tmap)) {
+                return nullptr;
+            }
         }
     }
 
