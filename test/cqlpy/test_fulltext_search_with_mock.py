@@ -87,6 +87,20 @@ def test_bm25_rank_cannot_order_rows(cql, fts_table):
                     f"ORDER BY BM25_RANK(content, 'hello') LIMIT {NUM_ROWS}")
 
 
+def test_bm25_search_term_rejects_a_search_function(cql, fts_table):
+    """A search function in the search term has no value, and is rejected wherever the search is called."""
+    table, _ = fts_table
+    nested = "BM25_HIGHLIGHT('a', 'x')"
+    for query in [
+            f"SELECT id FROM {table} WHERE BM25(content, {nested}) > 0 ORDER BY BM25(content, 'hello') LIMIT 5",
+            f"SELECT id FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, {nested}) LIMIT 5",
+            (f"SELECT id, BM25_SCORE(content, {nested}) FROM {table} WHERE BM25(content, 'hello') > 0 "
+                f"ORDER BY BM25(content, 'hello') LIMIT 5"),
+    ]:
+        with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the query of a search function")):
+            cql.prepare(query)
+
+
 def test_bm25_rank_orders_rows_through_a_function(cql, fts_setup_with_mock):
     """Only a bare rank is rejected. A function of ranks is a score like any other, sorted highest
     first, so it is the function that decides the order: 1 / rank gives the index's own, and the
