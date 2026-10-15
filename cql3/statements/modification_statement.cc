@@ -250,7 +250,12 @@ void modification_statement::build_cas_result_set_metadata() {
         // columns, then the existence condition applies only to the static columns themselves, and
         // so we don't want to include regular columns in that case.
         for (const auto& def : all_columns) {
-            _columns_of_cas_result_set.set(def.ordinal_id);
+            // The hidden column of a COMPACT STORAGE table without regular
+            // columns can't be returned to the user - its type, "empty",
+            // can't even be sent to the client.
+            if (!def.is_hidden_from_cql()) {
+                _columns_of_cas_result_set.set(def.ordinal_id);
+            }
         }
     } else {
         expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {

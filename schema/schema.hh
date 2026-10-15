@@ -291,9 +291,16 @@ public:
         return _computation;
     }
     void set_computed(column_computation_ptr computation) { _computation = std::move(computation); }
+    // A COMPACT STORAGE table with no regular columns has, internally, one
+    // hidden regular column, which holds its cells. It is recognized by its
+    // type "empty", which users can't use for a column - the only other
+    // columns with this type are a view's virtual columns.
+    bool is_compact_table_hidden_column() const {
+        return is_regular() && !is_view_virtual() && type->get_kind() == abstract_type::kind::empty;
+    }
     // Columns hidden from CQL cannot be in any way retrieved by the user,
     // either explicitly or via the '*' operator, or functions, aggregates, etc.
-    bool is_hidden_from_cql() const { return is_view_virtual(); }
+    bool is_hidden_from_cql() const { return is_view_virtual() || is_compact_table_hidden_column(); }
     const sstring& name_as_text() const;
     const bytes& name() const;
     sstring name_as_cql_string() const;
