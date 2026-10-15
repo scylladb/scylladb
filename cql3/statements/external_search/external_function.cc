@@ -39,6 +39,7 @@ std::pair<const column_definition*, expr::expression> extract_call_arguments(con
         throw exceptions::invalid_request_exception(
                 seastar::format("Second argument to {}() must not be a column reference", function_name));
     }
+    expr::verify_no_aggregate_or_search_functions(query_value, "query of a search function");
 
     return {col_val->col, query_value};
 }

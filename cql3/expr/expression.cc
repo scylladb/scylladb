@@ -34,6 +34,7 @@
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"
 #include "cql3/functions/aggregate_fcts.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -2485,6 +2486,22 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
     if (aggregation_depth(expr) > 0) {
         throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
+}
+
+void
+verify_no_aggregate_or_search_functions(const expression& expr, std::string_view context_for_errors) {
+    for_each_expression<function_call>(expr, [&] (const function_call& fc) {
+        const auto* fun = std::get_if<shared_ptr<functions::function>>(&fc.func);
+        if (!fun) {
+            on_internal_error(expr_logger, "unprepared function_call in verify_no_aggregate_or_search_functions()");
+        }
+        if ((*fun)->is_aggregate()) {
+            throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
+        }
+        if (const auto* search = functions::as_external_search_function(fc)) {
+            throw exceptions::invalid_request_exception(fmt::format("{}() is not supported in the {}", search->display_name(), context_for_errors));
+        }
+    });
 }
 
 unsigned
