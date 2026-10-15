@@ -212,7 +212,6 @@ def test_raid_mount_failure_dumps_udev(raid, caplog):
     assert 'ID_FS_TYPE: ext4' in caplog.text
 
 
-@pytest.mark.xfail(strict=True, reason='error messages lack the f-string prefix')
 def test_raid_mount_failure_names_missing_link(raid, caplog):
     raid.cmd.set('systemctl  start var-lib-scylla.mount', returncode=1)
     with caplog.at_level(logging.ERROR), pytest.raises(subprocess.CalledProcessError):

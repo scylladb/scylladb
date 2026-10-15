@@ -352,13 +352,13 @@ WantedBy=local-fs.target
     except SubprocessError as e:
         if mount_dev != fsdev:
             if not os.path.islink(mount_dev):
-                LOGGER.error('{mount_dev} is not found')
+                LOGGER.error(f'{mount_dev} is not found')
             if not os.path.exists(mount_dev):
-                LOGGER.error('{mount_dev} is broken link')
+                LOGGER.error(f'{mount_dev} is broken link')
         if not os.path.exists(fsdev):
-            LOGGER.error('{fsdev} is not found')
-        if not stat.S_ISBLK(os.stat(fsdev).st_mode):
-            LOGGER.error('{fsdev} is not block device')
+            LOGGER.error(f'{fsdev} is not found')
+        elif not stat.S_ISBLK(os.stat(fsdev).st_mode):
+            LOGGER.error(f'{fsdev} is not block device')
         LOGGER.error(f'Error detected, dumping udev env parameters on {fsdev}')
         udev_info.verify()
         udev_info.dump_variables()
