@@ -5456,6 +5456,62 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_res
     }).get();
 }
 
+// Reproducer for SCYLLADB-5244.
+//
+// A migration of a co-located group driven by the balancer must leave the
+// tablet sizes of every table complete on the new host.
+SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_migration, *boost::unit_test::expected_failures(1)) {
+    do_with_cql_env_thread([] (auto& e) {
+        // The setup follows test_load_balancing_with_colocated_tablets:
+        // two co-located groups start on host1, and the balancer is expected
+        // to move one of them to host2.
+        unsigned shard_count = 2;
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+        auto table3 = add_table(e, ks_name).get();
+        auto table4 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+
+            tablet_map tmap3 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table3, std::move(tmap3));
+            co_await tmeta.set_colocated_table(table4, table3);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(load.get_load(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_load(host2), 2);
+        }
+
+        BOOST_CHECK(load_stats_complete(stm.get(), load_stats, {table1, table2, table3, table4}));
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_uses_correct_desired_count_for_colocated_tables) {
     cql_test_config cfg{};
     cfg.db_config->tablets_per_shard_goal.set(4);
@@ -6038,6 +6094,81 @@ SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
         auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range);
         BOOST_REQUIRE(!new_load_stats);
     }
+
+    return make_ready_future<>();
+}
+
+// Reproducer for SCYLLADB-5244.
+//
+// The sizes of the co-located tables must move along with the base table's.
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated, *boost::unit_test::expected_failures(1)) {
+    auto base = table_id(utils::UUID_gen::get_time_UUID());
+    auto colocated = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const dht::token_range trange = tmap.get_token_range(tid);
+    range_based_tablet_id base_rb_tid{base, trange};
+    range_based_tablet_id colocated_rb_tid{colocated, trange};
+    global_tablet_id gid{base, tid};
+
+    load_stats stats;
+    stats.tablet_stats[host1].tablet_sizes[base][trange] = 42;
+    stats.tablet_stats[host1].tablet_sizes[colocated][trange] = 43;
+    stats.tablet_stats[host2] = {};
+
+    auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, trange);
+    BOOST_REQUIRE(new_load_stats);
+
+    // The base table's size moves in any case.
+    BOOST_REQUIRE(new_load_stats->get_tablet_size(host2, base_rb_tid) == 42);
+    BOOST_REQUIRE(!new_load_stats->get_tablet_size(host1, base_rb_tid));
+
+    auto colocated_on_host2 = new_load_stats->get_tablet_size(host2, colocated_rb_tid);
+    auto colocated_on_host1 = new_load_stats->get_tablet_size(host1, colocated_rb_tid);
+    BOOST_CHECK_MESSAGE(colocated_on_host2 == 43 && !colocated_on_host1,
+            fmt::format("co-located table size found on pending host: {}, on leaving host: {}",
+                        colocated_on_host2.has_value(), colocated_on_host1.has_value()));
+
+    return make_ready_future<>();
+}
+
+// Reproducer for SCYLLADB-5244.
+//
+// The co-located tables need a size estimate along with the base table's.
+SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated, *boost::unit_test::expected_failures(1)) {
+    auto base = table_id(utils::UUID_gen::get_time_UUID());
+    auto colocated = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const dht::token_range trange = tmap.get_token_range(tid);
+    range_based_tablet_id base_rb_tid{base, trange};
+    range_based_tablet_id colocated_rb_tid{colocated, trange};
+    global_tablet_id gid{base, tid};
+    const std::unordered_set<tablet_replica> read_from {tablet_replica{host1, 0}, tablet_replica{host2, 0}};
+
+    load_stats stats;
+    stats.tablet_stats[host1].tablet_sizes[base][trange] = 40;
+    stats.tablet_stats[host1].tablet_sizes[colocated][trange] = 10;
+    stats.tablet_stats[host2].tablet_sizes[base][trange] = 60;
+    stats.tablet_stats[host2].tablet_sizes[colocated][trange] = 30;
+    stats.tablet_stats[host3] = {};
+
+    auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, trange);
+    BOOST_REQUIRE(new_load_stats);
+
+    // The base table's size gets an estimate in any case.
+    BOOST_REQUIRE(new_load_stats->get_tablet_size(host3, base_rb_tid) == 50);
+
+    auto colocated_on_host3 = new_load_stats->get_tablet_size(host3, colocated_rb_tid);
+    BOOST_CHECK_MESSAGE(colocated_on_host3 == 20,
+            fmt::format("co-located table size found on rebuilt host: {}", colocated_on_host3.has_value()));
 
     return make_ready_future<>();
 }
