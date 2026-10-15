@@ -2273,23 +2273,19 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     if (stats.dropped_records) {
         logstor_logger.warn("Recovery dropped {} records that belong to no compaction group of this shard", stats.dropped_records);
     }
+    logstor_logger.info("Recovery indexed {} live records", _stats.live_record_count);
 
-    // go over the index and mark all segments that have live data as used.
+    // Mark the segments that an index entry points into. The scan started every found segment
+    // empty, and the indexes charge a segment for each entry that points into it and free the
+    // charge when the entry is replaced, so a segment is used exactly when it holds records. The
+    // set is fixed before the placement, which can write new segments.
     utils::dynamic_bitset used_segments(static_cast<size_t>(found_segment_count));
-
-    co_await db.get_tables_metadata().for_each_table_gently([&] (table_id tid, lw_shared_ptr<table> tp) -> future<> {
-        if (!tp->uses_logstor()) {
-            co_return;
+    for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
+        if (get_segment_descriptor(log_segment_id(seg_idx)).record_count > 0) {
+            used_segments.set(seg_idx);
         }
-        logstor_logger.info("Table {}.{} has {} entries in logstor index", tp->schema()->ks_name(), tp->schema()->cf_name(), tp->logstor_index().get_key_count());
-        auto scan = tp->logstor_index().scan();
-        while (auto batch = scan.next_batch(1024)) {
-            for (const auto& entry : batch->entries) {
-                used_segments.set(entry.get().entry().location.segment.value);
-            }
-            co_await coroutine::maybe_yield();
-        }
-    });
+        co_await coroutine::maybe_yield();
+    }
 
     // put used segments in compaction groups, and put the rest in the free list.
     uint64_t free_segment_count = 0;
