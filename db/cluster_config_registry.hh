@@ -51,6 +51,7 @@ enum class value_type {
 
 enum class version : uint8_t {
     v0,
+    v1,
 };
 
 // A config value in its native type. One alternative per value_type, in the same order;
