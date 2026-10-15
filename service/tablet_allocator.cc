@@ -2253,13 +2253,21 @@ public:
     // Returns true if the table is under vnodes-to-tablets migration.
     // Such tables have a tablet map but their keyspace RS doesn't use tablets.
     // They should be excluded from load balancing.
+    //
+    // A table whose migration has been finalized is not one of them, even while
+    // its keyspace still replicates by vnodes: every node runs it on tablets and
+    // it cannot be rolled back, so it is balanced and converges to its pow2
+    // layout like any other tablet table.
     bool is_migrating_table(table_id table) {
         auto t = _db.get_tables_metadata().get_table_if_exists(table);
         if (!t) {
             return false;
         }
         auto& ks = _db.find_keyspace(t->schema()->ks_name());
-        return !ks.get_replication_strategy().uses_tablets();
+        if (ks.get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        return !_tm->tablets().get_tablet_map(table).migration_finalized();
     }
 
     struct table_sizing {
@@ -4971,6 +4979,8 @@ private:
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
+        new_tablets.set_migration_finalized(tablets.migration_finalized());
+
         co_return std::move(new_tablets);
     }
 
@@ -5030,6 +5040,8 @@ private:
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
+
+        new_tablets.set_migration_finalized(tablets.migration_finalized());
 
         if (tablets.is_converging_to_pow2()) {
             auto target_pow2 = tablets.target_pow2_tablet_count();

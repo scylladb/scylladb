@@ -4584,7 +4584,13 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
             auto& keyspace = _db.local().find_keyspace(ks);
             if (!keyspace.uses_tablets()) {
                 for (const auto& schema : keyspace.metadata()->tables()) {
-                    if (tablet_metadata.has_tablet_map(schema->id())) {
+                    // A finalized table is done migrating: it no longer depends on
+                    // the node storage mode, so it must not make a mode settable.
+                    // Otherwise a round that ended would still accept `upgrade`,
+                    // leaving an intent that nothing can clear - `start` is refused
+                    // while an intent exists, and `finalize` has nothing to do.
+                    if (tablet_metadata.has_tablet_map(schema->id())
+                            && !tablet_metadata.get_tablet_map(schema->id()).migration_finalized()) {
                         has_any_migrating_table = true;
                         break;
                     }
@@ -7389,13 +7395,11 @@ storage_service::get_natural_endpoints(const sstring& keyspace, const sstring& c
 inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace, const schema_ptr& schema, const replica::column_family& cf, const partition_key& pk) const {
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
-    const auto& ks = _db.local().find_keyspace(keyspace);
-    host_id_vector_replica_set replicas;
-    if (ks.uses_tablets()) {
-        replicas = cf.get_effective_replication_map()->get_natural_replicas(token);
-    } else {
-        replicas = ks.get_static_effective_replication_map()->get_natural_replicas(token);
-    }
+    // Ask the table, not the keyspace: a table whose migration is finalized runs
+    // on tablets while its keyspace still replicates by vnodes, and its tablets
+    // move, so the vnode ring no longer names the nodes that hold its data. For a
+    // table that really is vnode-based, its own ERM is the keyspace's static one.
+    auto replicas = cf.get_effective_replication_map()->get_natural_replicas(token);
     return replicas | std::views::transform([&] (locator::host_id id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>();
 }
 
