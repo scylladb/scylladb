@@ -668,6 +668,24 @@ class row_level_repair;
 static void add_to_repair_meta_for_masters(repair_meta& rm);
 static void add_to_repair_meta_for_followers(repair_meta& rm);
 
+// Returns true if the tablet owning the range is in a rebuild_v2 transition, the only
+// transition in which a scheduler-driven tablet repair runs besides the repair transition.
+// A replica creates the repair's session when it applies the change that sets the
+// transition kind, so holding a valid guard of that session means the kind is visible.
+// The rebuild_repair stage is not checked: a follower may not have applied it yet, as
+// the session is created at write_both_read_old.
+static bool is_tablet_rebuild_repair(replica::table& t, const dht::token_range& range, service::topology_guard& guard) {
+    guard.check();
+    if (!t.uses_tablets()) {
+        return false;
+    }
+    auto erm = t.get_effective_replication_map();
+    auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(t.schema()->id());
+    auto last_token = range.end() ? range.end()->value() : dht::maximum_token();
+    auto* trinfo = tmap.get_tablet_transition_info(tmap.get_tablet_id(last_token));
+    return trinfo && trinfo->transition == locator::tablet_transition_kind::rebuild_v2;
+}
+
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
     std::list<repair_row> row_list;
     std::exception_ptr ex;
@@ -788,6 +806,12 @@ private:
     std::optional<repair_reader> _repair_reader;
     std::optional<int64_t> _repaired_at;
     locator::tablet_repair_incremental_mode _incremental_mode;
+    service::frozen_topology_guard _frozen_topology_guard;
+    service::topology_guard _topology_guard;
+    // Incremental repair of a tablet rebuild: reads only the unrepaired sstables, but
+    // takes no compaction lock and marks nothing, since a rebuild has no end_repair
+    // stage to release them.
+    bool _for_tablet_rebuild;
     lw_shared_ptr<repair_writer> _repair_writer;
     // Contains rows read from disk
     std::list<repair_row> _row_buf;
@@ -818,8 +842,6 @@ private:
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
     bool _small_table_optimization_tm_calculated = false;
-    service::frozen_topology_guard _frozen_topology_guard;
-    service::topology_guard _topology_guard;
     optimized_optional<seastar::abort_source::subscription> _session_abort_sub;
     const bool _is_eligible_to_repair_rejection;
 private:
@@ -923,7 +945,10 @@ public:
             , _nr_peer_nodes(nr_peer_nodes)
             , _repaired_at(repaired_at)
             , _incremental_mode(incremental_mode)
-            , _repair_writer(make_repair_writer(_schema, _repaired_at, _permit, _reason, _db, rs.get_view_builder(), rs.get_view_building_worker(), topo_guard))
+            , _frozen_topology_guard(topo_guard)
+            , _topology_guard(_frozen_topology_guard)
+            , _for_tablet_rebuild(_repaired_at && is_tablet_rebuild_repair(cf, _range, _topology_guard))
+            , _repair_writer(make_repair_writer(_schema, _for_tablet_rebuild ? std::nullopt : _repaired_at, _permit, _reason, _db, rs.get_view_builder(), rs.get_view_building_worker(), topo_guard))
             , _gate(format("repair_meta[{}]", repair_meta_id))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
@@ -947,14 +972,12 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             , _is_tablet(cf.uses_tablets())
-            , _frozen_topology_guard(topo_guard)
-            , _topology_guard(_frozen_topology_guard)
             , _is_eligible_to_repair_rejection(cf.is_eligible_to_write_rejection_on_critical_disk_utilization())
             {
 
             if (is_incremental_repair()) {
-                rlogger.info("Enable incremental repair for table={}.{} range={}",
-                    _schema->ks_name(), _schema->cf_name(), _range);
+                rlogger.info("Enable incremental repair for table={}.{} range={} for_tablet_rebuild={}",
+                    _schema->ks_name(), _schema->cf_name(), _range, _for_tablet_rebuild);
             }
 
             if (master) {
@@ -1217,17 +1240,20 @@ private:
         // To avoid the deadlock, we can throw in step 7 so that n2 will
         // proceed to the end_repair stage and release the lock. After that,
         // the scheduler could schedule the tablet repair again.
-        if (_rs._repair_compaction_locks.contains(gid)) {
-            auto msg = fmt::format("Tablet repair session={} table={} is in progress", _frozen_topology_guard, tid);
-            rlogger.info("{}", msg);
-            throw std::runtime_error(msg);
-        }
+        std::optional<replica::compaction_reenablers_and_lock_holders> reenablers_and_holders;
+        if (!_for_tablet_rebuild) {
+            if (_rs._repair_compaction_locks.contains(gid)) {
+                auto msg = fmt::format("Tablet repair session={} table={} is in progress", _frozen_topology_guard, tid);
+                rlogger.info("{}", msg);
+                throw std::runtime_error(msg);
+            }
 
-        co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
-        rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
-        auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
-        for (auto& lock_holder : reenablers_and_holders.lock_holders) {
-            _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
+            co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
+            rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
+            reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
+            for (auto& lock_holder : reenablers_and_holders->lock_holders) {
+                _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
+            }
         }
         auto sstables = co_await table.take_storage_snapshot(_range);
         _incremental_repair_meta.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_schema, _range));
@@ -1241,9 +1267,11 @@ private:
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
                 _metrics.inc_sst_skipped_bytes += bytes_on_disk;
             } else {
-                sst->mark_as_being_repaired(_frozen_topology_guard);
-                rlogger.info("Added sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
-                    sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
+                if (!_for_tablet_rebuild) {
+                    sst->mark_as_being_repaired(_frozen_topology_guard);
+                }
+                rlogger.info("Added sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for_tablet_rebuild={} for incremental repair",
+                    sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard, _for_tablet_rebuild);
                 _incremental_repair_meta.sst_set->insert(sst);
                 _metrics.inc_sst_read_bytes += bytes_on_disk;
             }
@@ -1252,8 +1280,10 @@ private:
         // sstables particiating the repair have been marked as
         // being_repaired which will be ignored by the new unrepaired
         // compaction.
-        reenablers_and_holders.cres.clear();
-        rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
+        if (reenablers_and_holders) {
+            reenablers_and_holders->cres.clear();
+            rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
+        }
 
         co_await utils::get_local_injector().inject("wait_after_prepare_sstables_for_incremental_repair", utils::wait_for_message(5min));
     }
@@ -2187,6 +2217,9 @@ public:
 
 public:
     future<> mark_sstable_as_repaired() {
+        if (_for_tablet_rebuild) {
+            co_return;
+        }
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
         if (_incremental_repair_meta.sst_set || !sstables.empty()) {
             co_await seastar::async([&] {
@@ -3487,10 +3520,14 @@ public:
             auto compaction_time = gc_clock::now();
 
             std::optional<int64_t> repaired_at;
-            bool enable_incremental_repair = _shard_task.db.local().features().tablet_incremental_repair && _is_tablet &&
-                                              _shard_task.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled &&
+            // A tablet rebuild repairs only the unrepaired data of the remaining replicas: the
+            // last incremental repair already synced the repaired data on all replicas.
+            auto& features = _shard_task.db.local().features();
+            bool enable_incremental_repair = features.tablet_incremental_repair && _is_tablet &&
                                              _shard_task.sched_info.sched_by_scheduler &&
-                                             !_shard_task.sched_info.for_tablet_rebuild;
+                                             (_shard_task.sched_info.for_tablet_rebuild
+                                                ? bool(features.tablet_rebuild_incremental_repair)
+                                                : _shard_task.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled);
             if (enable_incremental_repair) {
                 auto& table = _shard_task.db.local().find_column_family(_table_id);
                 auto erm = table.get_effective_replication_map();
@@ -3606,7 +3643,7 @@ public:
             }
 
             bool mark_as_repaired = false;
-            if (master.is_incremental_repair() && !_failed) {
+            if (master.is_incremental_repair() && !_shard_task.sched_info.for_tablet_rebuild && !_failed) {
                 mark_as_repaired = true;
             }
 
