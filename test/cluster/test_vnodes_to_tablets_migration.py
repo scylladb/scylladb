@@ -2222,6 +2222,103 @@ async def test_migration_with_orphan_view_build_status(manager: ScyllaClusterMan
         await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY)", timeout=60)
 
 
+FAIL_STAGING_INJECTION = "view_update_generator_consume_staging_sstable"
+
+
+async def create_pending_staging_sstables(manager: ScyllaClusterManager, cql, server: ServerInfo, ks: str, num_keys: int) -> str:
+    """Leave pending staging sstables of table `t` on `server`.
+
+    Write rows that `server` fails to apply, then repair the table so that
+    `server` gets them as staging sstables, and keep their processing failing.
+    Returns a glob that matches the staging sstables of `server`.
+    """
+    logger.info("Writing rows that the node fails to apply")
+    await manager.api.enable_injection(server.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks, "cf_name": "t", "what": "throw"})
+    stmt = SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (%s, %s)", consistency_level=ConsistencyLevel.ONE)
+    for k in range(num_keys):
+        await cql.run_async(stmt, [k, k])
+    await manager.api.disable_injection(server.ip_addr, "database_apply")
+
+    logger.info("Repairing the table while staging processing fails on the node")
+    workdir = await manager.server_get_workdir(server.server_id)
+    staging_glob = os.path.join(workdir, "data", ks, "t-*", "staging", "*-Data.db")
+    await manager.api.enable_injection(server.ip_addr, FAIL_STAGING_INJECTION, one_shot=False)
+    await manager.api.repair(server.ip_addr, ks, 't')
+    assert glob.glob(staging_glob), "Expected the repair to write staging sstables on the node"
+    return staging_glob
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_pending_staging_sstables(manager: ScyllaClusterManager):
+    """Verify that staging sstables pending on a node survive the resharding
+    of its storage upgrade and still produce view updates.
+
+    Steps:
+    1. Write rows that one node fails to apply, then repair the table so that the
+       node gets them as staging sstables, and keep their processing failing.
+    2. Start the migration, and upgrade and restart both nodes.
+       - Verify that the staging sstables survive the upgrade.
+    3. Let staging processing succeed, before finalizing the migration.
+       - Verify that the staging sstables are processed and the view on that
+         node has all the rows.
+    4. Finalize the migration.
+    """
+    num_keys = 100
+
+    cfg = {'num_tokens': 16, 'hinted_handoff_enabled': False}
+    # One node per rack, so that the keyspace is RF-rack-valid once it uses tablets.
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg,
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(2)])
+    server, other = servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def verify_view_on_node():
+        # The other node holds a complete view replica, and a CL=ONE read
+        # coordinated by `server` may still be served by it. Stop it, so that
+        # the read can only see the view replica on `server`.
+        await manager.server_stop_gracefully(other.server_id)
+        cql, hosts = await manager.get_ready_cql([server])
+        rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.mv", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+        assert len(rows) == num_keys, f"Expected {num_keys} rows in the view, got {len(rows)}"
+        await manager.server_start(other.server_id)
+        await manager.servers_see_each_other(servers)
+        await reconnect_driver(manager)
+        return (await manager.get_ready_cql(servers))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.t "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv', 2)
+
+        staging_glob = await create_pending_staging_sstables(manager, cql, server, ks, num_keys)
+
+        logger.info("Starting the migration and upgrading both nodes")
+        await manager.api.create_vnode_tablet_migration(other.ip_addr, ks)
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", [FAIL_STAGING_INJECTION])
+        for s in servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+        assert glob.glob(staging_glob), "Expected the staging sstables to survive the upgrade"
+
+        logger.info("Letting staging processing succeed")
+        await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
+        await manager.api.disable_injection(server.ip_addr, FAIL_STAGING_INJECTION)
+
+        async def staging_processed():
+            return True if not glob.glob(staging_glob) else None
+        await wait_for(staging_processed, time.time() + 60)
+
+        logger.info("Verifying that the view on the node has all the rows")
+        cql = await verify_view_on_node()
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(other.ip_addr, ks)
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaClusterManager):
     """Verify that staging sstables pending on an upgraded node are handled
@@ -2243,7 +2340,6 @@ async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaC
        - Verify that no view building tasks exist and view building still
          works, by building a view in a tablet keyspace.
     """
-    fail_staging = "view_update_generator_consume_staging_sstable"
     num_keys = 100
 
     cfg = {'num_tokens': 16, 'hinted_handoff_enabled': False}
@@ -2260,24 +2356,11 @@ async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaC
                             "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
         await wait_for_view(cql, 'mv', 2)
 
-        logger.info("Writing rows that the node fails to apply")
-        await manager.api.enable_injection(server.ip_addr, "database_apply", one_shot=False,
-                                           parameters={"ks_name": ks, "cf_name": "t", "what": "throw"})
-        stmt = SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (%s, %s)", consistency_level=ConsistencyLevel.ONE)
-        for k in range(num_keys):
-            await cql.run_async(stmt, [k, k])
-        await manager.api.disable_injection(server.ip_addr, "database_apply")
-
-        logger.info("Repairing the table while staging processing fails on the node")
-        workdir = await manager.server_get_workdir(server.server_id)
-        staging_glob = os.path.join(workdir, "data", ks, "t-*", "staging", "*-Data.db")
-        await manager.api.enable_injection(server.ip_addr, fail_staging, one_shot=False)
-        await manager.api.repair(server.ip_addr, ks, 't')
-        assert glob.glob(staging_glob), "Expected the repair to write staging sstables on the node"
+        staging_glob = await create_pending_staging_sstables(manager, cql, server, ks, num_keys)
 
         logger.info("Starting the migration and upgrading the node")
         await manager.api.create_vnode_tablet_migration(other.ip_addr, ks)
-        await manager.server_update_config(server.server_id, "error_injections_at_startup", [fail_staging])
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", [FAIL_STAGING_INJECTION])
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
         await manager.server_restart(server.server_id)
         await reconnect_driver(manager)
@@ -2293,7 +2376,7 @@ async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaC
 
         logger.info("Letting staging processing succeed")
         await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
-        await manager.api.disable_injection(server.ip_addr, fail_staging)
+        await manager.api.disable_injection(server.ip_addr, FAIL_STAGING_INJECTION)
 
         async def staging_processed():
             return True if not glob.glob(staging_glob) else None
