@@ -190,7 +190,6 @@ def test_sysconfig_setup_legacy_options(sysconfig_setup):
     assert sysconfig_setup.read('/etc/sysconfig/scylla-server') == legacy + 'SET_NIC=yes\n'
 
 
-@pytest.mark.xfail(strict=True, reason="cfg.set() is given an int, sysconfig_parser crashes iterating it")
 def test_sysconfig_setup_nr_hugepages(sysconfig_setup):
     sysconfig_setup.file('/etc/sysconfig/scylla-server', SYSCONFIG)
     assert sysconfig_setup.run('scylla_sysconfig_setup', '--nr-hugepages', '128') == 0
