@@ -1585,8 +1585,13 @@ rest_create_vnode_tablet_migration(http_context& ctx, sharded<service::storage_s
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
     auto keyspace = validate_keyspace(ctx, req);
-    co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
-        return ss.prepare_for_tablets_migration(keyspace);
+    std::optional<sstring> table;
+    if (auto table_param = req->get_query_param("table"); !table_param.empty()) {
+        validate_table(ctx.db.local(), keyspace, table_param);
+        table = std::move(table_param);
+    }
+    co_await ss.local().run_with_no_api_lock([keyspace, table] (service::storage_service& ss) {
+        return ss.prepare_for_tablets_migration(keyspace, table);
     });
     co_return json_void();
 }
@@ -1608,6 +1613,7 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
     ss::vnode_tablet_migration_status result;
     result.keyspace = status.keyspace;
     result.status = fmt::format("{}", status.status);
+    result.direction = status.direction;
     result.nodes._set = true;
     for (const auto& node : status.nodes) {
         ss::vnode_tablet_migration_node_status n;
@@ -1618,7 +1624,21 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
         result.nodes.push(n);
     }
 
-    if (with_tablet_status && status.status == service::storage_service::migration_status::tablets) {
+    result.tables._set = true;
+    for (const auto& table : status.tables) {
+        ss::vnode_tablet_migration_table_status t;
+        t.table = table.table_name;
+        t.prepared = table.prepared;
+        t.finalized = table.finalized;
+        result.tables.push(t);
+    }
+
+    // Attach it for a vnode keyspace too, once one of its tables is finalized: that
+    // table is converging, and the whole point of migrating a table at a time is to
+    // let it shrink before the next round starts.
+    auto any_finalized = std::ranges::any_of(status.tables, [] (const auto& t) { return t.finalized; });
+    if (with_tablet_status && (status.status == service::storage_service::migration_status::tablets
+            || any_finalized)) {
         auto pow2_status = ss.local().get_tablets_pow2_convergence_status(keyspace);
 
         ss::tablets_pow2_convergence_status pow2_result;
@@ -1667,9 +1687,14 @@ rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage
     }
     auto keyspace = validate_keyspace(ctx, req);
     validate_keyspace(ctx, keyspace);
+    std::optional<sstring> table;
+    if (auto table_param = req->get_query_param("table"); !table_param.empty()) {
+        validate_table(ctx.db.local(), keyspace, table_param);
+        table = std::move(table_param);
+    }
 
-    co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
-        return ss.finalize_tablets_migration(keyspace);
+    co_await ss.local().run_with_no_api_lock([keyspace, table] (service::storage_service& ss) {
+        return ss.finalize_tablets_migration(keyspace, table);
     });
     co_return json_void();
 }
