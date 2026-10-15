@@ -52,7 +52,6 @@ def testSelectDistinctWithDeletions(cql, test_keyspace):
         assert len(rows) == 9
 
 # Reproduces issue #10354
-@pytest.mark.xfail(reason="#10354 - we forgot to allow SELECT DISTINCT filtering on static column")
 def testSelectDistinctWithWhereClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, a int, b int, PRIMARY KEY (k, a))") as table:
         execute(cql, table, "CREATE INDEX ON %s (b)")
@@ -94,7 +93,6 @@ def testSelectDistinctWithWhereClause(cql, test_keyspace):
                    row(70))
 
 # Reproduces issue #10354
-@pytest.mark.xfail(reason="#10354 - we forgot to allow SELECT DISTINCT filtering on static column")
 def testSelectDistinctWithWhereClauseOnStaticColumn(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, a int, s int static, s1 int static, b int, PRIMARY KEY (k, a))") as table:
         for i in range(10):
@@ -155,7 +153,6 @@ def _testSelectDistinctWithPaging(cql, table):
                           row(4, 4))
 
 # Reproduces issue #10354
-@pytest.mark.xfail(reason="#10354 - we forgot to allow SELECT DISTINCT filtering on static column")
 def testSelectDistinctWithStaticColumnsAndPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, s int static, c int, d int, PRIMARY KEY (a, b))") as table:
         # Test with only static data
