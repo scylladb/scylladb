@@ -166,7 +166,7 @@ def test_interactive(root, monkeypatch, capsys):
     root.cmd.set('scylla_selinux_setup', returncode=1)
     answer(monkeypatch,
            'maybe', '',            # kernel check: invalid answer is asked again, empty takes default
-           'n', 'y',               # verify packages, enable service
+           'y',                    # enable service
            'yes', '',              # SELinux; its failure waits for a key
            'yes',                  # NTP
            'yes', 'yes', 'no', '',  # RAID, are you sure, RAID5, online discard
@@ -205,7 +205,7 @@ def test_interactive(root, monkeypatch, capsys):
 def test_interactive_say_no(root, monkeypatch, capsys):
     """Declining every step and cancelling disk selection runs nothing."""
     root.cmd.set('lsblk --help', '')
-    answer(monkeypatch, *['n'] * 5, 'yes', 'yes', 'yes', 'yes', 'cancel', *['n'] * 20)
+    answer(monkeypatch, *['n'] * 4, 'yes', 'yes', 'yes', 'yes', 'cancel', *['n'] * 20)
     root.fs.create_file('/dev/sdb', st_mode=stat.S_IFBLK | 0o660)
     monkeypatch.setattr(scylla_util, 'is_unused_disk', lambda dev: True)
     assert root.run('scylla_setup') == 0
@@ -215,7 +215,7 @@ def test_interactive_say_no(root, monkeypatch, capsys):
 
 def test_interactive_no_free_disks(root, monkeypatch, capsys):
     """Without free disks, interactive mode says so and skips RAID setup instead of looping forever."""
-    answer(monkeypatch, 'n', 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', *['n'] * 20)
+    answer(monkeypatch, 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', *['n'] * 20)
     root.run('scylla_setup')
     assert 'No free disks were detected' in capsys.readouterr().out
     assert not any(c.startswith('scylla_raid_setup') for c in setup_calls(root))
@@ -227,7 +227,7 @@ def test_interactive_rejects_unlisted_disk(root, monkeypatch, capsys):
     root.fs.create_file('/dev/sdb', st_mode=stat.S_IFBLK | 0o660)
     root.fs.create_file('/dev/sdz', st_mode=stat.S_IFBLK | 0o660)
     monkeypatch.setattr(scylla_util, 'is_unused_disk', lambda dev: dev == '/dev/sdb')
-    answer(monkeypatch, 'n', 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', '/dev/sdz', '/dev/sdb', 'done', *['n'] * 20)
+    answer(monkeypatch, 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', '/dev/sdz', '/dev/sdb', 'done', *['n'] * 20)
     assert root.run('scylla_setup') == 0
     assert '/dev/sdz is not an unused disk' in capsys.readouterr().out
     assert any(c.startswith('scylla_raid_setup --disks /dev/sdb ') for c in setup_calls(root))
@@ -239,44 +239,9 @@ def test_interactive_accepts_disk_alias(root, monkeypatch):
     root.fs.create_file('/dev/sdb', st_mode=stat.S_IFBLK | 0o660)
     root.fs.create_symlink('/dev/disk/by-id/nvme-x', '/dev/sdb')
     monkeypatch.setattr(scylla_util, 'is_unused_disk', lambda dev: dev == '/dev/sdb')
-    answer(monkeypatch, 'n', 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', '/dev/disk/by-id/nvme-x', 'done', *['n'] * 20)
+    answer(monkeypatch, 'n', 'n', 'n', 'n', 'yes', 'yes', 'no', 'no', '/dev/disk/by-id/nvme-x', 'done', *['n'] * 20)
     assert root.run('scylla_setup') == 0
     assert any(c.startswith('scylla_raid_setup --disks /dev/disk/by-id/nvme-x ') for c in setup_calls(root))
-
-
-@pytest.mark.parametrize('distro,setup,expected', [
-    pytest.param('ubuntu', lambda s: s.cmd.set('dpkg -s scylla-tools', returncode=1), 1, id='ubuntu-missing'),
-    pytest.param('rhel', lambda s: None, 0, id='rhel-installed'),
-    pytest.param('opensuse-leap', lambda s: s.cmd.set('rpm -q', returncode=1), 1, id='suse-missing'),
-    pytest.param('gentoo', lambda s: s.file('/var/db/pkg/dev-db/scylla-tools-1.0'), 0, id='gentoo-installed'),
-    pytest.param('gentoo', lambda s: None, 1, id='gentoo-missing'),
-])
-def test_do_verify_package(scripts, distro, setup, expected):
-    """do_verify_package_and_exit() exits only when the package manager says the package is missing."""
-    scripts.distro(distro)
-    setup(scripts)
-    ns = scripts.load('scylla_setup')
-    if expected:
-        with pytest.raises(SystemExit):
-            ns['do_verify_package_and_exit']('scylla-tools')
-    else:
-        ns['do_verify_package_and_exit']('scylla-tools')
-
-
-@pytest.mark.parametrize('installed', [True, False])
-def test_do_verify_package_offline(scripts, installed):
-    """Offline installs have no package database, so the package is checked by its files."""
-    scripts.file('/opt/scylladb/SCYLLA-OFFLINE-FILE')
-    if installed:
-        scripts.file('/opt/scylladb/share/cassandra/bin/cqlsh')
-    assert scripts.load('scylla_setup')['do_verify_package']('scylla-tools') == (0 if installed else 1)
-
-
-def test_do_verify_package_unknown_distro(scripts):
-    """An unrecognized distro can't verify packages, so setup stops instead of guessing."""
-    scripts.distro('arch')
-    with pytest.raises(SystemExit):
-        scripts.load('scylla_setup')['do_verify_package']('scylla-tools')
 
 
 def test_list_block_devices_without_lsblk_paths(scripts):
