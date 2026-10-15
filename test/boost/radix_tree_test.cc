@@ -15,6 +15,10 @@
 #include "radix_tree_printer.hh"
 #include "collection_stress.hh"
 #include "utils/compact-radix-tree.hh"
+#include "utils/array-search.hh"
+
+#include <array>
+#include <numeric>
 
 using namespace compact_radix_tree;
 using namespace seastar;
@@ -356,5 +360,29 @@ SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
         );
 
         cfg.count /= 2;
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_array_search_eq) {
+    std::array<uint8_t, 64> arr;
+    std::iota(arr.begin(), arr.end(), 0);
+    const uint8_t absent = 200;
+
+    for (unsigned i = 0; i < 16; i++) {
+        BOOST_REQUIRE_EQUAL(utils::array_search_16_eq(i, arr.data()), i);
+    }
+    BOOST_REQUIRE_EQUAL(utils::array_search_16_eq(absent, arr.data()), 16u);
+
+    for (unsigned i = 0; i < 32; i++) {
+        BOOST_REQUIRE_EQUAL(utils::array_search_32_eq(i, arr.data()), i);
+    }
+    BOOST_REQUIRE_EQUAL(utils::array_search_32_eq(absent, arr.data()), 32u);
+
+    for (int nr = 1; nr <= 2; nr++) {
+        unsigned len = 32 * nr;
+        for (unsigned i = 0; i < len; i++) {
+            BOOST_REQUIRE_EQUAL(utils::array_search_x32_eq(i, arr.data(), nr), i);
+        }
+        BOOST_REQUIRE_EQUAL(utils::array_search_x32_eq(absent, arr.data(), nr), len);
     }
 }

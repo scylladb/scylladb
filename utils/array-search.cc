@@ -126,7 +126,7 @@ arch_target("avx2") unsigned array_search_x32_eq_impl(uint8_t val, const uint8_t
     unsigned len = 32 * nr;
     auto a = _mm256_set1_epi8(val);
     for (unsigned off = 0; off < len; off += 32) {
-        auto b = _mm256_lddqu_si256((__m256i*)arr);
+        auto b = _mm256_lddqu_si256((__m256i*)(arr + off));
         auto c = _mm256_cmpeq_epi8(a, b);
         unsigned m = _mm256_movemask_epi8(c);
         if (m != 0) {
