@@ -114,17 +114,22 @@ def testDropWithTimestamp(cql, test_keyspace):
                [1, 4, 4, 4],
                [1, 100, 100, 100])
 
-@pytest.mark.xfail(reason="Issue #9930")
-def testDropAddWithDifferentKind(cql, test_keyspace):
+# Cassandra 4.0 forbids re-adding a dropped regular column as a static
+# column, or vice versa (CASSANDRA-14913), so this test checks that these
+# ALTERs fail. Scylla deliberately allows them, as Cassandra 3.0 did: it's
+# useful for correcting a column added with the wrong kind by mistake, and
+# Scylla's sstable reader correctly ignores the dropped column's old data
+# (see #9930, and test_alter_table.py::test_readd_static_column_as_regular
+# and test_readd_regular_column_as_static). So we changed this test to
+# check that these ALTERs succeed, and it is scylla_only.
+def testDropAddWithDifferentKind(cql, test_keyspace, scylla_only):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int static,  PRIMARY KEY (a, b))") as table:
         execute(cql, table, "ALTER TABLE %s DROP c")
         execute(cql, table, "ALTER TABLE %s DROP d")
 
-        assert_invalid_message(cql, table, "Cannot re-add previously dropped column 'c' of kind STATIC, incompatible with previous kind REGULAR",
-                         "ALTER TABLE %s ADD c int static")
+        execute(cql, table, "ALTER TABLE %s ADD c int static")
 
-        assert_invalid_message(cql, table, "Cannot re-add previously dropped column 'd' of kind REGULAR, incompatible with previous kind STATIC",
-                         "ALTER TABLE %s ADD d int")
+        execute(cql, table, "ALTER TABLE %s ADD d int")
 
 # Reproduces #9929
 def testDropStaticWithTimestamp(cql, test_keyspace):
