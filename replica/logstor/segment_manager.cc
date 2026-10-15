@@ -48,8 +48,9 @@
 #include "replica/logstor/write_buffer.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/dynamic_bitset.hh"
+#include "utils/error_injection.hh"
 #include "utils/serialized_action.hh"
-#include "replica/database.hh"
+#include "replica/logstor/recovery_catalog.hh"
 
 namespace replica::logstor {
 
@@ -659,7 +660,7 @@ public:
     segment_manager_impl(const segment_manager_impl&) = delete;
     segment_manager_impl& operator=(const segment_manager_impl&) = delete;
 
-    future<> do_recovery(replica::database&);
+    future<> do_recovery(recovery_catalog&);
     future<> do_recovery_for_test();
 
     future<> start();
@@ -707,8 +708,8 @@ public:
         uint64_t separated_segments{0};
     };
 
-    future<> load_segment(replica::database&, log_segment_id);
-    future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&, recovery_stats&);
+    future<> load_segment(recovery_catalog&, log_segment_id);
+    future<> add_segment_to_compaction_group(recovery_catalog&, segment_descriptor&, recovery_stats&);
 
     using index_resolver = segment_manager::index_resolver;
 
@@ -716,7 +717,7 @@ public:
     // uses logstor and whose token has a compaction group on this shard, and nothing otherwise. A
     // record of a table that is gone or of a tablet that is not here is left on disk and dropped
     // from the rebuild, and the latter is counted in `stats`: it is what an erase left behind.
-    static index_resolver make_index_resolver(replica::database&, recovery_stats& stats);
+    static index_resolver make_index_resolver(recovery_catalog&, recovery_stats& stats);
 
     // What rebuild_index() found on disk.
     struct rebuild_index_result {
@@ -787,7 +788,7 @@ public:
     future<utils::chunked_vector<segment_snapshot>> make_snapshot(logstor_group&);
 
     future<seastar::input_stream<char>> create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts);
-    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
+    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(recovery_catalog&);
 
     uint64_t allocatable_new_segment_count() const noexcept {
         return _next_new_segment_id < _configured_max_segments ? _configured_max_segments - _next_new_segment_id : 0;
@@ -2245,7 +2246,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
     co_await buf.release();
 }
 
-future<> segment_manager_impl::do_recovery(replica::database& db) {
+future<> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
     logstor_logger.info("Starting recovery for shard {} in directory {}", this_shard_id(), _cfg.base_dir.string());
 
     auto files = _file_mgr.start_recovery();
@@ -2269,7 +2270,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     }
 
     recovery_stats stats;
-    const auto rebuilt = co_await rebuild_index(found_segment_count, make_index_resolver(db, stats));
+    const auto rebuilt = co_await rebuild_index(found_segment_count, make_index_resolver(catalog, stats));
     if (stats.dropped_records) {
         logstor_logger.warn("Recovery dropped {} records that belong to no compaction group of this shard", stats.dropped_records);
     }
@@ -2319,7 +2320,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             if (recovered_used_segment_count % 1000 == 0) {
                 logstor_logger.info("Recovering used segments: {}%", 100 * recovered_used_segment_count / used_segment_count);
             }
-            co_await add_segment_to_compaction_group(db, desc, stats);
+            co_await add_segment_to_compaction_group(catalog, desc, stats);
             recovered_used_segment_count++;
         }
     }
@@ -2338,22 +2339,18 @@ future<> segment_manager_impl::do_recovery_for_test() {
     co_await files.finish();
 }
 
-segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(replica::database& db, recovery_stats& stats) {
-    return [&db, &stats] (const record_header& header) -> primary_index* {
-        try {
-            auto& t = db.find_column_family(header.table);
-            if (!t.uses_logstor()) {
-                return nullptr;
-            }
-            if (!t.maybe_get_logstor_group(header.key.token())) {
-                ++stats.dropped_records;
-                logstor_logger.trace("Dropping record of table {} key {}: its token has no compaction group on this shard", header.table, header.key);
-                return nullptr;
-            }
-            return &t.logstor_index();
-        } catch (const replica::no_such_column_family&) {
+segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(recovery_catalog& catalog, recovery_stats& stats) {
+    return [&catalog, &stats] (const record_header& header) -> primary_index* {
+        auto [index, cg] = catalog.find(header.table, header.key.token());
+        if (!index) {
             return nullptr;
         }
+        if (!cg) {
+            ++stats.dropped_records;
+            logstor_logger.trace("Dropping record of table {} key {}: its token has no compaction group on this shard", header.table, header.key);
+            return nullptr;
+        }
+        return index;
     };
 }
 
@@ -2422,7 +2419,7 @@ void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
 }
 
-future<> segment_manager_impl::add_segment_to_compaction_group(replica::database& db, segment_descriptor& desc, recovery_stats& stats) {
+future<> segment_manager_impl::add_segment_to_compaction_group(recovery_catalog& catalog, segment_descriptor& desc, recovery_stats& stats) {
     auto seg_id = desc_to_segment_id(desc);
     auto maybe_info = co_await read_segment_info(seg_id);
     if (!maybe_info) {
@@ -2439,28 +2436,26 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
         break;
     case segment_kind::full:
         auto& full = std::get<segment_info::full>(info.v);
-        try {
-            auto& t = db.find_column_family(full.table);
-            if (!t.uses_logstor()) {
-                co_return;
-            }
-            if (auto* cg = t.maybe_get_logstor_group(full.first_token, full.last_token)) {
-                cg->add_logstor_segment(desc);
-                logstor_logger.debug("Added segment {} with tokens [{},{}] to compaction group of table {}.{}", seg_id, full.first_token, full.last_token, t.schema()->ks_name(), t.schema()->cf_name());
-            } else {
-                // No group takes the segment whole: its range straddles two tablets of this shard,
-                // or reaches into one that is not here. A segment a group owned cannot end up like
-                // this - a split moves a segment whole only when it fits one of the new tablets and
-                // rewrites it otherwise - so this is one that an erase freed and a stale copy
-                // brought back. Its records that do belong here are placed one by one, like a mixed
-                // segment's.
-                ++stats.separated_segments;
-                logstor_logger.warn("Segment {} with tokens [{},{}] of table {}.{} fits no compaction group of this shard, separating its records",
-                        seg_id, full.first_token, full.last_token, t.schema()->ks_name(), t.schema()->cf_name());
-                need_separator = true;
-            }
-        } catch (const replica::no_such_column_family&) {
+        auto [index, cg] = catalog.find(full.table, full.first_token, full.last_token);
+        if (!index) {
             co_return;
+        }
+        if (cg) {
+            cg->add_logstor_segment(desc);
+            if (logstor_logger.is_enabled(seastar::log_level::debug)) {
+                logstor_logger.debug("Added segment {} with tokens [{},{}] to compaction group of table {}", seg_id, full.first_token, full.last_token, catalog.table_name(full.table));
+            }
+        } else {
+            // No group takes the segment whole: its range straddles two tablets of this shard,
+            // or reaches into one that is not here. A segment a group owned cannot end up like
+            // this - a split moves a segment whole only when it fits one of the new tablets and
+            // rewrites it otherwise - so this is one that an erase freed and a stale copy
+            // brought back. Its records that do belong here are placed one by one, like a mixed
+            // segment's.
+            ++stats.separated_segments;
+            logstor_logger.warn("Segment {} with tokens [{},{}] of table {} fits no compaction group of this shard, separating its records",
+                    seg_id, full.first_token, full.last_token, catalog.table_name(full.table));
+            need_separator = true;
         }
         break;
     }
@@ -2471,40 +2466,33 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             seg_ref.set_flush_failure();
         });
         co_await for_each_record(seg_id,
-            [&db] (record_location prev_loc, const record_header& header) -> want_data {
-                try {
-                    auto& t = db.find_column_family(header.table);
-                    return t.uses_logstor() && t.logstor_index().is_record_alive(header.index_key(), prev_loc)
-                            ? want_data::yes : want_data::no;
-                } catch (const replica::no_such_column_family&) {
-                    return want_data::no;
-                }
+            [&catalog] (record_location prev_loc, const record_header& header) -> want_data {
+                auto* index = catalog.index(header.table);
+                return index && index->is_record_alive(header.index_key(), prev_loc) ? want_data::yes : want_data::no;
             },
-            [seg_ref, &db, &stats] (record_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
-                try {
-                    auto& t = db.find_column_family(header.table);
-                    auto key = header.index_key();
-                    auto* cg = t.maybe_get_logstor_group(key.token());
-                    if (!cg) {
-                        // The record was indexed by the scan, so its group was here then; it is
-                        // dropped the way the scan would have dropped it, and the index entry goes
-                        // with it, or the segment could never be freed.
-                        ++stats.dropped_records;
-                        t.logstor_index().erase(key, prev_loc);
-                        co_return;
-                    }
-                    auto writer = log_record_bytes_writer(header, record_view);
-
-                    co_await cg->write_to_separator(std::move(writer), seg_ref, std::nullopt,
-                        separator_index_update {
-                            .index = &cg->logstor_index(),
-                            .key = key,
-                            .prev_location = prev_loc,
-                        }
-                    );
-                } catch (const replica::no_such_column_family&) {
-                    // ignore
+            [seg_ref, &catalog, &stats] (record_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
+                auto key = header.index_key();
+                auto [index, cg] = catalog.find(header.table, key.token());
+                if (!index) {
+                    co_return;
                 }
+                if (!cg) {
+                    // The record was indexed by the scan, so its group was here then; it is
+                    // dropped the way the scan would have dropped it, and the index entry goes
+                    // with it, or the segment could never be freed.
+                    ++stats.dropped_records;
+                    index->erase(key, prev_loc);
+                    co_return;
+                }
+                auto writer = log_record_bytes_writer(header, record_view);
+
+                co_await cg->write_to_separator(std::move(writer), seg_ref, std::nullopt,
+                    separator_index_update {
+                        .index = &cg->logstor_index(),
+                        .key = key,
+                        .prev_location = prev_loc,
+                    }
+                );
             });
         write_to_separator_failed.cancel();
     }
@@ -2551,8 +2539,8 @@ const segment_manager_impl& segment_manager::get_impl() const noexcept {
     return *_impl;
 }
 
-future<> segment_manager::do_recovery(replica::database& db) {
-    return _impl->do_recovery(db);
+future<> segment_manager::do_recovery(recovery_catalog& catalog) {
+    return _impl->do_recovery(catalog);
 }
 
 future<> segment_manager::do_recovery_for_test() {
@@ -2647,11 +2635,11 @@ future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_s
 
 class segment_stream_sink_impl : public segment_stream_sink {
     segment_manager_impl& _sm;
-    replica::database& _db;
+    recovery_catalog& _catalog;
     seg_ptr _seg;
 public:
-    segment_stream_sink_impl(segment_manager_impl& sm, replica::database& db, seg_ptr seg)
-        : _sm(sm), _db(db), _seg(std::move(seg))
+    segment_stream_sink_impl(segment_manager_impl& sm, recovery_catalog& catalog, seg_ptr seg)
+        : _sm(sm), _catalog(catalog), _seg(std::move(seg))
     {}
 public:
     log_segment_id segment_id() const noexcept override {
@@ -2664,36 +2652,36 @@ public:
     }
     future<> close() override {
         co_await _seg->stop();
-        co_await _sm.load_segment(_db, _seg->id());
+        co_await _sm.load_segment(_catalog, _seg->id());
     }
     future<> abort() override {
         co_await _seg->stop();
     }
 };
 
-future<> segment_manager_impl::load_segment(replica::database& db, log_segment_id seg_id) {
+future<> segment_manager_impl::load_segment(recovery_catalog& catalog, log_segment_id seg_id) {
     // read the segment and populate the index
     recovery_stats stats;
-    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(db, stats), [] (const segment_info&) {});
+    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(catalog, stats), [] (const segment_info&) {});
 
     auto& desc = get_segment_descriptor(seg_id);
-    co_await add_segment_to_compaction_group(db, desc, stats);
+    co_await add_segment_to_compaction_group(catalog, desc, stats);
     if (stats.dropped_records) {
         logstor_logger.warn("Dropped {} records of streamed segment {} that belong to no compaction group of this shard", stats.dropped_records, seg_id);
     }
 }
 
-future<std::unique_ptr<segment_stream_sink>> segment_manager_impl::create_segment_output_stream(replica::database& db) {
+future<std::unique_ptr<segment_stream_sink>> segment_manager_impl::create_segment_output_stream(recovery_catalog& catalog) {
     auto seg = co_await get_segment(write_source::streaming);
-    co_return std::make_unique<segment_stream_sink_impl>(*this, db, std::move(seg));
+    co_return std::make_unique<segment_stream_sink_impl>(*this, catalog, std::move(seg));
 }
 
 future<utils::chunked_vector<segment_snapshot>> segment_manager::make_snapshot(logstor_group& cg) {
     return _impl->make_snapshot(cg);
 }
 
-future<std::unique_ptr<segment_stream_sink>> segment_manager::create_segment_output_stream(replica::database& db) {
-    return _impl->create_segment_output_stream(db);
+future<std::unique_ptr<segment_stream_sink>> segment_manager::create_segment_output_stream(recovery_catalog& catalog) {
+    return _impl->create_segment_output_stream(catalog);
 }
 
 separator_buffer::~separator_buffer() {
