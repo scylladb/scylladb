@@ -432,6 +432,22 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_prepare_migration_data(
+        const sstring& ks_name, const std::unordered_map<table_id, size_t>& target_pow2s) {
+    apply_atomic("prepare_migration_ks_name", ks_name);
+    if (!target_pow2s.empty()) {
+        map_type_impl::native_type targets;
+        targets.reserve(target_pow2s.size());
+        for (const auto& [tid, target] : target_pow2s) {
+            targets.emplace_back(data_value(tid.uuid()), data_value(static_cast<int64_t>(target)));
+        }
+        apply_atomic("prepare_migration_target_pow2s",
+                     make_map_value(schema().get_column_definition("prepare_migration_target_pow2s")->type,
+                                    std::move(targets)));
+    }
+    return *this;
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_restore_tablets_data(
         const table_id& tid, const sstring& snapshot_name) {
     apply_atomic("restore_table_id", tid.uuid());

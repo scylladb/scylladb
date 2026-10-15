@@ -410,6 +410,12 @@ public:
         return _cfg.id;
     }
 
+    // The largest serialized message this node admits: rpc charges a request
+    // estimate_request_size() bytes against its memory limit, so a bigger one can never
+    // be sent or received. Callers which build one message out of many pieces use it to
+    // decide how much to put in.
+    size_t max_admissible_message_size() const noexcept;
+
     future<> shutdown();
     future<> stop();
     static rpc::no_wait_type no_wait();

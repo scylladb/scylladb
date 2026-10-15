@@ -13,6 +13,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "locator/tablets.hh"
 #include "service/storage_service.hh"
+#include "service/tablet_allocator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/token_metadata.hh"
@@ -251,7 +252,7 @@ static locator::tablet_map build_map(const std::vector<locator::host_id>& hosts,
     std::optional<locator::tablet_map> tmap;
     with_topology(nodes, {{locator::endpoint_dc_rack::default_location.dc, rf}}, shard_count, 0,
             [&] (const auto& erm, const auto*) {
-        tmap = service::storage_service::build_tablet_map_for_migration(erm, 0).get();
+        tmap = service::build_tablet_map_for_migration(erm, 0).get();
     });
     return std::move(*tmap);
 }
