@@ -7,7 +7,7 @@
 import re
 import pytest
 
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from .util import is_scylla, new_test_table, unique_name
 from .nodetool import flush
 
@@ -168,3 +168,24 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):
                 cql.execute(alter)
+
+# The following tests check re-adding a dropped column with a different type
+# (issues #24305 and #24290). A client may still hold a statement prepared
+# before the DROP, and send values serialized for the dropped column's type.
+# So the new type must be able to interpret the old type's values - the same
+# rule as for altering the type of an existing column.
+
+# Re-adding a dropped column with an incompatible type must be rejected,
+# because a stale prepared statement could store nonsense in it. For example,
+# if a bigint column is re-added as text, the bigint 1094861636, serialized
+# as the bytes 00 00 00 00 41 42 43 44, is valid UTF-8 and would be stored as
+# the string '\x00\x00\x00\x00ABCD'. Similarly, if a text column is re-added
+# as int, the string 'abcd' would be stored as the int 1633837924.
+# Reproduces #24290.
+@pytest.mark.xfail(reason='#24290')
+def test_readd_column_with_incompatible_type(cql, test_keyspace):
+    for old_type, new_type in [('bigint', 'text'), ('text', 'int')]:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x {old_type}') as table:
+            cql.execute(f'ALTER TABLE {table} DROP x')
+            with pytest.raises(InvalidRequest, match='incompatible with previously dropped column'):
+                cql.execute(f'ALTER TABLE {table} ADD x {new_type}')
