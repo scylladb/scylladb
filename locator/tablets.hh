@@ -526,6 +526,11 @@ struct load_stats {
     // - pending and leaving hosts are equal (in case of intranode migration)
     // - pending host is not found in load_stats.tablet_stats
     lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+
+    // Estimates the size of a rebuilt tablet on the pending host as the
+    // average over the read_from replicas. Returns nullptr if the pending
+    // host is missing from the stats or a read_from replica lacks a size.
+    lw_shared_ptr<load_stats> rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange) const;
 };
 
 using load_stats_v2 = load_stats;

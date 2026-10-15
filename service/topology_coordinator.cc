@@ -3509,28 +3509,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 [[fallthrough]];
             case locator::tablet_transition_kind::rebuild_v2:
                 // Handle rebuild
-                if (pending && old_load_stats->tablet_stats.contains(pending->host)) {
-                    // Compute the average tablet size of existing replicas
-                    uint64_t tablet_size_sum = 0;
-                    size_t replica_count = 0;
-                    bool incomplete = false;
-                    const locator::range_based_tablet_id rb_tid {gid.table, trange};
+                if (pending) {
                     auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tinfo, trinfo);
-                    for (auto& r : tsi.read_from) {
-                        auto tablet_size_opt = old_load_stats->get_tablet_size(r.host, rb_tid);
-                        if (tablet_size_opt) {
-                            tablet_size_sum += *tablet_size_opt;
-                            replica_count++;
-                        } else {
-                            incomplete = true;
-                        }
-                    }
-
-                    if (!incomplete) {
-                        new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
-                        auto size = replica_count ? tablet_size_sum / replica_count : 0;
-                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = size;
-                    }
+                    new_load_stats = old_load_stats->rebuild_tablet_size(pending->host, tsi.read_from, gid, trange);
                 }
                 break;
             case locator::tablet_transition_kind::repair:

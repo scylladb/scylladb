@@ -1422,23 +1422,65 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
     return reconciled_stats;
 }
 
-lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+// Moves the size of a tablet from the leaving to the pending host.
+// The caller checks that the size is on the leaving host and not on the pending host.
+static void migrate_table_tablet_size(load_stats& stats, host_id leaving, host_id pending, const range_based_tablet_id& rb_tid) {
+    auto& leaving_ts = stats.tablet_stats.at(leaving);
+    auto& pending_ts = stats.tablet_stats.at(pending);
+    auto map_node = leaving_ts.tablet_sizes.at(rb_tid.table).extract(rb_tid.range);
+    pending_ts.tablet_sizes[rb_tid.table].insert(std::move(map_node));
+    if (leaving_ts.tablet_sizes.at(rb_tid.table).empty()) {
+        leaving_ts.tablet_sizes.erase(rb_tid.table);
+    }
+}
 
+lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
     lw_shared_ptr<load_stats> result;
 
-    if (leaving != pending) {
-        range_based_tablet_id rb_tid {gid.table, trange};
-        if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid) && tablet_stats.contains(pending)) {
-            tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
-            result = make_lw_shared<locator::load_stats>(*this);
-            auto& new_leaving_ts = result->tablet_stats.at(leaving);
-            auto& new_pending_ts = result->tablet_stats.at(pending);
-            auto map_node = new_leaving_ts.tablet_sizes.at(gid.table).extract(trange);
-            new_pending_ts.tablet_sizes[gid.table].insert(std::move(map_node));
-            if (new_leaving_ts.tablet_sizes.at(gid.table).empty()) {
-                new_leaving_ts.tablet_sizes.erase(gid.table);
-            }
+    if (leaving == pending || !tablet_stats.contains(pending)) {
+        return result;
+    }
+
+    range_based_tablet_id rb_tid {gid.table, trange};
+    if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid)) {
+        tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
+        result = make_lw_shared<locator::load_stats>(*this);
+        migrate_table_tablet_size(*result, leaving, pending, rb_tid);
+    }
+
+    return result;
+}
+
+// Estimates the size of a tablet on the pending host as the average of its
+// sizes on the read_from replicas. Returns nullopt if a replica lacks a size.
+// With no read_from replicas the rebuild streams nothing, so the new replica
+// is empty and its size is 0.
+static std::optional<uint64_t> average_tablet_size(const load_stats& stats, const std::unordered_set<tablet_replica>& read_from, const range_based_tablet_id& rb_tid) {
+    uint64_t tablet_size_sum = 0;
+    size_t replica_count = 0;
+    for (auto& r : read_from) {
+        auto tablet_size_opt = stats.get_tablet_size(r.host, rb_tid);
+        if (!tablet_size_opt) {
+            return std::nullopt;
         }
+        tablet_size_sum += *tablet_size_opt;
+        replica_count++;
+    }
+    return replica_count ? tablet_size_sum / replica_count : 0;
+}
+
+lw_shared_ptr<load_stats> load_stats::rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange) const {
+    lw_shared_ptr<load_stats> result;
+
+    if (!tablet_stats.contains(pending)) {
+        return result;
+    }
+
+    range_based_tablet_id rb_tid {gid.table, trange};
+    if (auto size = average_tablet_size(*this, read_from, rb_tid)) {
+        tablet_logger.debug("Estimating tablet size for rebuilt tablet: {} on: {} as {}", gid, pending, *size);
+        result = make_lw_shared<locator::load_stats>(*this);
+        result->tablet_stats.at(pending).tablet_sizes[gid.table][trange] = *size;
     }
 
     return result;
