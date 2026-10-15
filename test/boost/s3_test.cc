@@ -1214,6 +1214,82 @@ static std::optional<double> read_s3_metric(const sstring& metric_name, const ss
     return std::nullopt;
 }
 
+// The client registers the connection counters per scheduling group; the tests below
+// want the total, so the series are summed rather than matched on a label.
+static std::optional<double> sum_s3_metric(const sstring& metric_name) {
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    auto fam_it = value_map.find(metric_name);
+    if (fam_it == value_map.end()) {
+        return std::nullopt;
+    }
+    std::optional<double> total;
+    for (const auto& [holder, reg] : fam_it->second) {
+        if (reg && reg->is_enabled()) {
+            total = total.value_or(0.0) + (*reg)().d();
+        }
+    }
+    return total;
+}
+
+// An exception leaving the reply handler makes seastar's http client drop the
+// connection, so reporting a missing object must not raise one.
+void do_test_client_object_absent(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testabsentobject");
+
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+
+    // After the first probe, so the connection it may have had to dial is not counted.
+    auto connections = sum_s3_metric("s3_total_new_connections");
+    BOOST_REQUIRE_MESSAGE(connections.has_value(), "s3_total_new_connections metric not registered");
+    for (int i = 0; i < 3; i++) {
+        BOOST_REQUIRE(!cln->object_exists(name).get());
+    }
+    BOOST_REQUIRE_EQUAL(sum_s3_metric("s3_total_new_connections").value(), *connections);
+
+    cln->put_object(name, temporary_buffer<char>()).get();
+    BOOST_REQUIRE(cln->object_exists(name).get());
+    BOOST_REQUIRE_EQUAL(sum_s3_metric("s3_total_new_connections").value(), *connections);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_object_absent_s3) {
+    do_test_client_object_absent(make_s3_client);
+}
+
+// Deleting is idempotent: callers only want the object gone afterwards. As above, that
+// must not cost a connection.
+void do_test_client_delete_absent_object(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testdeleteabsentobject");
+
+    cln->delete_object(name).get();
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+
+    auto connections = sum_s3_metric("s3_total_new_connections");
+    BOOST_REQUIRE_MESSAGE(connections.has_value(), "s3_total_new_connections metric not registered");
+    for (int i = 0; i < 3; i++) {
+        cln->delete_object(name).get();
+    }
+
+    // Makes the above a tolerated outcome rather than a delete that does nothing.
+    cln->put_object(name, temporary_buffer<char>()).get();
+    BOOST_REQUIRE(cln->object_exists(name).get());
+    cln->delete_object(name).get();
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+
+    // S3 and the gateway answer a DELETE for a key that was never there with 204, so a
+    // missing bucket is the only way to get the 404 this tolerates.
+    cln->delete_object(format("/{}-no-such-bucket/{}", guard.bucket(), "object")).get();
+
+    BOOST_REQUIRE_EQUAL(sum_s3_metric("s3_total_new_connections").value(), *connections);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_delete_absent_object_s3) {
+    do_test_client_delete_absent_object(make_s3_client);
+}
+
 // Integration test: drive a real upload through the fuzzing S3 proxy with the
 // actual AWS throttling controller wired in, and verify the
 // throttling machinery is exercised end-to-end by watching its metrics.
