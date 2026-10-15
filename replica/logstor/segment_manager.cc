@@ -604,16 +604,11 @@ class segment_manager_impl {
     segment_manager_config _cfg;
     uint64_t _segments_per_file;
 
-    // configured: segment count allowed by the current configuration; new
-    // segment ids are allocated only below this limit.
-    // actual: segment slots currently present on disk. Recovery may raise this
-    // above configured if it finds existing segments beyond the configured
-    // limit. Those segments remain usable until freed; once freed, beyond-
-    // configured segments become retired and are not allocated again.
-    struct {
-        uint64_t configured;
-        uint64_t actual;
-    } _max_segments;
+    // The segment count of the current configuration. New segment ids are allocated only below it.
+    // Recovery can find more segments, in files from an earlier, larger configuration, see
+    // actual_max_segments(). Those segments stay usable until they are freed, and a freed segment
+    // at or above this count is retired and not allocated again.
+    uint64_t _configured_max_segments;
 
     uint64_t _next_new_segment_id{0};
 
@@ -625,7 +620,12 @@ class segment_manager_impl {
 
     static constexpr size_t segment_pool_size = 128;
 
+    // One descriptor per segment on disk, so its size is at least actual_max_segments(). Recovery
+    // grows it to the segments that it finds, and keeps the descriptors of the files that it
+    // retires, which are not used again.
     std::vector<segment_descriptor> _segment_descs;
+    // Holds only segments below the configured count, and the constructor reserves room for all of
+    // them.
     seastar::circular_buffer<log_segment_id> _free_segments;
 
     seg_ptr _active_segment;
@@ -759,27 +759,27 @@ public:
     future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
 
     uint64_t allocatable_new_segment_count() const noexcept {
-        return _next_new_segment_id < _max_segments.configured ? _max_segments.configured - _next_new_segment_id : 0;
+        return _next_new_segment_id < _configured_max_segments ? _configured_max_segments - _next_new_segment_id : 0;
     }
 
     uint64_t available_segment_count() const noexcept {
         return static_cast<uint64_t>(_free_segments.size()) + static_cast<uint64_t>(_segment_pool.size()) + allocatable_new_segment_count();
     }
 
+    // The segments on disk: the configured segments, and the segments in the files from an earlier,
+    // larger configuration that recovery kept.
+    uint64_t actual_max_segments() const noexcept {
+        return std::max(_configured_max_segments, _file_mgr.allocated_file_count() * _segments_per_file);
+    }
+
     // The segments holding records: the ones the compaction groups own, the one being written and
     // the ones a read still refers to. The rest of the segments are free for the next write.
     uint64_t segments_in_use() const noexcept {
-        return _max_segments.actual - available_segment_count();
+        return actual_max_segments() - available_segment_count();
     }
 
     uint64_t available_segment_count(write_source src) const noexcept {
         return static_cast<uint64_t>(_free_segments.size()) + static_cast<uint64_t>(_segment_pool.available_segment_count(src)) + allocatable_new_segment_count();
-    }
-
-    void set_actual_max_segments(uint64_t actual_max_segments) {
-        _max_segments.actual = actual_max_segments;
-        _segment_descs.resize(static_cast<size_t>(_max_segments.actual));
-        _free_segments.reserve(static_cast<size_t>(_max_segments.actual));
     }
 
 private:
@@ -887,7 +887,7 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
 }
 
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
-    _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured, _sm._cfg.trigger_compaction_threshold());
+    _free_segment_watermarks = make_free_segment_watermarks(_sm._configured_max_segments, _sm._cfg.trigger_compaction_threshold());
     _compaction_limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
 
     logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
@@ -959,8 +959,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
         })
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
-    , _max_segments{(config.disk_size / config.file_size) * _segments_per_file, (config.disk_size / config.file_size) * _segments_per_file}
-    , _segment_descs(static_cast<size_t>(_max_segments.actual))
+    , _configured_max_segments((config.disk_size / config.file_size) * _segments_per_file)
+    , _segment_descs(static_cast<size_t>(_configured_max_segments))
     // A compaction job takes one segment from the pool per flush, so the reserve that keeps normal
     // writes from draining the pool is one segment per concurrent job.
     , _segment_pool(segment_pool_size, max_compaction_parallelism)
@@ -1004,11 +1004,11 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                 config.segment_size, segment_descriptor_hist_options.max_size));
     }
 
-    if (_max_segments.configured == 0) {
+    if (_configured_max_segments == 0) {
         throw exceptions::configuration_exception(fmt::format("Disk size {} must be greater than or equal to file size {}", config.disk_size, config.file_size));
     }
 
-    _free_segments.reserve(static_cast<size_t>(_max_segments.actual));
+    _free_segments.reserve(static_cast<size_t>(_configured_max_segments));
 
     namespace sm = seastar::metrics;
 
@@ -1386,7 +1386,7 @@ future<> segment_manager_impl::switch_active_segment() {
     }
 
     // trigger separator flush for separator buffers that hold old segments
-    auto u = std::max<size_t>(1, _max_segments.configured / 100);
+    auto u = std::max<size_t>(1, _configured_max_segments / 100);
     if (_next_segment_seq.value % u == 0 && _next_segment_seq.value > 5*u) {
         (void)_compaction_mgr.flush_all_separator_buffers(segment_sequence(_next_segment_seq.value - 5*u)).handle_exception([] (std::exception_ptr) {});
     }
@@ -1434,7 +1434,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
 
     while (true) {
         // first, allocate all new segments sequentially
-        if (_next_new_segment_id < _max_segments.configured) {
+        if (_next_new_segment_id < _configured_max_segments) {
             auto seg_id = log_segment_id(_next_new_segment_id++);
             co_return co_await make_segment(seg_id);
         }
@@ -1475,9 +1475,9 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     if (desc.ref_count != 0) {
         on_fatal_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
     }
-    if (segment_id.value < _max_segments.configured) {
-        // _free_segments is pre-reserved to fit every configured segment (see the constructor and
-        // set_actual_max_segments()), so this should never grow the vector.
+    if (segment_id.value < _configured_max_segments) {
+        // _free_segments is pre-reserved to fit every configured segment (see the constructor), so
+        // this should never grow the vector.
         _free_segments.push_back(segment_id);
         _segment_freed_cv.signal();
     }
@@ -2220,10 +2220,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     auto files = _file_mgr.start_recovery();
     const file_id_t found_file_count = co_await files.open_found_files();
 
-    uint64_t allocated_segment_count = found_file_count * _segments_per_file;
-    set_actual_max_segments(std::max(_max_segments.configured, allocated_segment_count));
+    // Recovery reads every found segment, so each of them needs a descriptor.
+    const uint64_t found_segment_count = found_file_count * _segments_per_file;
+    _segment_descs.resize(std::max(_segment_descs.size(), static_cast<size_t>(found_segment_count)));
 
-    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(allocated_segment_count), segment_sequence(0));
+    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(found_segment_count), segment_sequence(0));
     segment_sequence max_segment_seq = segment_sequence(0);
 
     // Populate the index from all segments. Keep the latest record for each key.
@@ -2254,7 +2255,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     }
 
     // go over the index and mark all segments that have live data as used.
-    utils::dynamic_bitset used_segments(static_cast<size_t>(allocated_segment_count));
+    utils::dynamic_bitset used_segments(static_cast<size_t>(found_segment_count));
 
     co_await db.get_tables_metadata().for_each_table_gently([&] (table_id tid, lw_shared_ptr<table> tp) -> future<> {
         if (!tp->uses_logstor()) {
@@ -2274,11 +2275,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     uint64_t free_segment_count = 0;
     uint64_t used_segment_count = 0;
     uint64_t max_used_seg_idx = 0;
-    for (uint64_t seg_idx = 0; seg_idx < allocated_segment_count; ++seg_idx) {
+    for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
         if (!used_segments.test(seg_idx)) {
-            if (seg_idx < _max_segments.configured) {
+            if (seg_idx < _configured_max_segments) {
                 _free_segments.push_back(seg_id);
                 free_segment_count++;
             }
@@ -2291,9 +2292,6 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 
     const file_id_t used_file_count = used_segment_count > 0 ? max_used_seg_idx / _segments_per_file + 1 : 0;
     co_await files.retire_unused_files(used_file_count);
-
-    allocated_segment_count = _file_mgr.allocated_file_count() * _segments_per_file;
-    set_actual_max_segments(std::max(_max_segments.configured, allocated_segment_count));
 
     uint64_t recovered_used_segment_count = 0;
     if (used_segments.size() > 0) {
@@ -2310,7 +2308,10 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
         }
     }
 
-    _next_new_segment_id = allocated_segment_count;
+    // A new segment comes after the segments of the files that recovery kept. Read the file count
+    // before files.finish(), because with format_on_startup it allocates more files, and their
+    // segments are new.
+    _next_new_segment_id = _file_mgr.allocated_file_count() * _segments_per_file;
     _next_segment_seq = max_segment_seq + 1;
 
     co_await files.finish();
