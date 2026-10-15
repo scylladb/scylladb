@@ -133,10 +133,26 @@ def test_create_vector_search_global_index_with_filtering_columns(cql, test_keys
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, f1, f2) USING 'vector_index'")
 
+def test_create_vector_search_global_index_with_static_filtering_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A static column cannot be a filtering column, while clustering key and regular columns can."""
+    schema = 'p int, c int, s int static, f int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Creating a vector index requires a non-static filtering column, but column s is a static column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, s) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, c, f) USING 'vector_index'")
+
 def test_create_vector_search_local_index_with_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v, f1, f2) USING 'vector_index'")
+
+def test_create_vector_search_local_index_with_static_filtering_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A static column cannot be a filtering column, while clustering key and regular columns can."""
+    schema = 'p int, c int, s int static, f int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="static columns are not supported"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}((p), v, s) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p), v, c, f) USING 'vector_index'")
 
 def test_create_vector_search_local_index(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v1 vector<float, 3>, v2 vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
