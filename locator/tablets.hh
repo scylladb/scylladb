@@ -650,14 +650,6 @@ struct load_stats {
 
 using load_stats_v2 = load_stats;
 
-struct repair_scheduler_config {
-    bool auto_repair_enabled = false;
-    // If the time since last repair is bigger than auto_repair_threshold
-    // seconds, the tablet is eligible for auto repair.
-    std::chrono::seconds auto_repair_threshold{10 * 24 * 3600};
-    bool operator==(const repair_scheduler_config&) const = default;
-};
-
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
 
 struct tablet_desc {
@@ -762,7 +754,6 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
-    std::optional<repair_scheduler_config> _repair_scheduler_config;
     raft_info_container _raft_info;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
 
@@ -772,7 +763,6 @@ private:
                transitions_map transitions,
                resize_decision resize_decision,
                tablet_task_info resize_task_info,
-               std::optional<repair_scheduler_config> repair_scheduler_config,
                raft_info_container raft_info,
                size_t target_pow2_tablet_count)
         : _tablet_ids(std::move(ids))
@@ -780,7 +770,6 @@ private:
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
     {}
@@ -958,7 +947,6 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
-    const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 
     size_t target_pow2_tablet_count() const { return _target_pow2_tablet_count; }
     void set_target_pow2_tablet_count(size_t count) { _target_pow2_tablet_count = count; }
@@ -971,7 +959,6 @@ public:
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
-    void set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
     void set_tablet_raft_info(tablet_id, tablet_raft_info);
@@ -1248,11 +1235,6 @@ struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_metadata_change_hint> : fmt::formatter<string_view> {
     auto format(const locator::tablet_metadata_change_hint&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<locator::repair_scheduler_config> : fmt::formatter<string_view> {
-    auto format(const locator::repair_scheduler_config&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

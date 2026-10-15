@@ -492,7 +492,8 @@ async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, a
         await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
         await live_update_config(manager, servers, 'auto_repair_enabled_default', str(auto_repair_enabled).lower())
     else:
-        raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
+        cql = manager.get_cql()
+        await cql.run_async(f"ALTER TABLE {ks}.{table} WITH auto_repair_enabled = {str(auto_repair_enabled).lower()} AND auto_repair_threshold_in_seconds = {auto_repair_threshold}")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ScyllaClusterManager):
@@ -556,16 +557,51 @@ async def test_tablet_auto_repair_cfg_enable(manager: ScyllaClusterManager):
     # Check repair is executed
     await check_has_repair_time(cql, hosts[0:1], table_id)
 
-@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-134", reason="no per tablet support yet")
 async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ScyllaClusterManager):
     cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
 
-    # Enable auto repair
+    # Enable auto repair for the table only
     await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1, config_per_table=True)
 
     # Check repair is executed
     await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def test_tablet_auto_repair_cfg_disable_cluster_enable(manager: ScyllaClusterManager):
+    cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Enable auto repair at cluster scope
+    await cql.run_async("ALTER CLUSTER WITH auto_repair_enabled = true")
+    await cql.run_async("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 1")
+
+    # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def test_tablet_auto_repair_cfg_enable_per_table_disable(manager: ScyllaClusterManager):
+    """
+    A table-scope auto_repair_enabled = false override wins over a yaml default that
+    enables auto repair.
+
+    Steps: start with auto repair disabled in yaml, disable it explicitly for the
+    test table, then enable it in yaml on every node. A control table in the same
+    keyspace gets repaired, which shows the scheduler is running, while the test
+    table never gets a repair_time.
+    """
+    cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    await cql.run_async(f"CREATE TABLE {ks}.control (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"INSERT INTO {ks}.control (pk, c) VALUES (1, 1)")
+    control_id = await manager.get_table_id(ks, "control")
+
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=False, auto_repair_threshold=1, config_per_table=True)
+    await live_update_config(manager, servers, 'auto_repair_enabled_default', 'true')
+
+    await check_has_repair_time(cql, hosts[0:1], control_id)
+
+    repair_time = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    assert all(v is None for v in repair_time.values()), f"auto repair ran on a table that disables it: {repair_time}"
 
 def parse_repair_plans(log_line):
     """

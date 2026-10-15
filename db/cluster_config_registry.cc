@@ -55,13 +55,24 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
+// When no scope stores an override it falls back to the deprecated yaml options
+// auto_repair_enabled_default and auto_repair_threshold_default_in_seconds instead of the
+// registered default, until those options are removed.
 constexpr std::array registry_options = {
     option{
-        .name = "auto_repair_enabled",
+        .name = option_name::auto_repair_enabled,
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
-        .default_value = false,
+        .default_value = auto_repair_enabled_default,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_in_seconds,
+        .description = "Time in seconds since the start of the last successful repair of a tablet after which it is eligible for automatic repair. A repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. 0 disables time-based automatic repair",
+        .scopes = table_oriented_scopes,
+        .min_version = version::v0,
+        .default_value = auto_repair_threshold_default_seconds,
     },
 };
 
