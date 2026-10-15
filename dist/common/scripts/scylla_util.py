@@ -499,7 +499,9 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        val = self._cfg.get('global', key).strip('"')
+        val = self._cfg.get('global', key)
+        if len(val) > 1 and val[0] == val[-1] == '"':
+            val = val[1:-1]
         return self.__unescape(val)
 
     def has_option(self, key):
