@@ -28,6 +28,7 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 
 #include "error_injection_fcts.hh"
+#include "format_fcts.hh"
 
 auto fmt::formatter<std::vector<data_type>>::format(const std::vector<data_type>& arg_types, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
@@ -406,6 +407,55 @@ static function_resolution resolution_failed(sstring message) {
             exceptions::invalid_request_exception(std::move(message)));
 }
 
+// format_bytes() and format_time() take a value of one of several types,
+// optionally followed by one or two units, so the function is built for the
+// types of the actual arguments, like toJson(). A value which isn't exactly
+// of one of the accepted types is a literal or a bind marker: an integer
+// literal or a bind marker is taken as a varint, which can hold any integer,
+// and a string literal as a text.
+static function_resolution
+get_format_function(data_dictionary::database db,
+        const sstring& keyspace,
+        const schema* schema_opt,
+        const function_name& name,
+        const std::vector<shared_ptr<assignment_testable>>& provided_args,
+        const sstring& receiver_ks,
+        std::optional<const std::string_view> receiver_cf) {
+    if (provided_args.empty() || provided_args.size() > 3) {
+        return resolution_failed(fmt::format("Invalid number of arguments for function {}([int|tinyint|smallint|bigint|varint|ascii|text], [ascii], [ascii])", name));
+    }
+    auto test = [&] (const data_type& t) {
+        auto spec = column_specification(receiver_ks, sstring(receiver_cf.value_or("")),
+                ::make_shared<column_identifier>(fmt::format("arg0({})", name.name), true), t);
+        return provided_args[0]->test_assignment(db, keyspace, schema_opt, spec);
+    };
+    data_type value_type;
+    for (const auto& t : format_value_types()) {
+        if (test(t) == assignment_testable::test_result::EXACT_MATCH) {
+            value_type = t;
+            break;
+        }
+    }
+    if (!value_type) {
+        for (const auto& t : {varint_type, utf8_type}) {
+            if (is_assignable(test(t))) {
+                value_type = t;
+                break;
+            }
+        }
+    }
+    if (!value_type) {
+        return resolution_failed(fmt::format("Function {} requires its first argument to be of type int, tinyint, smallint, bigint, varint, ascii or text", name));
+    }
+    // Cassandra's units are ascii, so its format_time() can't accept the
+    // unit "µs" which it documents. Scylla's units are text, so it can.
+    std::vector<data_type> arg_types(provided_args.size(), utf8_type);
+    arg_types[0] = value_type;
+    return name.name == "format_bytes"
+            ? make_format_bytes_function(std::move(arg_types))
+            : make_format_time_function(std::move(arg_types));
+}
+
 function_resolution
 functions::try_get(data_dictionary::database db,
         const sstring& keyspace,
@@ -419,6 +469,8 @@ functions::try_get(data_dictionary::database db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
+    static const function_name FORMAT_BYTES_FUNCTION_NAME = function_name::native_function("format_bytes");
+    static const function_name FORMAT_TIME_FUNCTION_NAME = function_name::native_function("format_time");
 
     auto schema = std::invoke([&] () -> schema_ptr {
         if (receiver_schema) {
@@ -467,6 +519,16 @@ functions::try_get(data_dictionary::database db,
         auto fun = ::make_shared<token_fct>(schema);
         if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
             return resolution_failed(std::move(*err));
+        }
+        return fun;
+    }
+
+    if (func_name == FORMAT_BYTES_FUNCTION_NAME || func_name == FORMAT_TIME_FUNCTION_NAME) {
+        auto fun = get_format_function(db, keyspace, schema.get(), func_name, provided_args, receiver_ks, receiver_cf);
+        if (fun.has_value()) {
+            if (auto err = check_types(db, keyspace, schema.get(), fun.value(), provided_args, receiver_ks, receiver_cf)) {
+                return resolution_failed(std::move(*err));
+            }
         }
         return fun;
     }
