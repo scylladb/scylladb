@@ -727,6 +727,12 @@ public:
     // from the rebuild, and the latter is counted in `stats`: it is what an erase left behind.
     static index_resolver make_index_resolver(recovery_catalog&, recovery_stats& stats);
 
+    // Where a scan keeps the sequence of each segment that it reads. Recovery keeps them in the
+    // descriptors. A rebuild next to a live store keeps them apart, because the active segment
+    // still holds the chunks of its earlier use until its first chunk is written, and their
+    // sequence is not the one in its descriptor.
+    using segment_sequences = std::function<segment_sequence&(log_segment_id)>;
+
     // What rebuild_index() found on disk.
     struct rebuild_index_result {
         // The highest segment sequence found.
@@ -734,16 +740,20 @@ public:
     };
 
     // Scans every segment below segment_count into the indexes the resolver names, the way
-    // recovery does.
-    future<rebuild_index_result> rebuild_index(uint64_t segment_count, const index_resolver&);
+    // recovery does, and keeps the sequence of each segment in segment_seqs.
+    future<rebuild_index_result> rebuild_index(uint64_t segment_count, const index_resolver&, const segment_sequences& segment_seqs);
 
     // Scans one segment into the resolver's indexes. `cmp` decides between two records of the same
     // key, and `on_segment_info` sees the segment info of every chunk, which holds the segment sequence.
     future<> index_segment_records(log_segment_id, const primary_index::entry_cmp_fn& cmp, const index_resolver&, std::function<void(const segment_info&)> on_segment_info);
 
-    // A coroutine, so that the resolver outlives the scan that refers to it.
+    // A coroutine, so that the resolver and the sequences outlive the scan that refers to them.
     future<> rebuild_index_from_disk(index_resolver resolve) {
-        co_await rebuild_index(_file_mgr.allocated_file_count() * _segments_per_file, resolve);
+        const uint64_t segment_count = _file_mgr.allocated_file_count() * _segments_per_file;
+        std::vector<segment_sequence> seqs(static_cast<size_t>(segment_count), segment_sequence(0));
+        co_await rebuild_index(segment_count, resolve, [&seqs] (log_segment_id id) -> segment_sequence& {
+            return seqs[id.value];
+        });
     }
 
     compaction_manager& get_compaction_manager() noexcept {
@@ -878,6 +888,7 @@ private:
     future<seg_ptr> get_segment(write_source src) {
         seg_ptr seg = co_await _segment_pool.get_segment(src);
         seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
+        get_segment_descriptor(seg->id()).seq = seg->seq_num();
         co_return seg;
     }
 
@@ -2340,7 +2351,10 @@ future<> segment_manager_impl::recovery::open_found_files() {
 
 // Scans every found segment into the indexes of the catalog.
 future<> segment_manager_impl::recovery::index_found_segments() {
-    const auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats));
+    const auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats),
+            [this] (log_segment_id id) -> segment_sequence& {
+                return _sm.get_segment_descriptor(id).seq;
+            });
     _max_segment_seq = rebuilt.max_segment_seq;
     if (_stats.dropped_records) {
         logstor_logger.warn("Recovery dropped {} records that belong to no compaction group of this shard", _stats.dropped_records);
@@ -2427,8 +2441,8 @@ segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(r
     };
 }
 
-future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild_index(uint64_t segment_count, const index_resolver& resolve) {
-    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(segment_count), segment_sequence(0));
+future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild_index(uint64_t segment_count, const index_resolver& resolve,
+        const segment_sequences& segment_seqs) {
     rebuild_index_result result;
 
     // Keep the latest record for each key. For equal records, keep the one from the segment with
@@ -2437,8 +2451,8 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
         if (auto c = primary_index::default_entry_cmp{}(old_entry, candidate); c != 0) {
             return c;
         }
-        const auto old_seq = segment_seqs[old_entry.location.segment.value];
-        const auto new_seq = segment_seqs[candidate.location.segment.value];
+        const auto old_seq = segment_seqs(old_entry.location.segment);
+        const auto new_seq = segment_seqs(candidate.location.segment);
         if (auto c = old_seq <=> new_seq; c != 0) {
             return c;
         }
@@ -2451,7 +2465,7 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
             [this, &cmp_with_seq, &resolve, &segment_seqs, &result] (log_segment_id seg_id) {
                 return index_segment_records(seg_id, cmp_with_seq, resolve,
                     [seg_id, &segment_seqs, &result] (const segment_info& seg_info) {
-                        segment_seqs[seg_id.value] = seg_info.segment_seq;
+                        segment_seqs(seg_id) = seg_info.segment_seq;
                         result.max_segment_seq = std::max(result.max_segment_seq, seg_info.segment_seq);
                     });
             }
