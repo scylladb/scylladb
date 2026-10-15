@@ -7,20 +7,29 @@
  */
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/s3_fixture.hh"
+#include "test/lib/test_utils.hh"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/format.hh>
+#include <seastar/testing/test_fixture.hh>
 #include "alternator/export.hh"
 #include "utils/rjson.hh"
 #include "utils/base64.hh"
 #include "utils/hashers.hh"
+#include "utils/s3/client.hh"
+#include <cstdlib>
+#include <exception>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include <span>
 
 // Tests of the export (sink) and import (source) pipelines from alternator/export.hh.
-// They all use the in-memory storage backend, so they exercise the serialization,
-// framing and flushing logic of the pipelines themselves, without involving S3.
+// Except for the last one, which needs an S3 server, they use the in-memory storage backend,
+// so they exercise the serialization, framing and flushing logic of the pipelines themselves,
+// without involving S3.
 // The pipelines write JSON lines: one serialized item per line, each terminated by '\n'.
 // A test usually writes items through a sink pipeline and reads them back with a source
 // pipeline over the same storage, and expects to get exactly the items it wrote, in order.
@@ -174,12 +183,10 @@ SEASTAR_TEST_CASE(test_in_memory_roundtrip_special_characters) {
     BOOST_CHECK_EQUAL(rjson::print(received[1]), rjson::print(item2));
 }
 
-// Verify the summary `flush_and_close()` reports - size, etag and md5 - describes the bytes the
-// pipeline actually wrote to the storage.
-SEASTAR_TEST_CASE(test_in_memory_flush_and_close_result) {
-    auto storage = std::make_shared<alternator::in_memory_test_storage>();
-    auto sink = alternator::create_sink_pipeline(alternator::in_memory_target_config{ storage });
-
+// Writes a few items through `sink`, closes it and checks the size and md5 `flush_and_close()`
+// reports against the payload it was given, one JSON line per item. Returns that payload and the
+// reported etag, which each storage checks its own way.
+static future<std::pair<std::string, sstring>> write_items_and_check_result(alternator::export_pipeline_interface& sink) {
     std::vector<rjson::value> items;
     items.push_back(rjson::parse("{\"id\": 1, \"name\": \"alice\"}"));
     items.push_back(rjson::parse("{\"id\": 2, \"nested\": {\"array\": [1, 2, 3]}}"));
@@ -188,23 +195,69 @@ SEASTAR_TEST_CASE(test_in_memory_flush_and_close_result) {
     // The pipeline writes one JSON line per item, so this is exactly the payload we expect.
     std::string expected;
     for (auto& item : items) {
-        co_await sink->process(item);
+        co_await sink.process(item);
         expected += rjson::print(item);
         expected += "\n";
     }
-    auto result = co_await sink->flush_and_close();
-
-    auto data = storage->data();
-    BOOST_REQUIRE_EQUAL(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), expected);
+    auto result = co_await sink.flush_and_close();
 
     BOOST_CHECK_EQUAL(result.size_in_bytes, expected.size());
 
     md5_hasher hasher;
     hasher.update(expected.data(), expected.size());
-    auto md5_bytes = hasher.finalize();
-    auto etag = to_hex(md5_bytes);
+    BOOST_CHECK_EQUAL(result.md5, base64_encode(hasher.finalize()));
 
-    BOOST_CHECK_EQUAL(result.md5, base64_encode(md5_bytes));
+    co_return std::make_pair(std::move(expected), std::move(result.etag));
+}
+
+// Verify the summary `flush_and_close()` reports - size, etag and md5 - describes the bytes the
+// pipeline actually wrote to the storage.
+SEASTAR_TEST_CASE(test_in_memory_flush_and_close_result) {
+    auto storage = std::make_shared<alternator::in_memory_test_storage>();
+    auto sink = alternator::create_sink_pipeline(alternator::in_memory_target_config{ storage });
+
+    auto [expected, etag] = co_await write_items_and_check_result(*sink);
+
+    auto data = storage->data();
+    BOOST_REQUIRE_EQUAL(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), expected);
+
+    md5_hasher hasher;
+    hasher.update(expected.data(), expected.size());
     // For a single part upload the etag is the object's md5 hash.
-    BOOST_CHECK_EQUAL(result.etag, etag);
+    BOOST_CHECK_EQUAL(etag, to_hex(hasher.finalize()));
+}
+
+// The same, against a real S3 object: the etag the S3 sink reports is the one S3 assigned to the
+// object, so it has to match what S3 says about that object afterwards - the point being that the
+// sink passes the storage's etag through rather than computing one of its own, which for a
+// multipart upload would not be the object's etag at all. Needs an S3 server, so without one
+// configured the precondition skips the test.
+SEASTAR_TEST_CASE(test_s3_flush_and_close_result, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    s3::endpoint_config cfg = {
+        .port = static_cast<unsigned>(std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST"))),
+        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+    };
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+    // The bucket belongs to the fixture and is dropped with its objects, so the object needs no
+    // cleanup of its own.
+    const sstring object_name = seastar::format("/{}/alternator-export-test", tests::getenv_safe("S3_BUCKET_FOR_TEST"));
+
+    std::exception_ptr ex;
+    try {
+        auto sink = alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name });
+        auto etag = (co_await write_items_and_check_result(*sink)).second;
+        // S3 reports an etag as an RFC 9110 entity-tag, i.e. in double quotes, which the pipeline strips.
+        BOOST_CHECK_EQUAL(seastar::format("\"{}\"", etag), (co_await client->get_object_info(object_name)).etag);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // Closed before returning, so that the fixture's client is the only one left on this endpoint
+    // when it deletes the bucket - a second client on the same endpoint and shard fails to register
+    // its metrics.
+    co_await client->close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }

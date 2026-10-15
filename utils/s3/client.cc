@@ -693,6 +693,7 @@ future<object_info> client::get_object_info(sstring object_name, seastar::abort_
                 info.metadata.emplace(std::move(key), value);
             }
         }
+        info.etag = rep.get_header("ETag");
         return make_ready_future<>();
     }, as);
     co_return info;
@@ -840,6 +841,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 }
 
 future<> client::put_object(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, seastar::abort_source* as) {
+    return put_object_and_get_etag(std::move(object_name), std::move(buf), std::move(metadata), as).discard_result();
+}
+
+future<sstring> client::put_object_and_get_etag(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {}", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     add_object_metadata_headers(req, metadata);
@@ -858,13 +863,20 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, obj
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req), [len] (group_client& gc, const auto& rep, auto&& in) {
+    sstring etag;
+    co_await make_request(std::move(req), [len, &etag] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_bytes += len;
+        etag = rep.get_header("ETag");
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
+    co_return etag;
 }
 
 future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata metadata, seastar::abort_source* as) {
+    return put_object_and_get_etag(std::move(object_name), std::move(bufs), std::move(metadata), as).discard_result();
+}
+
+future<sstring> client::put_object_and_get_etag(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {} (buffers)", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     add_object_metadata_headers(req, metadata);
@@ -885,10 +897,13 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req), [len] (group_client& gc, const auto& rep, auto&& in) {
+    sstring etag;
+    co_await make_request(std::move(req), [len, &etag] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_bytes += len;
+        etag = rep.get_header("ETag");
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
+    co_return etag;
 }
 
 future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
@@ -963,6 +978,17 @@ static const rapidxml::xml_node<>* get_node_safe(const rapidxml::xml_node<>* nod
     return child;
 }
 
+// The entity tag of the part the UploadPartCopy request produced, taken from the
+// CopyPartResult response. Note it parses the body in place, like
+// parse_multipart_upload_etag() and parse_multipart_upload_id() do.
+// Returns "" if the body isn't well-formed XML, and throws if it is XML but not a
+// CopyPartResult carrying an ETag.
+// Neither outcome propagates past the callers: both fail the request, whose failure
+// their handle_exception() merely logs, leaving the part's tag empty. The upload does
+// fail on it, but only later, when finalize_upload() finds that empty tag. In
+// parse_multipart_upload_etag() below there is no such later failure, the upload having
+// already completed by the time it runs - see its own comment for what a missing tag
+// does there.
 sstring parse_multipart_copy_upload_etag(sstring& body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
@@ -975,6 +1001,33 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
     }
     auto root_node = get_node_safe(doc.get(), "CopyPartResult", "CopyPartResult");
     auto etag_node = get_node_safe(root_node, "ETag", "CopyPartResult");
+    return etag_node->value();
+}
+
+// The entity tag S3 assigned to the object the multipart upload produced, taken from the
+// CompleteMultipartUpload response. Note it parses the body in place, like
+// parse_multipart_copy_upload_etag() and parse_multipart_upload_id() do.
+// The upload is already complete when this is called, so a response that doesn't carry the
+// tag must not fail it - it returns "" instead, and the user of
+// make_upload_sink_and_get_etag() is the one expected to check for the empty tag and handle
+// it the way it prefers. finalize_upload(), the immediate caller, just passes it on.
+static sstring parse_multipart_upload_etag(sstring& body) {
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
+    try {
+        doc->parse<0>(body.data());
+    } catch (const rapidxml::parse_error& e) {
+        s3l.warn("cannot parse complete multipart upload response: {}", e.what());
+        // A body that doesn't parse is the missing-tag case described above
+        return "";
+    }
+    // A missing node means S3 didn't report the tag of the object it had just completed,
+    // which doesn't fail the upload, unlike in parse_multipart_copy_upload_etag() above
+    auto root_node = doc->first_node("CompleteMultipartUploadResult");
+    auto etag_node = root_node ? root_node->first_node("ETag") : nullptr;
+    if (!etag_node) {
+        s3l.warn("'{}' node is missing in CompleteMultipartUploadResult response", root_node ? "ETag" : "CompleteMultipartUploadResult");
+        return "";
+    }
     return etag_node->value();
 }
 
@@ -993,6 +1046,20 @@ protected:
     // output_stream::close() flushes a second time, so upload_started() alone
     // cannot tell "nothing was ever written" from "already uploaded".
     bool _object_produced = false;
+    // Engaged if the caller asked for the entity tag of the object produced. The
+    // first upload_sink_base::flush() resolves this promise either way: with the tag
+    // once the object is produced, or with the flush's exception if the upload failed
+    // and no object was produced at all. If the sink is closed with the promise still
+    // engaged, i.e. without such a flush ever happening, upload_sink_base::close()
+    // breaks it, because nothing produces the object past that point. The tag is the
+    // ETag that S3 returned in the reply to the request that created the object (the
+    // PUT, or the CompleteMultipartUpload), rather than one read back later with a HEAD
+    // on _object_name, so it always describes the object this sink wrote even if someone
+    // overwrites that object afterwards. Disengaged for uploads nobody asked the tag
+    // of, including the jumbo sink's own pieces.
+    std::optional<promise<sstring>> _etag;
+    // The tag of the object produced, kept here until the flush producing it resolves.
+    sstring _produced_etag;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -1010,7 +1077,9 @@ protected:
     future<> put_empty_object() {
         s3l.trace("PUT empty object {}", _object_name);
         _object_produced = true;
-        return _client->put_object(_object_name, temporary_buffer<char>(), _metadata, _as);
+        return _client->put_object_and_get_etag(_object_name, temporary_buffer<char>(), _metadata, _as).then([this] (sstring tag) {
+            _produced_etag = std::move(tag);
+        });
     }
 
     multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
@@ -1133,12 +1202,23 @@ future<> client::copy_object(sstring source_object, sstring target_object, objec
 }
 
 class client::upload_sink_base : public multipart_upload, public data_sink_impl {
+protected:
+    // Uploads whatever has been put into the sink and produces the object.
+    virtual future<> do_flush() = 0;
+
 public:
     upload_sink_base(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
         : multipart_upload(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as)
     {
     }
 
+    // Returns the future resolving into the entity tag of the object the sink is
+    // going to produce. Must be called at most once, before the sink is flushed.
+    future<sstring> get_etag() {
+        return _etag.emplace().get_future();
+    }
+
+    virtual future<> flush() override;
     virtual future<> close() override;
 
     virtual size_t buffer_size() const noexcept override {
@@ -1329,19 +1409,72 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req), [](const http::reply&, input_stream<char>&& in) -> future<> {
-        // CompleteMultipartUpload can fail after the 200 OK status has been sent,
-        // in which case the error comes in the body
+    co_await _client->make_request(std::move(req), [this](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto payload = std::move(in);
-        std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
+        auto status_class = http::reply::classify_status(rep._status);
+        auto body = co_await util::read_entire_stream_contiguous(payload);
+        // Both aws_error::parse() and parse_multipart_upload_etag() run rapidxml on the
+        // buffer in place, which terminates names and values with NULs and leaves it
+        // unparseable for the next reader. S3 reports CompleteMultipartUpload failures
+        // with a 200 status and an Error body, so the status alone cannot tell success
+        // from failure and aws_error::parse() has to run unconditionally, before anything
+        // else looks at the body. That leaves the buffer unusable afterwards, hence the
+        // copy taken here for the etag - and only when an etag is wanted.
+        sstring etag_body = _etag ? body : sstring();
+        std::optional<aws::aws_error> possible_error = aws::aws_error::parse(std::move(body));
         if (possible_error) {
             co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
+        }
+
+        if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
+            co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
+        }
+
+        if (rep._status != http::reply::status_type::ok) {
+            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+        }
+        // The request succeeded, so the response carries the entity tag of the object
+        // just completed. It is the only place it can be taken from without racing with
+        // whoever overwrites the key next, so parse it out for the callers that want it.
+        if (_etag) {
+            _produced_etag = parse_multipart_upload_etag(etag_body);
         }
     }, http::reply::status_type::ok, _as);
     _upload_id = ""; // now upload_started() returns false
 }
 
+future<> client::upload_sink_base::flush() {
+    if (!_etag) {
+        return do_flush();
+    }
+    // The first flush produces the object, or fails trying, so it is the one that
+    // resolves the etag future, either way. Failing it with the flush's exception
+    // tells the caller why there is no tag better than the broken_promise it would
+    // otherwise get when the sink is destroyed.
+    return do_flush().then_wrapped([this] (future<> f) {
+        auto etag = std::exchange(_etag, std::nullopt);
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            etag->set_exception(ex);
+            return make_exception_future<>(std::move(ex));
+        }
+        etag->set_value(std::move(_produced_etag));
+        return make_ready_future<>();
+    });
+}
+
 future<> client::upload_sink_base::close() {
+    // A sink can be closed with the etag promise still engaged: output_stream::close()
+    // calls the sink's flush() only if its own flush got that far, and that one skips
+    // the sink's flush() when put() fails - e.g. when maybe_flush() hits an aborted
+    // _as or a failing upload_part() - yet it closes the sink either way. No object
+    // can be produced past this point, so break the promise here rather than leaving
+    // it to the sink's destructor: a caller awaiting the tag before dropping the sink
+    // would otherwise wait for a value that is never coming.
+    if (_etag) {
+        auto etag = std::exchange(_etag, std::nullopt);
+        etag->set_exception(broken_promise());
+    }
     if (upload_started()) {
         s3l.warn("closing incomplete multipart upload -> aborting");
         // If we got here, we need to pick up any background activity as it may
@@ -1382,7 +1515,7 @@ public:
         return maybe_flush();
     }
 
-    virtual future<> flush() override {
+    virtual future<> do_flush() override {
         if (!_object_produced) {
             // This is handy for small objects that are uploaded via the sink. It makes
             // upload happen in one REST call, instead of three (create + PUT + wrap-up).
@@ -1390,7 +1523,8 @@ public:
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
                 _object_produced = true;
-                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata), _as);
+                _produced_etag = co_await _client->put_object_and_get_etag(_object_name, std::move(_bufs), std::move(_metadata), _as);
+                co_return;
             }
 
             if (_bufs.size() != 0) {
@@ -1491,7 +1625,7 @@ public:
         co_await maybe_flush();
     }
 
-    virtual future<> flush() override {
+    virtual future<> do_flush() override {
         if (_current) {
             auto piece = std::exchange(_current, nullptr);
             if (piece->empty()) {
@@ -1520,11 +1654,33 @@ public:
     }
 
     virtual future<> close() override {
+        std::exception_ptr ex;
         if (_current) {
-            co_await _current->close();
-            _current.reset();
+            try {
+                co_await _current->close();
+                _current.reset();
+            } catch (...) {
+                ex = std::current_exception();
+            }
         }
-        co_await upload_sink_base::close();
+        // upload_sink_base::close() breaks a still-engaged etag promise (see
+        // make_upload_jumbo_sink_and_get_etag()), drains _bg_flushes and aborts an
+        // unfinished multipart upload, so it has to run even when closing the current
+        // piece failed - it does, for every sink, whether an etag was asked of it or
+        // not. Otherwise the promise would stay unresolved for as long as the sink
+        // lives, and background piece uploads would outlive the sink they refer to.
+        // When both closes fail, the piece's exception is the one reported and the
+        // one from the base close is dropped.
+        try {
+            co_await upload_sink_base::close();
+        } catch (...) {
+            if (!ex) {
+                ex = std::current_exception();
+            }
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
     }
 };
 
@@ -1532,8 +1688,21 @@ data_sink client::make_upload_sink(sstring object_name, object_metadata metadata
     return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::move(metadata), std::nullopt, as));
 }
 
+std::pair<data_sink, future<sstring>> client::make_upload_sink_and_get_etag(sstring object_name, object_metadata metadata, seastar::abort_source* as) {
+    auto sink = std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::move(metadata), std::nullopt, as);
+    auto etag = sink->get_etag();
+    return {data_sink(std::move(sink)), std::move(etag)};
+}
+
 data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as));
+}
+
+std::pair<data_sink, future<sstring>> client::make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece,
+                                                                                   seastar::abort_source* as) {
+    auto sink = std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as);
+    auto etag = sink->get_etag();
+    return {data_sink(std::move(sink)), std::move(etag)};
 }
 
 class client::chunked_download_source final : public seastar::data_source_impl {

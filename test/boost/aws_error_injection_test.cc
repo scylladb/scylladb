@@ -123,17 +123,46 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
-    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name));
-    auto close_stream = deferred_close(out);
+    auto [sink, etag] = is_jumbo ? cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, 3)
+                                 : cln->make_upload_sink_and_get_etag(name);
+    // The callers decide whether the upload must fail; the etag has to agree either way.
+    std::exception_ptr ex;
+    {
+        auto out = output_stream<char>(std::move(sink));
+        auto close_stream = deferred_close(out);
 
-    static constexpr unsigned chunk_size = 1000;
-    auto rnd = tests::random::get_bytes(chunk_size);
-    for (unsigned ch = 0; ch < 128_KiB; ch++) {
-        out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+        static constexpr unsigned chunk_size = 1000;
+        auto rnd = tests::random::get_bytes(chunk_size);
+        try {
+            for (unsigned ch = 0; ch < 128_KiB; ch++) {
+                out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+            }
+            testlog.info("Flush multipart upload");
+            out.flush().get();
+        } catch (...) {
+            ex = std::current_exception();
+        }
     }
-
-    testlog.info("Flush multipart upload");
-    out.flush().get();
+    // The sink is closed and gone by now, so the etag future is resolved whatever happened
+    // above, and can be inspected without hanging.
+    if (ex) {
+        // A failed upload fails the etag future too. The only failure the mock lets through to
+        // the sink is the CompleteMultipartUpload one, which the sink sends from its own
+        // flush(), so the etag is resolved by that flush and carries the very exception caught
+        // above. (The mock also answers the abort-upload request with 404 under the
+        // NONRETRYABLE_FAILURE policy, but abort_upload() swallows that one.) The close() the
+        // scope above ended with flushed the sink a second time, but that flush had nothing
+        // left to do: the first one took the etag promise out of the sink, so there was no
+        // second resolve, and finalize_upload() had set _object_produced before sending its
+        // request, which keeps this flush out of the plain-PUT fallback that would otherwise
+        // overwrite the object with an empty one.
+        BOOST_REQUIRE(etag.failed());
+        etag.ignore_ready_future();
+        std::rethrow_exception(ex);
+    }
+    // A successful upload resolves it with the tag of the completed upload.
+    BOOST_REQUIRE(etag.available());
+    BOOST_REQUIRE(!etag.get().empty());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_success) {
