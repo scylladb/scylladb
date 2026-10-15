@@ -2609,12 +2609,31 @@ end: {}
     }
 }
 
-void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+// The target of a migration command: a whole keyspace, or one table in it,
+// written `keyspace.table`. Split on the first dot, as CQL does for an
+// unquoted name; a keyspace whose quoted name contains a dot is not supported
+// here.
+static std::pair<sstring, std::unordered_map<sstring, sstring>>
+migrate_to_tablets_target(const bpo::variables_map& vm) {
     if (vm["keyspace"].empty()) {
         throw std::invalid_argument("keyspace is required");
     }
-    auto keyspace = vm["keyspace"].as<sstring>();
-    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace));
+    auto target = vm["keyspace"].as<sstring>();
+    std::unordered_map<sstring, sstring> params;
+    if (auto dot = target.find('.'); dot != sstring::npos) {
+        auto table = target.substr(dot + 1);
+        target = target.substr(0, dot);
+        if (target.empty() || table.empty()) {
+            throw std::invalid_argument("expected <keyspace> or <keyspace>.<table>");
+        }
+        params["table"] = std::move(table);
+    }
+    return {std::move(target), std::move(params)};
+}
+
+void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto [keyspace, params] = migrate_to_tablets_target(vm);
+    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace), std::move(params));
 }
 
 void migrate_to_tablets_upgrade_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -2638,20 +2657,44 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
     }
     auto res = client.get(url);
 
+    // A node owes a restart until it runs what it was asked to run. The column
+    // says only that: which storage each table uses is a per-table question,
+    // answered by the list of migrating tables above.
     auto node_status = [] (std::string_view current_mode, std::string_view intended_mode) -> std::string_view {
-        if (intended_mode == "vnodes" && current_mode == "vnodes") {
-            return "uses vnodes";
-        } else if (intended_mode == "tablets" && current_mode == "tablets") {
-            return "uses tablets";
-        } else if (intended_mode == "tablets" && current_mode == "vnodes") {
-            return "migrating to tablets";
-        } else {
-            return "migrating to vnodes";
-        }
+        return current_mode == intended_mode ? "Restarted" : "Needs restart";
     };
 
     fmt::print(std::cout, "Keyspace: {}\n", rjson::to_string_view(res["keyspace"]));
     fmt::print(std::cout, "Status: {}\n", rjson::to_string_view(res["status"]));
+
+    if (res.HasMember("tables")) {
+        // A table is being migrated once it has a tablet map and until its
+        // migration is finalized.
+        std::vector<std::string> migrating;
+        size_t total = 0;
+        for (const auto& t : res["tables"].GetArray()) {
+            ++total;
+            if (t["prepared"].GetBool() && !t["finalized"].GetBool()) {
+                migrating.emplace_back(rjson::to_string_view(t["table"]));
+            }
+        }
+        if (!migrating.empty()) {
+            if (migrating.size() == total) {
+                fmt::print(std::cout, "Migrating Tables: All\n");
+            } else {
+                fmt::print(std::cout, "Migrating Tables: {}\n", fmt::join(migrating, ", "));
+            }
+
+            // Which way the migration is going. The server works it out from the
+            // marks the nodes carry, which it can tell apart from no mark at all.
+            if (res.HasMember("direction")) {
+                auto direction = rjson::to_string_view(res["direction"]);
+                if (!direction.empty()) {
+                    fmt::print(std::cout, "Direction: {}\n", direction);
+                }
+            }
+        }
+    }
 
     const auto& nodes = res["nodes"].GetArray();
     if (!nodes.Empty()) {
@@ -2681,8 +2724,10 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
 
     fmt::print(std::cout, "\nTablet info:\n");
 
-    auto status = rjson::to_string_view(res["status"]);
-    if (status != "tablets") {
+    // The server attaches this for a vnode keyspace too, once one of its tables is
+    // finalized and so converging. Go by whether it reported anything, not by the
+    // keyspace's own storage, which says nothing about a finalized table.
+    if (!res.HasMember("tablets")) {
         fmt::print(std::cout, "  Pow2 tablet layout convergence: not applicable (keyspace uses vnodes)\n");
         return;
     }
@@ -2715,11 +2760,9 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
 }
 
 void migrate_to_tablets_finalize_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (vm["keyspace"].empty()) {
-        throw std::invalid_argument("keyspace is required");
-    }
-    auto keyspace = vm["keyspace"].as<sstring>();
-    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}/finalization", keyspace));
+    auto [keyspace, params] = migrate_to_tablets_target(vm);
+    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}/finalization", keyspace),
+                std::move(params));
 }
 
 void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -4665,11 +4708,14 @@ R"(
 Migrate a keyspace from vnodes to tablets.
 
 Subcommands:
-  start <keyspace>     Prepare a keyspace for migration from vnodes to tablets
+  start <keyspace>[.<table>]
+                       Prepare a keyspace, or a single table in it, for
+                       migration from vnodes to tablets
   upgrade              Set this node's intended storage mode to tablets
   downgrade            Set this node's intended storage mode back to vnodes
   status <keyspace>    Show migration status for a keyspace
-  finalize <keyspace>  Finalize the migration for a keyspace
+  finalize <keyspace>[.<table>]
+                       Finalize the migration for a keyspace or a table
 )",
                 { },
                 {
@@ -4678,11 +4724,19 @@ Subcommands:
                 {
                     {
                         "start",
-                        "Prepare a keyspace for migration from vnodes to tablets",
-                        "",
+                        "Prepare a keyspace, or a single table in it, for migration from vnodes to tablets",
+                        R"(
+Preparing a table makes every node reshard it to tablets on its next restart.
+Name a single table, as <keyspace>.<table>, to prepare a few at a time and bound
+how much data each node reshards per rolling restart. The keyspace keeps using
+vnodes until every one of its tables has been finalized.
+
+Tables can only be prepared before a node has been marked for upgrade. Once one
+has, preparing another is refused until the migration in progress is finalized.
+)",
                         { },
                         {
-                            typed_option<sstring>("keyspace", "The keyspace to migrate", 1),
+                            typed_option<sstring>("keyspace", "What to migrate: <keyspace>, or <keyspace>.<table> for a single table", 1),
                         },
                     },
                     {
@@ -4712,11 +4766,20 @@ Subcommands:
                     },
                     {
                         "finalize",
-                        "Finalize the migration for a keyspace",
-                        "",
+                        "Finalize the migration for a keyspace, or for a single table in it",
+                        R"(
+Finalizing a table ends its migration: it runs on tablets for good, it is
+balanced and converges to its final tablet count, and it can no longer be
+rolled back. The keyspace itself switches to tablets once its last table has
+been finalized.
+
+Name a single table as <keyspace>.<table>. Naming the keyspace alone finalizes
+it as a whole, which going forward requires every one of its tables to have
+been prepared.
+)",
                         { },
                         {
-                            typed_option<sstring>("keyspace", "The keyspace to finalize", 1),
+                            typed_option<sstring>("keyspace", "What to finalize: <keyspace>, or <keyspace>.<table> for a single table", 1),
                         },
                     },
                 }
