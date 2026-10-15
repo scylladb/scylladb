@@ -733,6 +733,11 @@ public:
     // key, and `on_segment_info` sees the segment info of every chunk, which holds the segment sequence.
     future<> index_segment_records(log_segment_id, const primary_index::entry_cmp_fn& cmp, const index_resolver&, std::function<void(const segment_info&)> on_segment_info);
 
+    // A coroutine, so that the resolver outlives the scan that refers to it.
+    future<> rebuild_index_from_disk(index_resolver resolve) {
+        co_await rebuild_index(_file_mgr.allocated_file_count() * _segments_per_file, resolve);
+    }
+
     compaction_manager& get_compaction_manager() noexcept {
         return _compaction_mgr;
     }
@@ -2554,6 +2559,10 @@ future<recovery_summary> segment_manager::do_recovery(recovery_catalog& catalog)
 
 future<> segment_manager::do_recovery_for_test() {
     return _impl->do_recovery_for_test();
+}
+
+future<> segment_manager::rebuild_index_from_disk(index_resolver resolve) {
+    return _impl->rebuild_index_from_disk(std::move(resolve));
 }
 
 future<> segment_manager::start() {
