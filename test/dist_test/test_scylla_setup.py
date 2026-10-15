@@ -212,7 +212,6 @@ def test_interactive_no_free_disks(root, monkeypatch, capsys):
     assert not any(c.startswith('scylla_raid_setup') for c in setup_calls(root))
 
 
-@pytest.mark.xfail(strict=True, reason='a block device that was not offered crashes: devices.remove() ValueError')
 def test_interactive_select_unlisted_disk(root, monkeypatch):
     root.cmd.set('lsblk --help', '')
     root.fs.create_file('/dev/sdb', st_mode=stat.S_IFBLK | 0o660)

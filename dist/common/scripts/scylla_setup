@@ -90,7 +90,7 @@ def interactive_choose_swap_directory():
     while True:
         d = input('> ')
         if not os.path.isdir(d):
-            print('{} is not valid directory, input again')
+            print('{} is not valid directory, input again'.format(d))
         else:
             return d
 
@@ -405,7 +405,8 @@ if __name__ == '__main__':
                     print(f'{dsk} is already added')
                     continue
                 selected.append(dsk)
-                devices.remove(dsk)
+                if dsk in devices:
+                    devices.remove(dsk)
             disks = ','.join(selected)
             args.disks = disks
 
