@@ -434,6 +434,8 @@ public:
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
         std::optional<sstring> finalize_migration_ks_name;
+        // Set when only this table of the keyspace is being finalized.
+        std::optional<sstring> finalize_migration_table_name;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
     };
