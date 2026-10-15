@@ -645,8 +645,12 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    logstor::logstor_group& get_logstor_group(dht::token token);
     logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
+    // Return the logstor group of the token or of the token range, or nullptr if this shard has
+    // none. See storage_group_manager::maybe_compaction_group_for_token() and
+    // maybe_compaction_group_for_logstor_segment().
+    logstor::logstor_group* maybe_get_logstor_group(dht::token token);
+    logstor::logstor_group* maybe_get_logstor_group(dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.
     // The sstable might undergo split if table is in split mode.
