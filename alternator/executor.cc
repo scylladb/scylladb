@@ -374,8 +374,12 @@ static schema_ptr get_table_for_write(service::storage_proxy& proxy, const rjson
     return find_table(proxy, table_name);
 }
 
+rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name) {
+    return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", keyspace_name, table_name));
+}
+
 static rjson::value generate_arn_for_table(const schema& schema) {
-    return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
+    return generate_arn_for_table(schema.ks_name(), schema.cf_name());
 }
 
 static rjson::value generate_arn_for_index(const schema& schema, std::string_view index_name) {
@@ -1967,10 +1971,7 @@ static std::optional<std::string> build_vector_index_non_key_attributes(const st
     return rjson::print(arr);
 }
 
-future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
-            const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-    throwing_assert(this_shard_id() == 0);
-
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
     // (e.g., verify that this table doesn't already exist) - we can only
@@ -1979,15 +1980,13 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     validate_table_name(table_name);
 
     if (table_name.find(executor::INTERNAL_TABLE_PREFIX) == 0) {
-        co_return api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
+        throw api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
 
-    maybe_audit(audit_info, audit::statement_category::DDL, keyspace_name, table_name, "CreateTable", request);
-
     const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
     if (attribute_definitions == nullptr) {
-        co_return api_error::validation("Missing AttributeDefinitions in CreateTable request");
+        throw api_error::validation("Missing AttributeDefinitions in CreateTable request");
     }
     // Save the list of AttributeDefinitions in unused_attribute_definitions,
     // and below remove each one as we see it in a KeySchema of the table or
@@ -1996,7 +1995,6 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     std::unordered_set<std::string> unused_attribute_definitions =
         validate_attribute_definitions("", *attribute_definitions);
 
-    tracing::add_alternator_table_name(trace_state, table_name);
 
     schema_builder builder(this_smp_shard_count(), keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request, "");
@@ -2031,28 +2029,28 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             std::string_view index_name = rjson::to_string_view(*index_name_v);
             auto [it, added] = index_names.emplace(index_name);
             if (!added) {
-                co_return api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
+                throw api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
             }
             std::string vname(lsi_name(table_name, index_name));
             elogger.trace("Adding LSI {}", index_name);
             if (range_key.empty()) {
-                co_return api_error::validation("LocalSecondaryIndex requires that the base table have a range key");
+                throw api_error::validation("LocalSecondaryIndex requires that the base table have a range key");
             }
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l, "Local Secondary Index");
             if (view_hash_key != hash_key) {
-                co_return api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
+                throw api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
             }
             add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key);
             unused_attribute_definitions.erase(view_hash_key);
             if (view_range_key.empty()) {
-                co_return api_error::validation("LocalSecondaryIndex must specify a sort key");
+                throw api_error::validation("LocalSecondaryIndex must specify a sort key");
             }
             unused_attribute_definitions.erase(view_range_key);
             if (view_range_key == hash_key) {
-                co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
+                throw api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
             }
             add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
@@ -2077,18 +2075,18 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     if (gsi) {
         if (!gsi->IsArray()) {
-            co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
+            throw api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
-        const bool composite_gsi_keys_supported = _proxy.features().alternator_composite_gsi_keys;
+        const bool composite_gsi_keys_supported = feat.alternator_composite_gsi_keys;
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
-                co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
+                throw api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
             }
             std::string_view index_name = rjson::to_string_view(*index_name_v);
             auto [it, added] = index_names.emplace(index_name);
             if (!added) {
-                co_return api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
+                throw api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
             }
             std::string vname(view_name(table_name, index_name));
             elogger.trace("Adding GSI {}", index_name);
@@ -2139,7 +2137,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     const rjson::value* vector_indexes = rjson::find(request, "VectorIndexes");
     if (vector_indexes) {
         if (!vector_indexes->IsArray()) {
-            co_return api_error::validation("VectorIndexes must be an array.");
+            throw api_error::validation("VectorIndexes must be an array.");
         }
         // Maps an attribute name to the Dimensions of the vector index(es)
         // already seen on it in this request. Multiple vector indexes on
@@ -2149,7 +2147,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         for (const rjson::value& v : vector_indexes->GetArray()) {
             const rjson::value* index_name_v = rjson::find(v, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
-                co_return api_error::validation("VectorIndexes IndexName must be a string.");
+                throw api_error::validation("VectorIndexes IndexName must be a string.");
             }
             std::string_view index_name = rjson::to_string_view(*index_name_v);
             // Limit the length and character choice of a vector index's
@@ -2158,15 +2156,15 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // of the index name but its sum with the base table name.
             validate_table_name(index_name, "VectorIndexes IndexName");
             if (!index_names.emplace(index_name).second) {
-                co_return api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
+                throw api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
             }
             const rjson::value* vector_attribute_v = rjson::find(v, "VectorAttribute");
             if (!vector_attribute_v || !vector_attribute_v->IsObject()) {
-                co_return api_error::validation("VectorIndexes VectorAttribute must be an object.");
+                throw api_error::validation("VectorIndexes VectorAttribute must be an object.");
             }
             const rjson::value* attribute_name_v = rjson::find(*vector_attribute_v, "AttributeName");
             if (!attribute_name_v || !attribute_name_v->IsString()) {
-                co_return api_error::validation("VectorIndexes AttributeName must be a string.");
+                throw api_error::validation("VectorIndexes AttributeName must be a string.");
             }
             std::string_view attribute_name = rjson::to_string_view(*attribute_name_v);
             validate_attr_name_length("VectorIndexes", attribute_name.size(), /*is_key=*/false, "AttributeName ");
@@ -2178,14 +2176,14 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             // written at all.
             for (auto it = attribute_definitions->Begin(); it != attribute_definitions->End(); ++it) {
                 if (rjson::to_string_view((*it)["AttributeName"]) == attribute_name) {
-                    co_return api_error::validation(fmt::format(
+                    throw api_error::validation(fmt::format(
                         "VectorIndexes AttributeName '{}' is declared in AttributeDefinitions with type {} so cannot be used as a vector index target.", attribute_name, rjson::to_string_view((*it)["AttributeType"])));
                 }
             }
             int dimensions = get_dimensions(v, index_name);
             auto [dimensions_it, inserted] = attribute_dimensions.emplace(attribute_name, dimensions);
             if (!inserted && dimensions_it->second != dimensions) {
-                co_return api_error::validation(fmt::format(
+                throw api_error::validation(fmt::format(
                     "Vector indexes on the same AttributeName '{}' must all have the same Dimensions ({} vs {})",
                     attribute_name, dimensions_it->second, dimensions));
             }
@@ -2219,7 +2217,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     // SearchSchema element there may be the only use of some attribute
     // declared in AttributeDefinitions:
     if (!unused_attribute_definitions.empty()) {
-        co_return api_error::validation(fmt::format(
+        throw api_error::validation(fmt::format(
             "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
             unused_attribute_definitions));
     }
@@ -2227,22 +2225,22 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     // We don't yet support configuring server-side encryption (SSE) via the
     // SSESpecifiction attribute, but an SSESpecification with Enabled=false
     // is simply the default, and should be accepted:
-    rjson::value* sse_specification = rjson::find(request, "SSESpecification");
+    const rjson::value* sse_specification = rjson::find(request, "SSESpecification");
     if (sse_specification && sse_specification->IsObject()) {
-        rjson::value* enabled = rjson::find(*sse_specification, "Enabled");
+        const rjson::value* enabled = rjson::find(*sse_specification, "Enabled");
         if (!enabled || !enabled->IsBool()) {
-            co_return api_error("ValidationException", "SSESpecification needs boolean Enabled");
+            throw api_error("ValidationException", "SSESpecification needs boolean Enabled");
         }
         if (enabled->GetBool()) {
             // TODO: full support for SSESpecification
-            co_return api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
+            throw api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
         }
     }
 
-    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+    const rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     bool stream_enabled = false;
     if (stream_specification && stream_specification->IsObject()) {
-        if (executor::add_stream_options(*stream_specification, builder, _proxy)) {
+        if (executor::add_stream_options(*stream_specification, builder)) {
             stream_enabled = true;
             validate_cdc_log_name_length(builder.cf_name());
             // If vector index was also enabled, it set up its desired CDC
@@ -2272,19 +2270,39 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
-    co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
-
     if (stream_enabled) {
-        const bool uses_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
+        const bool uses_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode).has_value();
         if (uses_tablets) {
-            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
-                co_return api_error::validation(
+            if (!feat.cdc_block_tablet_merges_for_alternator_streams) {
+                throw api_error::validation(
                         "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
                         "support blocking tablet merges for Alternator Streams");
             }
             block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
         }
     }
+
+    return create_table_params {
+        std::move(builder),
+        std::move(view_builders),
+        std::move(keyspace_name),
+        std::move(table_name),
+        std::move(tags_map),
+        vector_indexes && vector_indexes->Size() > 0,
+    };
+}
+
+future<executor::request_return_type> executor::commit_table_creation(
+    rjson::value&& request,
+    create_table_params&& validated,
+    service::client_state&& client_state,
+    const db::tablets_mode_t::mode tablets_mode)
+{
+    auto builder = std::move(validated.builder);
+    auto view_builders = std::move(validated.view_builders);
+    auto keyspace_name = std::move(validated.keyspace_name);
+    auto tags_map = std::move(validated.tags_map);
+    auto table_name = std::move(validated.table_name);
 
     schema_ptr schema = builder.build();
     for (auto& view_builder : view_builders) {
@@ -2312,7 +2330,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
         // Vector indexes is a new feature that we decided to only support
         // on tablets.
-        if (vector_indexes && vector_indexes->Size() > 0) {
+        if (validated.has_vector_indexes) {
             if (!rs->uses_tablets()) {
                 co_return api_error::validation("Vector indexes are not supported on tables using vnodes.");
             }
@@ -2451,6 +2469,24 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     executor::supplement_table_info(request, *schema, _proxy);
     rjson::add(status, "TableDescription", std::move(request));
     co_return rjson::print(std::move(status));
+}
+
+future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
+            const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    throwing_assert(this_shard_id() == 0);
+
+    // Audit before the permission check and the rest of validation, so that
+    // requests failing them are audited too.
+    std::string table_name = get_table_name(request);
+    validate_table_name(table_name);
+    maybe_audit(audit_info, audit::statement_category::DDL, executor::KEYSPACE_NAME_PREFIX + table_name, table_name, "CreateTable", request);
+    tracing::add_alternator_table_name(trace_state, table_name);
+
+    co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
+
+    create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode);
+
+    co_return co_await commit_table_creation(std::move(request), std::move(validated), std::move(client_state), tablets_mode);
 }
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -2629,7 +2665,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
-                if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
+                if (add_stream_options(*stream_specification, builder, tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
                     // If the table already has a vector index, ensure CDC uses
                     // delta_mode=full so the vector store can read full column

@@ -1570,7 +1570,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     co_return rjson::print(std::move(ret));
 }
 
-bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp, const cdc::options& existing_cdc_opts) {
+bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, const cdc::options& existing_cdc_opts) {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
         throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
