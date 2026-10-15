@@ -77,10 +77,6 @@ future<recovery_summary> logstor::do_recovery(recovery_catalog& catalog) {
     return _segment_manager.do_recovery(catalog);
 }
 
-future<> logstor::do_recovery_for_test() {
-    co_await _segment_manager.do_recovery_for_test();
-}
-
 future<> logstor::start() {
     logstor_logger.info("Starting logstor");
 

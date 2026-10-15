@@ -663,7 +663,6 @@ public:
     segment_manager_impl& operator=(const segment_manager_impl&) = delete;
 
     future<recovery_summary> do_recovery(recovery_catalog&);
-    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -2413,13 +2412,6 @@ future<recovery_summary> segment_manager_impl::do_recovery(recovery_catalog& cat
     co_return co_await r.run();
 }
 
-future<> segment_manager_impl::do_recovery_for_test() {
-    auto files = _file_mgr.start_recovery();
-    co_await files.open_found_files();
-    co_await files.retire_unused_files(0);
-    co_await files.finish();
-}
-
 segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(recovery_catalog& catalog, recovery_stats& stats) {
     return [&catalog, &stats] (const record_header& header) -> primary_index* {
         auto [index, cg] = catalog.find(header.table, header.key.token());
@@ -2620,10 +2612,6 @@ const segment_manager_impl& segment_manager::get_impl() const noexcept {
 
 future<recovery_summary> segment_manager::do_recovery(recovery_catalog& catalog) {
     return _impl->do_recovery(catalog);
-}
-
-future<> segment_manager::do_recovery_for_test() {
-    return _impl->do_recovery_for_test();
 }
 
 future<> segment_manager::rebuild_index_from_disk(index_resolver resolve) {
