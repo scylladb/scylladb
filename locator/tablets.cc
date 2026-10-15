@@ -630,7 +630,7 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _repair_scheduler_config, _raft_info, _target_pow2_tablet_count);
+                      _repair_scheduler_config, _raft_info, _target_pow2_tablet_count, _migration_finalized);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -659,7 +659,7 @@ future<tablet_map> tablet_map::clone_gently() const {
 
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
                          _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info),
-                         _target_pow2_tablet_count);
+                         _target_pow2_tablet_count, _migration_finalized);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
