@@ -230,9 +230,7 @@ def test_coredump_setup_old_systemd(coredump):
     assert not os.path.exists('/var/lib/systemd/coredump/core.1')
 
 
-@pytest.mark.parametrize('modules', ['', 'systemd-container-coredump', pytest.param(
-    'abc\nsystemd-container-coredump', marks=pytest.mark.xfail(
-        strict=True, reason='re.match() only looks at the 1st line of `semodule -l`, so the module is reloaded'))])
+@pytest.mark.parametrize('modules', ['', 'systemd-container-coredump', 'abc\nsystemd-container-coredump'])
 def test_coredump_setup_rhel9_selinux(coredump, monkeypatch, modules):
     """On RHEL 9 the systemd-container-coredump SELinux module is installed once, wherever semodule lists it."""
     coredump.distro('rhel', version='9')
