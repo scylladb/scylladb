@@ -580,6 +580,10 @@ future<> server_impl::start() {
                                  fsm_config {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
+                                     // A follower has to be able to hold everything a leader
+                                     // may have admitted plus its own trailing entries, which
+                                     // the leader may already have dropped.
+                                     .max_follower_log_size = _config.max_log_size + _config.snapshot_trailing_size,
                                      .enable_prevoting = _config.enable_prevoting,
                                      .fast_bootstrap_seed = _config.fast_bootstrap_seed,
                                      .leaseguard = fsm_leaseguard,

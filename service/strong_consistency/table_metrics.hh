@@ -35,6 +35,7 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
         uint64_t leaders = 0;
         uint64_t in_memory_log_size = 0;
         uint64_t log_memory_usage = 0;
+        uint64_t full_logs = 0;
         uint64_t uncommitted_entries = 0;
         uint64_t unapplied_entries = 0;
         uint64_t log_limiter_waiters = 0;
