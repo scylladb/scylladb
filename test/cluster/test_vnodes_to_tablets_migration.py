@@ -13,11 +13,12 @@ import logging
 import subprocess
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas, get_base_table
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import get_enabled_features, wait_for_feature, wait_for_cql_and_get_hosts
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.util import wait_for, wait_for_view
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
@@ -175,6 +176,10 @@ async def verify_pow2_layout(manager: ScyllaClusterManager, server: ServerInfo,
     expected_tokens = compute_pow2_boundaries(tablet_count)
 
     assert tablet_tokens == expected_tokens
+
+
+async def describe_view(cql, ks: str, view_name: str) -> str:
+    return (await cql.run_async(f"DESCRIBE MATERIALIZED VIEW {ks}.{view_name}"))[0].create_statement
 
 
 async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: ServerInfo,
@@ -1962,3 +1967,436 @@ async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "Keyspace is still using vnodes after migration finalization"
         await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+@pytest.mark.parametrize("rf,num_nodes", [(1, 1), (1, 3), (3, 3)])
+async def test_migration_with_materialized_views(manager: ScyllaClusterManager, rf: int, num_nodes: int):
+    """Verify vnodes-to-tablets migration for a keyspace with colocatable materialized views.
+
+    Views are migrated as tables co-located with their base table, sharing
+    its tablet map.
+
+    Steps:
+    1. Create a vnode keyspace with a table, a materialized view with the
+       same partition key, and a local secondary index; inject data.
+    2. Start the migration.
+       - Verify the base table gets a tablet map and the views are
+         registered as co-located with it.
+    3. Upgrade each node and restart it (triggers resharding).
+       - Verify data integrity through the base table and the view.
+    4. Finalize the migration.
+       - Verify the keyspace uses tablets and the views were switched to
+         the 'timeout' tombstone_gc mode.
+    5. Wait for pow2 convergence of the co-location group.
+       - Verify data integrity through the base table, the view and the
+         index on the converged layout.
+       - Verify the views remain built and view building keeps working on
+         the migrated keyspace (a new view can be created and built by the
+         view building coordinator).
+    """
+    num_shards = 2
+    tokens_per_node = 16
+    num_keys = 1000
+
+    logger.info(f"Starting {num_nodes} node(s) with {num_shards} shards and {tokens_per_node} random tokens")
+    # Co-located tables stall each pow2 convergence round until the next load
+    # stats refresh (SCYLLADB-5244), so refresh them often.
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    # As many racks as RF keeps the keyspace RF-rack-valid, which views in a
+    # tablet keyspace require.
+    racks = [{'dc': 'dc1', 'rack': f'rack{i % rf}'} for i in range(num_nodes)]
+    servers = await manager.servers_add(num_nodes, cmdline=['--smp', str(num_shards)], config=cfg,
+                                        property_file=racks)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        views = ('mv', 'local_idx_index')
+        # Co-located tables don't support the 'repair' tombstone_gc mode.
+        # Set it to 'repair' and expect finalization to automatically switch it
+        # to 'timeout'.
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c) "
+                            "WITH tombstone_gc = {'mode': 'repair'}")
+        await cql.run_async(f"CREATE INDEX local_idx ON {ks}.test ((pk), c)")
+        await cql.run_async(f"ALTER MATERIALIZED VIEW {ks}.local_idx_index WITH tombstone_gc = {{'mode': 'repair'}}")
+
+        logger.info("Populating the base table")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Waiting for the views to be built")
+        for view_name in views:
+            await wait_for_view(cql, view_name, num_nodes)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying tablet map boundaries for the base table")
+        await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
+
+        logger.info("Verifying that the views are co-located with the base table")
+        base_id = await manager.get_table_or_view_id(ks, 'test')
+        for view_name in views:
+            view_id = await manager.get_table_or_view_id(ks, view_name)
+            view_base_id = await get_base_table(manager, view_id)
+            assert view_base_id == base_id, \
+                f"Expected view {view_name} to be co-located with base table {base_id}, got base {view_base_id}"
+
+        for s in servers:
+            logger.info(f"Marking node {s.server_id} for tablets migration and restarting it to trigger resharding")
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            logger.info("Verifying data integrity through the base table and the view")
+            await verify_data_integrity(cql, ks, "test", num_keys)
+            await verify_data_integrity(cql, ks, "mv", num_keys)
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+
+        logger.info("Verifying that finalization switched the views to the 'timeout' tombstone_gc mode")
+        for view_name in views:
+            desc = await describe_view(cql, ks, view_name)
+            assert "'mode': 'timeout'" in desc, f"Expected view {view_name} to use the 'timeout' tombstone_gc mode: {desc}"
+
+        logger.info("Waiting for pow2 convergence of the co-location group")
+        await wait_for_pow2_convergence(manager, server, ks, 'test')
+
+        logger.info("Verifying data integrity after pow2 convergence")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+        await verify_data_integrity(cql, ks, "mv", num_keys)
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = 7 AND c = 7")
+        assert len(rows) == 1, "Local index query returned unexpected results after migration"
+
+        # Creating a new view exercises the view building coordinator on the
+        # migrated keyspace and triggers a view building state reload, which
+        # would mark the migrated views as unbuilt if their build status
+        # entries were not all SUCCESS.
+        logger.info("Creating a new view on the migrated keyspace")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv2 AS SELECT pk, c FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv2', num_nodes)
+
+        logger.info("Verifying that the migrated views are still marked as built")
+        for view_name in views:
+            rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = '{view_name}'")
+            assert len(rows) == 1, f"Expected view {view_name} to remain built after migration"
+
+        logger.info("Verifying that a migrated view can be dropped")
+        await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv2")
+
+
+async def test_migration_rollback_with_materialized_views(manager: ScyllaClusterManager):
+    """Verify that rolling back a migration of a keyspace with colocatable
+    materialized views cleans up their tablet metadata.
+
+    Steps:
+    1. Create a vnode keyspace with a table and a co-located view; inject data.
+    2. Start the migration and verify the view is registered as co-located.
+    3. Upgrade the node and restart, then downgrade and restart again.
+    4. Finalize the migration (rollback path).
+       - Verify the keyspace still uses vnodes and that the tablet metadata
+         of both the base table and the view has been cleared.
+       - Verify the view is still built and queryable.
+    """
+    num_shards = 2
+    tokens_per_node = 16
+    num_keys = 1000
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+
+        logger.info("Populating the base table")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Waiting for the view to be built")
+        await wait_for_view(cql, 'mv', 1)
+
+        original_desc = await describe_view(cql, ks, 'mv')
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the view is co-located with the base table")
+        base_id = await manager.get_table_or_view_id(ks, 'test')
+        view_id = await manager.get_table_or_view_id(ks, 'mv')
+        assert await get_base_table(manager, view_id) == base_id
+
+        logger.info("Marking node for tablets migration and restarting")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Marking node for downgrade back to vnodes and restarting")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing migration (rollback path)")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace schema still uses vnodes")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0, "Expected keyspace to still use vnodes after rollback"
+
+        logger.info("Verifying that the tablet metadata of the base table and the view has been cleared")
+        await read_barrier(manager.api, server.ip_addr)
+        for table_id in (base_id, view_id):
+            rows = await cql.run_async(f"SELECT * FROM system.tablets WHERE table_id = {table_id}")
+            assert len(rows) == 0, f"Expected no tablet metadata for table {table_id} after rollback, got {len(rows)} row(s)"
+
+        logger.info("Verifying that the rollback left the view unchanged")
+        desc = await describe_view(cql, ks, 'mv')
+        assert desc == original_desc, f"Expected the view to be unchanged after rollback.\nBefore: {original_desc}\nAfter: {desc}"
+
+        logger.info("Verifying that the view is still built and queryable")
+        rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = 'mv'")
+        assert len(rows) == 1, "Expected view to remain built after rollback"
+        await verify_data_integrity(cql, ks, "test", num_keys)
+        await verify_data_integrity(cql, ks, "mv", num_keys)
+
+
+async def test_migration_with_orphan_view_build_status(manager: ScyllaClusterManager):
+    """Verify that finalization removes the build status entries of views that
+    no longer exist.
+
+    Before 2026.4, dropping a view of a vnode keyspace removed its entries in
+    system.view_build_status_v2 in the background, so they could be left
+    behind. Once the keyspace uses tablets, loading the view building state
+    looks up the view of every entry, and an entry of a dropped view would
+    stop the group0 state machine.
+    """
+    server, cql = await setup_single_node(manager)
+    host_id = await manager.get_host_id(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+
+        # Recreate what an older version could leave behind: an entry of a
+        # view that doesn't exist. Current versions remove the entries in the
+        # same group0 command that drops the view, so write it directly.
+        logger.info("Inserting a build status entry of a dropped view")
+        await cql.run_async("INSERT INTO system.view_build_status_v2 (keyspace_name, view_name, host_id, status) "
+                            f"VALUES ('{ks}', 'dropped_view', {host_id}, 'SUCCESS')")
+
+        logger.info("Migrating the keyspace to tablets")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that finalization removed the entry")
+        rows = await cql.run_async("SELECT * FROM system.view_build_status_v2 "
+                                   f"WHERE keyspace_name = '{ks}' AND view_name = 'dropped_view'")
+        assert len(rows) == 0, f"Expected the build status entry of the dropped view to be removed, got {rows}"
+
+        logger.info("Verifying that group0 still applies commands")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY)", timeout=60)
+
+
+FAIL_STAGING_INJECTION = "view_update_generator_consume_staging_sstable"
+
+
+async def create_pending_staging_sstables(manager: ScyllaClusterManager, cql, server: ServerInfo, ks: str, num_keys: int) -> str:
+    """Leave pending staging sstables of table `t` on `server`.
+
+    Write rows that `server` fails to apply, then repair the table so that
+    `server` gets them as staging sstables, and keep their processing failing.
+    Returns a glob that matches the staging sstables of `server`.
+    """
+    logger.info("Writing rows that the node fails to apply")
+    await manager.api.enable_injection(server.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks, "cf_name": "t", "what": "throw"})
+    stmt = SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (%s, %s)", consistency_level=ConsistencyLevel.ONE)
+    for k in range(num_keys):
+        await cql.run_async(stmt, [k, k])
+    await manager.api.disable_injection(server.ip_addr, "database_apply")
+
+    logger.info("Repairing the table while staging processing fails on the node")
+    workdir = await manager.server_get_workdir(server.server_id)
+    staging_glob = os.path.join(workdir, "data", ks, "t-*", "staging", "*-Data.db")
+    await manager.api.enable_injection(server.ip_addr, FAIL_STAGING_INJECTION, one_shot=False)
+    await manager.api.repair(server.ip_addr, ks, 't')
+    assert glob.glob(staging_glob), "Expected the repair to write staging sstables on the node"
+    return staging_glob
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_pending_staging_sstables(manager: ScyllaClusterManager):
+    """Verify that staging sstables pending on a node survive the resharding
+    of its storage upgrade and still produce view updates.
+
+    Steps:
+    1. Write rows that one node fails to apply, then repair the table so that the
+       node gets them as staging sstables, and keep their processing failing.
+    2. Start the migration, and upgrade and restart both nodes.
+       - Verify that the staging sstables survive the upgrade.
+    3. Let staging processing succeed, before finalizing the migration.
+       - Verify that the staging sstables are processed and the view on that
+         node has all the rows.
+    4. Finalize the migration.
+    """
+    num_keys = 100
+
+    cfg = {'num_tokens': 16, 'hinted_handoff_enabled': False}
+    # One node per rack, so that the keyspace is RF-rack-valid once it uses tablets.
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg,
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(2)])
+    server, other = servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def verify_view_on_node():
+        # The other node holds a complete view replica, and a CL=ONE read
+        # coordinated by `server` may still be served by it. Stop it, so that
+        # the read can only see the view replica on `server`.
+        await manager.server_stop_gracefully(other.server_id)
+        cql, hosts = await manager.get_ready_cql([server])
+        rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.mv", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+        assert len(rows) == num_keys, f"Expected {num_keys} rows in the view, got {len(rows)}"
+        await manager.server_start(other.server_id)
+        await manager.servers_see_each_other(servers)
+        await reconnect_driver(manager)
+        return (await manager.get_ready_cql(servers))[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.t "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv', 2)
+
+        staging_glob = await create_pending_staging_sstables(manager, cql, server, ks, num_keys)
+
+        logger.info("Starting the migration and upgrading both nodes")
+        await manager.api.create_vnode_tablet_migration(other.ip_addr, ks)
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", [FAIL_STAGING_INJECTION])
+        for s in servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+        assert glob.glob(staging_glob), "Expected the staging sstables to survive the upgrade"
+
+        logger.info("Letting staging processing succeed")
+        await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
+        await manager.api.disable_injection(server.ip_addr, FAIL_STAGING_INJECTION)
+
+        async def staging_processed():
+            return True if not glob.glob(staging_glob) else None
+        await wait_for(staging_processed, time.time() + 60)
+
+        logger.info("Verifying that the view on the node has all the rows")
+        cql = await verify_view_on_node()
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(other.ip_addr, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_rollback_with_pending_staging_sstables(manager: ScyllaClusterManager):
+    """Verify that staging sstables pending on an upgraded node are handled
+    correctly when the migration is rolled back.
+
+    Staging sstables written by a repair before the migration can still be
+    pending when a node restarts for its storage upgrade. While the keyspace
+    uses vnodes, the node must keep handling them with the node-local view
+    update generator, so that rolling back the migration leaves no view
+    building tasks that reference a deleted tablet map.
+
+    Steps:
+    1. Write rows that one node fails to apply, then repair the table so that the
+       node gets them as staging sstables, and keep their processing failing.
+    2. Start the migration, and upgrade and restart that node.
+    3. Roll back the migration and let staging processing succeed.
+       - Verify that the staging sstables are processed and the view on that
+         node has all the rows.
+       - Verify that no view building tasks exist and view building still
+         works, by building a view in a tablet keyspace.
+    """
+    num_keys = 100
+
+    cfg = {'num_tokens': 16, 'hinted_handoff_enabled': False}
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg)
+    server, other = servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def view_building_tasks():
+        return await cql.run_async("SELECT id, base_id FROM system.view_building_tasks")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, c FROM {ks}.t "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await wait_for_view(cql, 'mv', 2)
+
+        staging_glob = await create_pending_staging_sstables(manager, cql, server, ks, num_keys)
+
+        logger.info("Starting the migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(other.ip_addr, ks)
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", [FAIL_STAGING_INJECTION])
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        assert glob.glob(staging_glob), "Expected the staging sstables to survive the upgrade"
+
+        logger.info("Rolling back the migration")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(other.ip_addr, ks)
+
+        logger.info("Letting staging processing succeed")
+        await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
+        await manager.api.disable_injection(server.ip_addr, FAIL_STAGING_INJECTION)
+
+        async def staging_processed():
+            return True if not glob.glob(staging_glob) else None
+        await wait_for(staging_processed, time.time() + 60)
+
+        logger.info("Verifying that the view on the node has all the rows")
+        await manager.server_stop_gracefully(other.server_id)
+        cql, hosts = await manager.get_ready_cql([server])
+        rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.mv", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+        assert len(rows) == num_keys, f"Expected {num_keys} rows in the view, got {len(rows)}"
+        await manager.server_start(other.server_id)
+        await manager.servers_see_each_other(servers)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that no view building tasks are left and view building still works")
+        tasks = await view_building_tasks()
+        assert len(tasks) == 0, f"Expected no view building tasks after the rollback, got {len(tasks)}"
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': true}") as tablets_ks:
+            await cql.run_async(f"CREATE TABLE {tablets_ks}.t (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {tablets_ks}.mv_tablets AS SELECT pk, c FROM {tablets_ks}.t "
+                                "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+            await wait_for_view(cql, 'mv_tablets', 2, timeout=60)

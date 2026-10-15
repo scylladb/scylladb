@@ -30,6 +30,10 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+namespace data_dictionary {
+class keyspace_metadata;
+}
+
 namespace gms {
 class feature_service;
 }
@@ -1077,6 +1081,12 @@ public:
     bool operator==(const tablet_metadata&) const;
     friend fmt::formatter<tablet_metadata>;
 };
+
+/// Returns true if the keyspace is currently undergoing vnodes-to-tablets migration.
+///
+/// A keyspace is considered to be undergoing migration when it uses vnode
+/// replication but at least one of its tables has a tablet map.
+bool is_keyspace_undergoing_tablets_migration(const tablet_metadata& tmeta, const data_dictionary::keyspace_metadata& ksm);
 
 // Check that all tablets which have replicas on this host, have a valid replica shard (< this_smp_shard_count()).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
