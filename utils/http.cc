@@ -162,3 +162,12 @@ bool utils::http::url_info::is_https() const {
     return strcasecmp(scheme.c_str(), HTTPS) == 0;
 }
 
+std::optional<utils::http::content_range> utils::http::parse_content_range(std::string_view value) {
+    // 19 digits always fit in uint64_t, so stoull cannot throw.
+    static const boost::regex pattern(R"(bytes (\d{1,19})-(\d{1,19})/(\d{1,19}))");
+    boost::cmatch m;
+    if (!boost::regex_match(value.begin(), value.end(), m, pattern)) {
+        return std::nullopt;
+    }
+    return content_range{std::stoull(m[1].str()), std::stoull(m[2].str()), std::stoull(m[3].str())};
+}
