@@ -516,3 +516,20 @@ endif()
 
 add_executable(patchelf
   tools/patchelf.cc)
+
+if(Scylla_USE_PRECOMPILED_HEADER_USE)
+  include(heavy_precompiled_headers)
+  scylla_add_heavy_precompiled_header(scylla-precompiled-header-database
+    stdafx_database.hh)
+  scylla_add_heavy_precompiled_header(scylla-precompiled-header-cql-test-env
+    test/lib/stdafx_cql_test_env.hh)
+  scylla_add_heavy_precompiled_header(scylla-precompiled-header-query-processor
+    stdafx_query_processor.hh)
+  scylla_add_heavy_precompiled_header(scylla-precompiled-header-mutation
+    stdafx_mutation.hh)
+  scylla_use_heavy_precompiled_headers(
+    stdafx_database.hh scylla-precompiled-header-database
+    test/lib/stdafx_cql_test_env.hh scylla-precompiled-header-cql-test-env
+    stdafx_query_processor.hh scylla-precompiled-header-query-processor
+    stdafx_mutation.hh scylla-precompiled-header-mutation)
+endif()
