@@ -132,7 +132,6 @@ public:
     segment_manager& operator=(const segment_manager&) = delete;
 
     future<recovery_summary> do_recovery(recovery_catalog&);
-    future<> do_recovery_for_test();
 
     // The index a record found on disk goes into, or nullptr to drop the record.
     using index_resolver = std::function<primary_index*(const record_header&)>;
