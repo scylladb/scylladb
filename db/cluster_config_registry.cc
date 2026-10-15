@@ -74,6 +74,13 @@ constexpr std::array registry_options = {
         .min_version = version::v0,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::tablet_streaming_min_batch_size_in_bytes,
+        .description = "Amount of tablet data (in bytes) which may be streaming to or from a shard regardless of the per-shard tablet count concurrency limits: a tablet migration which fits in it together with what the shard already streams is not subject to them. 0 always enforces the limits",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v1,
+        .default_value = int64_t(1) << 30,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
