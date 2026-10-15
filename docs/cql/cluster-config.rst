@@ -182,3 +182,11 @@ Available options
        which fits in it together with what the shard already streams is not subject to them, so
        that many small tablets migrate at once. ``0`` always enforces the limits.
        Default: ``1073741824`` (1 GiB).
+   * - ``tablet_streaming_max_token_space_percentage``
+     - floating point
+     - ``CLUSTER``
+     - Percentage of a table's token space, between 0 and 100, which may be in transition
+       (migrating or rebuilding) at the same time, to limit how many requests pay the
+       double-quorum overhead. A migration may start while the table is within it, so it may be
+       exceeded by one tablet. Values outside the range are clamped to it, and ``0`` allows one
+       migration per table at a time. Default: ``5.0``.
