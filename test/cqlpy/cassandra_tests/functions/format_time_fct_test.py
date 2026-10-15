@@ -30,7 +30,6 @@ BYTE_MAX_VALUE = 2**7 - 1
 LONG_MAX_VALUE = 2**63 - 1
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testOneValueArgument(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [INT], [[1, 7200001], # 2h + 1ms
                                                          [2, 7199999], # 2h - 1ms
@@ -40,7 +39,6 @@ def testOneValueArgument(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col1) from %s where pk = 3"), row("0 ms"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testOneValueArgumentDecimal(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [INT], [[1, 9000000], # 2.5h
                                                          [2, 7704000], # 2.14h
@@ -50,7 +48,6 @@ def testOneValueArgumentDecimal(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col1) from %s where pk = 3"), row("2.18 h"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testValueAndUnitArguments(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [INT], [[1, 1073741826],
                                                          [2, 0]]) as table:
@@ -65,7 +62,6 @@ def testValueAndUnitArguments(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col1, 'd') from %s where pk = 2"), row("0 d"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testValueWithSourceAndTargetArgument(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [INT], [[1, 1073741826],
                                                          [2, 1],
@@ -101,7 +97,6 @@ def testValueWithSourceAndTargetArgument(cql, test_keyspace, new_to_cassandra_6)
         assertRows(execute(cql, table, "select format_time(col1, 'd', 'us') from %s where pk = 3"), row("0 us"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testNoOverflow(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [BIGINT, INT, SMALLINT, TINYINT],
                     [[1,
@@ -127,7 +122,6 @@ def testNoOverflow(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col4, 'd', 'ns') from %s where pk = 2"), row("10972800000000000 ns"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testAllSupportedColumnTypes(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [INT, TINYINT, SMALLINT, BIGINT, VARINT, ASCII, TEXT],
                     [[1,
@@ -149,14 +143,12 @@ def testAllSupportedColumnTypes(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col7) from %s where pk = 1"), row("24.86 d"))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testNegativeValueIsInvalid(cql, test_keyspace, new_to_cassandra_6):
     with create_default_format_table(cql, test_keyspace, [["1", "-1", "-2"]]) as table:
         assertInvalidThrowMessage(cql, table, "value must be non-negative", InvalidRequest,
                                   "select format_time(col1) from %s where pk = 1")
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testUnparsableTextIsInvalid(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [TEXT], [[1, "'abc'"], [2, "'-1'"]]) as table:
         assertInvalidThrowMessage(cql, table, "unable to convert string 'abc' to a value of type long", InvalidRequest,
@@ -166,7 +158,6 @@ def testUnparsableTextIsInvalid(cql, test_keyspace, new_to_cassandra_6):
                                   "select format_time(col1) from %s where pk = 2")
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testInvalidUnits(cql, test_keyspace, new_to_cassandra_6):
     with create_default_format_table(cql, test_keyspace, [["1", "1", "2"]]) as table:
         for functionCall in ["format_time(col1, 'abc')",
@@ -177,7 +168,6 @@ def testInvalidUnits(cql, test_keyspace, new_to_cassandra_6):
                                       "select " + functionCall + " from %s where pk = 1")
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testInvalidArgumentsSize(cql, test_keyspace, new_to_cassandra_6):
     with create_default_format_table(cql, test_keyspace, [["1", "1", "2"]]) as table:
         # test arguemnt size = 0
@@ -189,7 +179,6 @@ def testInvalidArgumentsSize(cql, test_keyspace, new_to_cassandra_6):
                                   "select format_time(col1, 'ms', 's', 'h') from %s where pk = 1")
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testHandlingNullValues(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [TEXT, ASCII, INT],
                              [[1, None, None, None]]) as table:
@@ -201,7 +190,6 @@ def testHandlingNullValues(cql, test_keyspace, new_to_cassandra_6):
         assertRows(execute(cql, table, "select format_time(col1, 's', 'd') from %s where pk = 1"), row(None))
 
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testHandlingNullArguments(cql, test_keyspace, new_to_cassandra_6):
     with create_format_table(cql, test_keyspace, [TEXT, ASCII, INT],
                              [[1, None, None, None],
@@ -219,7 +207,6 @@ def testHandlingNullArguments(cql, test_keyspace, new_to_cassandra_6):
 # The Java test uses QuickTheories to check 1024 random positive integers.
 # We check fewer values, to keep the test fast.
 # Reproduces SCYLLADB-5219 (format_bytes() and format_time() functions)
-@pytest.mark.xfail(reason="SCYLLADB-5219")
 def testFuzzRandomGenerators(cql, test_keyspace, new_to_cassandra_6):
     with create_table(cql, test_keyspace, "(pk int primary key, col1 int)") as table:
         rand = random.Random(0)
