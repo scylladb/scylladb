@@ -4420,6 +4420,58 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_s3_test, *boost::unit_test::pre
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
+// A compaction spanning multiple time windows writes an sstable for each window. Each of them
+// must be a run of its own. Otherwise, after the window is widened, the reshape of the wider
+// window, done by ICS which counts runs, sees them as a single run and doesn't compact them.
+void twcs_reshape_after_multi_window_compaction_fn(test_env& env) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "twcs_reshape_after_multi_window_compaction")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("cl", int32_type, column_kind::clustering_key)
+            .with_column("value", int32_type);
+    builder.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
+    builder.set_compaction_strategy_options({
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+    });
+    auto s = builder.build();
+
+    constexpr unsigned windows = 8;
+    // Start at a day boundary, so that all the hourly windows fall in a single daily window.
+    using namespace std::chrono;
+    const auto day = duration_cast<days>(api::timestamp_clock::now().time_since_epoch()) - days(1);
+    auto pkey = tests::generate_partition_key(s);
+    auto make_row = [&] (unsigned hour) {
+        mutation m(s, pkey);
+        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(int32_t(hour))});
+        m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(hour)), duration_cast<microseconds>(day + hours(hour)).count());
+        return m;
+    };
+
+    auto sst_gen = env.make_sst_factory(s);
+    utils::chunked_vector<mutation> muts;
+    for (unsigned w = 0; w < windows; w++) {
+        muts.push_back(make_row(w));
+    }
+    auto input = make_sstable_containing(sst_gen, std::move(muts)).get();
+
+    auto cf = env.make_table_for_tests(s);
+    auto close_cf = deferred_stop(cf);
+    auto ret = compact_sstables(env, compaction::compaction_descriptor({input}), cf, sst_gen, replacer_fn_no_op()).get();
+    BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), windows);
+    auto run_ids = ret.new_sstables | std::views::transform(std::mem_fn(&sstable::run_identifier)) | std::ranges::to<std::unordered_set>();
+    BOOST_REQUIRE_EQUAL(run_ids.size(), windows);
+
+    auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::time_window, {
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "DAYS" },
+            { compaction::time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+    });
+    BOOST_REQUIRE_EQUAL(get_reshaping_job(cs, ret.new_sstables, s, compaction::reshape_mode::strict).sstables.size(), windows);
+}
+
+SEASTAR_TEST_CASE(twcs_reshape_after_multi_window_compaction_test) {
+    return test_env::do_with_async([](test_env& env) { twcs_reshape_after_multi_window_compaction_fn(env); });
+}
+
 SEASTAR_FIXTURE_TEST_CASE(twcs_reshape_with_disjoint_set_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { twcs_reshape_with_disjoint_set_fn(env, 64); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
