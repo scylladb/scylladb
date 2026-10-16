@@ -22,6 +22,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
+#include "db/cluster_config_manager.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
@@ -2326,6 +2327,14 @@ void execute_transitions(shared_token_metadata& stm) {
     }).get();
 }
 
+// Lets a table have all of its token space in transition, for tests which expect more migrations of
+// a table with few tablets at once than the token space budget allows.
+static
+void disable_token_space_budget(cql_test_env& e) {
+    e.execute_cql("ALTER CLUSTER WITH tablet_streaming_max_token_space_percentage = 100").get();
+    e.cluster_config_manager().local().refresh().get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
   do_with_cql_env_thread([] (auto& e) {
     // Tests the scenario of bootstrapping a single node
@@ -2840,6 +2849,8 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_map_layout) {
 
 SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
     do_with_cql_env_thread([] (auto& e) {
+        // Both tablets of the table have to move in one plan.
+        disable_token_space_budget(e);
         topology_builder topo(e);
 
         unsigned shard_count = 2;
@@ -4183,6 +4194,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     // The test verifies that the load balancer creates a plan
     // which when executed will achieve perfect balance,
     // which is a proof that it doesn't stop due to active migrations.
+    // The token space budget would stop it, since one of the 4 tablets is in transition.
+    disable_token_space_budget(e);
 
     topology_builder topo(e);
     auto host1 = topo.add_node(node_state::normal, 2);
