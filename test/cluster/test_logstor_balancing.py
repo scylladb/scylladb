@@ -280,12 +280,15 @@ async def test_churn_does_not_move_tablets(manager: ScyllaClusterManager):
 async def test_tablet_sizes_reach_coordinator(manager: ScyllaClusterManager):
     """
     The tablet sizes the coordinator reads are the live record bytes of the table: overwrites and
-    compaction change the space the table takes, but not its size.
+    compaction change the space the table takes, but not its size. The capacity of the node covers
+    the logstor files, of which the tablet sizes are only the live part. On a development disk the
+    free space alone is much larger than the files, so the capacity check cannot tell the files
+    were added.
     """
     key_count = 20
     value = 'x' * 2000
 
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg | {'force_effective_capacity_to_raw_disk_capacity': False})
     server = servers[0]
     cql = manager.get_cql()
 
@@ -329,3 +332,14 @@ async def test_tablet_sizes_reach_coordinator(manager: ScyllaClusterManager):
             if await tablet_sizes() == size:
                 return True
         await wait_for(size_unchanged, time.time() + 60)
+
+        host_id = await manager.get_host_id(server.server_id)
+        rows = await cql.run_async(f"SELECT * FROM system.load_per_node WHERE node = {host_id}")
+        assert len(rows) == 1
+        load = rows[0]
+        disk_usage = await get_metric(manager, server, 'scylla_logstor_sm_disk_usage')
+        logger.info(f"load_per_node: effective_capacity={load.effective_capacity} storage_load={load.storage_load} "
+                    f"storage_utilization={load.storage_utilization} logstor disk_usage={disk_usage}")
+        assert load.effective_capacity >= disk_usage
+        assert load.storage_load == size
+        assert 0 <= load.storage_utilization < 1
