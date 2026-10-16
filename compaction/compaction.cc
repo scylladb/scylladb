@@ -589,6 +589,8 @@ protected:
     mutation_source_metadata _ms_metadata = {};
     const compaction_sstable_replacer_fn _replacer;
     const sstables::run_id _run_identifier;
+    // Set once the output stream that is written with _run_identifier was started.
+    bool _run_identifier_used = false;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstables::sstable_set> _sstable_set;
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
@@ -699,7 +701,19 @@ protected:
         _new_partial_sstables.erase(writer->sst);
     }
 
-    sstables::sstable_writer_config make_sstable_writer_config(compaction_type type) {
+    // The interposer consumer may segregate the output into multiple streams, e.g. a stream per
+    // time window, whose sstables overlap each other. Each stream is written as a run of its own,
+    // so that strategies grouping sstables by run see its sstables as a run apart from the others.
+    // The first stream keeps the descriptor's run identifier, the one compaction_manager protects
+    // as the output run of an ongoing compaction.
+    sstables::run_id make_output_run_identifier() {
+        if (!std::exchange(_run_identifier_used, true)) {
+            return _run_identifier;
+        }
+        return sstables::run_id::create_random_id();
+    }
+
+    sstables::sstable_writer_config make_sstable_writer_config(compaction_type type, sstables::run_id run_identifier) {
         auto s = compaction_name(type);
         std::transform(s.begin(), s.end(), s.begin(), [] (char c) {
             return std::tolower(c);
@@ -707,7 +721,7 @@ protected:
         sstables::sstable_writer_config cfg = _table_s.configure_writer(std::move(s));
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &sstables::default_write_monitor();
-        cfg.run_identifier = _run_identifier;
+        cfg.run_identifier = run_identifier;
         cfg.replay_position = _rp;
         cfg.sstable_level = _sstable_level;
         return cfg;
@@ -1067,14 +1081,14 @@ private:
 
     virtual void on_end_of_compaction() {};
 
-    // create a writer based on decorated key.
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
+    // create a writer based on decorated key, writing an sstable of the given output run.
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, sstables::run_id run_identifier) = 0;
     // stop current writer
     virtual void stop_sstable_writer(compaction_writer* writer) = 0;
 
     compacted_fragments_writer get_compacted_fragments_writer() {
         return compacted_fragments_writer(*this,
-            [this] (const dht::decorated_key& dk) { return create_compaction_writer(dk); },
+            [this, run_identifier = make_output_run_identifier()] (const dht::decorated_key& dk) { return create_compaction_writer(dk, run_identifier); },
             [this] (compaction_writer* cw) { stop_sstable_writer(cw); });
     }
 
@@ -1312,12 +1326,12 @@ public:
         return "Compacted";
     }
 
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, sstables::run_id run_identifier) override {
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type, run_identifier);
         cfg.monitor = monitor.get();
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
@@ -1530,11 +1544,11 @@ public:
         return "Reshaped";
     }
 
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, sstables::run_id run_identifier) override {
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape, run_identifier);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
 
@@ -1601,7 +1615,7 @@ public:
         return "Split";
     }
 
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, sstables::run_id run_identifier) override {
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
@@ -1610,7 +1624,7 @@ public:
         const auto estimated_keys = _sstables[0]->estimated_keys_for_range(token_range_of_new_sst).get();
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
-        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type, run_identifier);
         cfg.monitor = monitor.get();
 
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, estimated_keys, cfg, get_encoding_stats()), sst};
@@ -2112,7 +2126,7 @@ public:
         return "Resharded";
     }
 
-    compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+    compaction_writer create_compaction_writer(const dht::decorated_key& dk, sstables::run_id) override {
         auto shards = _sharder->shard_for_writes(dk.token());
         if (shards.size() != 1) {
             // Resharding is not supposed to run on tablets, so this case does not have to be supported.
@@ -2122,9 +2136,8 @@ public:
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
-        auto cfg = make_sstable_writer_config(compaction_type::Reshard);
         // sstables generated for a given shard will share the same run identifier.
-        cfg.run_identifier = _run_identifiers.at(shard);
+        auto cfg = make_sstable_writer_config(compaction_type::Reshard, _run_identifiers.at(shard));
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), shard), sst};
     }
 
