@@ -317,7 +317,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
         switch (cfg.status()) {
         case value_status::Deprecated:
             h(label, "Option is deprecated", cfg.status());
-            continue;
+            break;
         case value_status::Invalid:
             h(label, "Option is not applicable", cfg.status());
             continue;
