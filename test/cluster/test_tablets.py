@@ -1581,9 +1581,7 @@ async def test_read_of_pending_replica_during_migration(manager: ScyllaClusterMa
 # This test checks that --enable-tablets option and the TABLETS parameters of the CQL CREATE KEYSPACE
 # statement are mutually correct.
 @pytest.mark.parametrize("tablets_mode_for_new_keyspaces", ["enabled", "disabled", "enforced"])
-@pytest.mark.parametrize("cql_tablets_params", ["enabled", "disabled", None])
-@pytest.mark.parametrize("replication_strategy", ["NetworkTopologyStrategy", "SimpleStrategy", "EverywhereStrategy", "LocalStrategy"])
-async def test_keyspace_creation_cql_vs_config_sanity(manager: ScyllaClusterManager, tablets_mode_for_new_keyspaces, cql_tablets_params, replication_strategy):
+async def test_keyspace_creation_cql_vs_config_sanity(manager: ScyllaClusterManager, tablets_mode_for_new_keyspaces):
     cfg = {'tablets_mode_for_new_keyspaces': tablets_mode_for_new_keyspaces}
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
@@ -1599,36 +1597,44 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ScyllaClusterMana
          "EverywhereStrategy"      |  Error  |    OK    |  Error  |    OK    |  Error  |   Error  |
          "LocalStrategy"           |  Error  |    OK    |  Error  |    OK    |  Error  |   Error  |
     """
-    no_misconfiguration = (
-        (replication_strategy == "NetworkTopologyStrategy" and (tablets_mode_for_new_keyspaces != "enforced" or cql_tablets_params != "disabled"))
-        or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params == "disabled")
-        or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params != "enabled")
-    )
-    expect_tablets = (replication_strategy == "NetworkTopologyStrategy") and (
-        (tablets_mode_for_new_keyspaces == "enforced" and cql_tablets_params != "disabled")
-        or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params != "disabled")
-        or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params == "enabled")
-    )
+    # One server per mode: the cql_tablets_params x replication_strategy cases share it to save boots.
+    failures = []
+    for cql_tablets_params in ["enabled", "disabled", None]:
+        for replication_strategy in ["NetworkTopologyStrategy", "SimpleStrategy", "EverywhereStrategy", "LocalStrategy"]:
+            no_misconfiguration = (
+                (replication_strategy == "NetworkTopologyStrategy" and (tablets_mode_for_new_keyspaces != "enforced" or cql_tablets_params != "disabled"))
+                or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params == "disabled")
+                or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params != "enabled")
+            )
+            expect_tablets = (replication_strategy == "NetworkTopologyStrategy") and (
+                (tablets_mode_for_new_keyspaces == "enforced" and cql_tablets_params != "disabled")
+                or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params != "disabled")
+                or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params == "enabled")
+            )
 
-    if no_misconfiguration:
-        expectation = does_not_raise()
-    else:
-        expectation = pytest.raises(ConfigurationException)
+            if no_misconfiguration:
+                expectation = does_not_raise()
+            else:
+                expectation = pytest.raises(ConfigurationException)
 
-    with expectation:
-        tablets_opt = ""
-        if cql_tablets_params == "enabled":
-            tablets_opt = f"AND TABLETS = {{'enabled': true }}"
-        if cql_tablets_params == "disabled":
-            tablets_opt = f"AND TABLETS = {{'enabled': false }}"
+            tablets_opt = ""
+            if cql_tablets_params == "enabled":
+                tablets_opt = f"AND TABLETS = {{'enabled': true }}"
+            if cql_tablets_params == "disabled":
+                tablets_opt = f"AND TABLETS = {{'enabled': false }}"
 
-        ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} {tablets_opt}")
-        res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
-        if expect_tablets:
-            assert res.one().initial_tablets == 0
-        else:
-            assert not res
-        await cql.run_async(f"drop keyspace {ks}")
+            try:
+                with expectation:
+                    ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} {tablets_opt}")
+                    res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+                    if expect_tablets:
+                        assert res.one().initial_tablets == 0
+                    else:
+                        assert not res
+                    await cql.run_async(f"drop keyspace {ks}")
+            except (Exception, pytest.fail.Exception) as e:  # pytest.raises signals a missing exception via Failed
+                failures.append(f"cql_tablets_params={cql_tablets_params}, replication_strategy={replication_strategy}: {e!r}")
+    assert not failures, "\n".join(failures)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
