@@ -5965,6 +5965,60 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
+void storage_service::validate_tablet_compaction(std::string_view compaction_type, const std::unordered_map<sstring, sstring>& options) {
+    if (compaction_type != major_tablet_compaction_type) {
+        throw std::invalid_argument(fmt::format("Unsupported tablet compaction type '{}': only '{}' is supported", compaction_type, major_tablet_compaction_type));
+    }
+    if (!options.empty()) {
+        throw std::invalid_argument(fmt::format("Unsupported option '{}' for {} compaction", options.begin()->first, compaction_type));
+    }
+}
+
+future<> storage_service::compact_tablet(locator::global_tablet_id tablet, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+    // The coordinator may run a newer version, which supports more compaction types.
+    validate_tablet_compaction(compaction_type, options);
+    co_await do_tablet_operation(tablet, fmt::format("{} compaction", compaction_type), [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
+        shard_id shard;
+        {
+            auto tm = guard.get_token_metadata();
+            auto& tmap = guard.get_tablet_map();
+            auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+            // Check if the request is still valid.
+            // If there is mismatch, it means this compaction was canceled and the coordinator moved on.
+            if (!trinfo || trinfo->stage != locator::tablet_transition_stage::tablet_compaction) {
+                throw std::runtime_error(fmt::format("Tablet {} is not in the tablet_compaction stage", tablet));
+            }
+            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+            auto it = std::ranges::find(tinfo.replicas, tm->get_my_id(), &locator::tablet_replica::host);
+            if (it == tinfo.replicas.end()) {
+                throw std::runtime_error(fmt::format("Tablet {} has no replica on this node", tablet));
+            }
+            shard = it->shard;
+        }
+        co_await utils::get_local_injector().inject("tablet_compaction_wait", utils::wait_for_message(std::chrono::minutes(5)));
+        utils::get_local_injector().inject("tablet_compaction_fail", [] {
+            throw std::runtime_error("tablet_compaction_fail injection");
+        });
+        guard.get_abort_source().check();
+        co_await _db.invoke_on(shard, [tablet] (replica::database& db) -> future<> {
+            auto& table = db.find_column_family(tablet.table);
+            // Aborts the compaction when the transition goes away, e.g. when the table is dropped,
+            // or when the coordinator cancels it.
+            locator::tablet_metadata_guard guard(table, tablet);
+            // The guard only aborts when the transition changes after it was created, so check
+            // that the transition is still there, in the guard's own view of the tablet map, as
+            // it may have gone away since it was checked above.
+            auto* trinfo = guard.get_tablet_map().get_tablet_transition_info(tablet.tablet);
+            if (!trinfo || trinfo->stage != locator::tablet_transition_stage::tablet_compaction) {
+                throw std::runtime_error(fmt::format("Tablet {} is no longer in the tablet_compaction stage", tablet));
+            }
+            co_await table.major_compact_tablet(tablet.tablet, tasks::make_empty_task_info(), guard.get_abort_source());
+        });
+        co_return tablet_operation_result();
+    });
+}
+
 static bool increases_replicas_per_rack(const locator::topology& topology, const locator::tablet_info& tinfo, sstring dst_rack) {
     std::unordered_map<sstring, size_t> m;
     for (auto& replica: tinfo.replicas) {
@@ -7310,6 +7364,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet) {
         return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
             return ss.cleanup_tablet(tablet);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_compaction(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+        return handle_raft_rpc(dst_id, [tablet, compaction_type = std::move(compaction_type), options = std::move(options)] (auto& ss) mutable {
+            return ss.compact_tablet(tablet, std::move(compaction_type), std::move(options));
         });
     });
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [this] (raft::server_id dst_id) {

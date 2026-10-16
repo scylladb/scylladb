@@ -91,6 +91,7 @@ verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_
 verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_snapshot_pull_params) -> service::raft_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
+verb [[cancellable]] tablet_compaction (raft::server_id dst_id, locator::global_tablet_id, sstring compaction_type, std::unordered_map<sstring, sstring> options);
 verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
 verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]]) -> service::tablet_operation_repair_result;

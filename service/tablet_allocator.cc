@@ -1025,6 +1025,8 @@ private:
                 return true;
             case tablet_transition_stage::restore:
                 return false;
+            case tablet_transition_stage::tablet_compaction:
+                return true;
             case tablet_transition_stage::end_repair:
                 return false;
             case tablet_transition_stage::write_both_read_new:

@@ -240,6 +240,16 @@ private:
     // when both of which sit on the same node. So all the movement is local.
     future<> clone_locally_tablet_storage(locator::global_tablet_id, locator::tablet_replica leaving, locator::tablet_replica pending);
     future<> cleanup_tablet(locator::global_tablet_id);
+    // Compacts a tablet replica on behalf of a cluster-wide compaction of tablets, with the given
+    // compaction type and options.
+    future<> compact_tablet(locator::global_tablet_id, sstring compaction_type, std::unordered_map<sstring, sstring> options);
+public:
+    // The compaction type of a cluster-wide major compaction of tablets.
+    static constexpr std::string_view major_tablet_compaction_type = "major";
+    // Throws unless the compaction type and options of a cluster-wide compaction of tablets are
+    // supported. Only major compaction, which takes no options, is supported for now.
+    static void validate_tablet_compaction(std::string_view compaction_type, const std::unordered_map<sstring, sstring>& options);
+private:
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
     future<> process_tablet_split_candidate(table_id) noexcept;
