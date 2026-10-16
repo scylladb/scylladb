@@ -200,6 +200,71 @@ def test_fromjson_bigint_nonoverflow(cql, table1):
     cql.execute(stmt, [p, '9223372036854775807'])
     assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(9223372036854775807,)]
 
+# A number with a decimal point or an exponent should be read as the double
+# nearest to it, which for an integer below 2^53 is that integer exactly. So
+# an integer column should store such a number exactly, e.g.,
+# 9007199254740991.0, which is how Python's json.dumps() writes the float
+# 2^53-1. Scylla's JSON parser used to read some of these numbers into a
+# slightly different double, so it stored 9007199254740990 instead, and even
+# rejected 2000000000000001.0 as having a fraction. scylla_only because
+# Cassandra doesn't accept a number with a decimal point or an exponent for
+# an integer column at all.
+def test_fromjson_bigint_decimal_point_below_limit(cql, table1, scylla_only):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))')
+    for n, expected in [('9007199254740991.0', 9007199254740991),
+                        ('-9007199254740991.0', -9007199254740991),
+                        ('9.0071992547409910e15', 9007199254740991),
+                        ('2000000000000001.0', 2000000000000001)]:
+        cql.execute(stmt, [p, n])
+        assert list(cql.execute(f'SELECT bigv from {table1} where p = {p}')) == [(expected,)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "bigv": 9007199254740991.0}}'""")
+    assert list(cql.execute(f'SELECT bigv from {table1} where p = {p}')) == [(9007199254740991,)]
+
+# A number with a fraction must be rejected for an integer column. Below
+# 2^52, a double can hold a fraction of .5, so the JSON parser must not lose
+# it - Scylla's parser used to read 4503599627370495.5 as 4503599627370495.
+def test_fromjson_bigint_fraction_below_2_52(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))')
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '4503599627370495.5'])
+
+# A decimal value with only a few digits, written as a JSON number, should
+# be stored exactly. Scylla's JSON parser used to read 9.58220516 into a
+# double slightly different from the one nearest to it, so it was stored as
+# 9.582205160000001, and 1e-30 as 9.999999999999999E-31.
+def test_fromjson_decimal_few_digits(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, dec) VALUES (?, fromJson(?))')
+    for n in ['9.58220516', '1e-30']:
+        cql.execute(stmt, [p, n])
+        assert list(cql.execute(f'SELECT dec from {table1} where p = {p}')) == [(Decimal(n),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "dec": 9.58220516}}'""")
+    assert list(cql.execute(f'SELECT dec from {table1} where p = {p}')) == [(Decimal('9.58220516'),)]
+
+# A decimal written as a JSON number gets the same scale (number of digits
+# after the decimal point) as in Cassandra, which converts the number with
+# Java's Double.toString(): A whole number keeps a ".0", so 100.0 is stored
+# as 100.0, not 100, while 100 is stored as 100. Some numbers get an exponent,
+# e.g., 1e7 is stored as 1.0E+7, and 0.0001 as 0.00010.
+def test_fromjson_decimal_scale(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, dec) VALUES (?, fromJson(?))')
+    for n, expected in [('100.0', '100.0'), ('100', '100'), ('1e3', '1000.0'), ('1e7', '1.0E+7'),
+                        ('12345678.9', '12345678.9'), ('0.0001', '0.00010'), ('1e-30', '1.0E-30'),
+                        ('-0.5', '-0.5')]:
+        cql.execute(stmt, [p, n])
+        assert str(cql.execute(f'SELECT dec from {table1} where p = {p}').one().dec) == expected
+
+# The scale is part of a decimal value, so a decimal partition key written by
+# INSERT JSON as the number 100.0 must be the same key as the CQL literal 100.0.
+def test_insert_json_decimal_key_keeps_scale(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk decimal PRIMARY KEY, v int') as table:
+        cql.execute(f'INSERT INTO {table} (pk, v) VALUES (100.0, 1)')
+        cql.execute(f"""INSERT INTO {table} JSON '{{"pk": 100.0, "v": 2}}'""")
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE pk = 100.0')) == [(2,)]
+
 # Test the same non-overflowing integer with scientific notation. This is the
 # same test as test_fromjson_int_scientific_notation_prepared above (so
 # reproduces #10100), just with a number higher than 2^53. This presents

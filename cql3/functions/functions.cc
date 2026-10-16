@@ -228,7 +228,7 @@ make_from_json_function(data_dictionary::database db, const sstring& keyspace, d
         try {
             // FIXME: avoid linearization of the parameter
             auto raw_json = parameters[0] ? to_bytes(*parameters[0]) : to_bytes("null");
-            rjson::value json_value = rjson::parse(utf8_type->to_string(raw_json));
+            rjson::value json_value = rjson::parse_full_precision(utf8_type->to_string(raw_json));
             managed_bytes_opt parsed_json_value;
             if (!json_value.IsNull()) {
                 parsed_json_value.emplace(from_json_object(*t, json_value));

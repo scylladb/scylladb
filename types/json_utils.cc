@@ -20,6 +20,8 @@
 #include "utils/managed_bytes.hh"
 #include "utils/chunked_string.hh"
 #include "exceptions/exceptions.hh"
+#include <charconv>
+#include <cmath>
 #include <limits>
 #include <utility>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -159,6 +161,44 @@ template <typename T> static T to_int(const rjson::value& value) {
     return result;
 }
 
+// Returns the decimal value of a double read from a JSON number, like
+// Cassandra, which uses Java's Double.toString(): the shortest digits which
+// identify the double, with at least one digit after the decimal point, and in
+// scientific notation (e.g., "1.0E7") if the absolute value is below 10^-3 or
+// at least 10^7. The number of digits after the decimal point determines the
+// decimal's scale, which is part of its value - e.g., 100.0 must become
+// "100.0", not "100", to be the same partition key as the CQL literal 100.0.
+static std::string double_to_decimal_string(double d) {
+    if (d == 0) {
+        return std::signbit(d) ? "-0.0" : "0.0";
+    }
+    char buf[32];
+    // The shortest digits which identify the double, as "D.DDDe+XX" or "De+XX".
+    auto res = std::to_chars(buf, buf + sizeof(buf), std::abs(d), std::chars_format::scientific);
+    std::string_view s(buf, res.ptr - buf);
+    auto e = s.find('e');
+    int exponent = std::stoi(std::string(s.substr(e + 1)));
+    std::string digits;
+    for (char c : s.substr(0, e)) {
+        if (c != '.') {
+            digits += c;
+        }
+    }
+    std::string ret = d < 0 ? "-" : "";
+    if (std::abs(d) >= 1e-3 && std::abs(d) < 1e7) {
+        if (exponent < 0) {
+            ret += "0." + std::string(-exponent - 1, '0') + digits;
+        } else if (digits.size() <= size_t(exponent) + 1) {
+            ret += digits + std::string(exponent + 1 - digits.size(), '0') + ".0";
+        } else {
+            ret += digits.substr(0, exponent + 1) + "." + digits.substr(exponent + 1);
+        }
+    } else {
+        ret += digits.substr(0, 1) + "." + (digits.size() > 1 ? digits.substr(1) : "0") + "E" + std::to_string(exponent);
+    }
+    return ret;
+}
+
 static std::string_view validated_to_string_view(const rjson::value& v, const char* type_name) {
     if (!v.IsString()) {
         throw marshal_exception(format("{} must be represented as string in JSON, instead got '{}'", type_name, v));
@@ -183,7 +223,7 @@ static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& va
             raw_map.emplace(from_json_object(*t.get_keys_type(), it->name), std::move(value));
         } else {
             try {
-                rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
+                rjson::value map_key = rjson::parse_full_precision(rjson::to_string_view(it->name));
                 raw_map.emplace(from_json_object(*t.get_keys_type(), map_key), std::move(value));
             } catch (rjson::error& e) {
                 throw marshal_exception(format("Failed parsing map_key {}: {}", it->name, e.what()));
@@ -371,6 +411,13 @@ struct from_json_object_visitor {
         } else if (!value.IsNumber()) {
             throw marshal_exception(
                     format("{} must be represented as numeric or string in JSON", value));
+        } else if (value.IsDouble()) {
+            // The JSON number was read as the double nearest to it. Its
+            // shortest representation has the value of the original number if
+            // it has up to 15 significant digits - while rjson::print() doesn't
+            // always print the shortest one, e.g., it prints the double nearest
+            // to 9.58220516 as 9.582205160000001.
+            return to_bytes(t.from_string(double_to_decimal_string(value.GetDouble())));
         }
 
         return to_bytes(t.from_string(rjson::print(value)));
