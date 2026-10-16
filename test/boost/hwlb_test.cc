@@ -18,6 +18,8 @@
 
 #include <random>
 #include <algorithm>
+#include <array>
+#include <cmath>
 
 #include "db/heat_load_balance.hh"
 
@@ -364,4 +366,43 @@ BOOST_AUTO_TEST_CASE(test_a) {
     // ~21,000 requests (~8 sigma from failure). We use 1,000,000 iterations
     // instead, giving ~214,000 requests (~26 sigma from failure).
     test_hit_rates({0.999, 0.999, 0.999, 0.999, 0.999, 0.989}, 2, false, 1000000);
+}
+
+// Test that rand_float() returns values in [0,1) which are multiples of
+// 2^-24, and that they are uniformly distributed. A skewed distribution
+// with the right mean would fail the bucket check.
+BOOST_AUTO_TEST_CASE(rand_float_range) {
+    constexpr unsigned N = 10'000'000;
+    constexpr unsigned buckets = 16;
+    unsigned violations = 0;
+    std::array<unsigned, buckets> counts{};
+    for (unsigned i = 0; i < N; i++) {
+        float v = rand_float();
+        float s = v * 0x1p24f;
+        if (!(v >= 0.0f && v < 1.0f) || !(s == std::floor(s) && s < 0x1p24f)) {
+            violations++;
+            continue;
+        }
+        counts[unsigned(v * buckets)]++;
+    }
+    BOOST_REQUIRE_EQUAL(violations, 0u);
+
+    // Each bucket expects N / buckets = 625000 draws, with a standard
+    // deviation of ~765. Allow 1% (~8 sigma) so the test cannot flake.
+    constexpr unsigned expected = N / buckets;
+    for (unsigned c : counts) {
+        BOOST_CHECK_LT(std::abs(int(c) - int(expected)), int(expected / 100));
+    }
+}
+
+// Pure arithmetic check, it does not call rand_float(): even the largest
+// value rand_float() can return (1 - 2^-24), multiplied by x and truncated,
+// stays below x. The "extra" node pick in db/heat_load_balance.hh relies on
+// this. That value comes up only once per 2^24 draws, so it can't be reliably
+// reached through rand_float() itself.
+BOOST_AUTO_TEST_CASE(rand_float_max_times_n) {
+    const float umax = float((1u << 24) - 1) * 0x1p-24f;
+    for (int x = 1; x <= 1024; x++) {
+        BOOST_CHECK_LT(int(umax * float(x)), x);
+    }
 }
