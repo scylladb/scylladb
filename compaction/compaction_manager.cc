@@ -622,10 +622,35 @@ std::optional<gate::holder> compaction_manager::start_compaction(table_state& t)
         return std::nullopt;
     }
 
-    return it->second.gate.hold();
+    return hold_compaction_state_gate(it->second);
 }
 
+gate::holder compaction_manager::hold_compaction_state_gate(compaction_state& cs) {
+    // The manager is stopped as soon as the node is asked to stop, while other services
+    // still run, and really_do_stop() closes the gates soon after. Report this as the
+    // abort it is, rather than as a closed gate, which callers treat as an error.
+    if (_state == state::stopped) {
+        throw abort_requested_exception();
+    }
+    return cs.gate.hold();
+}
+
+<<<<<<< HEAD
 future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info, bool consider_only_existing_data) {
+||||||| parent of 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+=======
+future<> compaction_manager::close_compaction_state_gate(compaction_state& cs) {
+    // The gate can be closed only once, but both really_do_stop() and remove() need to wait
+    // for its holders to leave, whichever of them closes it.
+    if (!cs.gate_closed) {
+        cs.gate_closed.emplace(cs.gate.close());
+    }
+    return cs.gate_closed->get_future();
+}
+
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+>>>>>>> 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
@@ -705,24 +730,34 @@ future<> compaction_manager::update_static_shares(float static_shares) {
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, table_state& t)
     : _cm(cm)
     , _table(&t)
-    , _compaction_state(cm.get_compaction_state(_table))
-    , _holder(_compaction_state.gate.hold())
 {
-    _compaction_state.compaction_disabled_counter++;
+    // really_do_stop() closes the gates as soon as the node is asked to stop, while other
+    // services still run: e.g. the group0 state machine can be applying a schema change which
+    // truncates a table, and so disables its compaction. A stopped manager runs no compaction,
+    // so there is nothing to disable: let the caller proceed instead of failing it. Without
+    // holding the gate, nothing keeps the compaction state alive, so don't refer to it.
+    if (cm._state == compaction_manager::state::stopped) {
+        cmlog.debug("Compaction manager is stopped, not disabling compaction for {}", t);
+        return;
+    }
+    auto& cs = cm.get_compaction_state(_table);
+    _holder = cs.gate.hold();
+    _compaction_state = &cs;
+    _compaction_state->compaction_disabled_counter++;
     cmlog.debug("Temporarily disabled compaction for {}. compaction_disabled_counter={}",
-            t, _compaction_state.compaction_disabled_counter);
+            t, _compaction_state->compaction_disabled_counter);
 }
 
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_reenabler&& o) noexcept
     : _cm(o._cm)
     , _table(std::exchange(o._table, nullptr))
-    , _compaction_state(o._compaction_state)
+    , _compaction_state(std::exchange(o._compaction_state, nullptr))
     , _holder(std::move(o._holder))
 {}
 
 compaction_manager::compaction_reenabler::~compaction_reenabler() {
     // submit compaction request if we're the last holder of the gate which is still opened.
-    if (_table && --_compaction_state.compaction_disabled_counter == 0 && !_compaction_state.gate.is_closed()) {
+    if (_compaction_state && --_compaction_state->compaction_disabled_counter == 0 && !_compaction_state->gate.is_closed()) {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
@@ -733,8 +768,112 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
     }
 }
 
+<<<<<<< HEAD
 future<compaction_manager::compaction_reenabler>
 compaction_manager::stop_and_disable_compaction(table_state& t) {
+||||||| parent of 623027b62b (compaction_manager: don't fail disabling compaction on a stopped manager)
+future<> compaction_manager::await_ongoing_compactions(compaction_group_view* t) {
+    auto name = t ? t->schema()->ks_name() + "." + t->schema()->cf_name() : "ALL";
+    try {
+        auto tasks = _tasks
+                | std::views::filter([t] (const auto& task) {
+                    return (!t || task.compacting_table() == t);
+                })
+                | std::views::transform([] (auto& task) { return task.shared_from_this(); })
+                | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
+        auto sz = tasks.size();
+        cmlog.debug("Awaiting ongoing unrepaired compactions table={} tasks={}", name, sz);
+        bool task_stopped = false;
+        co_await await_tasks(std::move(tasks), task_stopped);
+        cmlog.debug("Awaiting ongoing unrepaired compactions table={} tasks={} done", name, sz);
+    } catch (...) {
+        cmlog.error("Awaiting ongoing unrepaired compactions table={} failed: {}", name, std::current_exception());
+        throw;
+    }
+}
+
+future<seastar::rwlock::holder>
+compaction_manager::get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
+    }
+    compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
+    auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
+    }
+    co_return ret;
+}
+
+future<seastar::rwlock::holder>
+compaction_manager::get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
+    }
+    compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
+    auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
+    }
+    co_return ret;
+}
+
+future<compaction_reenabler>
+compaction_manager::await_and_disable_compaction(compaction_group_view& t) {
+=======
+future<> compaction_manager::await_ongoing_compactions(compaction_group_view* t) {
+    auto name = t ? t->schema()->ks_name() + "." + t->schema()->cf_name() : "ALL";
+    try {
+        auto tasks = _tasks
+                | std::views::filter([t] (const auto& task) {
+                    return (!t || task.compacting_table() == t);
+                })
+                | std::views::transform([] (auto& task) { return task.shared_from_this(); })
+                | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
+        auto sz = tasks.size();
+        cmlog.debug("Awaiting ongoing unrepaired compactions table={} tasks={}", name, sz);
+        bool task_stopped = false;
+        co_await await_tasks(std::move(tasks), task_stopped);
+        cmlog.debug("Awaiting ongoing unrepaired compactions table={} tasks={} done", name, sz);
+    } catch (...) {
+        cmlog.error("Awaiting ongoing unrepaired compactions table={} failed: {}", name, std::current_exception());
+        throw;
+    }
+}
+
+future<seastar::rwlock::holder>
+compaction_manager::get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
+    }
+    compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = hold_compaction_state_gate(cs);
+    auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
+    }
+    co_return ret;
+}
+
+future<seastar::rwlock::holder>
+compaction_manager::get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
+    }
+    compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = hold_compaction_state_gate(cs);
+    auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
+    if (!reason.empty()) {
+        cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
+    }
+    co_return ret;
+}
+
+future<compaction_reenabler>
+compaction_manager::await_and_disable_compaction(compaction_group_view& t) {
+>>>>>>> 623027b62b (compaction_manager: don't fail disabling compaction on a stopped manager)
     compaction_reenabler cre(*this, t);
     co_await stop_ongoing_compactions("user-triggered operation", &t);
     co_return cre;
@@ -1161,9 +1300,11 @@ future<> compaction_manager::really_do_stop() noexcept {
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
     co_await _task_manager_module->stop();
-    co_await coroutine::parallel_for_each(_compaction_state | std::views::values, [] (compaction_state& cs) -> future<> {
+    co_await coroutine::parallel_for_each(_compaction_state, [this] (auto& entry) -> future<> {
+        auto& [t, cs] = entry;
         if (!cs.gate.is_closed()) {
-            co_await cs.gate.close();
+            cmlog.debug("Closing compaction state gate of {}.{} compaction group {}", t->schema()->ks_name(), t->schema()->cf_name(), t->get_group_id());
+            co_await close_compaction_state_gate(cs);
         }
     });
     if (!_tasks.empty()) {
@@ -2155,12 +2296,34 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
     }
     std::vector<sstables::shared_sstable> ret;
 
+<<<<<<< HEAD
     auto gate = get_compaction_state(&t).gate.hold();
     sstables::compaction_progress_monitor monitor;
     sstables::compaction_data info = create_compaction_data();
     sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
     desc.creator = [&t] (shard_id _) {
         return t.make_sstable();
+||||||| parent of 623027b62b (compaction_manager: don't fail disabling compaction on a stopped manager)
+    auto gate = get_compaction_state(&t).gate.hold();
+    compaction_progress_monitor monitor;
+    compaction_data info = create_compaction_data();
+    compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
+    desc.creator = [&t, sst] (shard_id _) {
+        // NOTE: preserves the sstable state, since we want the output to be on the same state as the original.
+        // For example, if base table has views, it's important that sstable produced by repair will be
+        // in the staging state.
+        return t.make_sstable(sst->state());
+=======
+    auto gate = hold_compaction_state_gate(get_compaction_state(&t));
+    compaction_progress_monitor monitor;
+    compaction_data info = create_compaction_data();
+    compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
+    desc.creator = [&t, sst] (shard_id _) {
+        // NOTE: preserves the sstable state, since we want the output to be on the same state as the original.
+        // For example, if base table has views, it's important that sstable produced by repair will be
+        // in the staging state.
+        return t.make_sstable(sst->state());
+>>>>>>> 623027b62b (compaction_manager: don't fail disabling compaction on a stopped manager)
     };
     desc.replacer = [&] (sstables::compaction_completion_desc d) {
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
@@ -2233,11 +2396,32 @@ future<> compaction_manager::remove(table_state& t, sstring reason) noexcept {
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
+<<<<<<< HEAD
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
         co_await stop_ongoing_compactions(reason, &t);
         co_await std::move(close_gate);
     }
+||||||| parent of 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
+    if (!c_state.gate.is_closed()) {
+        auto close_gate = c_state.gate.close();
+        co_await stop_ongoing_compactions(reason, &t);
+        // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+        co_await c_state.incremental_repair_lock.write_lock();
+        co_await std::move(close_gate);
+    }
+=======
+    // really_do_stop() may have closed the gate already, possibly while it was still held: e.g. by
+    // a truncate, whose reenablers on other shards are destroyed asynchronously, through foreign_ptr,
+    // while the dropped table is already being stopped. Wait for the holders all the same, so the
+    // compaction state is not destroyed under them.
+    auto close_gate = close_compaction_state_gate(c_state);
+    co_await stop_ongoing_compactions(reason, &t);
+    // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+    // They hold the gate only while acquiring the lock, so closing the gate doesn't wait for them.
+    co_await c_state.incremental_repair_lock.write_lock();
+    co_await std::move(close_gate);
+>>>>>>> 235bfb885e (compaction_manager: remove: wait for a gate closed by stop)
 
 #ifdef DEBUG
     auto found = false;
@@ -2281,7 +2465,9 @@ bool compaction_manager::has_table_ongoing_compaction(const table_state& t) cons
 
 bool compaction_manager::compaction_disabled(table_state& t) const {
     if (auto it = _compaction_state.find(&t); it != _compaction_state.end()) {
-        return it->second.compaction_disabled();
+        // A stopped manager runs no compaction, so compaction_reenabler doesn't disable it
+        // there, and callers checking that it is disabled (e.g. truncate) must see it as such.
+        return _state == state::stopped || it->second.compaction_disabled();
     } else {
         cmlog.debug("compaction_disabled: {}:{} not in compaction_state", t.schema()->id(), t.get_group_id());
         // Compaction is not strictly disabled, but it is not enabled either.
