@@ -479,7 +479,9 @@ def table1(dynamodb):
 
 # An empty update_table() call, without any parameters changed, is not allowed.
 def test_updatetable_empty(dynamodb, table1):
-    with pytest.raises(ClientError, match='ValidationException.*UpdateTable'):
+    # The error lists the members which make a request non-empty, among them
+    # WarmThroughput.
+    with pytest.raises(ClientError, match='ValidationException.*WarmThroughput'):
         dynamodb.meta.client.update_table(TableName=table1.name)
     # An empty GlobalSecondaryIndexUpdates array is the same as no parameter
     # at all:
