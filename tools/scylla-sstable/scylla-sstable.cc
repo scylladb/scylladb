@@ -3469,6 +3469,12 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         // On the other hand, we gain access to the code hidden behind the option
         dbcfg.rf_rack_valid_keyspaces(true, ::utils::config_file::config_source::CommandLine);
 
+        // Override whatever value the option has. A schema file may re-add a dropped column
+        // with an incompatible type, which an older version allowed, and which is refused by
+        // default because a client may still use a statement prepared before the column was
+        // dropped. The schema loader serves no clients, so there is no reason to refuse it.
+        dbcfg.allow_readd_column_with_incompatible_type(true, ::utils::config_file::config_source::CommandLine);
+
         // Register schema initializer for default compression settings.
         //
         // Note that the initializer determines the default compression settings
