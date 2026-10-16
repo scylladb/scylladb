@@ -383,6 +383,10 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     rjson::value* gsis = rjson::find(descr, "GlobalSecondaryIndexes");
     if (gsis && gsis->IsArray()) {
         for (rjson::value& g : gsis->GetArray()) {
+            // UpdateTable has no such member, so it echoes a stray one unvalidated.
+            if (!g.IsObject()) {
+                continue;
+            }
             rjson::value* throughput = rjson::find(g, "ProvisionedThroughput");
             if (!throughput) {
                 rjson::value t = rjson::empty_object();
@@ -390,7 +394,7 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
                 rjson::add(t, "WriteCapacityUnits", 0);
                 rjson::add(t, "NumberOfDecreasesToday", 0);
                 rjson::add(g, "ProvisionedThroughput", std::move(t));
-            } else if (!rjson::find(*throughput, "NumberOfDecreasesToday")) {
+            } else if (throughput->IsObject() && !rjson::find(*throughput, "NumberOfDecreasesToday")) {
                 rjson::add(*throughput, "NumberOfDecreasesToday", 0);
             }
         }
