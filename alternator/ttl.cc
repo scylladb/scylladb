@@ -69,7 +69,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     schema_ptr schema = get_table(_proxy, request);
     get_stats_from_schema(_proxy, *schema)->api_operations.update_time_to_live++;
 
-    maybe_audit(audit_info, audit::statement_category::DDL,
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::DDL,
                 schema->ks_name(), schema->cf_name(), "UpdateTimeToLive", request);
 
     rjson::value* spec = rjson::find(request, "TimeToLiveSpecification");
@@ -125,7 +125,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
     _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
     
-    maybe_audit(audit_info, audit::statement_category::QUERY,
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY,
                 schema->ks_name(), schema->cf_name(), "DescribeTimeToLive", request);
 
     std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);

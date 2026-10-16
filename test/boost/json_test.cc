@@ -54,3 +54,44 @@ BOOST_AUTO_TEST_CASE(test_parsing_map_from_null) {
     BOOST_REQUIRE(map1 == map2);
     BOOST_REQUIRE(map1 == empty_map);
 }
+
+BOOST_AUTO_TEST_CASE(test_exact_print) {
+    const std::vector<std::string_view> input = {
+        R"({"plain":"abcdefghijklmnopqrstuvwxyz","number":123,"boolean":true})",
+        R"({"escaped":"\"\\\b\f\n\r\t\u0001"})",
+        R"({"unicode":"chào mọi người","array":[null,false,1.5]})",
+        R"({"expanded":1e20})",
+    };
+
+    for (const auto json : input) {
+        auto value = rjson::parse(json);
+        auto serialized_size = rjson::measure_serialized_size(value);
+        auto exact = rjson::print_exact(value, serialized_size);
+        BOOST_CHECK_EQUAL(exact, rjson::print(value));
+        BOOST_CHECK_EQUAL(exact, rjson::print_exact(value));
+        BOOST_CHECK_EQUAL(serialized_size.value, exact.size());
+        BOOST_CHECK_LE(serialized_size.value, json.size() * 8);
+    }
+
+    auto expanded = rjson::parse(R"({"expanded":1e20})");
+    BOOST_CHECK_EQUAL(rjson::print_exact(expanded), R"({"expanded":100000000000000000000.0})");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_with_memory_usage) {
+    std::string input = R"({"values":[)";
+    constexpr size_t value_count = 10000;
+    for (size_t i = 0; i < value_count; ++i) {
+        if (i) {
+            input += ',';
+        }
+        input += '0';
+    }
+    input += "]}";
+
+    rjson::chunked_content content;
+    content.emplace_back(temporary_buffer<char>::copy_of(input));
+    auto parsed = rjson::parse_with_memory_usage(std::move(content));
+
+    BOOST_CHECK_EQUAL(rjson::print_exact(parsed.value), input);
+    BOOST_CHECK_GT(parsed.memory_usage, input.size() * 2);
+}

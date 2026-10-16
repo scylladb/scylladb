@@ -24,11 +24,13 @@
 #include "seastarx.hh"
 #include "error.hh"
 #include "service/client_state.hh"
+#include "service/memory_limiter.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/assert.hh"
 #include "timeout_config.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
+#include <chrono>
 #include <cctype>
 #include <string_view>
 #include <algorithm>
@@ -41,6 +43,7 @@
 #include "client_data.hh"
 #include "utils/updateable_value.hh"
 #include "utils/exceptions.hh"
+#include "utils/error_injection.hh"
 #include <zlib.h>
 #include "alternator/http_compression.hh"
 
@@ -782,6 +785,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
     auto dot = target.find('.');
     std::string_view op = (dot == sstring::npos) ? std::string_view() : std::string_view(target).substr(dot+1);
+    auto callback_it = _callbacks.find(op);
     if (req->content_length > request_content_length_limit) {
         // If we have a Content-Length header and know the request will be too
         // long, we don't need to wait for read_entire_stream() below to
@@ -805,28 +809,85 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
-    // JSON parsing can allocate up to roughly 2x the size of the raw
-    // document, + a couple of bytes for maintenance.
-    // If the Content-Length of the request is not available, we assume
-    // the largest possible request (request_content_length_limit, i.e., 16 MB)
-    // and after reading the request we return_units() the excess.
-    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
-    auto units_fut = get_units(*_memory_limiter, mem_estimate);
-    if (_memory_limiter->waiters()) {
+    // Reserve for buffering/decompression, JSON parsing and, when applicable,
+    // for serializing, retaining, filtering, and formatting the audited request.
+    // If the uncompressed length is unknown, reserve for the largest possible
+    // request and return the excess after reading and decompressing its body.
+    const sstring content_encoding = req->get_header("Content-Encoding");
+    const bool compressed = content_encoding == "gzip" || content_encoding == "deflate";
+    const bool has_transfer_encoding = !req->get_header("Transfer-Encoding").empty();
+    const bool content_length_unknown = has_transfer_encoding;
+    const bool known_empty = !has_transfer_encoding && req->content_length == 0;
+    const bool request_will_be_parsed = !known_empty
+            && callback_it != _callbacks.end()
+            && (content_encoding.empty() || compressed);
+    const bool uncompressed_length_unknown = content_length_unknown || (compressed && !known_empty);
+    const bool audit_may_log = request_will_be_parsed
+            && audit::audit::audit_instance().local_is_initialized()
+            && audit::audit::local_audit_instance().will_log(callback_it->second.audit_category);
+    const auto memory_copy_counts = audit_may_log
+            ? audit::audit::local_audit_instance().alternator_request_memory_copy_counts_for(
+                    callback_it->second.audit_batch)
+            : audit::alternator_request_memory_copy_counts{};
+    // RapidJSON writes a double into at most 24 bytes, while a JSON token
+    // parsed as a double has at least 3 bytes. Strings and all other tokens do
+    // not expand when parsed and printed with the same UTF-8 encoding. Reserve
+    // this bound before parsing, then return the excess after measuring the
+    // actual canonical representation.
+    static constexpr size_t max_serialized_size_multiplier = 8;
+    // A dense scalar array can retain one rjson::value per two input bytes.
+    // While parsing, RapidJSON's 1.5x construction stack overlaps the final
+    // DOM and the unread input. These bounds include extra allocator slack and
+    // work for both 16-byte and 24-byte rjson::value layouts.
+    static constexpr size_t max_parsed_memory_multiplier = 2 + sizeof(rjson::value) / 2;
+    static constexpr size_t max_parsing_memory_multiplier = 4 + 5 * sizeof(rjson::value) / 4;
+    // Requests rejected before parsing only need to retain their raw body or,
+    // for a supported compression encoding, the input and decompressed body.
+    static constexpr size_t max_unparsed_memory_multiplier = 2;
+    // Batch audit filtering reparses the retained request while its canonical
+    // query string remains live. Keep that as a separate memory phase.
+    const size_t batch_reparse_memory_multiplier = audit_may_log && callback_it->second.audit_batch
+            ? max_parsing_memory_multiplier
+            : 0;
+    const size_t request_processing_multiplier = max_parsed_memory_multiplier
+            + memory_copy_counts.request_processing * max_serialized_size_multiplier;
+    const size_t batch_reparse_multiplier = batch_reparse_memory_multiplier
+            ? batch_reparse_memory_multiplier + max_serialized_size_multiplier
+            : 0;
+    const size_t audit_write_multiplier = memory_copy_counts.audit_write * max_serialized_size_multiplier;
+    const size_t memory_multiplier = request_will_be_parsed
+            ? std::max({max_parsing_memory_multiplier, request_processing_multiplier,
+                    batch_reparse_multiplier, audit_write_multiplier})
+            : max_unparsed_memory_multiplier;
+    const size_t estimated_content_length = uncompressed_length_unknown ? request_content_length_limit : req->content_length;
+    size_t content_length = estimated_content_length;
+    const size_t mem_estimate = estimated_content_length * memory_multiplier + 8000;
+    auto& memory_semaphore = _memory_limiter->get_semaphore();
+    // Waiting for more than the semaphore's capacity can never finish and
+    // permanently blocks its FIFO. Wait for the capacity, then record the
+    // excess as non-blocking debt so no other request is admitted meanwhile.
+    const size_t units_to_wait_for = std::min(mem_estimate, _memory_limiter->total_memory());
+    auto units_fut = get_units(memory_semaphore, units_to_wait_for);
+    if (memory_semaphore.waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
+    units.adopt(consume_units(memory_semaphore, mem_estimate - units_to_wait_for));
+    constexpr std::string_view admission_injection_name = "alternator_request_memory_admission";
+    auto& injector = utils::get_local_injector();
+    if (injector.is_enabled(admission_injection_name)) {
+        injector.set_parameter(admission_injection_name, "request_permit_units", format("{}", units.count()));
+        co_await injector.inject(admission_injection_name, utils::wait_for_message(std::chrono::seconds(60)));
+    }
     throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
-    // If the request had no Content-Length, we reserved too many units
-    // so need to return some
-    if (req->content_length == 0) {
-        size_t content_length = 0;
+    if (content_length_unknown && !compressed) {
+        content_length = 0;
         for (const auto& chunk : content) {
             content_length += chunk.size();
         }
-        size_t new_mem_estimate = content_length * 2 + 8000;
-        units.return_units(mem_estimate - new_mem_estimate);
+        const size_t new_mem_estimate = content_length * memory_multiplier + 8000;
+        units.return_units(units.count() - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
     // If the request is compressed, uncompress it now, after we checked
@@ -834,7 +895,6 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // We apply the request_content_length_limit again to the uncompressed
     // content - we don't want to allow a tiny compressed request to
     // expand to a huge uncompressed request.
-    sstring content_encoding = req->get_header("Content-Encoding");
     if (content_encoding == "gzip") {
         content = co_await ungzip(std::move(content), request_content_length_limit);
     } else if (content_encoding == "deflate") {
@@ -844,6 +904,14 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         // I'm not sure if this is the best error code, but let's do it too.
         // See the test test_garbage_content_encoding confirming this case.
         co_return api_error::internal("Unsupported Content-Encoding");
+    }
+    if (compressed) {
+        content_length = 0;
+        for (const auto& chunk : content) {
+            content_length += chunk.size();
+        }
+        const size_t new_mem_estimate = content_length * memory_multiplier + 8000;
+        units.return_units(units.count() - new_mem_estimate);
     }
 
     // As long as the system_clients_entry object is alive, this request will
@@ -861,7 +929,6 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     if (slogger.is_enabled(log_level::trace)) {
         slogger.trace("Request: {} {} {}", op, truncated_content_view(content, _max_users_query_size_in_trace_output).as_view(), req->_headers);
     }
-    auto callback_it = _callbacks.find(op);
     if (callback_it == _callbacks.end()) {
         _executor._stats.unsupported_operations++;
         co_return api_error::unknown_operation(fmt::format("Unsupported operation {}", op));
@@ -877,14 +944,70 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     tracing::trace(trace_state, "{}", op);
 
     auto user = client_state.user();
-    auto f = [this, content = std::move(content), &callback = callback_it->second,
+    auto f = [this, content = std::move(content), &callback = callback_it->second.callback,
+            audit_category = callback_it->second.audit_category, audit_batch = callback_it->second.audit_batch,
+            audit_may_log, memory_copy_counts, content_length, batch_reparse_memory_multiplier,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
-        rjson::value json_request = co_await _json_parser.parse(std::move(content));
+        constexpr std::string_view injection_name = "alternator_request_before_audit";
+        auto& injector = utils::get_local_injector();
+        if (injector.is_enabled(injection_name)) {
+            injector.set_parameter(injection_name, "request_permit_units_before_parse", format("{}", units.count()));
+            injector.set_parameter(injection_name, "batch_reparse_memory_bytes",
+                    format("{}", content_length * batch_reparse_memory_multiplier));
+        }
+        auto parsed_request = co_await _json_parser.parse(std::move(content));
+        rjson::value json_request = std::move(parsed_request.value);
         if (!json_request.IsObject()) {
             co_return api_error::validation("Request content must be an object");
         }
+        const size_t request_memory = std::max(content_length * 2, parsed_request.memory_usage);
+        struct batch_audit_metadata_memory {
+            size_t request_processing = 0;
+            size_t audit_write = 0;
+        } batch_metadata_memory;
+        if (audit_may_log && audit_batch) {
+            if (const auto* request_items = rjson::find(json_request, "RequestItems"); request_items && request_items->IsObject()) {
+                const size_t table_count = request_items->MemberCount();
+                size_t table_name_bytes = 0;
+                for (const auto& item : request_items->GetObject()) {
+                    table_name_bytes += item.name.GetStringLength();
+                }
+                const size_t joined_table_names = table_name_bytes + (table_count ? table_count - 1 : 0);
+                // Each entry in the retained set owns the table and derived
+                // keyspace strings. This bound also covers the tree node and
+                // allocator bookkeeping on supported platforms.
+                static constexpr size_t table_set_entry_overhead = 128;
+                static_assert(sizeof(audit::audit_table_set::value_type) + 4 * sizeof(void*) <= table_set_entry_overhead);
+                const size_t retained_table_set = 2 * table_name_bytes
+                        + table_count * (std::string_view(executor::KEYSPACE_NAME_PREFIX).size() + 2 + table_set_entry_overhead);
+                // Batch logging keeps one reference vector per possible sink.
+                const size_t sink_table_refs = 2 * table_count * sizeof(std::reference_wrapper<const audit::audit_table_set::value_type>);
+                batch_metadata_memory.request_processing = retained_table_set;
+                batch_metadata_memory.audit_write = retained_table_set + sink_table_refs + 6 * joined_table_names;
+            }
+        }
+        const size_t unaudited_mem_estimate = request_memory + 8000;
+        throwing_assert(unaudited_mem_estimate <= units.count());
+        size_t audit_only_units = 0;
+        if (audit_may_log) {
+            audit_only_units = units.count() - unaudited_mem_estimate;
+        } else {
+            units.return_units(units.count() - unaudited_mem_estimate);
+        }
+        auto request_permit = make_service_permit(std::move(units));
         std::unique_ptr<audit::audit_info_alternator> audit_info;
+        if (audit_may_log) {
+            audit_info = std::make_unique<audit::audit_info_alternator>(
+                    audit::audit_info_alternator::pending_tag{}, audit_category, this_shard_id(), audit_only_units,
+                    request_memory, memory_copy_counts, batch_metadata_memory.request_processing,
+                    content_length * batch_reparse_memory_multiplier, batch_metadata_memory.audit_write);
+        } else {
+            // Audit configuration is live-updatable. Keep the admission-time
+            // decision for this request so auditing cannot be enabled later
+            // without the matching memory reservation.
+            audit_info = std::make_unique<audit::audit_info_alternator>(audit::audit_info_alternator::disabled_tag{});
+        }
 
         // We need to futurize here as `callback` might be a normal function returning a future and
         // if that function throws `as_future` won't catch it - the exception will be propagated to the caller and
@@ -892,11 +1015,25 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         auto ret_fut = co_await seastar::coroutine::as_future(
             seastar::futurize_invoke(
                 callback,
-                _executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info
+                _executor, client_state, trace_state, request_permit, std::move(json_request), std::move(req), audit_info
             )
         );
         auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();
-        if (audit_info) {
+        if (injector.is_enabled(injection_name)) {
+            injector.set_parameter(injection_name, "request_dom_memory_bytes", format("{}", parsed_request.memory_usage));
+        }
+        if (audit_info && audit_info->is_pending()) {
+            throwing_assert(audit_info->request_shard() == this_shard_id());
+            request_permit.return_units(audit_info->mark_skipped());
+            if (injector.is_enabled(injection_name)) {
+                injector.set_parameter(injection_name, "request_permit_units_after_callback_fallback", format("{}", request_permit.count()));
+            }
+        }
+        if (injector.is_enabled(injection_name)) {
+            injector.set_parameter(injection_name, "request_permit_units", format("{}", request_permit.count()));
+            co_await injector.inject(injection_name, utils::wait_for_message(std::chrono::seconds(60)));
+        }
+        if (audit_info && audit_info->is_active()) {
             bool has_error = std::holds_alternative<api_error>(ret);
             co_await audit::inspect(*audit_info, client_state, has_error);
         }
@@ -985,89 +1122,89 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _pending_requests("alternator::server::pending_requests")
         , _timeout_config(timeout_config)
       , _callbacks{
-        {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        {"CreateTable", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DescribeTable", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DeleteTable", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"UpdateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"UpdateTable", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"PutItem", {audit::statement_category::DML, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"UpdateItem", {audit::statement_category::DML, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"GetItem", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DeleteItem", {audit::statement_category::DML, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"ListTables", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.list_tables(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"Scan", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"Scan", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.scan(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DescribeEndpoints", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_endpoints(client_state, std::move(permit), std::move(json_request), req->get_header("Host"), audit_info);
-        }},
-        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"BatchWriteItem", {audit::statement_category::DML, true, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.batch_write_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"BatchGetItem", {audit::statement_category::QUERY, true, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.batch_get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"Query", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"SearchVectors", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"SearchVectors", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.search_vectors(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"TagResource", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.tag_resource(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"UntagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"UntagResource", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.untag_resource(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"ListTagsOfResource", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"UpdateTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"UpdateTimeToLive", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.update_time_to_live(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DescribeTimeToLive", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DescribeTimeToLive", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_time_to_live(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"ListStreams", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.list_streams(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DescribeStream", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DescribeStream", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_stream(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"GetShardIterator", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"GetShardIterator", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.get_shard_iterator(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"GetRecords", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"DescribeContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"DescribeContinuousBackups", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_continuous_backups(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"ExportTableToPointInTime", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+        }}},
+        {"ExportTableToPointInTime", {audit::statement_category::QUERY, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.export_table_to_point_in_time(client_state, std::move(permit), std::move(json_request), audit_info);
-        }},
-        {"UpdateContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) -> future<executor::request_return_type> {
+        }}},
+        {"UpdateContinuousBackups", {audit::statement_category::DDL, false, [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) -> future<executor::request_return_type> {
             ++e._stats.unsupported_operations;
             ++e._stats.api_operations.update_continuous_backups;
             return make_ready_future<executor::request_return_type>(api_error::unknown_operation("Unsupported operation UpdateContinuousBackups - scylla doesn't support continuous backups and the call is not required for ExportTableToPointInTime to work."));
-        }},
+        }}},
     } {
 }
 
@@ -1090,7 +1227,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
         std::optional<tls::credentials_builder> creds,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        service::memory_limiter* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _warn_authorization = std::move(warn_authorization);
@@ -1199,7 +1336,7 @@ server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
                 return;
             }
             try {
-                _parsed_document = rjson::parse_yieldable(std::move(_raw_document));
+                _parsed_document = rjson::parse_yieldable_with_memory_usage(std::move(_raw_document));
                 _current_exception = nullptr;
             } catch (...) {
                 _current_exception = std::current_exception();
@@ -1209,18 +1346,18 @@ server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
     })) {
 }
 
-future<rjson::value> server::json_parser::parse(chunked_content&& content) {
+future<rjson::parsed_value> server::json_parser::parse(chunked_content&& content) {
     if (content.size() < yieldable_parsing_threshold) {
-        return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
+        return make_ready_future<rjson::parsed_value>(rjson::parse_with_memory_usage(std::move(content)));
     }
     return with_semaphore(_parsing_sem, 1, [this, content = std::move(content)] () mutable {
         _raw_document = std::move(content);
         _document_waiting.signal();
         return _document_parsed.wait().then([this] {
             if (_current_exception) {
-                return make_exception_future<rjson::value>(_current_exception);
+                return make_exception_future<rjson::parsed_value>(_current_exception);
             }
-            return make_ready_future<rjson::value>(std::move(_parsed_document));
+            return make_ready_future<rjson::parsed_value>(std::move(_parsed_document));
         });
     });
 }
