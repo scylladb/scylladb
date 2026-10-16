@@ -750,6 +750,10 @@ public:
         return segments_in_use() * _cfg.segment_size;
     }
 
+    uint64_t get_space_on_disk() const noexcept {
+        return _cfg.sparse_files ? get_segment_bytes_in_use() : get_disk_usage();
+    }
+
     segment_stats& shard_segment_stats() noexcept {
         return _segment_stats;
     }
@@ -2539,6 +2543,7 @@ segment_manager_usage segment_manager::get_usage() const noexcept {
     return segment_manager_usage{
         .disk_usage = _impl->get_disk_usage(),
         .segment_bytes_in_use = _impl->get_segment_bytes_in_use(),
+        .space_on_disk = _impl->get_space_on_disk(),
         .memory_usage = _impl->get_memory_usage(),
     };
 }
