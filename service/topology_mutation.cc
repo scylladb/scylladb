@@ -313,10 +313,32 @@ topology_mutation_builder& topology_mutation_builder::start_restore_request(cons
     return apply_set("ongoing_restore_requests", collection_apply_mode::update, std::vector<data_value>{req_id});
 }
 
-topology_mutation_builder& topology_mutation_builder::finish_restore_request(const std::unordered_set<utils::UUID>& current, const utils::UUID& req_id) {
+topology_mutation_builder& topology_mutation_builder::finish_restore_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids) {
+    if (req_ids.empty()) {
+        return *this;
+    }
     auto new_values = current;
-    new_values.erase(req_id);
+    for (const auto& id : req_ids) {
+        if (!new_values.erase(id)) {
+            on_internal_error(rtlogger, fmt::format("ongoing restore requests [{}] do not contain the completed request {}",
+                    fmt::join(current, ", "), id));
+        }
+    }
     return apply_set("ongoing_restore_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
+}
+
+topology_mutation_builder& topology_mutation_builder::resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids) {
+    if (ids.empty()) {
+        return *this;
+    }
+    auto new_values = current;
+    for (const auto& id : ids) {
+        if (!new_values.erase(id)) {
+            on_internal_error(rtlogger, fmt::format("paused rf change requests [{}] do not contain the request {} being resumed",
+                    fmt::join(current, ", "), id));
+        }
+    }
+    return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
 }
 
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
@@ -348,6 +370,15 @@ topology_mutation_builder& topology_mutation_builder::del_global_topology_reques
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request_id() {
     return del("global_topology_request_id");
+}
+
+topology_mutation_builder& topology_mutation_builder::set_needs_auto_rf_change(bool value) {
+    _m.set_static_cell("needs_auto_rf_change", value, _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::del_needs_auto_rf_change() {
+    return del("needs_auto_rf_change");
 }
 
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {

@@ -12,7 +12,8 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version, get_topology_coordinator
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version, get_topology_coordinator, \
+    quiesce_and_disable_tablet_balancing
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -689,7 +690,7 @@ async def test_tablet_split(manager: ScyllaClusterManager, injection_error: str)
         await check()
         time.sleep(5) # Give load balancer some time to do work
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await check()
 
@@ -814,6 +815,8 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: S
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
+        table_id = await manager.get_table_id(ks, "test")
+
         async def check():
             logger.info("Checking table")
             cql = manager.get_cql()
@@ -838,7 +841,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: S
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for('Finalizing resize decision for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Finalizing resize decision for table {table_id}', from_mark=s1_mark)
 
         # Delays refresh of tablet stats, so balancer works with whichever it got last.
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing")
@@ -854,7 +857,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: S
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count > 2
@@ -1077,11 +1080,13 @@ def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
             return shard_id
     return -1
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_count_metric_per_shard(manager: ScyllaClusterManager):
     # Given two running servers
     shards_count = 4
     cmdline = ['--smp=4']
-    servers = await manager.servers_add(2, cmdline=cmdline)
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    servers = await manager.servers_add(2, cmdline=cmdline, config=config)
 
     # And given disabled load balancing
     await manager.disable_tablet_balancing()
@@ -1460,7 +1465,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ScyllaClust
         await compaction_task
 
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count > 1
@@ -1535,6 +1540,7 @@ def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[Ser
     assert total == initial_tablets * rf
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_basic(manager: ScyllaClusterManager):
     """
     Test decommissioning of all nodes in a rack
@@ -1549,7 +1555,7 @@ async def test_decommission_rack_basic(manager: ScyllaClusterManager):
     # We need to disable this option to be able to create a keyspace. This can be ditched
     # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
     # Then we can create `rf` nodes, create the keyspace, and add another node.
-    config = {"rf_rack_valid_keyspaces": False}
+    config = {"rf_rack_valid_keyspaces": False, 'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
 
     all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
@@ -1576,6 +1582,7 @@ async def test_decommission_rack_basic(manager: ScyllaClusterManager):
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, live_servers.values(), tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterManager):
     """
     Test decommissioning a rack, after a rack with new nodes is added
@@ -1588,7 +1595,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterMan
 
     # We can't add a new rack if we create a keyspace.
     # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
-    config = {"rf_rack_valid_keyspaces": False}
+    config = {"rf_rack_valid_keyspaces": False, 'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
 
     initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
@@ -2047,7 +2054,10 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
         assert len(rows) == 0
 
-        await manager.disable_tablet_balancing()
+        # The one-shot injection below is not scoped to the test table. Let a pending
+        # resize of the system keyspaces' tablets finish first, so that it is not the one
+        # which takes it.
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
 
@@ -2066,7 +2076,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         await s1_log.wait_for(f"Loading new SSTables for keyspace", from_mark=s1_mark)
 
         await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await manager.api.wait_for_injection_enter(servers[0].ip_addr, "stream_mutation_fragments")
         await manager.api.message_injection(server.ip_addr, "stream_mutation_fragments")
@@ -2206,7 +2216,10 @@ async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: Sc
 
     cql = manager.get_cql()
 
-    await manager.disable_tablet_balancing()
+    # The one-shot resize injections below are not scoped to the test table. Let the
+    # initial split of the system keyspaces' tablets finish first, so that only the test
+    # table's split is left to take them.
+    await quiesce_and_disable_tablet_balancing(manager, server.ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
@@ -2278,6 +2291,10 @@ async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterMana
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
     ])
+    # The coordinator balances the system keyspaces' tablets onto the second node, and its
+    # commits can make every retry of the DDL below fail with a group0 concurrent
+    # modification when the driver sends it to that node, a follower.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     cql = manager.get_cql()
 
@@ -2397,7 +2414,9 @@ async def test_split_and_incremental_repair_synchronization(manager: ScyllaClust
 
     cql = manager.get_cql()
 
-    await manager.disable_tablet_balancing()
+    # The resize injection and the log wait below are not scoped to the test table. Let
+    # the initial split of the system keyspaces' tablets finish first.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     initial_tablets = 2
 

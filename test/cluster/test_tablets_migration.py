@@ -15,6 +15,7 @@ from test.pylib.util import start_writes, scale_timeout_by_mode
 from test.cluster.util import (
     wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for,
     wait_for_no_pending_topology_transition, get_topology_coordinator,
+    quiesce_and_disable_tablet_balancing,
     FeatureConfig,
     feature_configs,
     FeatureConfigurations
@@ -754,7 +755,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterMana
 
     servers = await manager.servers_add(2, config=cfg)
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_opts) as ks:

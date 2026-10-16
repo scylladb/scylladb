@@ -8,10 +8,12 @@
  */
 
 #include "cql3/statements/property_definitions.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <ranges>
 #include "table_helper.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -19,6 +21,10 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
+#include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 
 static logging::logger tlogger("table_helper");
 
@@ -188,7 +194,8 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
-                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> initial_tablets,
+                                      std::optional<db::tablet_options> per_table_tablet_options) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -215,14 +222,41 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
         if (!db.has_keyspace(keyspace_name)) {
             locator::replication_strategy_config_options opts;
-            if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
-                for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
-                    opts[dc] = replication_factor;
+            bool uses_tablets = initial_tablets.has_value();
+            const auto& feat = qp.proxy().features();
+            const auto& cfg = db.get_config();
+            auto tmptr = qp.proxy().get_token_metadata_ptr();
+            bool is_nts = locator::abstract_replication_strategy::to_qualified_class_name(replication_strategy_name)
+                    == "org.apache.cassandra.locator.NetworkTopologyStrategy";
+            if (uses_tablets && is_nts) {
+                // A tablets keyspace needs a replica in every DC it names, so name only
+                // the DCs which can host one: those with a normal token-owning node.
+                // Expanding 'replication_factor' in prepare_options() would name every
+                // DC of the topology, including one made of zero-token nodes only (an
+                // arbiter DC), and creating the keyspace would then fail -- in the
+                // rack-list expansion with rf_rack_valid_keyspaces, in the tablet
+                // allocation without it. The audit keyspace is created while the node
+                // starts, so that failure would stop the node.
+                for (const auto& dc : tmptr->get_datacenter_racks_token_owners() | std::views::keys) {
+                    if (!locator::get_allowed_racks(*tmptr, dc).empty()) {
+                        opts[dc] = replication_factor;
+                    }
+                }
             }
-            else {
-                opts["replication_factor"] = replication_factor;
+            if (opts.empty()) {
+                opts[cql3::statements::ks_prop_defs::REPLICATION_FACTOR_KEY] = replication_factor;
             }
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, std::nullopt, true);
+            opts = cql3::statements::prepare_options(
+                    replication_strategy_name,
+                    *tmptr,
+                    cfg.rf_rack_valid_keyspaces(),
+                    cfg.enforce_rack_list(),
+                    std::move(opts),
+                    /*old_options=*/{},
+                    feat.rack_list_rf,
+                    uses_tablets);
+
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), initial_tablets, std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));
@@ -241,6 +275,11 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
         co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
             auto schema = parse_new_cf_statement(qp, table->_create_cql);
+            if (per_table_tablet_options) {
+                schema_builder builder{schema};
+                builder.set_tablet_options(per_table_tablet_options->to_map());
+                schema = builder.build();
+            }
             if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
             }
@@ -257,4 +296,18 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             tlogger.info("Concurrent operation is detected while creating tables for {} keyspace, retrying.", keyspace_name);
         }
     }
+}
+
+future<> table_helper::setup_auto_rf_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name,
+                                              sstring vnode_strategy, size_t rf_goal, service::query_state& qs, std::vector<table_helper*> tables) {
+    // Follow the cluster's default for new keyspaces: with tablets_mode_for_new_keyspaces
+    // disabled (or enable_tablets=false) the operator asked for vnodes.
+    const bool use_tablets = qp.db().features().auto_replication_factor && qp.db().get_config().enable_tablets_by_default()
+            && !utils::get_local_injector().enter("auto_rf_keyspaces_use_vnodes");
+    if (!use_tablets) {
+        return setup_keyspace(qp, mm, keyspace_name, std::move(vnode_strategy), std::to_string(rf_goal), qs, std::move(tables));
+    }
+    db::tablet_options options;
+    options.min_per_shard_tablet_count = 1;
+    return setup_keyspace(qp, mm, keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", "1", qs, std::move(tables), 0, std::move(options));
 }

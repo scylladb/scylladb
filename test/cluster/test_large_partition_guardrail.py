@@ -56,6 +56,11 @@ async def test_large_data_guardrails_rolling_upgrade(manager: ScyllaClusterManag
     servers = []
     servers.append(await manager.server_add(config=cfg_old))   # "old" node
     servers.append(await manager.server_add(config=cfg_base))  # "new" node
+    # The second node makes the coordinator split and balance the tablets of
+    # audit and system_traces. Its commits can make every retry of the DDL below
+    # fail with a group0 concurrent modification when it is issued on a
+    # follower, so let them finish.
+    await manager.api.quiesce_topology(servers[0].ip_addr)
 
     # Connect to the "new" node — it supports the feature but the cluster
     # as a whole does not (because the old node doesn't advertise it).

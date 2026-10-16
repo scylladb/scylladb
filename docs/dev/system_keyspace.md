@@ -1702,6 +1702,7 @@ CREATE TABLE system.topology (
     unpublished_cdc_generations frozen<set<tuple<bigint, timeuuid>>> STATIC,
     upgrade_state text STATIC,
     version bigint STATIC,
+    needs_auto_rf_change boolean STATIC,
     PRIMARY KEY (key, host_id)
 ) WITH CLUSTERING ORDER BY (host_id ASC);
 ```
@@ -1749,6 +1750,7 @@ CREATE TABLE system.topology (
 - `upgrade_state`: State of cluster upgrade process
 - `global_requests`: Set of global request IDs
 - `paused_rf_change_requests`: Set of paused replication factor change requests
+- `needs_auto_rf_change`: Set when the automatic replication of `audit` and `system_traces` has a change to schedule; tablet load balancing yields to it until the change is scheduled
 
 **Related tables:** [topology_requests](#systemtopology_requests), [tablets](#systemtablets), [discovery](#systemdiscovery)
 

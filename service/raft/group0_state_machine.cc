@@ -206,6 +206,17 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
     return modules;
 }
 
+// Creating or altering a keyspace is what makes racks eligible for auto-RF, but a pure
+// schema change carries no topology state change hint, so applying one does not wake the
+// topology coordinator. Detect it here so the coordinator can re-evaluate immediately
+// instead of waiting for its next periodic tick.
+static bool touches_keyspaces(const utils::chunked_vector<canonical_mutation>& mutations) {
+    const auto keyspaces_id = db::schema_tables::v3::keyspaces()->id();
+    return std::ranges::any_of(mutations, [keyspaces_id] (const canonical_mutation& m) {
+        return m.column_family_id() == keyspaces_id;
+    });
+}
+
 // Defines set of table_ids, which should reload view building state if any of the table is changed.
 static const std::unordered_set<table_id>& get_view_building_state_tables() {
     static const std::unordered_set<table_id> ids {
@@ -309,10 +320,12 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     std::optional<storage_service::state_change_hint> topology_state_change_hint;
     modules_to_reload modules_to_reload;
+    bool keyspaces_changed = false;
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
+        keyspaces_changed = touches_keyspaces(chng.mutations);
         if (_in_memory_state_machine_enabled) {
             co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         } else {
@@ -355,6 +368,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     if (_in_memory_state_machine_enabled) {
         if (topology_state_change_hint) {
             co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+        } else if (keyspaces_changed) {
+            // See touches_keyspaces().
+            _ss._topology_state_machine.event.broadcast();
         }
         co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
         co_await reload_modules(std::move(modules_to_reload));

@@ -222,6 +222,12 @@ rack list. To ensure that, follow a procedure of :ref:`conversion to rack list r
 After that restart all nodes in the cluster, with ``enforce_rack_list`` enabled and ``rf_rack_valid_keyspaces`` disabled. Make
 sure to avoid setting or updating replication factor (with CREATE KEYSPACE or ALTER KEYSPACE) while nodes are being restarted.
 
+The tablet keyspaces include ``audit`` and ``system_traces`` where they use tablets (see
+:ref:`Replication of the Audit Table <audit-table-replication>`). They need no manual conversion: they keep numeric replication
+factors only while neither ``rf_rack_valid_keyspaces`` nor ``enforce_rack_list`` is set, nodes started with either option let
+them through the startup checks with a warning, and once the option is set on the node that coordinates topology changes, they
+are converted to rack lists of the same size automatically. Set the option on every node.
+
 .. _tablets-limitations:
 
 Limitations and Unsupported Features
