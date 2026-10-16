@@ -66,7 +66,7 @@ async def wait_for_schema_agreement(manager: ScyllaClusterManager, servers, dead
     """Wait until every given server reports the same schema version and return it.
 
     Used as an end-to-end liveness check for a mixed-version cluster (a cluster-config-aware
-    node joined to cluster-config-unaware nodes before the CLUSTER_CONFIG_REGISTRY_V0
+    node joined to cluster-config-unaware nodes before the CLUSTER_CONFIG
     feature is enabled): the cluster must converge on a single schema version. Note that
     with GROUP0_SCHEMA_VERSIONING the reported version is a persisted group0 state-id rather
     than a locally computed digest, so this guards overall schema-propagation liveness, not
@@ -218,7 +218,7 @@ async def test_mixed_version_upgrade_with_old_binary(
     cql = await reconnect_driver(manager)
     cql, ready_hosts = await manager.get_ready_cql(servers)
 
-    await wait_for_feature("CLUSTER_CONFIG_REGISTRY_V0", cql, ready_hosts[0], time.time() + 60)
+    await wait_for_feature("CLUSTER_CONFIG", cql, ready_hosts[0], time.time() + 60)
     await cql.run_async("ALTER CLUSTER WITH auto_repair_enabled = true", host=ready_hosts[0])
     await wait_for_config_map_value_on_hosts(cql, ready_hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", "true")
 
@@ -249,7 +249,7 @@ async def test_mixed_version_downgrade_with_old_binary_is_rejected_after_feature
     await cql.run_async("ALTER CLUSTER WITH auto_repair_enabled = true", host=hosts[0])
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", "true")
 
-    await asyncio.gather(*(wait_for_feature("CLUSTER_CONFIG_REGISTRY_V0", cql, host, time.time() + 60) for host in hosts))
+    await asyncio.gather(*(wait_for_feature("CLUSTER_CONFIG", cql, host, time.time() + 60) for host in hosts))
 
     await manager.server_stop_gracefully(servers[0].server_id)
     await manager.server_switch_executable(servers[0].server_id, str(old_scylla_binary), old_scylla_version)
@@ -257,9 +257,9 @@ async def test_mixed_version_downgrade_with_old_binary_is_rejected_after_feature
     # iterating the cluster's persisted (sorted) feature set, which -- when falling back to the
     # real 2026.1 release rather than a purpose-built "no cluster config" binary -- may well be
     # some other feature enabled since 2026.1 (e.g. ALTERNATOR_STREAMS) rather than
-    # CLUSTER_CONFIG_REGISTRY_V0 itself. Match the shared "was previously enabled in the cluster"
+    # CLUSTER_CONFIG itself. Match the shared "was previously enabled in the cluster"
     # wording used for both the "unknown feature" and "known but disabled feature" cases instead of
-    # pinning to CLUSTER_CONFIG_REGISTRY_V0 specifically.
+    # pinning to CLUSTER_CONFIG specifically.
     await manager.server_start(
         servers[0].server_id,
         expected_error="was previously enabled in the cluster|Feature check failed|received notification of being banned from the cluster from",
@@ -279,12 +279,12 @@ async def test_old_binary_cannot_join_after_cluster_config_feature_enablement(
     await cql.run_async("ALTER CLUSTER WITH auto_repair_enabled = true", host=hosts[0])
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", "true")
 
-    await asyncio.gather(*(wait_for_feature("CLUSTER_CONFIG_REGISTRY_V0", cql, host, time.time() + 60) for host in hosts))
+    await asyncio.gather(*(wait_for_feature("CLUSTER_CONFIG", cql, host, time.time() + 60) for host in hosts))
 
     new_server = await manager.server_add(version=old_scylla_version, start=False)
     await manager.server_start(
         new_server.server_id,
-        expected_error="Feature check failed|received notification of being banned from the cluster from|Unknown feature 'CLUSTER_CONFIG_REGISTRY_V0' was previously enabled in the cluster",
+        expected_error="Feature check failed|received notification of being banned from the cluster from|Unknown feature 'CLUSTER_CONFIG' was previously enabled in the cluster",
     )
 
 
@@ -321,7 +321,7 @@ async def test_mixed_version_schema_agreement_before_feature_enablement(
     manager: ScyllaClusterManager, scylla_binary: Path, scylla_2026_1: ScyllaVersionDescription,
 ) -> None:
     """Integration regression: a cluster-config-aware node joins a cluster of
-    cluster-config-unaware ("old") binaries before the CLUSTER_CONFIG_REGISTRY_V0
+    cluster-config-unaware ("old") binaries before the CLUSTER_CONFIG
     cluster feature is enabled, and the cluster keeps working — nodes reach schema
     agreement and schema changes flow from both old and new nodes.
 

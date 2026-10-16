@@ -173,16 +173,15 @@ namespace {
 // No shipped option is node-oriented yet, so the node-oriented tests inject a test-only
 // one (mirroring the ALTER DATACENTER/RACK/NODE tests in cql_query_test). Returns the
 // deferred cleanup that removes the injected option from every shard.
-auto inject_node_oriented_test_option() {
+auto inject_node_oriented_test_option(cql_test_env& e) {
     static constexpr auto node_oriented_scopes = db::cluster_config_registry::scope_set::of<
             db::cluster_config_registry::scope::cluster,
             db::cluster_config_registry::scope::datacenter,
             db::cluster_config_registry::scope::rack,
             db::cluster_config_registry::scope::node>();
-    db::cluster_config_registry::add_test_only_option_on_all_shards(db::cluster_config_registry::option{
+    db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
         .name = "test_node_only_option",
         .scopes = node_oriented_scopes,
-        .min_version = db::cluster_config_registry::version::v0,
         .default_value = int64_t(0),
     }).get();
     return seastar::defer([] noexcept {
@@ -191,11 +190,10 @@ auto inject_node_oriented_test_option() {
 }
 
 // No shipped option is text-typed yet either, so the text-value tests inject one.
-auto inject_text_test_option() {
-    db::cluster_config_registry::add_test_only_option_on_all_shards(db::cluster_config_registry::option{
+auto inject_text_test_option(cql_test_env& e) {
+    db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
         .name = "test_text_option",
         .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
-        .min_version = db::cluster_config_registry::version::v0,
         .default_value = std::string_view(""),
     }).get();
     return seastar::defer([] noexcept {
@@ -214,7 +212,7 @@ auto inject_text_test_option() {
 // contract in describe_statement.cc true.
 SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_text_value_that_would_break_a_comment) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto clear_test_options = inject_text_test_option();
+        auto clear_test_options = inject_text_test_option(e);
 
         const auto* opt = db::cluster_config_registry::find("test_text_option");
         BOOST_REQUIRE(opt != nullptr);
@@ -241,7 +239,7 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_text_value_that_would_bre
 // by stacking overrides on every scope and peeling them off one at a time.
 SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_node_oriented_waterfall) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto clear_test_options = inject_node_oriented_test_option();
+        auto clear_test_options = inject_node_oriented_test_option(e);
 
         const auto& topo = e.shared_token_metadata().local().get()->get_topology();
         const sstring dc = topo.get_datacenter();
@@ -293,7 +291,7 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_node_oriented_waterfall) 
 // effective value, and an unchanged refresh does not re-invoke it.
 SEASTAR_TEST_CASE(test_callback_node_oriented_option_fires_for_local_node) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto clear_test_options = inject_node_oriented_test_option();
+        auto clear_test_options = inject_node_oriented_test_option(e);
 
         const auto& topo = e.shared_token_metadata().local().get()->get_topology();
         const sstring dc = topo.get_datacenter();

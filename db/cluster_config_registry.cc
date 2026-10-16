@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -18,7 +19,9 @@
 
 #include <fmt/format.h>
 
+#include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/core/thread.hh>
 
 #include "gms/feature_service.hh"
 #include "types/types.hh"
@@ -60,7 +63,6 @@ constexpr std::array registry_options = {
         .name = "auto_repair_enabled",
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
-        .min_version = version::v0,
         .default_value = false,
     },
 };
@@ -77,6 +79,9 @@ constexpr bool all_registry_options_are_single_domain() {
 static_assert(all_registry_options_are_single_domain(),
         "A cluster config option must not mix table-oriented (KEYSPACE/TABLE) and "
         "node-oriented (DATACENTER/RACK/NODE) scopes");
+
+// The feature names of options removed from the registry; see retired_feature_names().
+constexpr std::array<std::string_view, 0> retired_option_features = {};
 
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
@@ -209,10 +214,10 @@ std::span<const option> options() {
     return registry_options;
 }
 
-const option* find(std::string_view name, std::optional<version> max_version) {
+const option* find(std::string_view name) {
     for (const auto& opt : options()) {
         if (opt.name == name) {
-            return (max_version && *max_version < opt.min_version) ? nullptr : &opt;
+            return &opt;
         }
     }
     return nullptr;
@@ -226,11 +231,28 @@ bool is_table_oriented(const option& opt) {
     return opt.scopes.intersects(table_only_scopes);
 }
 
-std::optional<version> current_version(const gms::feature_service& features) {
-    if (features.cluster_config_registry_v0) {
-        return version::v0;
+seastar::sstring feature_name(std::string_view option_name) {
+    static constexpr std::string_view prefix = "CLUSTER_CONFIG_";
+    seastar::sstring name(seastar::sstring::initialized_later(), prefix.size() + option_name.size());
+    const auto out = std::ranges::copy(prefix, name.begin()).out;
+    std::ranges::transform(option_name, out, [] (const unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return name;
+}
+
+std::span<const std::string_view> retired_feature_names() {
+    return retired_option_features;
+}
+
+bool enabled(const gms::feature_service& features) {
+    return features.cluster_config;
+}
+
+bool is_supported(const option& opt, const gms::feature_service& features) {
+    if (!enabled(features)) {
+        return false;
     }
-    return std::nullopt;
+    const auto* feature = features.cluster_config_option_feature(opt.name);
+    return feature && *feature;
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
@@ -317,9 +339,13 @@ void add_test_only_option(option opt) {
 
 }
 
-seastar::future<> add_test_only_option_on_all_shards(option opt) {
-    return seastar::smp::invoke_on_all([opt] {
+seastar::future<> add_test_only_option_on_all_shards(seastar::sharded<gms::feature_service>& features, option opt) {
+    return features.invoke_on_all([opt] (gms::feature_service& fs) {
         add_test_only_option(opt);
+        // feature::enable() runs the feature's listeners, which expect a seastar thread.
+        return seastar::async([&fs, opt] {
+            fs.add_cluster_config_option_feature(opt.name).enable();
+        });
     });
 }
 

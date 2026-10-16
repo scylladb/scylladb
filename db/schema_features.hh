@@ -42,7 +42,7 @@ enum class schema_feature {
     // When enabled, the node-oriented cluster-config tables
     // (scylla_clusters/scylla_datacenters/scylla_racks/scylla_nodes) participate
     // in the schema. Gated so that a node which already supports cluster config
-    // but is in a cluster where the CLUSTER_CONFIG_REGISTRY_V0 cluster
+    // but is in a cluster where the CLUSTER_CONFIG cluster
     // feature is not yet enabled does not perturb the schema digest relative to
     // a node that predates cluster config. See #4457 and the cluster-config design.
     CLUSTER_CONFIG_TABLES,
