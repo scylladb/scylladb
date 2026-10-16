@@ -1,0 +1,39 @@
+From 478902a7e57e2283c57410f5aa14939e743b5102 Mon Sep 17 00:00:00 2001
+From: Avi Kivity <avi@scylladb.com>
+Date: Tue, 12 May 2020 14:51:18 +0300
+Subject: [PATCH] antlr3memory.hpp: fix for C++20 mode
+
+gcc 10 in C++20 mode requires that the allocator type match
+the type used to allocate, so do that by adding "const" to the
+key type.
+---
+ runtime/Cpp/include/antlr3memory.hpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/Cpp/include/antlr3memory.hpp b/runtime/Cpp/include/antlr3memory.hpp
+index 7713613..4667a00 100755
+--- a/runtime/Cpp/include/antlr3memory.hpp
++++ b/runtime/Cpp/include/antlr3memory.hpp
+@@ -98,17 +98,17 @@ public:
+ 	{
+ 	};
+ 
+ 	template<class KeyType, class ValueType>
+ 	class UnOrderedMapType : public std::map< KeyType, ValueType, std::less<KeyType>, 
+-										AllocatorType<std::pair<KeyType, ValueType> > >
++										AllocatorType<std::pair<const KeyType, ValueType> > >
+ 	{
+ 	};
+ 
+ 	template<class KeyType, class ValueType>
+ 	class OrderedMapType : public std::map< KeyType, ValueType, std::less<KeyType>, 
+-										AllocatorType<std::pair<KeyType, ValueType> > >
++										AllocatorType<std::pair<const KeyType, ValueType> > >
+ 	{
+ 	};
+ 
+ 	ANTLR_INLINE static void* operator new (std::size_t bytes)
+ 	{ 
+-- 
+2.26.2
+
