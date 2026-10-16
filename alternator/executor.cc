@@ -3273,7 +3273,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or WarmThroughput to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
