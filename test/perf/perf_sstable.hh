@@ -289,6 +289,8 @@ public:
                 compaction::compaction_progress_monitor progress_monitor;
                 auto ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
                 auto end = perf_sstable_test_env::now();
+                // table dtor aborts if not stopped first (see commit message).
+                cf->stop().get();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
                 if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
