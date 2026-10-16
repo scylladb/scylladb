@@ -1338,16 +1338,9 @@ public:
         }
     }
 
-    future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
-        lblogger.debug("In make_repair_plan");
-
-        auto ret = tablet_repair_plan();
-
-        if (!_db.features().tablet_repair_scheduler) {
-            lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
-            co_return ret;
-        }
-
+    // Returns the streaming load of the nodes, of the transitions which are already scheduled
+    // and of the migrations which are about to be scheduled by mplan.
+    future<node_load_map> make_streaming_load_map(const migration_plan& mplan) {
         const locator::topology& topo = _tm->get_topology();
 
         // Populate the load of the migration that is already in the plan
@@ -1366,6 +1359,23 @@ public:
 
         // Consider load that is about to be scheduled
         co_await consider_planned_load(nodes, mplan);
+
+        co_return nodes;
+    }
+
+    future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_repair_plan");
+
+        auto ret = tablet_repair_plan();
+
+        if (!_db.features().tablet_repair_scheduler) {
+            lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
+            co_return ret;
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+
+        node_load_map nodes = co_await make_streaming_load_map(mplan);
 
         service::auto_repair_stats auto_repair_stats;
 
