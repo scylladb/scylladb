@@ -396,6 +396,7 @@ The full set of available permissions is:
 - ``DESCRIBE``
 - ``VECTOR_SEARCH_INDEXING``
 - ``TEXT_SEARCH_INDEXING``
+- ``EXPORT``
 
 .. 
    - ``EXECUTE``
@@ -473,6 +474,15 @@ permissions can be granted on which types of resources, and which statements are
    * - ``TEXT_SEARCH_INDEXING``
      - ``ALL KEYSPACES``
      - ``SELECT`` on all tables with full-text search indexes, and on some :ref:`system tables <external-index-system-tables>`
+   * - ``EXPORT``
+     - ``ALL KEYSPACES``
+     - Alternator's ``ExportTableToPointInTime`` (with ``SELECT``), ``DescribeExport`` and ``ListExports`` on any table, and ``ListExports`` without a table
+   * - ``EXPORT``
+     - ``KEYSPACE keyspace_name``
+     - Alternator's ``ExportTableToPointInTime`` (with ``SELECT``), ``DescribeExport`` and ``ListExports`` on any table in specified keyspace
+   * - ``EXPORT``
+     - ``TABLE table_name``
+     - Alternator's ``ExportTableToPointInTime`` (with ``SELECT``), ``DescribeExport`` and ``ListExports`` on specified table
 
 .. _external-index-system-tables:
 
@@ -497,7 +507,7 @@ Granting permission uses the ``GRANT PERMISSION`` statement:
    
    grant_permission_statement: GRANT `permissions` ON `resource` TO `user_name`
    permissions: ALL [ PERMISSIONS ] | `permission` [ PERMISSION ]
-   permission: CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | VECTOR_SEARCH_INDEXING | TEXT_SEARCH_INDEXING
+   permission: CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | VECTOR_SEARCH_INDEXING | TEXT_SEARCH_INDEXING | EXPORT
    resource: ALL KEYSPACES
            :| KEYSPACE `keyspace_name`
            :| [ TABLE ] `table_name`
@@ -535,6 +545,24 @@ GRANT ALL
 
 When the ``GRANT ALL`` form is used, the appropriate set of permissions is determined automatically based on the target
 resource.
+
+A role that is not a superuser can run ``GRANT ALL`` or ``REVOKE ALL`` on a resource only if the role has
+``AUTHORIZE`` and all the permissions of the set on the resource or on a parent of the resource.
+
+Since 2026.4, the set for keyspaces, tables and ``ALL KEYSPACES`` includes ``EXPORT``. ScyllaDB versions prior to
+2026.4 do not know the ``EXPORT`` permission. A role gets permissions through ``GRANT ALL`` or as the creator of a
+table or a keyspace. If the role got these permissions before all the nodes of the cluster ran 2026.4, the role does
+not have ``EXPORT``. Thus, the role cannot run ``GRANT ALL`` or ``REVOKE ALL`` on the resource.
+
+To give ``EXPORT`` to the role:
+
+#. Upgrade all the nodes of the cluster to 2026.4. While a node runs a version prior to 2026.4, ``GRANT ALL`` does not
+   grant ``EXPORT``, and ``GRANT EXPORT`` fails.
+
+#. As a superuser, use one of these statements for the role and the resource:
+
+   * ``GRANT EXPORT ON <resource> TO <role>`` gives ``EXPORT`` to the role.
+   * ``GRANT ALL ON <resource> TO <role>`` gives ``EXPORT`` and all the other permissions of the set to the role.
 
 Automatic Granting
 ``````````````````

@@ -35,6 +35,7 @@ enum class permission {
     MODIFY, // required for INSERT, UPDATE, DELETE, TRUNCATE.
     VECTOR_SEARCH_INDEXING, // required for SELECT from tables with vector indexes if SELECT permission is not granted.
     TEXT_SEARCH_INDEXING, // required for SELECT from tables with fulltext indexes if SELECT permission is not granted.
+    EXPORT, // required for Alternator's export of a table to S3.
 
     // permission management
     AUTHORIZE, // required for GRANT and REVOKE.
@@ -58,7 +59,8 @@ typedef enum_set<
                 permission::DESCRIBE,
                 permission::EXECUTE,
                 permission::VECTOR_SEARCH_INDEXING,
-                permission::TEXT_SEARCH_INDEXING>> permission_set;
+                permission::TEXT_SEARCH_INDEXING,
+                permission::EXPORT>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 
