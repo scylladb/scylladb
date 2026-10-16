@@ -942,6 +942,10 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     get_stats_from_schema(_proxy, *schema)->api_operations.export_table_to_point_in_time++;
 
+    // Reading the table needs SELECT, writing it out to S3 needs EXPORT.
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::EXPORT, _stats);
+
     // Required parameter
     auto s3_bucket = get_non_empty_string_attribute(request, "S3Bucket");
 
@@ -1141,6 +1145,10 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
             get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_export++;
         }
     }
+
+    // Deleting a table revokes all permissions on it (executor::delete_table()), so for a deleted
+    // table this check passes only with a grant on its keyspace or on ALL KEYSPACES.
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, parts.keyspace_name, parts.table_name, auth::permission::EXPORT, _stats);
 
     auto exp = co_await get_export(_proxy, client_state, std::move(trace_state), std::move(permit), sstring(export_arn));
     // DynamoDB answers ExportNotFoundException also when the ARN names a table it does not have,
@@ -1589,6 +1597,15 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
     maybe_audit(audit_info, audit::statement_category::QUERY,
                 table_parts ? table_parts->keyspace_name : "", table_parts ? table_parts->table_name : "",
                 "ListExports", request);
+
+    if (table_parts) {
+        // Deleting a table revokes all permissions on it (executor::delete_table()), so for a deleted
+        // table this check passes only with a grant on its keyspace or on ALL KEYSPACES.
+        co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, table_parts->keyspace_name, table_parts->table_name, auth::permission::EXPORT, _stats);
+    } else {
+        // An unfiltered listing covers every table.
+        co_await verify_permission_on_all_keyspaces(_enforce_authorization, _warn_authorization, client_state, auth::permission::EXPORT, _stats);
+    }
 
     // For a TableArn of a table that does not exist, DynamoDB returns an empty body without
     // ExportSummaries, also when the table was deleted after an export, but ValidationException

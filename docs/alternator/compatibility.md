@@ -173,11 +173,12 @@ on how to use GRANT and REVOKE to control permissions:
 
 The following permissions are needed to run the following API operations:
 
- * `SELECT`:      GetItem, Query, Scan, BatchGetItem, GetRecords
+ * `SELECT`:      GetItem, Query, Scan, BatchGetItem, GetRecords, ExportTableToPointInTime
  * `MODIFY`:      PutItem, DeleteItem, UpdateItem, BatchWriteItem
  * `CREATE`:      CreateTable
  * `DROP`:        DeleteTable
  * `ALTER`:       UpdateTable, TagResource, UntagResource, UpdateTimeToLive
+ * `EXPORT`:      ExportTableToPointInTime, DescribeExport, ListExports
  * _none needed_: ListTables, DescribeTable, DescribeEndpoints,
                   ListTagsOfResource, DescribeTimeToLive,
                   DescribeContinuousBackups, ListStreams, DescribeStream,
@@ -187,6 +188,13 @@ Note that the required permissions depend on the type of operation, not on
 what it does. For example, even though the PutItem operation can read the
 value of an item (when used with `ReturnValues=ALL_OLD`), it still requires
 the MODIFY permission, not the SELECT permission.
+
+ExportTableToPointInTime needs both SELECT and EXPORT on the table.
+DescribeExport needs EXPORT only on the table that the export ARN names.
+ListExports with a TableArn needs EXPORT only on that table, and ListExports
+without a TableArn needs EXPORT on ALL KEYSPACES. DeleteTable revokes the
+permissions granted on the table, so they no longer give access to the
+exports of the deleted table.
 
 Permissions are separate for a base table and each of its GSI/LSI and CDC
 log, so it's possible to give a role permissions to read one index and

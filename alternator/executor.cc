@@ -2441,7 +2441,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
-    co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
+    co_await verify_permission_on_all_keyspaces(enforce_authorization, warn_authorization, client_state, auth::permission::CREATE, _stats);
 
     if (stream_enabled) {
         const bool uses_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
