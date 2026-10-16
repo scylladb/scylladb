@@ -10,6 +10,11 @@ If a keyspace is provided, the compaction will run on all of the tables within t
 
 .. caution:: It is always best to allow ScyllaDB to automatically run minor compactions using a :doc:`compaction strategy </kb/compaction>`. Using Nodetool to run compaction can quickly exhaust all resources, increase operational costs, and take up valuable disk space. For this reason, major compactions should be avoided and are not recommended for any production system.  
 
+.. note::
+   For tablet keyspaces, use :doc:`nodetool cluster compact </operating-scylla/nodetool-commands/cluster/compact>`
+   instead. It compacts a few tablets per shard at a time, so it needs far less free disk space,
+   and it isn't interrupted by tablet migrations, merges, splits or repairs.
+
 
 Syntax
 -------
