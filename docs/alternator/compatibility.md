@@ -523,10 +523,10 @@ they should be easy to detect. Here is a list of these unimplemented features:
 * Alternator does not support the table option WarmThroughput that can be
   used to check or guarantee that the database has "warmed" to handle a
   particular throughput. Alternator has no throughput caps and nothing to
-  pre-warm, so a table's WarmThroughput is remembered and returned by
-  `DescribeTable` but otherwise ignored; a table which never set one reports
-  zero units, as does each of its active GSIs. This table option was added to
-  DynamoDB in November 2024.
+  pre-warm, so a WarmThroughput set on a table or on any of its GSIs is
+  remembered and returned by `DescribeTable` but otherwise ignored; a table or
+  an active GSI which never set one reports zero units. This table option was
+  added to DynamoDB in November 2024.
   <https://github.com/scylladb/scylladb/issues/21853>
 
 * Alternator does not support the table option MultiRegionConsistency
