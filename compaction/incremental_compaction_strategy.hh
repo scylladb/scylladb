@@ -112,6 +112,8 @@ public:
 
     static std::vector<sstables::shared_sstable> runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs);
     static std::vector<sstables::frozen_sstable_run> sstables_to_runs(std::vector<sstables::shared_sstable> sstables);
+    // The number of runs that the given sstables make, as grouped by sstables_to_runs().
+    static size_t sstable_run_count(const std::vector<sstables::shared_sstable>& sstables);
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
