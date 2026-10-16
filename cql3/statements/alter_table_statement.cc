@@ -204,11 +204,13 @@ void alter_table_statement::add_column(data_dictionary::database db, const query
 
         // If there used to be a non-frozen collection column with the same name (that has been dropped),
         // we could still have some data using the old type, and so we can't allow adding a collection
-        // with the same name unless the types are compatible (see #6276).
+        // with the same name unless the types are compatible (see #6276). The
+        // dropped column's type is stored with its user types replaced by
+        // tuples, so do the same to the new type.
         auto& dropped = schema.dropped_columns();
         auto i = dropped.find(column_name.text());
         if (i != dropped.end() && i->second.type->is_collection() && i->second.type->is_multi_cell()
-                && !type->is_compatible_with(*i->second.type)) {
+                && !db::schema_tables::expand_user_type(type)->is_compatible_with(*db::schema_tables::expand_user_type(i->second.type))) {
             throw exceptions::invalid_request_exception(fmt::format("Cannot add a collection with the name {} "
                 "because a collection with the same name and a different type has already been used in the past", column_name));
         }
