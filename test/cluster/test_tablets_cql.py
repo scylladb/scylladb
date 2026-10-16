@@ -34,9 +34,9 @@ async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> 
                                       "tablets = {'enabled': true}")
     await manager.get_cql().run_async(f"create table {ks}.t (pk int primary key)")
 
-    logger.info(f"injecting wait-after-topology-coordinator-gets-event into the leader node {servers[0]}")
+    logger.info(f"injecting pause-before-handling-keyspace-rf-change into the leader node {servers[0]}")
     injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr,
-                                                    'wait-after-topology-coordinator-gets-event')
+                                                    'pause-before-handling-keyspace-rf-change')
 
     async def alter_tablets_ks_without_waiting_to_complete():
         res = await manager.get_cql().run_async("select data_center from system.local")
@@ -50,7 +50,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> 
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the keyspace-rf-change request")
     leader_log_file = await manager.server_open_log(servers[0].server_id)
-    await manager.api.wait_for_injection_enter(servers[0].ip_addr, "wait-after-topology-coordinator-gets-event")
+    await manager.api.wait_for_injection_enter(servers[0].ip_addr, "pause-before-handling-keyspace-rf-change")
 
     logger.info(f"dropping KS from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                 f"wakes up with the drop applied")
@@ -60,12 +60,12 @@ async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> 
     logger.info("Waking up the leader to continue processing ALTER with KS that doesn't exist (has been just dropped)")
     await injection_handler.message()
 
+    with pytest.raises(InvalidRequest, match=f"Can't ALTER keyspace {ks}, keyspace doesn't exist|Can't find a keyspace {ks}") as e:
+        await task
+
     matches = await leader_log_file.grep("topology change coordinator fiber got error "
                                          fr"data_dictionary::no_such_keyspace \(Can't find a keyspace {ks}\)")
     assert not matches
-
-    with pytest.raises(InvalidRequest, match=f"Can't ALTER keyspace {ks}, keyspace doesn't exist|Can't find a keyspace {ks}") as e:
-        await task
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_tablets_keyspace_concurrent_modification(manager: ScyllaClusterManager) -> None:
