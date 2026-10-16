@@ -28,7 +28,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens for this node",
+               "summary":"Returns a list of the tokens for this node. With keyspace and cf of a tablet table, returns the last tokens of the tablets that have this node as a replica (primary or not)",
                "type":"array",
                "items":{
                   "type":"string"
@@ -38,6 +38,22 @@
                   "application/json"
                ],
                "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace of a tablet table; requires cf",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"The tablet table; requires keyspace",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
                ]
             }
          ]
@@ -47,7 +63,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens for or a specified node",
+               "summary":"Returns a list of the tokens for or a specified node. With keyspace and cf of a tablet table, returns the last tokens of the tablets that have the node as a replica (primary or not)",
                "type":"array",
                "items":{
                   "type":"string"
@@ -64,6 +80,22 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace of a tablet table; requires cf",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"The tablet table; requires keyspace",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }
