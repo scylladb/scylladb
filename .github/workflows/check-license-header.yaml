@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [master]
+    paths:
+      # Keep in sync with CHECKED_EXTENSIONS below: these are the only files
+      # the header check inspects, so there is no need to run on anything else.
+      - '**/*.cc'
+      - '**/*.hh'
+      - '**/*.py'
 
 env:
   HEADER_CHECK_LINES: 10
