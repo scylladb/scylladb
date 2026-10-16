@@ -190,3 +190,10 @@ Available options
        double-quorum overhead. A migration may start while the table is within it, so it may be
        exceeded by one tablet. Values outside the range are clamped to it, and ``0`` allows one
        migration per table at a time. Default: ``5.0``.
+   * - ``tablet_streaming_max_transitions_per_shard``
+     - integer
+     - ``CLUSTER``
+     - Maximum number of tablet transitions which may stream to or from a shard at the same time,
+       counted like the per-shard tablet count concurrency limits. Unlike them, it also holds when
+       ``tablet_streaming_min_batch_size_in_bytes`` relaxes them, so that many tables or many small
+       tablets cannot overload a shard. Default: ``32``.
