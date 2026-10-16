@@ -1735,7 +1735,7 @@ def test_alter_table(cql, test_keyspace):
         cql.execute(f"alter table {table} add r1 int")
         assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, blob)]
         cql.execute(f"alter table {table} drop r2")
-        cql.execute(f"alter table {table} add r2 int")
+        cql.execute(f"alter table {table} add r2 blob")
         assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, None)]
 
 
