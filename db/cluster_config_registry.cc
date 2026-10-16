@@ -88,6 +88,13 @@ constexpr std::array registry_options = {
         .min_version = version::v1,
         .default_value = 5.0,
     },
+    option{
+        .name = option_name::tablet_streaming_max_transitions_per_shard,
+        .description = "Maximum number of tablet transitions which may stream to or from a shard at the same time, counted like the per-shard tablet count concurrency limits. Unlike them, it also holds when tablet_streaming_min_batch_size_in_bytes relaxes them",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v1,
+        .default_value = int64_t(32),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
