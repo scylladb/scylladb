@@ -44,6 +44,9 @@ using token = dht::token;
 
 using tablet_task_id = utils::tagged_uuid<struct tablet_task_id_tag>;
 
+// The id of a cluster-wide compaction of tablets, which is the id of its topology request.
+using cluster_compaction_id = utils::tagged_uuid<struct cluster_compaction_id_tag>;
+
 // Identifies tablet within the scope of a single tablet_map,
 // which has a scope of (table_id, token metadata version).
 // Different tablets of different tables can have the same tablet_id.
@@ -318,6 +321,13 @@ struct tablet_info {
     std::unique_ptr<tablet_task_info> repair_task_info;
     std::unique_ptr<tablet_task_info> migration_task_info;
     int64_t sstables_repaired_at;
+    // The id of the last cluster-wide compaction request (a topology request) which
+    // processed this tablet, or null. A tablet is pending compaction by a request as long
+    // as this differs from the request's id.
+    cluster_compaction_id cluster_compaction_request_id;
+    // Set when the request of cluster_compaction_request_id failed to compact this tablet.
+    // The request doesn't retry it.
+    bool cluster_compaction_failed = false;
 
     tablet_info() = default;
     tablet_info(tablet_replica_set, db_clock::time_point, std::unique_ptr<tablet_task_info> repair_task_info, std::unique_ptr<tablet_task_info> migration_task_info, int64_t sstables_repaired_at);

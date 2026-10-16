@@ -97,7 +97,9 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_column("snapshot_name", utf8_type);
+            .with_column("snapshot_name", utf8_type)
+            .with_column("cluster_compaction_request_id", uuid_type)
+            .with_column("cluster_compaction_failed", boolean_type);
 
     if (strongly_consistent_tables_enabled) {
         builder
@@ -314,6 +316,11 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
         }
 
+        if (features.tablet_cluster_compaction && tablet.cluster_compaction_request_id) {
+            m.set_clustered_cell(ck, "cluster_compaction_request_id", data_value(tablet.cluster_compaction_request_id.uuid()), ts);
+            m.set_clustered_cell(ck, "cluster_compaction_failed", data_value(tablet.cluster_compaction_failed), ts);
+        }
+
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
             m.set_clustered_cell(ck, "transition", tablet_transition_kind_to_string(tr_info->transition), ts);
@@ -442,6 +449,13 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
 tablet_mutation_builder&
 tablet_mutation_builder::set_repair_time(dht::token last_token, db_clock::time_point repair_time) {
     _m.set_clustered_cell(get_ck(last_token), "repair_time", data_value(repair_time), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_cluster_compaction_request_id(dht::token last_token, locator::cluster_compaction_id request_id, bool failed) {
+    _m.set_clustered_cell(get_ck(last_token), "cluster_compaction_request_id", data_value(request_id.uuid()), _ts);
+    _m.set_clustered_cell(get_ck(last_token), "cluster_compaction_failed", data_value(failed), _ts);
     return *this;
 }
 
@@ -763,6 +777,12 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         sstables_repaired_at = row.get_as<int64_t>("sstables_repaired_at");
     }
 
+    locator::cluster_compaction_id cluster_compaction_request_id;
+    if (row.has("cluster_compaction_request_id")) {
+        cluster_compaction_request_id = locator::cluster_compaction_id(row.get_as<utils::UUID>("cluster_compaction_request_id"));
+    }
+    bool cluster_compaction_failed = row.has("cluster_compaction_failed") && row.get_as<bool>("cluster_compaction_failed");
+
     locator::tablet_task_info repair_task_info;
     if (row.has("repair_task_info")) {
         repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
@@ -810,6 +830,8 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
             repair_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(repair_task_info)) : nullptr,
             migration_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(migration_task_info)) : nullptr,
             sstables_repaired_at};
+    info.cluster_compaction_request_id = cluster_compaction_request_id;
+    info.cluster_compaction_failed = cluster_compaction_failed;
     if (is_updating) {
         auto old_last_token = map.get_last_token(tid);
         if (last_token != old_last_token) {
