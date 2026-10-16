@@ -980,6 +980,7 @@ schema_ptr system_keyspace::commitlog_cleanups() {
         // comment
         "information about cleanups, for filtering commitlog replay"
        );
+        builder.set_gc_grace_seconds(0);
         builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
