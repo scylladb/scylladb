@@ -300,7 +300,8 @@ future<> verify_create_permission(bool enforce_authorization, bool warn_authoriz
         co_return;
     }
     auto resource = auth::resource(auth::resource_kind::data);
-    if (!co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
+    if (!client_state.user() || !client_state.user()->name ||
+        !co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
         sstring username = "<anonymous>";
         if (client_state.user() && client_state.user()->name) {
             username = client_state.user()->name.value();
