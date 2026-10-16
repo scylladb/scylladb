@@ -192,11 +192,13 @@ void verify_all_are_used(const rjson::value* field,
 /// SELECT, DROP, etc.) on the given table. When permission is denied an
 /// appropriate user-readable api_error::access_denied is thrown.
 future<> verify_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, const schema_ptr&, auth::permission, stats& stats);
+/// Like verify_permission() above, for a table given by name, which need not exist.
+future<> verify_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, std::string_view ks_name, std::string_view cf_name, auth::permission, stats& stats);
 
-/// Similar to verify_permission() above, but just for CREATE operations.
-/// Those do not operate on any specific table, so require permissions on
+/// Similar to verify_permission() above, but for operations, such as CREATE,
+/// which do not operate on any specific table, so require permissions on
 /// ALL KEYSPACES instead of any specific table.
-future<> verify_create_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, stats& stats);
+future<> verify_permission_on_all_keyspaces(bool enforce_authorization, bool warn_authorization, const service::client_state&, auth::permission, stats& stats);
 
 // Sets a KeySchema JSON array inside the given parent object describing the
 // key attributes of the given schema as HASH or RANGE keys. Additionally,
