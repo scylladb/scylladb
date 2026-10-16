@@ -1228,6 +1228,10 @@ mutation_reader make_multishard_combining_reader(
         mutation_reader::forwarding fwd_mr,
         multishard_reader_buffer_hint buffer_hint,
         read_ahead read_ahead) {
+    if (!erm->get_replication_strategy().is_vnode_based()) {
+        on_internal_error(mrlog, seastar::format("multishard reader cannot be used on tablet-based table {}.{}",
+                schema->ks_name(), schema->cf_name()));
+    }
     auto& sharder = erm->get_sharder(*schema);
     return make_mutation_reader<multishard_combining_reader>(sharder, std::any(std::move(erm)), std::move(lifecycle_policy),
             std::move(schema), std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint, read_ahead);
