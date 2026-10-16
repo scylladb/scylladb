@@ -1524,6 +1524,69 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_linearizable_read_waits_for_leader_apply(manager: ScyllaClusterManager):
+    """
+    A write is acked once its raft entry is committed, not once it's applied, so
+    the leader can hold a committed write its table doesn't have yet. A CL=QUORUM
+    read on the leader still has to return it: read_barrier() waits until the
+    leader has applied everything committed before the read, and only then the
+    table is read. With the leader's applier parked, the read can't complete and
+    times out - if it returned, it would return the older value, and a client
+    that saw its write acked would read its own write undone.
+
+    A CL=ONE read on the same leader has no read barrier and returns the older
+    value right away. It's what shows that the table really lacks the write, so
+    the CL=QUORUM timeout is the barrier waiting, not something else stuck.
+    """
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+    # Leadership must not move away from the node whose applier is parked.
+    follower_config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    followers = await manager.servers_add(2, config=follower_config, cmdline=DEFAULT_CMDLINE,
+                                          property_file=[{"dc": "dc1", "rack": "rack2"},
+                                                         {"dc": "dc1", "rack": "rack3"}])
+    cql, [leader_host, _, _] = await manager.get_ready_cql([leader_server, *followers])
+
+    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            group_id = await get_table_raft_group_id(manager, ks, table.split('.')[-1])
+            leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+            assert leader_host_id == await manager.get_host_id(leader_server.server_id)
+
+            # None until the row exists in the leader's table.
+            async def read_on_leader(cl, timeout=""):
+                stmt = SimpleStatement(f"SELECT v FROM {table} WHERE pk = 1 {timeout}", consistency_level=cl,
+                                       retry_policy=FallthroughRetryPolicy())
+                rows = await cql.run_async(stmt, host=leader_host)
+                return rows[0].v if rows else None
+
+            async def leader_has_applied(v):
+                return True if await read_on_leader(ConsistencyLevel.ONE) == v else None
+
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", host=leader_host)
+            # The leader may still be applying this write when the ack arrives, and then
+            # the injection below would park this entry rather than the next one.
+            await wait_for(lambda: leader_has_applied(1), time.time() + 60)
+
+            logger.info("Parking the applier of the leader")
+            await manager.api.enable_injection(leader_server.ip_addr, wait_before_apply_injection, one_shot=True)
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 2)", host=leader_host)
+            await manager.api.wait_for_injection_enter(leader_server.ip_addr, wait_before_apply_injection)
+
+            assert await read_on_leader(ConsistencyLevel.ONE) == 1, \
+                "CL=ONE: expected the leader's table to lack the acked write while its applier is parked"
+            with pytest.raises(ReadTimeout):
+                v = await read_on_leader(ConsistencyLevel.QUORUM, timeout="USING TIMEOUT 1s")
+                pytest.fail(f"CL=QUORUM returned v={v} before the leader applied the acked write")
+
+            logger.info("Releasing the applier of the leader")
+            await manager.api.message_injection(leader_server.ip_addr, wait_before_apply_injection)
+            assert await read_on_leader(ConsistencyLevel.QUORUM) == 2
+
+
 async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
