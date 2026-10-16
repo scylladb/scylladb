@@ -88,3 +88,8 @@ struct const_template_arg_test_object {
 struct frozen_object stub [[writable]] {
     utils::UUID id;
 };
+
+struct writable_vector_in_variant stub [[writable]] {
+    std::variant<std::vector<writable_simple_compound>, simple_compound> variant;
+    uint32_t tail;
+};
