@@ -115,19 +115,20 @@ def test_block_creating_tables_with_reserved_prefix(scylla_only, dynamodb):
 # Test that the system.clients virtual table is readable, and lists ongoing
 # Alternator requests, and lists the client SDK's User-Agent (usually
 # containing its language, version, and other information) as "driver_name".
-# Since we are making the Scan request with Boto3, we expect to find in
-# the result of the Scan at least one client using Boto3.
+# Check the User-Agent for each supported backend.
 # Reproduces #24993.
-def test_system_clients(scylla_only, dynamodb):
+@pytest.mark.parametrize('dynamodb_backend', ['boto3', 'alternator-client'], indirect=True)
+def test_system_clients(scylla_only, dynamodb, dynamodb_backend):
     clients = dynamodb.Table(internal_prefix + 'system.clients')
     success = False
     clients = full_scan(clients)
     assert len(clients) > 0
+    expected_user_agent = 'Boto3' if dynamodb_backend == 'boto3' else 'alternator-client-python'
     for client in clients:
         # Not all clients have a driver_name. For example, a CQL
         # connection only gets one after its STARTUP message, so a CQL
         # connection which some other client is just opening won't have it.
-        if 'Boto3' in client.get('driver_name', ''):
+        if expected_user_agent in client.get('driver_name', ''):
             success = True
             # Verify that some other fields that we expect to appear in
             # Alternator's system.clients entry do appear. For most of
