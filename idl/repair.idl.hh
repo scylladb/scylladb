@@ -31,6 +31,17 @@ class repair_sync_boundary {
     position_in_partition position;
 };
 
+struct repair_hash_sketch {
+    utils::chunked_vector<int16_t> counts;
+    utils::chunked_vector<uint64_t> key_sums;
+    utils::chunked_vector<uint32_t> check_sums;
+};
+
+struct get_combined_row_hash_with_sketch_response {
+    repair_hash hash;
+    std::optional<repair_hash_sketch> sketch;
+};
+
 struct get_sync_boundary_response {
     std::optional<repair_sync_boundary> boundary;
     repair_hash row_buf_combined_csum;
@@ -120,3 +131,4 @@ verb [[with_client_info]] repair_get_diff_algorithms () -> std::vector<row_level
 verb [[with_client_info]] repair_update_compaction_ctrl (locator::global_tablet_id gid, service::frozen_topology_guard topo_guard);
 verb [[with_client_info]] repair_update_repaired_at_for_merge(table_id);
 verb [[with_client_info]] repair_get_table_size(table_id table) -> uint64_t;
+verb [[with_client_info]] repair_get_combined_row_hash_with_sketch (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id, uint32_t sketch_cells) -> get_combined_row_hash_with_sketch_response;
