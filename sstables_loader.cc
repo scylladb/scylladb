@@ -901,7 +901,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
-                .set_progress_fn([progress] {
+                .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
                     return progress->get();
                 })
                 .set_finalizer([progress] () noexcept {
@@ -1437,7 +1437,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
-                .set_progress_fn([progress] {
+                .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
                     return make_ready_future<tasks::task_manager::task::progress>(progress->get());
                 })
                 .set_abort_fn([this, tid] (abort_source&) noexcept {

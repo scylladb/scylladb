@@ -443,7 +443,7 @@ future<task_manager::task::progress> task_manager::generic_task_impl::get_progre
     }
     auto complete = is_complete();
     auto progress_fn = _progress_fn;
-    auto progress = co_await (progress_fn ? (*progress_fn)() : task::impl::get_progress());
+    auto progress = co_await (progress_fn ? (*progress_fn)(*this) : task::impl::get_progress());
     if (complete) {
         _cached_progress = progress;
     }
