@@ -330,24 +330,15 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // evaluate partition key constraints.
     //
     // These calls can affect partition key ranges computation and target shard
-    // selection for LWT statements.
+    // selection for LWT and strongly consistent statements.
     // For such cases we need to forward the computed execution result of the
-    // function when redirecting the query execution to another shard.
+    // function when redirecting the query execution to another shard or node.
     // Otherwise, it's possible that we end up bouncing indefinitely between
     // various shards when evaluating a non-deterministic function each time on
     // each shard.
     //
     // Prepare context is used to keep track of such AST nodes and also modifies
     // them to include an id, that will be used for caching the results.
-    // At this point we don't yet know if it's an LWT query or not, because the
-    // prepared statement object is constructed later.
-    //
-    // Since this cache is only meaningful for LWT queries, just clear the ids
-    // if it's not a conditional statement so that the AST nodes don't
-    // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions()) {
-        ctx.clear_pk_function_calls_cache();
-    }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }
