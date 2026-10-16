@@ -132,6 +132,24 @@ jobs:
           AFTER_SHA: ${{ github.event.after }}
           # Comment event context
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+<<<<<<< HEAD
+||||||| parent of 8c6f9842eb (scylla-ci-route: report CI skipped on commit-message-only pushes)
+          COMMENT_COMMAND: ${{ steps.comment-check.outputs.command }}
+          COMMENT_ACTOR: ${{ github.event.comment.user.login }}
+          # Replies to @scylladbbot commands are posted as scylladbbot; only
+          # comment events reply, so don't expose the token to other events
+          BOT_TOKEN: ${{ github.event_name == 'issue_comment' && secrets.AUTO_BACKPORT_TOKEN || '' }}
+=======
+          COMMENT_COMMAND: ${{ steps.comment-check.outputs.command }}
+          COMMENT_ACTOR: ${{ github.event.comment.user.login }}
+          # Replies to @scylladbbot commands and the CI skip comment on
+          # commit-message-only pushes are posted as scylladbbot; only those
+          # events post, so don't expose the token to other events
+          BOT_TOKEN: ${{ (github.event_name == 'issue_comment' || github.event.action == 'synchronize') && secrets.AUTO_BACKPORT_TOKEN || '' }}
+          # Read the previous head's CI build state on commit-message-only pushes
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+>>>>>>> 8c6f9842eb (scylla-ci-route: report CI skipped on commit-message-only pushes)
           # Manual dispatch context
           DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           DISPATCH_TARGET_REPO: ${{ github.event.inputs.target_repo }}
@@ -180,9 +198,98 @@ jobs:
               BEFORE_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$BEFORE_SHA" --jq '.tree.sha' 2>/dev/null || true)
               AFTER_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$AFTER_SHA" --jq '.tree.sha' 2>/dev/null || true)
               if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
-                echo "No code changes detected (commit message edit only), skipping CI"
-                echo "should_continue=false" >> "$GITHUB_OUTPUT"
-                exit 0
+                # Same code, so the previous head's Jenkins results still apply.
+                # Only reuse them when they all come from one finished,
+                # successful, full (not thin) scylla-ci build; a failed,
+                # running, thin or missing CI run must not be hidden by a reword.
+                # --paginate: a PR can have more than 100 statuses.
+                fetch_jenkins_statuses() {
+                  local raw
+                  raw=$(gh_api_retry --paginate "repos/$PR_REPO/commits/$BEFORE_SHA/status?per_page=100" \
+                    --jq ".statuses[] | select((.target_url // \"\") | startswith(\"$JENKINS_URL/\"))" 2>/dev/null || true)
+                  jq -s '.' <<< "$raw" 2>/dev/null || echo '[]'
+                }
+                JENKINS_STATUSES=$(fetch_jenkins_statuses)
+                TOTAL=$(jq 'length' <<< "$JENKINS_STATUSES")
+                NOT_GREEN=$(jq '[.[] | select(.state != "success")] | length' <<< "$JENKINS_STATUSES")
+                # Normalize the trailing slash so ".../scylla-ci/N" and
+                # ".../scylla-ci/N/" count as the same build.
+                CI_BUILDS=$(jq -c '[.[].target_url | select(test("/job/scylla-ci/[0-9]+/?$")) | sub("/?$"; "/")] | unique' <<< "$JENKINS_STATUSES")
+                CI_BUILD=$(jq -r 'first // ""' <<< "$CI_BUILDS")
+                REUSE=false
+                if [ "$TOTAL" -eq 0 ]; then
+                  REASON="it has no Jenkins statuses"
+                elif [ "$NOT_GREEN" -gt 0 ]; then
+                  REASON="$NOT_GREEN of $TOTAL Jenkins statuses are not successful"
+                elif [ "$(jq 'length' <<< "$CI_BUILDS")" -ne 1 ]; then
+                  REASON="its statuses do not come from exactly one scylla-ci build"
+                else
+                  # The statuses alone cannot tell a finished run from one that
+                  # has not reported all its stages yet, or a thin run from a
+                  # full one, so ask Jenkins.
+                  BUILD_JSON=$(curl -s -g --fail --max-time 30 --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
+                    "${CI_BUILD%/}/api/json?tree=building,result,actions[parameters[name,value]]" 2>/dev/null || true)
+                  BUILD_STATE=$(jq -r 'if .building then "running"
+                    elif .result != "SUCCESS" then "failed"
+                    elif any(.actions[]?.parameters[]?; .name == "THIN_CI" and (.value == true or .value == "true")) then "thin"
+                    else "full" end' <<< "$BUILD_JSON" 2>/dev/null || true)
+                  # If the build finished between reading the statuses and
+                  # asking Jenkins, stages it reported in between would be
+                  # missing from the copy: only reuse an unchanged status set.
+                  if [ "$BUILD_STATE" = "full" ] && [ "$(fetch_jenkins_statuses)" != "$JENKINS_STATUSES" ]; then
+                    BUILD_STATE=changed
+                  fi
+                  case "$BUILD_STATE" in
+                    full) REUSE=true ;;
+                    changed) REASON="its statuses changed while its CI build $CI_BUILD was being checked" ;;
+                    running) REASON="its CI build $CI_BUILD is still running" ;;
+                    thin) REASON="its CI build $CI_BUILD was a thin CI run" ;;
+                    failed) REASON="its CI build $CI_BUILD did not succeed" ;;
+                    *) REASON="the state of its CI build $CI_BUILD could not be read from Jenkins" ;;
+                  esac
+                fi
+                if [ "$REUSE" = "true" ]; then
+                  echo "No code changes detected (commit message edit only), reusing CI results of $BEFORE_SHA"
+                  # Carry the results over so the new head shows its CI state.
+                  # Skipping is only safe if every status made it; otherwise
+                  # the new head would be left without full CI results.
+                  # gh reads from /dev/null so it cannot eat the loop's input.
+                  COPIED=()
+                  COPY_FAILED=false
+                  while read -r STATUS; do
+                    CONTEXT=$(jq -r '.context' <<< "$STATUS")
+                    if gh_api_retry "repos/$PR_REPO/statuses/$AFTER_SHA" \
+                      -f state="$(jq -r '.state' <<< "$STATUS")" \
+                      -f context="$CONTEXT" \
+                      -f description="$(jq -r '.description // ""' <<< "$STATUS")" \
+                      -f target_url="$(jq -r '.target_url' <<< "$STATUS")" --silent < /dev/null; then
+                      COPIED+=("$CONTEXT")
+                    else
+                      echo "::warning::Failed to copy status '$CONTEXT' to $AFTER_SHA"
+                      COPY_FAILED=true
+                      break
+                    fi
+                  done < <(jq -c '.[]' <<< "$JENKINS_STATUSES")
+                  if [ "$COPY_FAILED" = "false" ]; then
+                    post_bot_reply "$PR_REPO" "$PR_NUMBER" \
+                      "CI was not re-run for ${AFTER_SHA}: only the commit message changed since ${BEFORE_SHA} (same tree), which already passed CI ([build](${CI_BUILD})). Its results were copied to the new head. Use \`@scylladbbot trigger-ci\` to force a new run."
+                    echo "should_continue=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  # Do not leave the statuses copied so far green on the new
+                  # head: if the new CI run never reports them, the PR would
+                  # look as if it passed.
+                  for CONTEXT in "${COPIED[@]}"; do
+                    gh_api_retry "repos/$PR_REPO/statuses/$AFTER_SHA" \
+                      -f state="pending" \
+                      -f context="$CONTEXT" \
+                      -f description="Waiting for a new CI run" --silent < /dev/null \
+                      || echo "::warning::Failed to reset copied status '$CONTEXT' on $AFTER_SHA"
+                  done
+                  echo "No code changes detected, but copying the CI results of $BEFORE_SHA failed, running CI"
+                else
+                  echo "No code changes detected, but CI of $BEFORE_SHA cannot be reused ($REASON), running CI"
+                fi
               fi
             fi
           fi
