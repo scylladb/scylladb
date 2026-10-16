@@ -591,10 +591,10 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
 
 
 # Test auditing of QUERY table-level operations: DescribeTable, ListTagsOfResource,
-# DescribeTimeToLive, DescribeContinuousBackups, ExportTableToPointInTime,
+# DescribeTimeToLive, DescribeContinuousBackups, ExportTableToPointInTime, ListExports,
 # ListTables, DescribeEndpoints.
 # ListTables and DescribeEndpoints have empty keyspace/table.
-# Produces 7 audit entries.
+# Produces 8 audit entries.
 def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
@@ -621,6 +621,9 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         # ExportTableToPointInTime
         client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
         expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
+        # ListExports (the table it is filtered by)
+        client.list_exports(TableArn=table_arn)
+        expected.append(("QUERY", "", False, ks_name, table.name, ["ListExports", table_arn]))
         # ListTables (empty keyspace)
         client.list_tables()
         expected.append(("QUERY", "", False, "", "", ["ListTables"]))
