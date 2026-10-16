@@ -49,7 +49,8 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
                 permission::DROP,
                 permission::SELECT,
                 permission::MODIFY,
-                permission::AUTHORIZE>();
+                permission::AUTHORIZE,
+                permission::EXPORT>();
 
     if (!dv.table()) {
         set.add(permission_set::of<permission::CREATE>());

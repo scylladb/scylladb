@@ -1309,7 +1309,7 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
     ;
 
 permission returns [auth::permission perm = auth::permission{}]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE | K_VECTOR_SEARCH_INDEXING | K_TEXT_SEARCH_INDEXING | K_PATTERN_SEARCH_INDEXING)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE | K_VECTOR_SEARCH_INDEXING | K_TEXT_SEARCH_INDEXING | K_PATTERN_SEARCH_INDEXING | K_EXPORT)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
@@ -2308,6 +2308,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_EXPORT
         ) { $str = $k.text; }
     ;
 
@@ -2532,6 +2533,8 @@ K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 K_VECTOR_SEARCH_INDEXING: V E C T O R '_' S E A R C H '_' I N D E X I N G;
 K_TEXT_SEARCH_INDEXING: T E X T '_' S E A R C H '_' I N D E X I N G;
 K_PATTERN_SEARCH_INDEXING: P A T T E R N '_' S E A R C H '_' I N D E X I N G;
+
+K_EXPORT: E X P O R T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

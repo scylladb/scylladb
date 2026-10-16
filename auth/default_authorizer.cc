@@ -25,6 +25,7 @@ extern "C" {
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
+#include "gms/feature_service.hh"
 #include "utils/log.hh"
 
 namespace auth {
@@ -104,6 +105,14 @@ default_authorizer::modify(
 
 
 future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource, ::service::group0_batch& mc) {
+    // A node that does not know EXPORT fails to read the role's permissions on the resource once they include it.
+    if (set.contains(permission::EXPORT) && !_qp.db().features().export_permission) {
+        set.remove(permission::EXPORT);
+        if (!set) {
+            return make_exception_future<>(unsupported_authorization_operation(
+                    "The EXPORT permission is not yet supported by this cluster. Upgrade all nodes to use it."));
+        }
+    }
     return modify(role_name, std::move(set), resource, "+", mc);
 }
 
