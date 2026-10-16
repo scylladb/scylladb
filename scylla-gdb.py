@@ -151,13 +151,21 @@ class thread_local_storage:
     def get(self, name):
         """The selected thread's instance of the thread-local variable `name`."""
         name = name.lstrip(':')
+        symbol = self._lookup_symbol(name)
+        # parse_and_eval expands many CUs; a symbol lookup is far cheaper.
+        if symbol is not None:
+            try:
+                value = symbol.value(gdb.selected_frame())
+                if not value.is_optimized_out:
+                    return value
+            except gdb.error:
+                pass
         try:
             value = gdb.parse_and_eval("'{}'".format(name))
             if not value.is_optimized_out:
                 return value
         except gdb.error:
             pass
-        symbol = self._lookup_symbol(name)
         if symbol is None:
             raise gdb.error('No symbol "{}" in current context.'.format(name))
         address = self._block_address() + self._offset_of(symbol)
