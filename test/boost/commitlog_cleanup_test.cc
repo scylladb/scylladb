@@ -86,13 +86,13 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_records) {
         };
 
         // Insert an interval.
-        insert_record(tableid, {0, true}, {1, true}, {42, 1337, 1});
+        insert_record(tableid, {0, true}, {1, true}, {42, 1337, 2});
         // Overlap it with a range with higher replay position.
-        insert_record(tableid, {1, true}, {2, true}, {42, 1337, 2});
+        insert_record(tableid, {1, true}, {2, true}, {42, 1337, 3});
         // Overlap both with a range with lower replay position.
-        insert_record(tableid, {-1, true}, {3, true}, {42, 1337, 0});
+        insert_record(tableid, {-1, true}, {3, true}, {42, 1337, 1});
         // Insert an empty range, it shouldn't affect the result at all.
-        insert_record(tableid, {0, false}, {1, false}, {42, 1337, 3});
+        insert_record(tableid, {0, false}, {1, false}, {42, 1337, 4});
         // Insert a record for a different table.
         insert_record(table_id(utils::UUID_gen::get_time_UUID()), {0, false}, {1, false}, {42, 1337, 5});
         // Insert a record for a different shard.
@@ -109,11 +109,11 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_records) {
         };
         // Check that the resulting map is as we expect.
         BOOST_REQUIRE(get_rp(-2) == std::nullopt);
-        BOOST_REQUIRE(get_rp(-1) == db::replay_position(42, 1337, 0));
-        BOOST_REQUIRE(get_rp(0) == db::replay_position(42, 1337, 1));
-        BOOST_REQUIRE(get_rp(1) == db::replay_position(42, 1337, 2));
-        BOOST_REQUIRE(get_rp(2) == db::replay_position(42, 1337, 2));
-        BOOST_REQUIRE(get_rp(3) == db::replay_position(42, 1337, 0));
+        BOOST_REQUIRE(get_rp(-1) == db::replay_position(42, 1337, 1));
+        BOOST_REQUIRE(get_rp(0) == db::replay_position(42, 1337, 2));
+        BOOST_REQUIRE(get_rp(1) == db::replay_position(42, 1337, 3));
+        BOOST_REQUIRE(get_rp(2) == db::replay_position(42, 1337, 3));
+        BOOST_REQUIRE(get_rp(3) == db::replay_position(42, 1337, 1));
         BOOST_REQUIRE(get_rp(4) == std::nullopt);
     });
 }
@@ -245,7 +245,7 @@ SEASTAR_TEST_CASE(test_drop_all_commitlog_cleanup_records) {
         for (auto shard : shards) {
             for (int i = 0; i < records_per_shard; ++i) {
                 auto tr = dht::token_range::make({dht::token::from_int64(i), false}, {dht::token::from_int64(i + 1), true});
-                sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position(shard, segment_id, i)).get();
+                sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position(shard, segment_id, i + 1)).get();
             }
         }
 
@@ -341,6 +341,34 @@ SEASTAR_TEST_CASE(test_obsolete_commitlog_cleanup_records_dropped_on_save) {
         BOOST_REQUIRE(it->second.get(3) == std::nullopt);
         BOOST_REQUIRE(it->second.get(4) == rp_3);
         BOOST_REQUIRE(it->second.get(5) == std::nullopt);
+    });
+}
+
+// Test that saving a commitlog cleanup record with an invalid replay position
+// (which would filter nothing on replay) leaves the table unchanged.
+SEASTAR_TEST_CASE(test_invalid_replay_position_commitlog_cleanup_record) {
+    BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto tableid = table_id(utils::UUID_gen::get_time_UUID());
+        auto tr = dht::token_range::make({dht::token::from_int64(0), false}, {dht::token::from_int64(1), true});
+
+        auto get_num_records = [&] {
+            auto res = e.execute_cql("select * from system.commitlog_cleanups;").get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+        // On a single shard, a record with an invalid replay position would not be written
+        // anyway, it would be covered by the pruning done by the same save (it is below the
+        // commitlog's minimum position), so also check that the save doesn't write anything.
+        auto& t = e.local_db().find_column_family(db::system_keyspace::NAME, db::system_keyspace::COMMITLOG_CLEANUPS);
+
+        BOOST_REQUIRE_EQUAL(get_num_records(), 0);
+        const auto writes_before = t.get_stats().writes().count();
+        sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position()).get();
+        BOOST_REQUIRE_EQUAL(t.get_stats().writes().count(), writes_before);
+        BOOST_REQUIRE_EQUAL(get_num_records(), 0);
     });
 }
 
