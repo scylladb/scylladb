@@ -1063,6 +1063,89 @@ async def test_migration_with_counters(manager: ScyllaClusterManager, scale_time
         await load.run_checked_rounds(rounds, writer_ids())
 
 
+async def test_migration_rollback_with_counters(manager: ScyllaClusterManager):
+    """Verify that counters survive rolling back a vnodes-to-tablets migration and migrating again.
+
+    Same cluster and checks as test_migration_with_counters.
+
+    Steps:
+    1. Increment the counters on vnodes, start the migration, and restart every node into
+       tablets one at a time, with checked increments after each restart.
+    2. Restart every node back into vnodes the same way, then finalize, which rolls the
+       migration back: the keyspace stays on vnodes and the tablet map is dropped.
+    3. Check that every counter still holds the shards written under the rack IDs, and
+       that increments go under the host IDs again.
+    4. Migrate again, where every node that restarts into tablets must continue its rack
+       ID shard from the value it left there, finalize forward and check the counters.
+    """
+    num_keys = 10
+    rounds = 5
+    racks = [('dc1', 'rack1'), ('dc2', 'rack1'), ('dc2', 'rack2')]
+    rack_ids = {rack_counter_id(dc, rack) for dc, rack in racks}
+
+    logger.info(f"Starting {len(racks)} nodes in {racks}")
+    servers = await manager.servers_add(len(racks), cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': dc, 'rack': rack} for dc, rack in racks])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    node_modes = {host_id: ('vnodes', 'vnodes') for host_id in host_ids}
+
+    def writer_ids() -> set[uuid.UUID]:
+        """Return the counter IDs that the nodes write under: host IDs on vnodes, rack IDs on tablets."""
+        return {rack_counter_id(dc, rack) if node_modes[host_id][0] == 'tablets' else uuid.UUID(str(host_id))
+                for host_id, (dc, rack) in zip(host_ids, racks)}
+
+    replication_opts = "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 2}"
+    async with new_test_keyspace(manager, f"WITH replication = {replication_opts} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
+        load = CounterLoad(ks, 'counters', num_keys)
+        load.connect(cql, hosts)
+
+        async def restart_and_check(idx: int, mode: str):
+            cql, hosts = await restart_node_into(manager, servers, idx, mode)
+            node_modes[host_ids[idx]] = (mode, mode)
+            await verify_migration_status(manager, servers[0], ks,
+                expected_status='migrating_to_tablets', expected_node_statuses=node_modes)
+            logger.info(f"Incrementing counters with nodes in modes {node_modes}")
+            load.connect(cql, hosts)
+            await load.run_checked_rounds(rounds, writer_ids())
+
+        logger.info("Incrementing counters while every node uses vnodes")
+        await load.run_checked_rounds(rounds, writer_ids())
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await load.run_checked_rounds(rounds, writer_ids())
+        for idx in range(len(servers)):
+            await restart_and_check(idx, 'tablets')
+        for idx in range(len(servers)):
+            await restart_and_check(idx, 'vnodes')
+
+        logger.info("Finalizing the migration with every node back on vnodes, which rolls it back")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='vnodes', expected_node_statuses={})
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'counters')
+        assert tablet_count == 0, f"Expected the rollback to drop the tablet map, found {tablet_count} tablets"
+        shards = await load.run_checked_rounds(rounds, writer_ids())
+        missing = {key: rack_ids - shards.get(key, {}).keys() for key in range(num_keys)
+                   if not rack_ids <= shards.get(key, {}).keys()}
+        assert not missing, f"Counters lost shards of rack IDs in the rollback, key: IDs: {missing}"
+
+        logger.info("Starting vnodes-to-tablets migration again (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await load.run_checked_rounds(rounds, writer_ids())
+        for idx in range(len(servers)):
+            await restart_and_check(idx, 'tablets')
+
+        logger.info("Finalizing the migration forward")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'counters')
+        # A tablet migration gives its pending replica the negated rack ID, so finish any before checking the IDs.
+        await manager.disable_tablet_balancing()
+        await load.run_checked_rounds(rounds, writer_ids())
+
+
 async def setup_single_node(manager: ScyllaClusterManager):
     """Start a single node with random tokens for migration error tests."""
     cfg = {'num_tokens': 16}
