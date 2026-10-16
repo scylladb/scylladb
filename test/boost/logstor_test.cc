@@ -17,6 +17,8 @@
 #include <span>
 #include <vector>
 #include <fmt/format.h>
+#include <seastar/core/memory.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -29,13 +31,21 @@
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"
 #include "replica/logstor/record_value.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/segment_io.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
+#include "data_dictionary/user_types_metadata.hh"
+#include "db/config.hh"
+#include "db/schema_tables.hh"
+#include "gms/feature_service.hh"
+#include "init.hh"
 #include <seastar/core/simple-stream.hh>
+#include "partition_slice_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -82,6 +92,18 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
         },
         .value = encode_record_value(m),
     };
+}
+
+// The mutation that a record value decodes to, for the tests that compare mutations: the decoder
+// gives a single_row_partition.
+mutation decode_to_mutation(const record_value& v, schema_ptr s, const record_header& h) {
+    auto partition = decode_record_value(v, *s, h);
+    return to_mutation(std::move(s), h.key, std::move(partition));
+}
+
+// The mutation that a whole record holds.
+mutation to_mutation(const log_record& r, schema_ptr s) {
+    return decode_to_mutation(r.value, std::move(s), r.header);
 }
 
 temporary_buffer<char> copy_chunk(bytes_view chunk) {
@@ -709,7 +731,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_round_trip) {
 
     auto m = make_multi_column_mutation(schema, "pk0", ts);
     auto value = encode_record_value(m);
-    assert_that(decode_record_value(value, schema, make_header(m, ts))).is_equal_to(m);
+    assert_that(decode_to_mutation(value, schema, make_header(m, ts))).is_equal_to(m);
     BOOST_REQUIRE_LT(value.size(), canonical_mutation(m).representation().size());
 
     // The value starts with the schema version, most significant half first. That is what a
@@ -723,7 +745,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_round_trip) {
     mutation deleted(schema, m.decorated_key());
     deleted.partition().apply(tombstone(ts, gc_clock::now()));
     auto deleted_value = encode_record_value(deleted);
-    assert_that(decode_record_value(deleted_value, schema, make_header(deleted, ts))).is_equal_to(deleted);
+    assert_that(decode_to_mutation(deleted_value, schema, make_header(deleted, ts))).is_equal_to(deleted);
 }
 
 // Checks that a record written under one schema version reads under another the way a
@@ -740,12 +762,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_decodes_under_another_schema_
 
     auto with_added = schema_builder(schema).with_column("y", long_type).build();
     BOOST_REQUIRE(with_added->version() != schema->version());
-    assert_that(decode_record_value(value, with_added, header)).is_equal_to(oracle.to_mutation(with_added));
-    assert_that(decode_record_value(value, with_added, header)).is_equal_to(m);
+    assert_that(decode_to_mutation(value, with_added, header)).is_equal_to(oracle.to_mutation(with_added));
+    assert_that(decode_to_mutation(value, with_added, header)).is_equal_to(m);
 
     auto with_dropped = schema_builder(schema).without_column("w", ts + 1).build();
     BOOST_REQUIRE(with_dropped->version() != schema->version());
-    auto decoded = decode_record_value(value, with_dropped, header);
+    auto decoded = decode_to_mutation(value, with_dropped, header);
     assert_that(decoded).is_equal_to(oracle.to_mutation(with_dropped));
     // Of the three cells written, the one of the dropped column is gone.
     const auto& cells = decoded.partition().clustered_row(*with_dropped, clustering_key::make_empty()).cells();
@@ -766,8 +788,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_rejects_the_schema_of_another
     auto header = make_header(m, ts);
 
     BOOST_REQUIRE(other->id() != schema->id());
-    BOOST_REQUIRE_THROW(decode_record_value(value, other, header), std::runtime_error);
-    assert_that(decode_record_value(value, schema, header)).is_equal_to(m);
+    BOOST_REQUIRE_THROW(decode_to_mutation(value, other, header), std::runtime_error);
+    assert_that(decode_to_mutation(value, schema, header)).is_equal_to(m);
 }
 
 // Checks that the frozen and the unfrozen forms of a mutation give the same record value and the
@@ -814,7 +836,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_frozen_record_value_matches_the_unfrozen_o
         BOOST_REQUIRE_EQUAL(record_timestamp(frozen), ts);
 
         // The value decodes to the original mutation.
-        assert_that(decode_record_value(encode_record_value(frozen, *schema), schema, make_header(m, ts))).is_equal_to(m);
+        assert_that(decode_to_mutation(encode_record_value(frozen, *schema), schema, make_header(m, ts))).is_equal_to(m);
     }
 }
 
@@ -873,7 +895,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_writes_a_frozen_mutation) {
         ls.flush_to_separator().get();
         cg.flush_separator().get();
 
-        auto actual = ls.read(schema, cg.logstor_index(), expected.decorated_key(), schema->full_slice()).get();
+        auto actual = read_mutation(ls, schema, cg.logstor_index(), expected.decorated_key(), schema->full_slice()).get();
         BOOST_REQUIRE(actual);
         assert_that(*actual).is_equal_to(expected);
     }
@@ -938,13 +960,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_largest_accepted_record_can_be_separated) 
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
 
-    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
 
-// A read after stop() returns a failed future. It does not throw from read(). read_from_segment()
-// takes the gate in a coroutine, so the exception goes into the future.
+// A read of a stopped logstor fails with the closed gate, which the read of the segment takes.
 SEASTAR_THREAD_TEST_CASE(test_logstor_read_after_stop_fails_the_future) {
     auto schema = make_kv_schema();
     tmpdir dir;
@@ -959,8 +980,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_read_after_stop_fails_the_future) {
     ls.write(m, write_target(&cg, {}), db::no_timeout).get();
     ls.stop().get();
 
-    auto f = ls.read(schema, cg.logstor_index(), m.decorated_key(), schema->full_slice());
-    BOOST_REQUIRE_THROW(f.get(), gate_closed_exception);
+    BOOST_REQUIRE_THROW(read_mutation(ls, schema, cg.logstor_index(), m.decorated_key(), schema->full_slice()).get(), gate_closed_exception);
 }
 
 // Checks that a record that does not fit a segment of either kind is rejected by the write path,
@@ -1181,8 +1201,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     BOOST_REQUIRE(pk0_after->location != pk0_before->location);
     BOOST_REQUIRE(pk1_after->location != pk1_before->location);
 
-    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that a compaction whose index updates fail returns its buffer to the pool. This failure
@@ -1221,16 +1241,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     // The records are readable whichever location the index kept for them.
-    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 
     // The buffer of the failed compaction is back in the pool, so compaction still runs.
     setup_guard.reset();
     ls.get_compaction_manager().submit(cg);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
-    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that primary_index accounting callbacks track live bytes across
@@ -2697,7 +2717,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     BOOST_REQUIRE(entry_after_flush->location.segment != entry_before_flush->location.segment);
     BOOST_REQUIRE_EQUAL(entry_after_flush->location.segment.value, snapshot.front().segment_id.value);
 
-    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -2758,7 +2778,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     BOOST_REQUIRE(entry_after_discard);
     BOOST_REQUIRE(entry_after_discard->location == entry_before_discard->location);
 
-    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -2797,7 +2817,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     // The write itself succeeded and the record is readable where it was written.
     BOOST_REQUIRE(cg.logstor_index().get(make_index_key(*schema, key)));
 
-    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -3364,9 +3384,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->location.segment));
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->location.segment));
 
-    auto actual_pk0 = ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk1 = ls.read(schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk2 = ls.read(schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
+    auto actual_pk0 = read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = read_mutation(ls, schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = read_mutation(ls, schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -3453,9 +3473,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     BOOST_REQUIRE(live_pk1_after->location == live_pk1_before->location);
     BOOST_REQUIRE(live_pk2_after->location == live_pk2_before->location);
 
-    auto actual_pk0 = ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk1 = ls.read(schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk2 = ls.read(schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
+    auto actual_pk0 = read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = read_mutation(ls, schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = read_mutation(ls, schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -3578,7 +3598,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 
     // All the records are readable, from whichever group they ended up in.
     for (const auto& expected : {k0, k1, k2_v1, k3, k4, k5}) {
-        auto actual = ls.read(schema, index, expected.decorated_key(), schema->full_slice()).get();
+        auto actual = read_mutation(ls, schema, index, expected.decorated_key(), schema->full_slice()).get();
         BOOST_REQUIRE(actual);
         assert_that(*actual).is_equal_to(expected);
     }
@@ -3606,20 +3626,22 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 // semaphore to take read permits from. Tests fill the group with populate() and read it back
 // through make_reader().
 struct reader_test_env {
-    schema_ptr schema{make_kv_schema()};
+    schema_ptr schema;
     tmpdir dir;
     shared_logstor_cache cache;
     logstor ls{make_test_logstor_config(dir.path()), cache.shared_tracker};
     std::optional<test_logstor_group> cg;
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    reader_test_env() {
+    explicit reader_test_env(bool cache_enabled = false, schema_ptr s = make_kv_schema())
+            : schema(std::move(s)) {
         ls.do_recovery_for_test().get();
         ls.start().get();
-        cg.emplace(schema, ls);
+        cg.emplace(schema, ls, cache_enabled);
     }
 
     ~reader_test_env() {
+        cg->logstor_index().drain_cache().get();
         cg.reset();
         ls.stop().get();
     }
@@ -3631,8 +3653,24 @@ struct reader_test_env {
     mutation_reader make_reader(const dht::partition_range& pr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
-        return ls.make_reader(schema, cg->logstor_index(), semaphore.make_permit(), pr,
-                schema->full_slice(), nullptr, fwd, fwd_mr);
+        return make_reader(pr, schema->full_slice(), fwd, fwd_mr);
+    }
+
+    mutation_reader make_reader(const dht::partition_range& pr, const query::partition_slice& slice,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
+        return make_reader(schema, pr, slice, fwd, fwd_mr);
+    }
+
+    // Under a query schema of the caller's: the reversed one, for a reversed read.
+    mutation_reader make_reader(schema_ptr query_schema, const dht::partition_range& pr, const query::partition_slice& slice,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
+        return ls.make_reader(std::move(query_schema), cg->logstor_index(), semaphore.make_permit(), pr, slice, nullptr, fwd, fwd_mr);
+    }
+
+    const ::cache_tracker::stats& cache_stats() const {
+        return cache.shared_tracker.get_stats();
     }
 };
 
@@ -3656,16 +3694,28 @@ dht::partition_range range_between(const mutation& lower, const mutation& upper)
             bound(dht::ring_position(upper.decorated_key()), false));
 }
 
-// Both readers fill their buffer by draining a reader made for the partition they are on, so that
-// reader has to be bounded by the buffer size the caller asked for. Without that, a caller that
-// shrank its buffer is served the partition reader's own, much larger, default.
-SEASTAR_THREAD_TEST_CASE(test_logstor_readers_honor_max_buffer_size) {
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 2);
-    env.populate(ms);
+// Runs a reader test twice: with the partitions read from the log, and with the cache enabled and
+// holding all of them, so that the same assertions check the readers' cache path.
+static void with_and_without_cache(size_t partitions, std::function<void(reader_test_env&, const std::vector<mutation>&)> body) {
+    for (const bool cache_enabled : {false, true}) {
+        reader_test_env env(cache_enabled);
+        auto ms = make_token_ordered_mutations(env.schema, partitions);
+        env.populate(ms);
+        if (cache_enabled) {
+            for (const auto& m : ms) {
+                assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+            }
+        }
+        body(env, ms);
+    }
+}
 
+// A reader stops at the buffer size the caller asked for, between any two fragments, those inside
+// a partition included. Without that, a caller that shrank its buffer is served a whole partition
+// in one fill.
+SEASTAR_THREAD_TEST_CASE(test_logstor_readers_honor_max_buffer_size) {
     // Fills the reader with the smallest buffer bound there is and tells whether it stopped short
-    // of the end of the partition it was on. An unbounded partition reader hands over the whole
+    // of the end of the partition it was on. A reader that ignores the bound hands over the whole
     // partition, its end included, in one go.
     auto stops_inside_the_partition = [] (mutation_reader rd) {
         rd.set_max_buffer_size(1);
@@ -3678,8 +3728,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_readers_honor_max_buffer_size) {
         return !saw_partition_end;
     };
 
-    BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(singular_range(ms[0]))));
-    BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(query::full_partition_range)));
+    with_and_without_cache(2, [&] (reader_test_env& env, const std::vector<mutation>& ms) {
+        BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(singular_range(ms[0]))));
+        BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(query::full_partition_range)));
+    });
 }
 
 // Checks that a reader over a singular partition range honors the mutation_reader
@@ -3728,33 +3780,32 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_partition_navigation) {
 // at the end of the previous one, and that it does skip what is left of a partition the reader
 // is in the middle of.
 SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_next_partition_at_buffer_boundary) {
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 4);
-    env.populate(ms);
+    with_and_without_cache(4, [] (reader_test_env& env, const std::vector<mutation>& ms) {
 
-    // A buffer this small holds a single fragment, so the reader runs out of buffer at every
-    // fragment boundary, the ones inside a partition included.
-    auto at_partition_end = env.make_reader(query::full_partition_range);
-    at_partition_end.set_max_buffer_size(1);
-    auto at_partition_end_assertions = assert_that(std::move(at_partition_end));
-    for (const auto& m : ms) {
-        at_partition_end_assertions.produces_partition_start(m.decorated_key())
-                .produces_row_with_key(clustering_key::make_empty())
-                .produces_partition_end()
-                .next_partition();
-    }
-    at_partition_end_assertions.produces_end_of_stream();
+        // A buffer this small holds a single fragment, so the reader runs out of buffer at every
+        // fragment boundary, the ones inside a partition included.
+        auto at_partition_end = env.make_reader(query::full_partition_range);
+        at_partition_end.set_max_buffer_size(1);
+        auto at_partition_end_assertions = assert_that(std::move(at_partition_end));
+        for (const auto& m : ms) {
+            at_partition_end_assertions.produces_partition_start(m.decorated_key())
+                    .produces_row_with_key(clustering_key::make_empty())
+                    .produces_partition_end()
+                    .next_partition();
+        }
+        at_partition_end_assertions.produces_end_of_stream();
 
-    // Called with the partition entered but not consumed, next_partition() drops the rest of it
-    // and moves on to the one that follows.
-    auto mid_partition = env.make_reader(query::full_partition_range);
-    mid_partition.set_max_buffer_size(1);
-    auto mid_partition_assertions = assert_that(std::move(mid_partition));
-    for (const auto& m : ms) {
-        mid_partition_assertions.produces_partition_start(m.decorated_key())
-                .next_partition();
-    }
-    mid_partition_assertions.produces_end_of_stream();
+        // Called with the partition entered but not consumed, next_partition() drops the rest of it
+        // and moves on to the one that follows.
+        auto mid_partition = env.make_reader(query::full_partition_range);
+        mid_partition.set_max_buffer_size(1);
+        auto mid_partition_assertions = assert_that(std::move(mid_partition));
+        for (const auto& m : ms) {
+            mid_partition_assertions.produces_partition_start(m.decorated_key())
+                    .next_partition();
+        }
+        mid_partition_assertions.produces_end_of_stream();
+    });
 }
 
 // Checks that the range reader serves the bounds of the partition range it was given. It scans
@@ -3763,146 +3814,149 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_next_partition_at_buffer_boun
 SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_honors_partition_range_bounds) {
     using bound = dht::partition_range::bound;
 
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 5);
-    env.populate(ms);
+    with_and_without_cache(5, [] (reader_test_env& env, const std::vector<mutation>& ms) {
 
-    auto pos = [] (const mutation& m) { return dht::ring_position(m.decorated_key()); };
+        auto pos = [] (const mutation& m) { return dht::ring_position(m.decorated_key()); };
 
-    assert_that(env.make_reader(query::full_partition_range))
-            .produces(ms)
-            .produces_end_of_stream();
+        assert_that(env.make_reader(query::full_partition_range))
+                .produces(ms)
+                .produces_end_of_stream();
 
-    // [1, 3]
-    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), true), bound(pos(ms[3]), true))))
-            .produces(ms[1])
-            .produces(ms[2])
-            .produces(ms[3])
-            .produces_end_of_stream();
+        // [1, 3]
+        assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), true), bound(pos(ms[3]), true))))
+                .produces(ms[1])
+                .produces(ms[2])
+                .produces(ms[3])
+                .produces_end_of_stream();
 
-    // (1, 3)
-    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), false), bound(pos(ms[3]), false))))
-            .produces(ms[2])
-            .produces_end_of_stream();
+        // (1, 3)
+        assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), false), bound(pos(ms[3]), false))))
+                .produces(ms[2])
+                .produces_end_of_stream();
 
-    // (-inf, 1]
-    assert_that(env.make_reader(dht::partition_range(std::nullopt, bound(pos(ms[1]), true))))
-            .produces(ms[0])
-            .produces(ms[1])
-            .produces_end_of_stream();
+        // (-inf, 1]
+        assert_that(env.make_reader(dht::partition_range(std::nullopt, bound(pos(ms[1]), true))))
+                .produces(ms[0])
+                .produces(ms[1])
+                .produces_end_of_stream();
 
-    // [3, +inf)
-    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[3]), true), std::nullopt)))
-            .produces(ms[3])
-            .produces(ms[4])
-            .produces_end_of_stream();
+        // [3, +inf)
+        assert_that(env.make_reader(dht::partition_range(bound(pos(ms[3]), true), std::nullopt)))
+                .produces(ms[3])
+                .produces(ms[4])
+                .produces_end_of_stream();
 
-    // Bounds given by token only, without a key.
-    assert_that(env.make_reader(dht::partition_range(
-                    bound(dht::ring_position::starting_at(ms[2].token()), true),
-                    bound(dht::ring_position::ending_at(ms[3].token()), true))))
-            .produces(ms[2])
-            .produces(ms[3])
-            .produces_end_of_stream();
+        // Bounds given by token only, without a key.
+        assert_that(env.make_reader(dht::partition_range(
+                        bound(dht::ring_position::starting_at(ms[2].token()), true),
+                        bound(dht::ring_position::ending_at(ms[3].token()), true))))
+                .produces(ms[2])
+                .produces(ms[3])
+                .produces_end_of_stream();
+    });
 }
 
 // Checks that a reader that may be fast-forwarded serves every range it is moved to, including
 // ranges that hold nothing and ranges it is moved to before the current partition was consumed.
 SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_fast_forward_to) {
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 5);
-    env.populate(ms);
+    with_and_without_cache(5, [] (reader_test_env& env, const std::vector<mutation>& ms) {
 
-    auto make_forwardable_reader = [&] {
-        return env.make_reader(singular_range(ms[0]), streamed_mutation::forwarding::no,
-                mutation_reader::forwarding::yes);
-    };
+        auto make_forwardable_reader = [&] {
+            return env.make_reader(singular_range(ms[0]), streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::yes);
+        };
 
-    assert_that(make_forwardable_reader())
-            .produces(ms[0])
-            .produces_end_of_stream()
-            .fast_forward_to(singular_range(ms[2]))
-            .produces(ms[2])
-            .produces_end_of_stream()
-            .fast_forward_to(singular_range(ms[4]))
-            .produces(ms[4])
-            .produces_end_of_stream();
+        assert_that(make_forwardable_reader())
+                .produces(ms[0])
+                .produces_end_of_stream()
+                .fast_forward_to(singular_range(ms[2]))
+                .produces(ms[2])
+                .produces_end_of_stream()
+                .fast_forward_to(singular_range(ms[4]))
+                .produces(ms[4])
+                .produces_end_of_stream();
 
-    // A range with nothing in it is served as an empty stream, and does not end the reader:
-    // it still serves the range it is moved to next.
-    assert_that(make_forwardable_reader())
-            .produces(ms[0])
-            .produces_end_of_stream()
-            .fast_forward_to(range_between(ms[1], ms[2]))
-            .produces_end_of_stream()
-            .fast_forward_to(singular_range(ms[3]))
-            .produces(ms[3])
-            .produces_end_of_stream();
+        // A range with nothing in it is served as an empty stream, and does not end the reader:
+        // it still serves the range it is moved to next.
+        assert_that(make_forwardable_reader())
+                .produces(ms[0])
+                .produces_end_of_stream()
+                .fast_forward_to(range_between(ms[1], ms[2]))
+                .produces_end_of_stream()
+                .fast_forward_to(singular_range(ms[3]))
+                .produces(ms[3])
+                .produces_end_of_stream();
 
-    // Forwarding out of a partition that was entered but not consumed.
-    auto mid_partition = make_forwardable_reader();
-    mid_partition.set_max_buffer_size(1);
-    assert_that(std::move(mid_partition))
-            .produces_partition_start(ms[0].decorated_key())
-            .fast_forward_to(singular_range(ms[1]))
-            .produces(ms[1])
-            .produces_end_of_stream();
+        // Forwarding out of a partition that was entered but not consumed.
+        auto mid_partition = make_forwardable_reader();
+        mid_partition.set_max_buffer_size(1);
+        assert_that(std::move(mid_partition))
+                .produces_partition_start(ms[0].decorated_key())
+                .fast_forward_to(singular_range(ms[1]))
+                .produces(ms[1])
+                .produces_end_of_stream();
+    });
 }
 
 // The index scan hands the reader one batch of entries at a time, so a scan of more partitions
 // than a batch holds has to carry on across batches without dropping, repeating or reordering a
 // partition.
 SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_scans_across_index_batches) {
-    reader_test_env env;
     // Comfortably more than the reader's read-ahead, so the scan takes several batches.
-    auto ms = make_token_ordered_mutations(env.schema, 25);
-    env.populate(ms);
+    with_and_without_cache(25, [] (reader_test_env& env, const std::vector<mutation>& ms) {
 
-    assert_that(env.make_reader(query::full_partition_range))
-            .produces(ms)
-            .produces_end_of_stream();
+        assert_that(env.make_reader(query::full_partition_range))
+                .produces(ms)
+                .produces_end_of_stream();
 
-    assert_that(env.make_reader(query::full_partition_range)).has_monotonic_positions();
+        assert_that(env.make_reader(query::full_partition_range)).has_monotonic_positions();
+    });
 }
 
 // Checks that a range reader in forwarding mode produces every partition in clustering
 // sub-streams, and that next_partition() is what moves it to the next partition.
 SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_streamed_mutation_forwarding) {
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 3);
-    env.populate(ms);
+    with_and_without_cache(3, [] (reader_test_env& env, const std::vector<mutation>& ms) {
 
-    auto assertions = assert_that(env.make_reader(query::full_partition_range, streamed_mutation::forwarding::yes));
-    for (const auto& m : ms) {
-        assertions.produces_partition_start(m.decorated_key())
-                .produces_end_of_stream()
-                .fast_forward_to(position_range::all_clustered_rows())
-                .produces_row_with_key(clustering_key::make_empty())
-                .produces_end_of_stream()
-                .next_partition();
-    }
-    assertions.produces_end_of_stream();
+        auto assertions = assert_that(env.make_reader(query::full_partition_range, streamed_mutation::forwarding::yes));
+        for (const auto& m : ms) {
+            assertions.produces_partition_start(m.decorated_key())
+                    .produces_end_of_stream()
+                    .fast_forward_to(position_range::all_clustered_rows())
+                    .produces_row_with_key(clustering_key::make_empty())
+                    .produces_end_of_stream()
+                    .next_partition();
+        }
+        assertions.produces_end_of_stream();
+    });
 }
 
 // Checks that a range holding no key ends the stream right away, whether the key it asks for was
 // never written or the range simply falls between two keys that were.
 SEASTAR_THREAD_TEST_CASE(test_logstor_reader_produces_nothing_for_empty_ranges) {
-    reader_test_env env;
-    auto ms = make_token_ordered_mutations(env.schema, 3);
-    // Everything but the middle mutation, so that its key is the one missing from a populated index.
-    const std::array written = {ms[0], ms[2]};
-    env.populate(written);
+    for (const bool cache_enabled : {false, true}) {
+        reader_test_env env(cache_enabled);
+        auto ms = make_token_ordered_mutations(env.schema, 3);
+        // Everything but the middle mutation, so that its key is the one missing from a populated index.
+        const std::array written = {ms[0], ms[2]};
+        env.populate(written);
+        if (cache_enabled) {
+            for (const auto& m : written) {
+                assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+            }
+        }
 
-    assert_that(env.make_reader(singular_range(ms[1])))
-            .produces_end_of_stream();
+        assert_that(env.make_reader(singular_range(ms[1])))
+                .produces_end_of_stream();
 
-    assert_that(env.make_reader(singular_range(ms[1]), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
-            .produces_end_of_stream();
+        assert_that(env.make_reader(singular_range(ms[1]), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+                .produces_end_of_stream();
 
-    // The keys that were written bound this range without being in it, so the reader has to read
-    // their records and then filter both of them out.
-    assert_that(env.make_reader(range_between(ms[0], ms[2])))
-            .produces_end_of_stream();
+        // The keys that were written bound this range without being in it, so the reader has to
+        // take their partitions - from the log or from the cache - and then filter both of them out.
+        assert_that(env.make_reader(range_between(ms[0], ms[2])))
+                .produces_end_of_stream();
+    }
 }
 
 // get_memory_usage() counts the B+tree, get_entries_memory_usage() does not, so it has to be the
@@ -3956,4 +4010,332 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
     const size_t after_clear = index.get_memory_usage();
     testlog.info("primary index after clear: allocated {} bytes", after_clear);
+}
+
+// The shapes a logstor partition takes, on the key-value schema: a live row, a row with a row
+// tombstone older than its marker, a row whose marker and cell expire, a row whose marker is dead,
+// and a partition that is only a tombstone. One per key, in token order.
+static std::vector<mutation> make_partition_shapes(schema_ptr schema) {
+    const auto ts = api::timestamp_type(7);
+    const auto now = gc_clock::now();
+    auto keys = make_token_ordered_keys(schema, 5);
+    std::vector<mutation> ms;
+
+    ms.push_back(make_kv_mutation(schema, keys[0], "live", ts));
+
+    auto shadowed = make_kv_mutation(schema, keys[1], "shadowed", ts);
+    shadowed.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_tombstone(tombstone(ts - 1, now)));
+    ms.push_back(std::move(shadowed));
+
+    mutation expiring(schema, make_kv_mutation(schema, keys[2], "", ts).decorated_key());
+    {
+        auto& row = expiring.partition().clustered_row(*schema, clustering_key::make_empty());
+        row.apply(row_marker(ts, std::chrono::hours(1), now + std::chrono::hours(1)));
+        const auto& v_def = *schema->get_column_definition("v");
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(sstring("expiring")),
+                now + std::chrono::hours(1), std::chrono::hours(1)));
+    }
+    ms.push_back(std::move(expiring));
+
+    mutation dead_marker(schema, make_kv_mutation(schema, keys[3], "", ts).decorated_key());
+    dead_marker.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_marker(tombstone(ts, now)));
+    ms.push_back(std::move(dead_marker));
+
+    mutation deleted(schema, make_kv_mutation(schema, keys[4], "", ts).decorated_key());
+    deleted.partition().apply(tombstone(ts, now));
+    ms.push_back(std::move(deleted));
+
+    return ms;
+}
+
+// Drains two readers side by side and requires them to produce the same fragments.
+static void require_same_fragments(const schema& s, mutation_reader actual, mutation_reader expected) {
+    auto close_actual = deferred_close(actual);
+    auto close_expected = deferred_close(expected);
+    while (auto expected_mf = expected().get()) {
+        auto actual_mf = actual().get();
+        BOOST_REQUIRE(actual_mf);
+        BOOST_REQUIRE(actual_mf->equal(s, *expected_mf));
+    }
+    BOOST_REQUIRE(!actual().get());
+}
+
+// A read of a key the cache holds is served from it, straight into the reader's buffer, and
+// produces what a read that bypasses the cache produces - for every shape a partition takes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_serves_a_hit_from_the_cache) {
+    reader_test_env env(true);
+    auto ms = make_partition_shapes(env.schema);
+    env.populate(ms);
+
+    auto bypassing = partition_slice_builder(*env.schema).with_option<query::partition_slice::option::bypass_cache>().build();
+
+    const auto& stats = env.cache_stats();
+    for (const auto& m : ms) {
+        const auto hits = stats.partition_hits;
+        const auto misses = stats.partition_misses;
+
+        // The first read misses and admits the partition.
+        assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits);
+
+        // The second is a hit, and produces the same fragments as a read that goes to the log.
+        require_same_fragments(*env.schema, env.make_reader(singular_range(m)), env.make_reader(singular_range(m), bypassing));
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 1);
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+    }
+}
+
+// A hit honors the buffer bound like any other read: with the smallest bound each fill_buffer()
+// delivers one fragment, and the fragments not delivered yet wait for the next call. The row is
+// charged to the permit while it waits, and the charge is released when the row is pushed.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_hit_honors_max_buffer_size) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    assert_that(env.make_reader(singular_range(ms[0]))).produces(ms[0]).produces_end_of_stream();
+
+    const auto hits = env.cache_stats().partition_hits;
+    auto rd = env.make_reader(singular_range(ms[0]));
+    auto close_rd = deferred_close(rd);
+    rd.set_max_buffer_size(1);
+
+    std::vector<mutation_fragment_v2::kind> kinds;
+    // The memory charged to the permit after each fill, when the fragments of the fill are gone.
+    std::vector<ssize_t> memory;
+    while (!rd.is_end_of_stream()) {
+        rd.fill_buffer().get();
+        while (!rd.is_buffer_empty()) {
+            kinds.push_back(rd.pop_mutation_fragment().mutation_fragment_kind());
+        }
+        memory.push_back(rd.permit().consumed_resources().memory);
+    }
+    BOOST_REQUIRE_EQUAL(env.cache_stats().partition_hits, hits + 1);
+    BOOST_REQUIRE_EQUAL(memory.size(), 3);
+    const std::vector<mutation_fragment_v2::kind> expected{
+        mutation_fragment_v2::kind::partition_start,
+        mutation_fragment_v2::kind::clustering_row,
+        mutation_fragment_v2::kind::partition_end,
+    };
+    BOOST_REQUIRE(kinds == expected);
+    BOOST_REQUIRE_GT(memory[0], memory[1]);
+    BOOST_REQUIRE_EQUAL(memory[1], memory[2]);
+}
+
+// A cached partition that does not carry the key it was looked up by - a hash collision, or a
+// corruption - is rejected by the reader with key_mismatch_error.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_rejects_a_cached_partition_of_another_key) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 2);
+    env.populate(ms);
+
+    auto& index = env.cg->logstor_index();
+    primary_index_key key(ms[0].decorated_key());
+    auto entry = index.get(key);
+    BOOST_REQUIRE(entry);
+    BOOST_REQUIRE(index.populate_cache(key, entry->location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
+
+    auto rd = env.make_reader(singular_range(ms[0]));
+    auto close_rd = deferred_close(rd);
+    BOOST_REQUIRE_THROW(rd.fill_buffer().get(), key_mismatch_error);
+}
+
+// An eviction between two reads turns the second into a miss, which admits the partition again.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_misses_after_an_eviction) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    const auto& m = ms[0];
+    const auto& stats = env.cache_stats();
+
+    assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    BOOST_REQUIRE_EQUAL(stats.partition_hits, 1);
+    BOOST_REQUIRE_EQUAL(stats.partition_misses, 1);
+
+    // The one cached partition goes with the cache's contents.
+    env.cg->logstor_index().drain_cache().get();
+
+    assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    BOOST_REQUIRE_EQUAL(stats.partition_misses, 2);
+    assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    BOOST_REQUIRE_EQUAL(stats.partition_hits, 2);
+}
+
+// The reader contract over a cached partition: next_partition() before the partition was entered
+// does not skip it, and a forwarding reader produces it in clustering sub-streams.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_partition_navigation_on_a_hit) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    const auto& first = ms[0];
+    assert_that(env.make_reader(singular_range(first))).produces(first).produces_end_of_stream();
+    const auto hits = env.cache_stats().partition_hits;
+
+    assert_that(env.make_reader(singular_range(first)))
+            .next_partition()
+            .produces_partition_start(first.decorated_key())
+            .next_partition()
+            .produces_end_of_stream();
+
+    assert_that(env.make_reader(singular_range(first), streamed_mutation::forwarding::yes))
+            .produces_partition_start(first.decorated_key())
+            .produces_end_of_stream()
+            .fast_forward_to(position_range::all_clustered_rows())
+            .produces_row_with_key(clustering_key::make_empty())
+            .produces_end_of_stream();
+
+    BOOST_REQUIRE_EQUAL(env.cache_stats().partition_hits, hits + 2);
+}
+
+// The partition of a hit is built inside the cache's allocating section and pushed outside it, so
+// an allocation failure that makes the section retry duplicates nothing: whatever allocation
+// fails, a read that completes produces exactly one partition.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_hit_survives_allocation_failures) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    assert_that(env.make_reader(singular_range(ms[0]))).produces(ms[0]).produces_end_of_stream();
+
+    memory::with_allocation_failures([&] {
+        auto rd = env.make_reader(singular_range(ms[0]));
+        auto close_rd = deferred_close(rd);
+        // The hit path does not yield, so this neither suspends the thread nor lets another task
+        // consume the injected failure.
+        rd.fill_buffer().get();
+        unsigned partition_starts = 0;
+        unsigned rows = 0;
+        while (!rd.is_buffer_empty()) {
+            auto mf = rd.pop_mutation_fragment();
+            partition_starts += mf.is_partition_start();
+            rows += mf.is_clustering_row();
+        }
+        BOOST_REQUIRE_EQUAL(partition_starts, 1);
+        BOOST_REQUIRE_EQUAL(rows, 1);
+        BOOST_REQUIRE(rd.is_end_of_stream());
+    });
+}
+
+// The schema registry of the shard, initialized the way a node's is: what a reversed read needs,
+// since the reversed schema of a table comes from it.
+struct schema_registry_init {
+    std::unique_ptr<db::config> config = std::make_unique<db::config>();
+    gms::feature_service fs{{get_disabled_features_from_db_config(*config)}};
+    schema_registry_init() {
+        local_schema_registry().init(db::schema_ctxt(config->extensions(), config->murmur3_partitioner_ignore_msb_bits(),
+                std::make_shared<data_dictionary::dummy_user_types_storage>(), fs),
+                std::chrono::seconds(config->schema_registry_grace_period()));
+    }
+};
+
+// A reversed read comes under the reversed schema, and a table without clustering columns has
+// nothing to reverse: it produces what the forward read does, from the log and from the cache, and
+// the cache serves it as it serves the forward read - a reversed read of a cached key is a hit,
+// and so is the forward read that follows it.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_serves_a_reversed_read) {
+    // Registered, as a table's schema is, so that the reversed schema is the registry's and knows
+    // the table's as its own reverse.
+    schema_registry_init registry;
+    reader_test_env env(true, local_schema_registry().learn(make_kv_schema()));
+    auto ms = make_partition_shapes(env.schema);
+    env.populate(ms);
+
+    auto reversed_schema = env.schema->get_reversed();
+    BOOST_REQUIRE(reversed_schema->get_reversed() == env.schema);
+    auto reversed = partition_slice_builder(*reversed_schema).with_option<query::partition_slice::option::reversed>().build();
+    auto reversed_bypassing = partition_slice_builder(*reversed_schema, reversed).with_option<query::partition_slice::option::bypass_cache>().build();
+
+    const auto& stats = env.cache_stats();
+    for (const auto& m : ms) {
+        const auto hits = stats.partition_hits;
+        const auto misses = stats.partition_misses;
+
+        // The forward read, drained first, misses and admits the partition; the reversed read that
+        // follows is a hit, and produces the same fragments.
+        require_same_fragments(*env.schema, env.make_reader(reversed_schema, singular_range(m), reversed),
+                env.make_reader(singular_range(m)));
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 1);
+
+        // A reversed hit produces what a reversed read of the log does, and the forward read
+        // after it is a hit too.
+        require_same_fragments(*env.schema, env.make_reader(reversed_schema, singular_range(m), reversed),
+                env.make_reader(reversed_schema, singular_range(m), reversed_bypassing));
+        assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 3);
+        BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+    }
+}
+
+// A slice whose row ranges exclude the one row a logstor partition has - an empty list of ranges,
+// since a logstor schema has no clustering columns for a range to be built on - gets the partition
+// without its row, from the log and from the cache alike.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_drops_the_row_the_slice_excludes) {
+    reader_test_env env(true);
+    auto ms = make_token_ordered_mutations(env.schema, 1);
+    env.populate(ms);
+    const auto& m = ms[0];
+
+    auto no_rows = partition_slice_builder(*env.schema).with_ranges({}).build();
+    const auto& stats = env.cache_stats();
+    const auto misses = stats.partition_misses;
+    const auto hits = stats.partition_hits;
+    for (unsigned read = 0; read < 2; ++read) {
+        assert_that(env.make_reader(singular_range(m), no_rows))
+                .produces_partition_start(m.decorated_key())
+                .produces_partition_end()
+                .produces_end_of_stream();
+    }
+    BOOST_REQUIRE_EQUAL(stats.partition_misses, misses + 1);
+    BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + 1);
+}
+
+// A range read of cached partitions serves them from the cache, counting a hit per partition, and
+// produces what a read that bypasses the cache produces - for every shape a partition takes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_serves_hits_from_the_cache) {
+    reader_test_env env(true);
+    auto ms = make_partition_shapes(env.schema);
+    env.populate(ms);
+    for (const auto& m : ms) {
+        assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    }
+
+    auto bypassing = partition_slice_builder(*env.schema).with_option<query::partition_slice::option::bypass_cache>().build();
+    const auto& stats = env.cache_stats();
+    const auto hits = stats.partition_hits;
+    const auto misses = stats.partition_misses;
+    require_same_fragments(*env.schema, env.make_reader(query::full_partition_range),
+            env.make_reader(query::full_partition_range, bypassing));
+    BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + ms.size());
+    BOOST_REQUIRE_EQUAL(stats.partition_misses, misses);
+}
+
+// A reversed range read comes under the reversed schema, and produces what the forward read does,
+// from the log and from the cache. Its reads of the cache are hits.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_serves_a_reversed_read) {
+    // Registered, as a table's schema is, so that the reversed schema is the registry's and knows
+    // the table's as its own reverse.
+    schema_registry_init registry;
+    reader_test_env env(true, local_schema_registry().learn(make_kv_schema()));
+    auto ms = make_partition_shapes(env.schema);
+    env.populate(ms);
+
+    auto reversed_schema = env.schema->get_reversed();
+    auto reversed = partition_slice_builder(*reversed_schema).with_option<query::partition_slice::option::reversed>().build();
+    auto bypassing = partition_slice_builder(*env.schema).with_option<query::partition_slice::option::bypass_cache>().build();
+
+    // A range read does not populate the cache, so both reads go to the log.
+    require_same_fragments(*env.schema, env.make_reader(reversed_schema, query::full_partition_range, reversed),
+            env.make_reader(query::full_partition_range, bypassing));
+
+    for (const auto& m : ms) {
+        assert_that(env.make_reader(singular_range(m))).produces(m).produces_end_of_stream();
+    }
+    const auto& stats = env.cache_stats();
+    const auto hits = stats.partition_hits;
+    const auto misses = stats.partition_misses;
+    require_same_fragments(*env.schema, env.make_reader(reversed_schema, query::full_partition_range, reversed),
+            env.make_reader(query::full_partition_range, bypassing));
+    BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + ms.size());
+    BOOST_REQUIRE_EQUAL(stats.partition_misses, misses);
 }

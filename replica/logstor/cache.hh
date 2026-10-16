@@ -9,10 +9,12 @@
 
 #include "db/cache_tracker.hh"
 #include "mutation/mutation.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "utils/entangled.hh"
 #include "utils/lru.hh"
 #include "utils/logalloc.hh"
 #include <optional>
+#include <type_traits>
 
 namespace replica::logstor {
 
@@ -21,7 +23,11 @@ class primary_index;
 class primary_index_entry;
 class cached_entry_slot;
 
-// An evictable node holding the deserialized mutation for one primary_index_entry.
+// LSA compaction moves a cached entry with a constructor that must not throw.
+static_assert(std::is_nothrow_move_constructible_v<single_row_partition>);
+
+// An evictable node holding the cached partition of one primary_index_entry, as a
+// single_row_partition. The cache admits a single_row_partition, so the shape comes with the type.
 //
 // Lives inside the shared cache tracker's LSA region. When the shared LSA
 // reclaimer needs memory it calls on_evicted(), which:
@@ -31,19 +37,19 @@ class cached_entry_slot;
 // The back-pointer (_slot_link) is an entangled paired with the
 // primary_index_entry::_cached_entry._entry_link, which lives in the
 // standard-heap B+tree and is therefore stable across LSA compaction.
-class cached_mutation_entry final : public evictable {
+class cached_partition_entry final : public evictable {
     schema_ptr _schema;
     partition_key _key;
-    mutation_partition _partition;
+    single_row_partition _partition;
     entangled _slot_link; // Paired with the primary_index_entry's cached_entry_slot::_entry_link
 
 public:
-    // Note: constructed inside the LSA region.
-    cached_mutation_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot);
+    // Note: constructed inside the LSA region, as a copy of `partition`.
+    cached_partition_entry(schema_ptr schema, const partition_key& key, const single_row_partition& partition, cached_entry_slot& slot);
 
     // LSA compaction moves cached entries between addresses, so the owning
     // primary_index_entry::_cached_entry pointer must be rebound to the new object.
-    cached_mutation_entry(cached_mutation_entry&& other) noexcept
+    cached_partition_entry(cached_partition_entry&& other) noexcept
             : evictable(std::move(other))
             , _schema(std::move(other._schema))
             , _key(std::move(other._key))
@@ -53,9 +59,9 @@ public:
     }
 
     // Not copyable.
-    cached_mutation_entry(const cached_mutation_entry&) = delete;
-    cached_mutation_entry& operator=(const cached_mutation_entry&) = delete;
-    cached_mutation_entry& operator=(cached_mutation_entry&&) = delete;
+    cached_partition_entry(const cached_partition_entry&) = delete;
+    cached_partition_entry& operator=(const cached_partition_entry&) = delete;
+    cached_partition_entry& operator=(cached_partition_entry&&) = delete;
 
     const schema_ptr& schema() const noexcept {
         return _schema;
@@ -65,20 +71,12 @@ public:
         return _key;
     }
 
-    const mutation_partition& partition() const noexcept {
+    const single_row_partition& partition() const noexcept {
         return _partition;
     }
 
-    mutation_partition& partition() noexcept {
-        return _partition;
-    }
-
-    void upgrade(schema_ptr schema) {
-        if (_schema != schema) {
-            _partition.upgrade(*_schema, *schema);
-            _schema = std::move(schema);
-        }
-    }
+    // Converts the row to `schema`, in place. Called with the region's allocator current.
+    void upgrade(schema_ptr schema);
 
     // Called by lru under memory pressure.
     void on_evicted() noexcept override;
@@ -97,23 +95,20 @@ public:
     cached_entry_slot(const cached_entry_slot&) = delete;
     cached_entry_slot& operator=(const cached_entry_slot&) = delete;
 
-    cached_mutation_entry* get() const noexcept {
-        return _entry_link.get(&cached_mutation_entry::_slot_link);
+    cached_partition_entry* get() const noexcept {
+        return _entry_link.get(&cached_partition_entry::_slot_link);
     }
 
     explicit operator bool() const noexcept { return bool(_entry_link); }
-    cached_mutation_entry& operator*() const noexcept { return *get(); }
-    cached_mutation_entry* operator->() const noexcept { return get(); }
+    cached_partition_entry& operator*() const noexcept { return *get(); }
+    cached_partition_entry* operator->() const noexcept { return get(); }
 
-    friend class cached_mutation_entry;
+    friend class cached_partition_entry;
 };
 
-// Uses the shared row-cache LSA region and LRU list for the logstor cache.
+// The cache of a primary index: uses the shared row-cache LSA region and LRU list, and is read
+// and written through the index, since a cached partition hangs off the index entry of its key.
 class cache_tracker {
-public:
-    friend class cached_mutation_entry;
-
-private:
     ::cache_tracker& _shared_tracker;
     // Used by the read path to lock the LSA region without changing the current allocator
     logalloc::allocating_section _read_section;
@@ -125,22 +120,24 @@ public:
 
     void evict(const primary_index_entry&);
 
-    // The schema is taken by reference rather than as a schema_ptr: a hit needs one reference of
-    // its own for the mutation it returns, and a miss needs none at all.
-    std::optional<mutation> lookup(const primary_index_entry&, const schema& target_schema);
+    // Admits a copy of `partition`, of the key `key` under `schema`, unless the entry holds a
+    // partition already.
+    void populate(const primary_index_entry&, const schema_ptr& schema, const partition_key& key, const single_row_partition& partition);
 
-    // Like lookup(), but for introspection: returns a snapshot of the cached mutation
-    // without touching the LRU, without counting a hit or a miss and without upgrading
-    // the cached entry in place.
+    // The hit path of a read: touches the LRU, counts a hit or a miss, upgrades the entry in place,
+    // and hands out the partition with its key. A reader turns the partition into fragments without
+    // a mutation in between. The index entry has only the hash of the key, so a point read compares
+    // the key it gets with its own. The schema is taken by reference, because only a hit that
+    // upgrades the entry needs a reference to it. Never yields.
+    std::optional<keyed_single_row_partition> read_partition(const primary_index_entry&, const schema& target_schema);
+
+    // For introspection: a snapshot of the cached partition as a mutation, taken without
+    // touching the LRU, without counting a hit or a miss and without upgrading the cached
+    // entry in place - the snapshot is upgraded instead.
     std::optional<mutation> peek(const primary_index_entry&, schema_ptr);
 
-    void populate(const primary_index_entry&, const mutation&);
-
+private:
     logalloc::region& region() noexcept {
-        return _shared_tracker.region();
-    }
-
-    const logalloc::region& region() const noexcept {
         return _shared_tracker.region();
     }
 

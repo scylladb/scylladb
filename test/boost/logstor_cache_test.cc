@@ -11,7 +11,10 @@
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/index.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "db/cache_tracker.hh"
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/util/defer.hh>
 #include <variant>
 #include "schema/schema_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
@@ -74,15 +77,15 @@ mutation make_mutation(schema_ptr schema, sstring pk, sstring value) {
 void populate(primary_index& index, const primary_index_key& key, const mutation& m) {
     auto entry = index.get(key);
     BOOST_REQUIRE(entry);
-    BOOST_REQUIRE(index.populate_cache(key, entry->location, m));
+    BOOST_REQUIRE(index.populate_cache(key, entry->location, m.schema(), m.key(), to_single_row_partition(mutation(m))));
 }
 
 mutation lookup_mutation(primary_index& index, const primary_index_key& key, schema_ptr schema) {
-    auto result = index.lookup_for_read(key, *schema, true);
+    auto result = index.lookup_for_read(key, *schema, use_cache::yes);
     BOOST_REQUIRE(result);
-    auto* cached = std::get_if<mutation>(&*result);
+    auto* cached = std::get_if<keyed_single_row_partition>(&*result);
     BOOST_REQUIRE(cached);
-    return std::move(*cached);
+    return to_mutation(std::move(schema), std::move(cached->key), std::move(cached->partition));
 }
 
 mutation_partition lookup(primary_index& index, const primary_index_key& key, schema_ptr schema) {
@@ -90,13 +93,13 @@ mutation_partition lookup(primary_index& index, const primary_index_key& key, sc
 }
 
 bool lookup_exists(primary_index& index, const primary_index_key& key, schema_ptr schema) {
-    auto result = index.lookup_for_read(key, *schema, true);
+    auto result = index.lookup_for_read(key, *schema, use_cache::yes);
     BOOST_REQUIRE(result);
-    return std::holds_alternative<mutation>(*result);
+    return std::holds_alternative<keyed_single_row_partition>(*result);
 }
 
-bool evict_one(replica::logstor::cache_tracker& tracker) {
-    return tracker.region().evict_some() == seastar::memory::reclaiming_result::reclaimed_something;
+bool evict_one(shared_logstor_cache& cache) {
+    return cache.shared_tracker.region().evict_some() == seastar::memory::reclaiming_result::reclaimed_something;
 }
 
 std::vector<primary_index_key> insert_same_token_keys(primary_index& index, const schema& schema, int64_t token, int start, int count) {
@@ -176,7 +179,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     BOOST_REQUIRE(lookup_exists(index, key3, schema));
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+    BOOST_REQUIRE(evict_one(cache));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 1);
 
     auto cached_after_eviction = int(lookup_exists(index, key0, schema))
@@ -266,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+        BOOST_REQUIRE(evict_one(cache));
     }
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + hot_keys.size());
 
@@ -367,11 +370,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
 
     // Create fragmentation so full_compaction() has live cached objects to move.
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
-    BOOST_REQUIRE(evict_one(cache.logstor_tracker));
+    BOOST_REQUIRE(evict_one(cache));
+    BOOST_REQUIRE(evict_one(cache));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 2);
 
-    cache.logstor_tracker.region().full_compaction();
+    cache.shared_tracker.region().full_compaction();
 
     for (size_t i = 2; i < keys.size(); ++i) {
         BOOST_REQUIRE(lookup_exists(index, keys[i], schema));
@@ -411,5 +414,241 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_sche
     auto expected = original;
     expected.upgrade(new_schema);
     assert_that(new_schema, cached).is_equal_to(expected.partition());
+    index.drain_cache().get();
+}
+
+static dht::decorated_key make_decorated_key(const schema& schema, sstring pk) {
+    return dht::decorate_key(schema, partition_key::from_single_value(schema, serialized(std::move(pk))));
+}
+
+static mutation to_mutation(schema_ptr schema, sstring pk, single_row_partition&& partition) {
+    auto dk = make_decorated_key(*schema, std::move(pk));
+    return to_mutation(std::move(schema), std::move(dk), std::move(partition));
+}
+
+// to_single_row_partition() takes the one row out of a mutation and to_mutation() puts it back: the
+// round trip is the identity for every shape a partition takes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_row_partition_round_trips_every_partition_shape) {
+    auto schema = make_logstor_schema();
+    const auto ts = api::timestamp_type(7);
+    const auto now = gc_clock::now();
+    const auto& v_def = *schema->get_column_definition("v");
+
+    // The shapes a logstor partition takes: a live row, a row with a tombstone older than its marker,
+    // a row whose marker and cell expire, a row whose marker is dead, and a partition that is only a
+    // tombstone.
+    std::vector<mutation> ms;
+
+    ms.push_back(make_mutation(schema, "live", "v0"));
+
+    auto shadowed = make_mutation(schema, "shadowed", "v0");
+    shadowed.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_tombstone(tombstone(api::timestamp_type(0), now)));
+    ms.push_back(std::move(shadowed));
+
+    mutation expiring(schema, make_decorated_key(*schema, "expiring"));
+    {
+        auto& row = expiring.partition().clustered_row(*schema, clustering_key::make_empty());
+        row.apply(row_marker(ts, std::chrono::hours(1), now + std::chrono::hours(1)));
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(sstring("v0")),
+                now + std::chrono::hours(1), std::chrono::hours(1)));
+    }
+    ms.push_back(std::move(expiring));
+
+    mutation dead_marker(schema, make_decorated_key(*schema, "dead"));
+    dead_marker.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_marker(tombstone(ts, now)));
+    ms.push_back(std::move(dead_marker));
+
+    mutation deleted(schema, make_decorated_key(*schema, "deleted"));
+    deleted.partition().apply(tombstone(ts, now));
+    ms.push_back(std::move(deleted));
+
+    for (const auto& m : ms) {
+        auto partition = to_single_row_partition(mutation(m));
+        BOOST_REQUIRE(partition.partition_tombstone == m.partition().partition_tombstone());
+        BOOST_REQUIRE_EQUAL(partition.row.has_value(), !m.partition().clustered_rows().empty());
+        assert_that(to_mutation(schema, m.decorated_key(), std::move(partition))).is_equal_to(m);
+    }
+}
+
+// A partition of a shape a logstor schema cannot produce is an internal error, not a fallback.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_row_partition_rejects_a_partition_of_another_shape) {
+    const auto abort_ie = set_abort_on_internal_error(false);
+    auto reset_abort_ie = defer([abort_ie] noexcept {
+        set_abort_on_internal_error(abort_ie);
+    });
+    auto schema = make_logstor_schema();
+    auto m = make_mutation(schema, "pk0", "v0");
+    m.partition().ensure_last_dummy(*schema);
+    BOOST_REQUIRE_THROW(to_single_row_partition(std::move(m)), std::runtime_error);
+}
+
+// Reads the partition of `pk` as a point read does: by the hash of the key, asking for the key
+// itself.
+static std::optional<single_row_partition> read_partition(primary_index& index, sstring pk, const schema& schema) {
+    auto dk = make_decorated_key(schema, std::move(pk));
+    auto result = index.lookup_for_read(primary_index_key(dk), schema, use_cache::yes);
+    BOOST_REQUIRE(result);
+    if (auto* cached = std::get_if<keyed_single_row_partition>(&*result)) {
+        BOOST_REQUIRE(cached->key.equal(schema, dk));
+        return std::move(cached->partition);
+    }
+    return std::nullopt;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_read_partition_hands_out_the_row) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+
+    // A row with a marker, a live cell and a row tombstone older than both, so that every part of
+    // a row is there to be handed out.
+    auto m = make_mutation(schema, "pk0", "v0");
+    m.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_tombstone(tombstone(api::timestamp_type(0), gc_clock::now())));
+    populate(index, key, m);
+
+    const auto hits_before = cache.shared_tracker.get_stats().partition_hits;
+    auto partition = read_partition(index, "pk0", *schema);
+    BOOST_REQUIRE(partition);
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, hits_before + 1);
+    BOOST_REQUIRE(!partition->partition_tombstone);
+    BOOST_REQUIRE(partition->row);
+    BOOST_REQUIRE(partition->row->marker().is_live());
+    BOOST_REQUIRE_EQUAL(partition->row->cells().size(), 1);
+    assert_that(to_mutation(schema, "pk0", std::move(*partition))).is_equal_to(m);
+    assert_that(to_mutation(schema, "pk0", *read_partition(index, "pk0", *schema))).is_equal_to(lookup_mutation(index, key, schema));
+    index.drain_cache().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_read_partition_of_a_tombstone_has_no_row) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+
+    auto deleted = make_mutation(schema, "pk0", "v0");
+    deleted.partition() = mutation_partition(*schema);
+    deleted.partition().apply(tombstone(api::timestamp_type(2), gc_clock::now()));
+    populate(index, key, deleted);
+
+    auto partition = read_partition(index, "pk0", *schema);
+    BOOST_REQUIRE(partition);
+    BOOST_REQUIRE(partition->partition_tombstone == deleted.partition().partition_tombstone());
+    BOOST_REQUIRE(!partition->row);
+    assert_that(to_mutation(schema, "pk0", std::move(*partition))).is_equal_to(deleted);
+    index.drain_cache().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_read_partition_counts_a_miss) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+
+    const auto misses_before = cache.shared_tracker.get_stats().partition_misses;
+    BOOST_REQUIRE(!read_partition(index, "pk0", *schema));
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, misses_before + 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_read_partition_upgrades_the_entry) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+
+    auto original = make_mutation(schema, "pk0", "v0");
+    populate(index, key, original);
+
+    auto new_schema = schema_builder(schema).with_column("v2", utf8_type).build();
+    auto partition = read_partition(index, "pk0", *new_schema);
+    BOOST_REQUIRE(partition);
+    auto expected = original;
+    expected.upgrade(new_schema);
+    assert_that(to_mutation(new_schema, "pk0", std::move(*partition))).is_equal_to(expected);
+    // The entry was upgraded in place, so a read under the new schema finds it there already.
+    assert_that(lookup_mutation(index, key, new_schema)).is_equal_to(expected);
+    index.drain_cache().get();
+}
+
+// peek() is the dump's read of the cache: the snapshot is what the cache holds, upgraded to the
+// schema asked for, and it counts as neither a hit nor a miss.
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_peek_snapshots_without_counting) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+    auto m = make_mutation(schema, "pk0", "v0");
+    populate(index, key, m);
+
+    const auto stats_before = cache.shared_tracker.get_stats();
+    auto snapshot = index.lookup_for_dump(key, schema);
+    BOOST_REQUIRE(snapshot && snapshot->cached_mutation);
+    assert_that(*snapshot->cached_mutation).is_equal_to(m);
+
+    auto new_schema = schema_builder(schema).with_column("v2", utf8_type).build();
+    auto upgraded = index.lookup_for_dump(key, new_schema);
+    BOOST_REQUIRE(upgraded && upgraded->cached_mutation);
+    auto expected = m;
+    expected.upgrade(new_schema);
+    assert_that(*upgraded->cached_mutation).is_equal_to(expected);
+
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, stats_before.partition_hits);
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, stats_before.partition_misses);
+    index.drain_cache().get();
+}
+
+// The entry of a key, found the way a scan finds it: through the batch of its token.
+static const primary_index_entry& find_entry(primary_index& index, const primary_index_key& key) {
+    auto scan = index.scan(dht::token_range::make_singular(key.token()));
+    while (auto batch = scan.next_batch(16)) {
+        for (const auto& entry : batch->entries) {
+            if ((entry.get().key() <=> key) == 0) {
+                return entry.get();
+            }
+        }
+        if (batch->exhausted) {
+            break;
+        }
+    }
+    BOOST_FAIL("key is missing from the index");
+    __builtin_unreachable();
+}
+
+// The scan's read of the cache: the key comes too, since the scan holds only the entry, and it
+// counts as a hit or a miss like a point read does.
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_lookup_cached_hands_out_the_key_too) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
+
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
+
+    const auto stats_before = cache.shared_tracker.get_stats();
+    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key), *schema, use_cache::yes));
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, stats_before.partition_misses + 1);
+
+    auto m = make_mutation(schema, "pk0", "v0");
+    populate(index, key, m);
+    auto cached = index.lookup_cached(find_entry(index, key), *schema, use_cache::yes);
+    BOOST_REQUIRE(cached);
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, stats_before.partition_hits + 1);
+    BOOST_REQUIRE(cached->key.equal(*schema, m.decorated_key()));
+    assert_that(to_mutation(schema, std::move(cached->key), std::move(cached->partition))).is_equal_to(m);
+
+    // A read that does not use the cache is not a lookup at all.
+    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key), *schema, use_cache::no));
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, stats_before.partition_hits + 1);
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, stats_before.partition_misses + 1);
     index.drain_cache().get();
 }

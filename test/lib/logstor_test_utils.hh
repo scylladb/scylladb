@@ -10,14 +10,20 @@
 #include <filesystem>
 #include <memory>
 
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include "db/cache_tracker.hh"
+#include "mutation/mutation.hh"
+#include "reader_concurrency_semaphore.hh"
+#include "readers/mutation_reader.hh"
 #include "replica/logstor/cache.hh"
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/updateable_value.hh"
 
@@ -118,5 +124,35 @@ protected:
         return _cm;
     }
 };
+
+// The partition of a consumed mutation: the row is moved out of it, no cell is copied. Tests build
+// a partition from a mutation; logstor itself decodes one from a record.
+inline replica::logstor::single_row_partition to_single_row_partition(mutation&& m) {
+    return replica::logstor::to_single_row_partition(std::move(m.partition()), *m.schema(), m.key());
+}
+
+// Reads the partition of a key the way a query does, through the reader logstor::make_reader()
+// makes, and builds the mutation from what the reader emits: nullopt when the index does not hold
+// the key.
+inline future<mutation_opt> read_mutation(replica::logstor::logstor& ls, schema_ptr s, const replica::logstor::primary_index& index,
+        reader_permit permit, const dht::decorated_key& dk, const query::partition_slice& slice) {
+    const auto pr = dht::partition_range::make_singular(dk);
+    auto reader = ls.make_reader(std::move(s), index, std::move(permit), pr, slice);
+    auto m = co_await coroutine::as_future(read_mutation_from_mutation_reader(reader));
+    co_await reader.close();
+    co_return co_await std::move(m);
+}
+
+// Like the above, for a test that has no permit to read with: each read takes one from a semaphore
+// of its own. The semaphore is stopped however the read ends, since it holds a permit by then.
+inline future<mutation_opt> read_mutation(replica::logstor::logstor& ls, schema_ptr s, const replica::logstor::primary_index& index,
+        const dht::decorated_key& dk, const query::partition_slice& slice) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, "logstor_read_mutation",
+            reader_concurrency_semaphore::register_metrics::no);
+    auto permit = semaphore.make_tracking_only_permit(s, "read_mutation", db::no_timeout, {});
+    auto m = co_await coroutine::as_future(read_mutation(ls, std::move(s), index, std::move(permit), dk, slice));
+    co_await semaphore.stop();
+    co_return co_await std::move(m);
+}
 
 } // namespace tests::logstor
