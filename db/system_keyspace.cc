@@ -1579,12 +1579,12 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     //
     // But we don't know that here, so we have to SELECT the set of partition keys,
     // and issue DELETEs on that.
-    sstring req = format("SELECT shard from system.{}", COMMITLOG_CLEANUPS);
+    sstring req = format("SELECT shard from {}.{}", NAME, COMMITLOG_CLEANUPS);
     auto rs = co_await execute_cql(req);
 
     co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto shard = row.get_as<int32_t>("shard");
-        static const sstring delete_req = format("DELETE FROM system.{} WHERE shard = ?", COMMITLOG_CLEANUPS);
+        static const sstring delete_req = format("DELETE FROM {}.{} WHERE shard = ?", NAME, COMMITLOG_CLEANUPS);
         co_await execute_cql(delete_req, shard);
     });
 }
@@ -1594,14 +1594,14 @@ future<> system_keyspace::drop_old_commitlog_cleanup_records(replay_position min
         int64_t(min_position.base_id()),
         int32_t(min_position.pos)
     }));
-    sstring req = format("DELETE FROM system.{} WHERE shard = ? AND position < ?", COMMITLOG_CLEANUPS);
+    sstring req = format("DELETE FROM {}.{} WHERE shard = ? AND position < ?", NAME, COMMITLOG_CLEANUPS);
     co_await _qp.execute_internal(req, {int32_t(min_position.shard_id()), pos}, cql3::query_processor::cache_internal::yes);
 }
 
 future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
     auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
     auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)}));
-    sstring req = format("INSERT INTO system.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", COMMITLOG_CLEANUPS);
+    sstring req = format("INSERT INTO {}.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", NAME, COMMITLOG_CLEANUPS);
     co_await _qp.execute_internal(req, {int32_t(rp.shard_id()), pos, table.uuid(), start_token_exclusive, end_token_inclusive}, cql3::query_processor::cache_internal::yes);
 }
 
@@ -1670,7 +1670,7 @@ std::optional<db::replay_position> system_keyspace::commitlog_cleanup_local_map:
 
 future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cleanup_records() {
     commitlog_cleanup_map ret;
-    const auto req = format("SELECT * from system.{}", COMMITLOG_CLEANUPS);
+    const auto req = format("SELECT * from {}.{}", NAME, COMMITLOG_CLEANUPS);
     auto result_set = co_await execute_cql(req);
     for (const auto& row: *result_set) {
         auto table = table_id(row.get_as<utils::UUID>("table_uuid"));
