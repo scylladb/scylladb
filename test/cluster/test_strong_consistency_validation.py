@@ -11,7 +11,7 @@ import pytest
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, new_test_table
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import ConfigurationException, InvalidRequest
 
 DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
 
@@ -65,3 +65,22 @@ async def test_cell_only_writes_on_sc_logstor_table(manager: ScyllaClusterManage
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 3)")
             rows = await cql.run_async(f"SELECT v FROM {table} WHERE pk = 1")
             assert [r.v for r in rows] == [3]
+
+
+async def test_consistency_option_needs_feature(manager: ScyllaClusterManager):
+    """
+    Without the strongly-consistent-tables feature a keyspace cannot name a
+    consistency option at all, not even 'eventual': the check is on the
+    option being present. The same keyspace without the option is created
+    as usual.
+    """
+    server = await manager.server_add(config={'experimental_features': []})
+    cql, _ = await manager.get_ready_cql([server])
+
+    options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    for consistency in ('global', 'eventual'):
+        with pytest.raises(ConfigurationException, match="The strongly_consistent_tables feature must be enabled to use a consistency option"):
+            await cql.run_async(f"CREATE KEYSPACE ks_{consistency} {options} AND consistency = '{consistency}'")
+
+    async with new_test_keyspace(manager, options):
+        pass
