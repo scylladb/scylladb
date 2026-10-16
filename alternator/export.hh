@@ -19,9 +19,13 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/noncopyable_function.hh>
+#include "schema/schema_fwd.hh"
+#include "service_permit.hh"
 #include "utils/rjson.hh"
 
 namespace s3 { class client; }
+namespace service { class storage_proxy; }
 
 namespace alternator {
 
@@ -133,5 +137,34 @@ std::unique_ptr<export_pipeline_interface> create_sink_pipeline(std::variant<in_
 // - s3_target_config - creates source pipeline that will read from S3 object.
 future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item);
 
+
+/// Full table scan of an Alternator table, calling `cb` with every item (DynamoDB-style JSON).
+///
+/// Reads page by page at (LOCAL_)QUORUM. Concurrent writes never make it fail or restart:
+///  - every item present for the whole scan is visited exactly once; items added, deleted or
+///    expired during the scan may or may not be visited, but never twice,
+///  - it's not a snapshot - an updated item is visited with either its old or new value,
+///  - `cb` calls are sequential, in any order, in the export/import scheduling group.
+///
+/// Transient read errors are retried indefinitely with backoff and smaller pages, except a
+/// read failure persisting at a single-row page, which fails the scan. A NetworkTopologyStrategy
+/// keyspace with RF=0 in the local DC fails with `api_error::validation`.
+///
+/// An abort of `as` fails the scan with `as.abort_requested_exception_ptr()`, after at most one
+/// in-flight read (`alternator_timeout_in_ms`) or `cb` call.
+///
+/// Replica reads and read-repair writes started by the scan may hold a copy of `permit` after
+/// the future resolves, until their deadlines: at most the longer of `alternator_timeout_in_ms`
+/// and `write_request_timeout_in_ms`. Keep its semaphore alive that long.
+///
+/// IMPORTANT: this is an *internal* read - no authorization check (the caller must do it)
+/// and no user's service level applies.
+
+seastar::future<> export_scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    seastar::abort_source& as,
+    service_permit permit,
+    seastar::noncopyable_function<seastar::future<>(rjson::value)> cb);
 
 } // namespace alternator

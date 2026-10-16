@@ -106,6 +106,7 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
         _scheduling_groups->memtable_to_cache_scheduling_group = co_await create_scheduling_group("memtable_to_cache", 200);
         _scheduling_groups->gossip_scheduling_group = co_await create_scheduling_group("gossip", 1000);
+        _scheduling_groups->export_import_scheduling_group = co_await create_scheduling_group("export_import", 200);
     }
     co_return *_scheduling_groups;
 }
@@ -693,6 +694,7 @@ private:
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
+            dbcfg.export_import_scheduling_group = scheduling_groups.export_import_scheduling_group;
 
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {

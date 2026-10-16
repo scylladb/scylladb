@@ -10,28 +10,49 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/result_set.hh"
+#include "db/config.hh"
+#include "db/consistency_level.hh"
+#include "db/timeout_clock.hh"
+#include "exceptions/exceptions.hh"
+#include "gms/feature_service.hh"
+#include "query/query-request.hh"
+#include "replica/database.hh"
+#include "schema/schema.hh"
+#include "service/client_state.hh"
+#include "service/pager/paging_state.hh"
+#include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/log.hh>
 #include "bytes.hh"
 #include "utils/assert.hh"
 #include "utils/base64.hh"
+#include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/rjson.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/s3/client.hh"
+#include "service_permit.hh"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace alternator {
 
@@ -652,4 +673,265 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     rjson::add(response, "ExportDescription", std::move(export_desc));
     co_return rjson::print(std::move(response));
 }
+
+// Consistency level of the scan: LOCAL_QUORUM for NetworkTopologyStrategy, QUORUM otherwise
+// (other strategies may have no replicas in the local DC). With a single token owner in the
+// local DC / cluster, LOCAL_ONE / ONE.
+// Throws if the keyspace has RF=0 (in the local DC, for NetworkTopologyStrategy).
+//
+// FIXME: based on expiration_consistency_level() from #32200. Merge the two as a followup.
+static db::consistency_level scan_consistency_level(const locator::token_metadata& tm,
+        const schema& s, const locator::effective_replication_map& erm) {
+    const auto& rs = erm.get_replication_strategy();
+    if (rs.get_type() != locator::replication_strategy_type::network_topology) {
+        // With RF=0 a read silently returns an empty result (quorum of zero replicas),
+        // so the export would "succeed" with no items.
+        if (db::quorum_for(erm) == 0) {
+            throw api_error::validation(fmt::format(
+                    "Cannot export {}.{}: keyspace has no replicas (replication factor 0)",
+                    s.ks_name(), s.cf_name()));
+        }
+        return tm.count_normal_token_owners() > 1
+            ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    }
+    const auto& local_dc = tm.get_topology().get_datacenter();
+    // With RF=0 in the local DC a read silently returns an empty result, so the export
+    // would "succeed" with no items.
+    if (db::local_quorum_for(erm, local_dc) == 0) {
+        throw api_error::validation(fmt::format(
+                "Cannot export {}.{}: keyspace has no replicas in the local datacenter {}",
+                s.ks_name(), s.cf_name(), local_dc));
+    }
+    const auto dc_token_owners = tm.get_datacenter_token_owners();
+    const auto it = dc_token_owners.find(local_dc);
+    if (it != dc_token_owners.end() && it->second.size() == 1) {
+        return db::consistency_level::LOCAL_ONE;
+    }
+    return db::consistency_level::LOCAL_QUORUM;
+}
+
+seastar::future<> export_scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    abort_source& as,
+    service_permit permit,
+    seastar::noncopyable_function<seastar::future<>(rjson::value)> cb)
+{
+    as.check();
+
+    // Run as a maintenance job, so the scan doesn't compete with user traffic. Remote replicas
+    // serve it via the `$maintenance` RPC tenant (in the streaming group).
+    // A group of its own next to streaming in the maintenance supergroup: with equal CPU shares,
+    // an hours-long scan cannot starve streaming on this shard.
+    // Switch before the first read - the pager computes the page byte limit from the current group.
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+
+    // Build a wildcard selection (SELECT *) for all columns.
+    auto selection = cql3::selection::selection::wildcard(schema);
+
+    // The wildcard selection expects every column, static ones included.
+    auto regular_columns =
+        schema->regular_columns()
+        | std::views::transform(&column_definition::id)
+        | std::ranges::to<query::column_id_vector>();
+    auto static_columns =
+        schema->static_columns()
+        | std::views::transform(&column_definition::id)
+        | std::ranges::to<query::column_id_vector>();
+
+    // `allow_short_read` lets the byte and tombstone limits end a page early (the pager sets
+    // it too, but the scan relies on it). `bypass_cache` avoids evicting user data from cache.
+    // Same as the TTL scanner (`ttl.cc`).
+    query::partition_slice::option_set opts = selection->get_query_options();
+    opts.set<query::partition_slice::option::allow_short_read>();
+    opts.set<query::partition_slice::option::bypass_cache>();
+
+    // Scan all clustering ranges (no restriction).
+    std::vector<query::clustering_range> ck_bounds{
+        query::clustering_range::make_open_ended_both_sides()};
+
+    auto partition_slice = query::partition_slice(
+        std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
+
+    // No authorization check here - the caller must do it.
+    auto& client_state = service::client_state::for_internal_calls();
+    tracing::trace_state_ptr trace_state;
+    service::query_state query_state(client_state, trace_state, std::move(permit));
+
+    db::consistency_level cl = scan_consistency_level(
+        *proxy.get_token_metadata_ptr(),
+        *schema,
+        *schema->table().get_effective_replication_map()
+    );
+
+    // Without a tombstone limit a long run of tombstones could time out every attempt and
+    // the scan would never progress. `storage_proxy::get_tombstone_limit()` disables the limit
+    // for internal groups (ours included), so read the config directly. Read per pager, so
+    // live config updates apply.
+    auto tombstone_limit = [&proxy] {
+        return proxy.features().empty_replica_pages
+                ? query::tombstone_limit(proxy.local_db().get_config().query_tombstone_page_limit())
+                : query::tombstone_limit::max;
+    };
+
+    // Every page (and every retry) uses a new pager, resumed from the last good paging state:
+    //  - a pager consumes its ranges while fetching, so a retry on it could query an empty
+    //    range, be reported as "exhausted" and silently skip the rest of the table,
+    //  - a pager keeps its command's `timestamp`, so on a long scan rows with expired TTL
+    //    would be exported as live.
+    // The pager refers to the query options, so it's destroyed first.
+    std::unique_ptr<cql3::query_options> query_options;
+    std::unique_ptr<service::pager::query_pager> pager;
+    auto make_pager = [&] (lw_shared_ptr<const service::pager::paging_state> paging_state) {
+        pager.reset();
+        query_options = std::make_unique<cql3::query_options>(
+            std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{}),
+            std::move(paging_state));
+
+        // Fresh command with a fresh `timestamp`. `max_result_size` is recomputed by the pager
+        // before every page.
+        auto command = ::make_lw_shared<query::read_command>(
+            schema->id(), schema->version(), partition_slice,
+            proxy.get_max_result_size(partition_slice),
+            tombstone_limit());
+
+        // Scan the full token ring.
+        dht::partition_range_vector partition_ranges{
+            dht::partition_range::make_open_ended_both_sides()};
+
+        pager = service::pager::query_pagers::pager(
+            proxy, schema, selection, query_state, *query_options,
+            std::move(command), std::move(partition_ranges), nullptr);
+    };
+
+    // Paging state of the last successfully read page (null - start from the beginning).
+    lw_shared_ptr<const service::pager::paging_state> last_page_state = nullptr;
+    bool exhausted = false;
+
+    // Row limit of a page. Doubles after each fast page (up to `unlimited_page_size`, where only
+    // the 1 MiB byte limit applies) and halves after each failed attempt (down to one row).
+    // Kept across pages, as the cluster's condition carries over.
+    static constexpr uint32_t unlimited_page_size = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32_t min_page_size = 1;
+    // Start small - a too large first page would just cost a failed attempt.
+    static constexpr uint32_t initial_page_size = 128;
+    uint32_t page_size = initial_page_size;
+    // With `unlimited_page_size`, halving starts from the row count of the last page instead
+    // (or from `assumed_page_rows` if that page was empty).
+    uint32_t last_page_rows = 0;
+    static constexpr uint32_t assumed_page_rows = 1000;
+
+    // Give up after this many read failures of a single-row page (several minutes of retries).
+    static constexpr int max_smallest_page_failures = 10;
+
+    // Failed attempts are logged as warnings only once the page shrank this much (a run of
+    // failures), otherwise at debug level.
+    static constexpr uint32_t warn_page_size = 16;
+    auto retry_log_level = [&page_size] {
+        return page_size <= warn_page_size ? logging::log_level::warn : logging::log_level::debug;
+    };
+
+    while (!exhausted) {
+        as.check();
+        std::unique_ptr<cql3::result_set> rs;
+
+        make_pager(last_page_state);
+
+        // Exponential backoff between attempts at the same page.
+        static constexpr auto initial_retry_delay = std::chrono::seconds(1);
+        static constexpr auto max_retry_delay = std::chrono::seconds(30);
+        auto retry_delay = initial_retry_delay;
+        // Read failures of this page at `min_page_size`.
+        int smallest_page_failures = 0;
+
+        // Transient errors are retried without limit, as a failed scan can't be resumed - stop
+        // it via `as`. The only exception is a read failure persisting at `min_page_size`.
+        // Errors not caught below fail the scan.
+        for (int attempts = 1; ; ++attempts) {
+            // Short deadline (`alternator_timeout_in_ms`) - it bounds how long an abort can go
+            // unnoticed, and a retry is cheap.
+            auto timeout = executor::default_timeout();
+            auto started = db::timeout_clock::now();
+            try {
+                rs = co_await pager->fetch_page(page_size, gc_clock::now(), timeout);
+                last_page_rows = static_cast<uint32_t>(rs->size());
+                // Fast read - grow the page.
+                if (page_size != unlimited_page_size
+                        && (db::timeout_clock::now() - started) * 4 < timeout - started) {
+                    page_size = page_size > unlimited_page_size / 2
+                            ? unlimited_page_size : page_size * 2;
+                }
+                break;
+            } catch(exceptions::read_timeout_exception&) {
+                xlogger.log(retry_log_level(),
+                        "S3 export scanner read timed out (attempt {}), retrying: {}",
+                        attempts, std::current_exception());
+            } catch(exceptions::read_failure_exception_with_timeout&) {
+                // A closed connection, not a replica failure - treat it as a timeout.
+                xlogger.log(retry_log_level(),
+                        "S3 export scanner lost the connection to a replica (attempt {}), retrying: {}",
+                        attempts, std::current_exception());
+            } catch(exceptions::read_failure_exception&) {
+                // A smaller page may still succeed. Failures are counted, because reaching
+                // `min_page_size` alone doesn't mean a run of failures (e.g. one halving from
+                // a 2-row page of 400 KB items gets there).
+                if (page_size <= min_page_size
+                        && ++smallest_page_failures >= max_smallest_page_failures) {
+                    xlogger.error("S3 export scanner read failed on a replica {} times (attempt "
+                            "{}) with the smallest possible page, giving up: {}",
+                            smallest_page_failures, attempts, std::current_exception());
+                    // Prefer reporting an abort requested during the read.
+                    as.check();
+                    throw;
+                }
+                xlogger.log(retry_log_level(),
+                        "S3 export scanner read failed on a replica (attempt {}), "
+                        "retrying with a smaller page: {}",
+                        attempts, std::current_exception());
+            } catch(exceptions::unavailable_exception&) {
+                xlogger.log(retry_log_level(),
+                        "S3 export scanner read found too few replicas available (attempt {}), retrying: {}",
+                        attempts, std::current_exception());
+            } catch(exceptions::overloaded_exception&) {
+                xlogger.log(retry_log_level(),
+                        "S3 export scanner read was rejected, the node is overloaded (attempt {}), retrying: {}",
+                        attempts, std::current_exception());
+            }
+            // Prefer reporting an abort requested during the read.
+            as.check();
+            std::chrono::milliseconds delay = retry_delay;
+            // Tests shorten the backoff to reach the give-up path quickly.
+            if (auto ms = utils::get_local_injector().inject_parameter<uint32_t>("export_scan_retry_delay_ms")) {
+                delay = std::chrono::milliseconds(*ms);
+            }
+            try {
+                co_await seastar::sleep_abortable(delay, as);
+            } catch (const seastar::sleep_aborted&) {
+                // report the abort source's exception, not sleep_abortable()'s own one
+                as.check();
+                throw;
+            }
+            retry_delay = std::min(retry_delay * 2, max_retry_delay);
+            // Halve the page size (see `last_page_rows`).
+            uint32_t halve_from = page_size;
+            if (page_size == unlimited_page_size) {
+                halve_from = last_page_rows > 0 ? last_page_rows : assumed_page_rows;
+            }
+            page_size = std::max(min_page_size, halve_from / 2);
+            // A failed pager can't be reused (see `make_pager`).
+            make_pager(last_page_state);
+        }
+        last_page_state = pager->state(std::nullopt);
+        exhausted = pager->is_exhausted();
+
+        for (const auto& row : rs->rows()) {
+            co_await coroutine::maybe_yield();
+            as.check();
+            rjson::value item = rjson::empty_object();
+            describe_single_item(*selection, row, std::nullopt, item);
+            co_await cb(std::move(item));
+        }
+    }
+}
+
 } // namespace alternator
