@@ -707,6 +707,116 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
     }
 }
 
+void cluster_compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    // The type leaves room for other compaction types to be run cluster-wide, tablet by tablet,
+    // e.g. reshape, upgrade or scrub. The server validates it, so that supporting a new type
+    // doesn't need a change here.
+    const auto type = vm.contains("type") ? vm["type"].as<sstring>() : sstring("major");
+
+    std::unordered_map<sstring, sstring> params;
+    params["type"] = type;
+    if (vm.contains("recursive")) {
+        params["recursive"] = "true";
+    }
+    if (vm.contains("force-flush")) {
+        params["force_flush"] = "true";
+    }
+
+    struct target {
+        sstring keyspace;
+        sstring table;
+        sstring table_id;
+    };
+    std::vector<target> targets;
+    bool all_tables = false;
+    if (vm.contains("table-id")) {
+        if (vm.contains("table")) {
+            throw std::invalid_argument("nodetool cluster compact: --table-id can't be combined with table names");
+        }
+        const auto keyspace = vm.contains("keyspace") ? vm["keyspace"].as<sstring>() : sstring();
+        for (const auto& id : vm["table-id"].as<std::vector<sstring>>()) {
+            targets.push_back(target{keyspace, "", id});
+        }
+    } else {
+        std::vector<sstring> keyspaces, tables;
+        if (vm.contains("keyspace")) {
+            auto res = parse_keyspace_and_tables(client, vm, true);
+            if (!keyspace_uses_tablets(client, res.keyspace)) {
+                throw std::invalid_argument("nodetool cluster compact compacts only tablet keyspaces. To compact vnode keyspaces use nodetool compact.");
+            }
+            keyspaces.push_back(std::move(res.keyspace));
+            tables = std::move(res.tables);
+        } else if (vm.contains("table")) {
+            // The positional options can be given by name too, and a table without its keyspace
+            // would otherwise be dropped on the floor, compacting every table instead.
+            throw std::invalid_argument("nodetool cluster compact: a table name requires the keyspace");
+        } else {
+            keyspaces = get_keyspaces(client, "non_local_strategy", "tablets");
+            if (!get_keyspaces(client, "non_local_strategy", "vnodes").empty()) {
+                fmt::print("Warning: only tablet keyspaces will be compacted. To compact vnode keyspaces use nodetool compact.\n");
+            }
+        }
+        all_tables = tables.empty();
+        auto ks_to_cfs = all_tables ? get_ks_to_cfs(client) : std::map<sstring, std::vector<sstring>>{};
+        for (const auto& keyspace : keyspaces) {
+            for (const auto& table : all_tables ? ks_to_cfs[keyspace] : tables) {
+                targets.push_back(target{keyspace, table, ""});
+            }
+        }
+    }
+
+    auto log = [&]<typename... Args> (fmt::format_string<Args...> fmt, Args&&... param) {
+        const auto msg = fmt::format(fmt, param...);
+        using clock = std::chrono::system_clock;
+        const auto n = clock::now();
+        const auto t = clock::to_time_t(n);
+        const auto ms = (n - clock::from_time_t(t)) / 1ms;
+        fmt::print("[{:%F %T},{:03d}] {}\n", localtime(t), ms, msg);
+    };
+
+    int exit_code = EXIT_SUCCESS;
+    for (const auto& [keyspace, table, table_id] : targets) {
+        auto target_params = params;
+        if (!keyspace.empty()) {
+            target_params["ks"] = keyspace;
+        }
+        if (!table.empty()) {
+            target_params["table"] = table;
+        }
+        if (!table_id.empty()) {
+            target_params["table_id"] = table_id;
+        }
+        const auto what = table_id.empty() ? fmt::format("keyspace={} table={}", keyspace, table) : fmt::format("table_id={}", table_id);
+        try {
+            const auto task_id = rjson::to_sstring(client.post("/storage_service/tablets/compaction", std::move(target_params)));
+
+            log("Starting {} compaction with task_id={} {}", type, task_id, what);
+
+            const auto res = client.get(format("/task_manager/wait_task/{}", task_id));
+            const auto status = res.GetObject();
+
+            if (status["state"] == "failed") {
+                exit_code = EXIT_FAILURE;
+                const auto error = status.HasMember("error") ? rjson::to_string_view(status["error"]) : std::string_view();
+                log("ERROR: {} compaction with task_id={} failed: {}", type, task_id, error);
+            } else {
+                log("{} compaction with task_id={} finished", type, task_id);
+            }
+        } catch (const api_request_failed& ex) {
+            // When compacting all tables, compacting the base table of a co-location group compacts
+            // the tables co-located with it too, and a table may have been dropped meanwhile.
+            if (all_tables && (std::string(ex.what()).contains("because it is colocated") || std::string(ex.what()).contains("Can't find a column family"))) {
+                continue;
+            }
+            log("ERROR: {} compaction request for {} failed with {}", type, what, ex);
+            exit_code = EXIT_FAILURE;
+        }
+    }
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
+}
+
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.contains("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -4214,6 +4324,48 @@ For more information, see: {}
                         },
                     },
                     {
+                        "compact",
+                        "Compact tablet tables cluster-wide, tablet by tablet",
+fmt::format(R"(
+When running nodetool cluster compact on a single node, all tablets of
+the specified table(s) are compacted on all of their replicas, a limited
+number of tablets per shard at a time, which bounds the temporary space
+overhead of the compaction (like repair, it counts against the
+tablet_streaming_read_concurrency_per_shard and
+tablet_streaming_write_concurrency_per_shard configuration options,
+which by default allow a single tablet per shard). A table which is the
+base table of a co-location group is compacted with the tables
+co-located with it.
+
+The compaction is best effort: a tablet which fails to compact isn't
+retried, the other tablets are compacted all the same, and the
+compaction is then reported as failed.
+
+Only major compaction (--type=major, the default) is supported for now.
+
+Before compacting, all tables are flushed on every node holding replicas
+of the tables, forcing new commitlog segments, so that the compaction
+can purge as many tombstones as possible, unless all tables were
+flushed within compaction_flush_all_tables_before_major_seconds. With
+--force-flush, all tables are flushed regardless.
+
+Note that nodetool cluster compact compacts only tablet keyspaces.
+To compact vnode keyspaces use nodetool compact.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/cluster/compact.html")),
+                        {
+                            typed_option<sstring>("type", "The type of compaction to run: major (the default, and the only one supported for now)"),
+                            typed_option<>("recursive", "Also compact the tables derived from each table which aren't co-located with it: its materialized views, secondary indexes and CDC log table"),
+                            typed_option<>("force-flush", "Flush all tables on every node before compacting, regardless of compaction_flush_all_tables_before_major_seconds"),
+                            typed_option<std::vector<sstring>>("table-id", "The id(s) of the table(s) to compact, in place of table names; the keyspace, if given, must be the tables' one"),
+                        },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to compact, if missing all tablet keyspaces are compacted", 1),
+                            typed_option<std::vector<sstring>>("table", "The table(s) to compact, if missing all tables are compacted", -1),
+                        },
+                    },
+                    {
                         "cleanup",
                         "Remove unused data from the cluster",
 fmt::format(R"(
@@ -4263,6 +4415,9 @@ For more information, see: {}
                 {
                     {
                         "repair", { cluster_repair_operation },
+                    },
+                    {
+                        "compact", { cluster_compact_operation }
                     },
                     {
                         "cleanup", { cluster_cleanup_operation }
