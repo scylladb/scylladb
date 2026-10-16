@@ -56,7 +56,7 @@ if __name__ == '__main__':
         if enforce != "Disabled":
             if os.path.exists('/usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2'):
                 modules = out('semodule -l')
-                match = re.match(r'^systemd-container-coredump$', modules, re.MULTILINE)
+                match = re.search(r'^systemd-container-coredump$', modules, re.MULTILINE)
                 if not match:
                     run('semodule -v -i /usr/share/selinux/packages/targeted/systemd-container-coredump.pp.bz2', shell=True, check=True)
                     run('semodule -v -e systemd-container-coredump', shell=True, check=True)

@@ -155,6 +155,7 @@ if __name__ == '__main__':
 
     # Allow args.online_discard to be used as a boolean value
     args.online_discard = strtobool(args.online_discard)
+    args.blk_discard = strtobool(args.blk_discard)
 
     root = args.root.rstrip('/')
     if args.volume_role == 'all':
@@ -307,7 +308,7 @@ if __name__ == '__main__':
     after = ''
     wants = ''
     if raid and args.raid_level != '0':
-        after = wants = 'md_service'
+        after = wants = str(md_service)
     opt_discard = ''
     if args.online_discard:
         opt_discard = ',discard'
@@ -351,13 +352,13 @@ WantedBy=local-fs.target
     except SubprocessError as e:
         if mount_dev != fsdev:
             if not os.path.islink(mount_dev):
-                LOGGER.error('{mount_dev} is not found')
+                LOGGER.error(f'{mount_dev} is not found')
             if not os.path.exists(mount_dev):
-                LOGGER.error('{mount_dev} is broken link')
+                LOGGER.error(f'{mount_dev} is broken link')
         if not os.path.exists(fsdev):
-            LOGGER.error('{fsdev} is not found')
-        if not stat.S_ISBLK(os.stat(fsdev).st_mode):
-            LOGGER.error('{fsdev} is not block device')
+            LOGGER.error(f'{fsdev} is not found')
+        elif not stat.S_ISBLK(os.stat(fsdev).st_mode):
+            LOGGER.error(f'{fsdev} is not block device')
         LOGGER.error(f'Error detected, dumping udev env parameters on {fsdev}')
         udev_info.verify()
         udev_info.dump_variables()
