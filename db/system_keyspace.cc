@@ -1530,8 +1530,13 @@ future<> system_keyspace::drop_truncation_rp_records() {
 
 future<> system_keyspace::remove_truncation_records(table_id id) {
     static const sstring req = format("DELETE FROM system.{} WHERE table_uuid = ?", TRUNCATED);
+    // No need to flush: this is called only when dropping a table, which
+    // does not persist truncation records. If the deletion is lost, the
+    // surviving records come from an earlier truncate of the table: they
+    // are pruned on boot if the table does not exist, and otherwise (the
+    // table was recreated with the same id) their truncation time is in
+    // the past, which is harmless.
     co_await execute_cql(req, id.uuid());
-    co_await force_blocking_flush(TRUNCATED);
 }
 
 future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
