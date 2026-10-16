@@ -9,6 +9,7 @@ ScyllaDB SSTable - 3.x
    sstables-3-summary
    sstables-3-index
    sstable-ms-index
+   sstable-mu-format
    sstable-format
 
 .. include:: ../_common/sstable_what_is.rst
@@ -23,4 +24,5 @@ For more information on ScyllaDB 3.x SSTable formats, see below:
 * :doc:`SSTable 3.0 Summary <sstables-3-summary>`
 * :doc:`SSTable 3.0 Index (me/md format) <sstables-3-index>`
 * :doc:`SSTable ms Index (Trie-Based) <sstable-ms-index>`
+* :doc:`SSTable mu Format (Physical Index Positions) <sstable-mu-format>`
 * :doc:`SSTable 3.0 Format in ScyllaDB <sstable-format>`

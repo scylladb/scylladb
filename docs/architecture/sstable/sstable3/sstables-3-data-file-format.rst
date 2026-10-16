@@ -43,6 +43,10 @@ Partitions.db and Rows.db are not described on this page.
 See https://github.com/apache/cassandra/blob/70bcaec54d492658cb331b70869215ad64feb63d/src/java/org/apache/cassandra/io/sstable/format/bti/BtiFormat.md
 for a description.
 
+The "mu" format also changes the layout of compressed chunks in Data.db and the
+positions stored in Partitions.db and Rows.db.
+See :doc:`SSTable mu Format </architecture/sstable/sstable3/sstable-mu-format>` for details.
+
 Overview
 ........
 
