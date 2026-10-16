@@ -22,6 +22,11 @@ on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB'
 throughput cap. The values provisioned for a table and for each of its GSIs
 are remembered and returned by `DescribeTable`, but are not enforced.
 
+`UpdateTable` can switch a table to `BillingMode=PAY_PER_REQUEST`, and
+`DescribeTable` then reports zero capacities for the table and for its GSIs.
+The switch to `BillingMode=PROVISIONED` is not supported yet
+(<https://github.com/scylladb/scylladb/issues/19718>).
+
 ## Load balancing
 
 DynamoDB applications specify a single "endpoint" address, e.g.,
