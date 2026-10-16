@@ -1579,7 +1579,9 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     //
     // But we don't know that here, so we have to SELECT the set of partition keys,
     // and issue DELETEs on that.
-    sstring req = format("SELECT shard from {}.{}", NAME, COMMITLOG_CLEANUPS);
+    // Use DISTINCT: each partition can hold a large number of records (clustering rows),
+    // and we want one DELETE per partition, not one per record.
+    sstring req = format("SELECT DISTINCT shard from {}.{}", NAME, COMMITLOG_CLEANUPS);
     auto rs = co_await execute_cql(req);
 
     co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
