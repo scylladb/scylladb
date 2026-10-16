@@ -110,7 +110,9 @@ async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_
     logger.info("starting a fourth node")
     fourth_node_future = asyncio.create_task(manager.server_add(
         seeds=[servers[0].ip_addr],
-        expected_error="raft operation \\[add_entry\\] timed out, there is no raft quorum",
+        # add_entry timeouts are classified as concurrent modification and retried by the leader,
+        # so the joiner may see the retry's read_barrier timeout instead.
+        expected_error="raft operation \\[(add_entry|read_barrier)\\] timed out, there is no raft quorum",
         timeout=60))
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the join request")
