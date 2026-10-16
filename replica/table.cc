@@ -813,7 +813,7 @@ public:
     locator::combined_load_stats table_load_stats() const override {
         return locator::combined_load_stats{
             .table_ls = locator::table_load_stats{
-                            .size_in_bytes = _single_sg->live_disk_space_used(),
+                            .size_in_bytes = _single_sg->data_size(),
                             .split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min()},
             .tablet_ls = locator::tablet_load_stats{}
         };
@@ -3767,7 +3767,9 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
         auto tid = locator::tablet_id(id);
         locator::global_tablet_id gid { _t.schema()->id(), tid };
         locator::tablet_replica me { _my_host_id, this_shard_id() };
-        const uint64_t tablet_size = sg.live_disk_space_used();
+        // The reconciliation at end_migration and at resize carries this number between hosts and
+        // between tablets, so the tablet size and the table size come from the same accessor.
+        const uint64_t tablet_size = sg.data_size();
 
         auto transition = _tablet_map->get_tablet_transition_info(tid);
         auto& info = _tablet_map->get_tablet_info(tid);

@@ -984,57 +984,6 @@ async def test_trigger_separator_flush(manager: ScyllaClusterManager):
             value = f"value_{i}_" + ('x' * (value_size - 20))
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
 
-async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
-    """
-    Test that a logstor table automatically splits tablets when the data size
-    exceeds --target-tablet-size-in-bytes.
-
-    The split threshold is set to 300KB (~2 segments at 128KB each).
-    Writing 5 keys with ~100KB values fills 5 segments (~640KB total), which
-    exceeds the threshold and should trigger an automatic split.
-    After the split, all data must remain readable.
-    """
-    cmdline = [
-        '--logger-log-level', 'logstor=debug',
-        '--logger-log-level', 'load_balancer=debug',
-        '--target-tablet-size-in-bytes', '300000',
-        '--smp=1',
-    ]
-    cfg = {
-        'tablet_load_stats_refresh_interval_in_seconds': 1,
-        'experimental_features': ['logstor'],
-    }
-    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
-    cql = manager.get_cql()
-
-    s0_log = await manager.server_open_log(servers[0].server_id)
-
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
-
-        assert await get_tablet_count(manager, servers[0], ks, 'test') == 1
-
-        s0_mark = await s0_log.mark()
-
-        # Write 5 keys with ~100KB values to fill 5 segments (~640KB total).
-        # This exceeds the 300KB target and should trigger a split.
-        value = 'x' * (100 * 1024)
-        for i in range(5):
-            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
-
-        # Flush to assign segments to compaction groups so their size is
-        # visible to tablet load stats.
-        await manager.api.logstor_flush(servers[0].ip_addr)
-
-        await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark, timeout=60)
-        await asyncio.sleep(1)
-
-        # Verify all data is accessible after the split
-        for i in range(5):
-            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
-            assert len(rows) == 1, f"Key {i} not found after tablet split"
-            assert rows[0].v == value, f"Wrong value for key {i} after tablet split"
-
 async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [

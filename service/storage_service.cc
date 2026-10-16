@@ -4347,9 +4347,10 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
 
     for (const auto& [tid, cf_name] : tables_to_estimate) {
         // Table statistics are per-shard, so the size of the local dataset is
-        // the sum over all shards.
+        // the sum over all shards. The size is the one the resize logic reads,
+        // so the tablet count fits the data of the table.
         auto local_size = co_await _db.map_reduce0([tid] (replica::database& db) {
-            return uint64_t(db.find_column_family(tid).live_disk_space_used().on_disk);
+            return db.find_column_family(tid).data_size();
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
