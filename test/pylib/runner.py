@@ -36,6 +36,7 @@ from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
+from test.pylib.object_storage import start_shared_gs_server
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, summarize_resource_utilization
@@ -896,6 +897,13 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     )
     await s3_server.start()
     artifacts.add_exit_artifact(s3_server.stop)
+
+    try:
+        artifacts.add_exit_artifact(await start_shared_gs_server(log_dir=str(tempdir_base)))
+    except Exception:
+        # Don't let a Google Storage backend failure block unrelated services;
+        # tests that need it will fail on their own.
+        logging.exception("Failed to start shared fake-gcs-server")
 
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),
