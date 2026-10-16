@@ -27,6 +27,8 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
+#include "utils/error_injection.hh"
+#include "service/cas_shard.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
@@ -725,6 +727,8 @@ SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
     }, [] {
         auto cfg = tablet_cql_test_config();
         cfg.need_remote_proxy = true;
+        // The test observes the raw bounce, so cql_test_env must not follow it.
+        cfg.follow_shard_bounces = false;
         return cfg;
     }());
 }
@@ -1277,7 +1281,13 @@ SEASTAR_TEST_CASE(test_tablets_routing_strong_consistency) {
                     "Did not expect tablets-routing-v2 payload on version match");
             });
         }).get();
-    }, tablet_v2_cql_test_config());
+    }, [] {
+        auto cfg = tablet_v2_cql_test_config();
+        // Part 1 deliberately targets the wrong shard; following the bounce
+        // would answer from the right one and defeat the check.
+        cfg.follow_shard_bounces = false;
+        return cfg;
+    }());
 }
 
 // The parser counts markers for one statement at a time, but used to hand
@@ -1306,6 +1316,209 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
             BOOST_REQUIRE_EQUAL(stmt->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config())->bound_names.size(), 1);
         }
     });
+}
+
+// Regression tests for shard-bounced LWT statements (query_processor::bounce_to_shard).
+// forced_bounce_to_shard_counter makes the bounce deterministic regardless of --smp.
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// LWT/CAS needs storage_proxy's RPC verbs (paxos prepare/accept go through
+// storage_proxy::remote() even for a single-node CAS).
+static cql_test_config bounce_test_config() {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    return cfg;
+}
+
+// cql_test_env's bounce cap (10) + 1: the countdown ends exactly as the guard trips,
+// so process_forced_rebounce's static counter isn't left mid-countdown for later tests.
+static constexpr int64_t max_forced_bounces = 11;
+
+static void force_bounces(int64_t count) {
+    utils::error_injection_parameters params;
+    params["value"] = std::to_string(count);
+    // enable_on_all: the retry can land on any shard, and the injection must be
+    // live there too, or the counter it drives gets stuck mid-countdown.
+    utils::get_local_injector().enable_on_all("forced_bounce_to_shard_counter", false, std::move(params)).get();
+}
+
+// process_forced_rebounce() disables the injection once its countdown completes,
+// so a still-enabled injection means the bounce never fired.
+static void require_forced_bounces_done() {
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter"));
+}
+
+SEASTAR_TEST_CASE(test_lwt_insert_survives_forced_shard_bounce) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, v int)");
+
+        force_bounces(1);
+        auto msg = e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get();
+        require_forced_bounces_done();
+        // Must survive as the CAS result set, not a void message. pk/v null: no prior row.
+        assert_that(msg).is_rows().with_size(1).with_row({boolean_type->decompose(true), {}, {}});
+
+        assert_that(e.execute_cql("SELECT v FROM t WHERE pk = 1").get())
+            .is_rows().with_size(1).with_row({int32_type->decompose(1)});
+    }, bounce_test_config());
+}
+
+// A bounced CAS that does not apply must report [applied]=false plus the
+// current row - the case a void message could not express at all.
+SEASTAR_TEST_CASE(test_lwt_not_applied_result_survives_forced_shard_bounce) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, v int)");
+        cquery_nofail(e, "INSERT INTO t (pk, v) VALUES (1, 7)");
+
+        force_bounces(1);
+        auto msg = e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get();
+        require_forced_bounces_done();
+        assert_that(msg).is_rows().with_size(1)
+            .with_row({boolean_type->decompose(false), int32_type->decompose(1), int32_type->decompose(7)});
+
+        // The failed CAS must not have overwritten the existing value.
+        assert_that(e.execute_cql("SELECT v FROM t WHERE pk = 1").get())
+            .is_rows().with_size(1).with_row({int32_type->decompose(7)});
+    }, bounce_test_config());
+}
+
+// Repeated re-bounces: the injection walks the statement across several shards
+// before landing on the right one, exercising the recursive retry path.
+SEASTAR_TEST_CASE(test_lwt_survives_repeated_shard_bounces) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        if (this_smp_shard_count() < 2) {
+            testlog.info("Skipping test_lwt_survives_repeated_shard_bounces, smp == 1");
+            return;
+        }
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, v int)");
+
+        force_bounces(3);
+        auto msg = e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get();
+        require_forced_bounces_done();
+        assert_that(msg).is_rows().with_size(1).with_row({boolean_type->decompose(true), {}, {}});
+
+        assert_that(e.execute_cql("SELECT v FROM t WHERE pk = 1").get())
+            .is_rows().with_size(1).with_row({int32_type->decompose(1)});
+    }, bounce_test_config());
+}
+
+// The prepared path has its own retry (do_execute_prepared), including the
+// re-prepare of bind variables on each attempt.
+SEASTAR_TEST_CASE(test_lwt_prepared_survives_forced_shard_bounce) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, v int)");
+        auto id = e.prepare("INSERT INTO t (pk, v) VALUES (?, ?) IF NOT EXISTS").get();
+
+        force_bounces(1);
+        auto msg = e.execute_prepared(id, {cql3::raw_value::make_value(int32_type->decompose(1)),
+                                           cql3::raw_value::make_value(int32_type->decompose(1))}).get();
+        require_forced_bounces_done();
+        assert_that(msg).is_rows().with_size(1).with_row({boolean_type->decompose(true), {}, {}});
+
+        assert_that(e.execute_cql("SELECT v FROM t WHERE pk = 1").get())
+            .is_rows().with_size(1).with_row({int32_type->decompose(1)});
+    }, bounce_test_config());
+}
+
+// Batches bounce via a separate path (batch_statement.cc) the injection above
+// doesn't hook; drive a real bounce via tablets instead.
+SEASTAR_TEST_CASE(test_lwt_batch_survives_forced_shard_bounce) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        if (this_smp_shard_count() < 2) {
+            testlog.info("Skipping test_lwt_batch_survives_forced_shard_bounce, smp == 1");
+            return;
+        }
+        e.execute_cql("create keyspace ks_batch_bounce with replication = "
+            "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+            "and tablets = {'initial': 1};").get();
+
+        // Create dummy tables until the next table's tablet lands on a foreign
+        // shard (see test_tablet_routing_info_after_cas_shard_bounce above).
+        schema_ptr schema;
+        for (unsigned i = 0; ; ++i) {
+            BOOST_REQUIRE_MESSAGE(i <= this_smp_shard_count(), "Could not place tablet on a foreign shard");
+            auto tbl = format("tbl_{}", i);
+            e.execute_cql(format("create table ks_batch_bounce.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck));", tbl)).get();
+            schema = e.local_db().find_schema("ks_batch_bounce", tbl);
+            auto pk = partition_key::from_singular(*schema, int32_t(1));
+            if (schema->table().shard_for_reads(dht::get_token(*schema, pk.view())) != this_shard_id()) {
+                break;
+            }
+        }
+
+        e.execute_batch({format("INSERT INTO ks_batch_bounce.{} (pk, ck, v) VALUES (1, 1, 1) IF NOT EXISTS", schema->cf_name()),
+                         format("INSERT INTO ks_batch_bounce.{} (pk, ck, v) VALUES (1, 2, 2)", schema->cf_name())},
+                        cql3::statements::batch_statement::type::LOGGED,
+                        std::make_unique<cql3::query_options>(cql3::query_options::DEFAULT)).get();
+
+        assert_that(e.execute_cql(format("SELECT ck, v FROM ks_batch_bounce.{} WHERE pk = 1", schema->cf_name())).get())
+            .is_rows().with_size(2)
+            .with_row({int32_type->decompose(1), int32_type->decompose(1)})
+            .with_row({int32_type->decompose(2), int32_type->decompose(2)});
+    }, [] {
+        auto cfg = tablet_cql_test_config();
+        cfg.need_remote_proxy = true;
+        return cfg;
+    }());
+}
+
+// A bounce loop must fail loudly instead of recursing until the stack dies.
+SEASTAR_TEST_CASE(test_shard_bounce_loop_is_bounded) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        if (this_smp_shard_count() < 2) {
+            testlog.info("Skipping test_shard_bounce_loop_is_bounded, smp == 1");
+            return;
+        }
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, v int)");
+
+        force_bounces(max_forced_bounces);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (pk, v) VALUES (1, 1) IF NOT EXISTS").get(),
+                            std::runtime_error);
+        require_forced_bounces_done();
+    }, bounce_test_config());
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
+
+// A bounced paged SELECT must keep its paging state, or the caller silently
+// stops after the first page.
+SEASTAR_TEST_CASE(test_paged_serial_select_survives_shard_bounce) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        if (this_smp_shard_count() < 2) {
+            testlog.info("Skipping test_paged_serial_select_survives_shard_bounce, smp == 1");
+            return;
+        }
+        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, PRIMARY KEY (pk, ck))");
+        auto schema = e.local_db().find_schema("ks", "t");
+        int32_t pk = 0;
+        while (service::cas_shard(*schema, dht::get_token(*schema, partition_key::from_singular(*schema, pk).view())).this_shard()) {
+            ++pk;
+        }
+        for (int ck = 0; ck < 10; ++ck) {
+            cquery_nofail(e, format("INSERT INTO t (pk, ck) VALUES ({}, {})", pk, ck));
+        }
+
+        const auto query = format("SELECT ck FROM t WHERE pk = {}", pk);
+        lw_shared_ptr<service::pager::paging_state> paging_state;
+        size_t rows = 0;
+        for (;;) {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::SERIAL, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{3, paging_state, {}, api::new_timestamp()});
+            auto msg = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(e.execute_cql(query, std::move(qo)).get());
+            BOOST_REQUIRE(msg);
+            rows += msg->rs().result_set().size();
+            auto ps = msg->rs().get_metadata().paging_state();
+            if (!ps) {
+                break;
+            }
+            paging_state = make_lw_shared<service::pager::paging_state>(*ps);
+        }
+        BOOST_REQUIRE_EQUAL(rows, 10);
+    }, [] {
+        cql_test_config cfg;
+        cfg.need_remote_proxy = true;
+        return cfg;
+    }());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
