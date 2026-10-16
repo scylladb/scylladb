@@ -955,6 +955,94 @@ class CounterLoad:
         return after
 
 
+async def test_migration_with_counters(manager: ScyllaClusterManager):
+    """Verify that counters keep their values through a vnodes-to-tablets migration (SCYLLADB-5413).
+
+    A node leads counter updates under its host ID while it stores the table in vnodes
+    and under its rack's ID once it stores it in tablets. Every node replicates every key
+    and leads the updates it coordinates, so nodes in different storage modes race on
+    the same counters. Both DCs have a rack named rack1, which must still get distinct
+    rack IDs.
+
+    Steps:
+    1. Start 3 nodes in dc1/rack1, dc2/rack1 and dc2/rack2, and create a counter table
+       with RF={'dc1': 1, 'dc2': 2}.
+    2. Increment the counters while every node uses vnodes, then start the migration.
+    3. Restart the nodes into tablets one at a time. Downgrade the first node back to
+       vnodes once another has switched, then upgrade it again, so that it returns to
+       each of its IDs. After every restart, increment the counters, check their values
+       exactly, and check that each node advanced the shard of its current ID only.
+    4. Finalize and wait for pow2 convergence with increments running in the background,
+       where a failed one counts as possibly applied, then check the counters again.
+    """
+    num_keys = 10
+    rounds = 5
+    racks = [('dc1', 'rack1'), ('dc2', 'rack1'), ('dc2', 'rack2')]
+
+    logger.info(f"Starting {len(racks)} nodes in {racks}")
+    servers = await manager.servers_add(len(racks), cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': dc, 'rack': rack} for dc, rack in racks])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+    node_modes = {host_id: ('vnodes', 'vnodes') for host_id in host_ids}
+
+    def writer_ids() -> set[uuid.UUID]:
+        """Return the counter IDs that the nodes write under: host IDs on vnodes, rack IDs on tablets."""
+        return {rack_counter_id(dc, rack) if node_modes[host_id][0] == 'tablets' else uuid.UUID(str(host_id))
+                for host_id, (dc, rack) in zip(host_ids, racks)}
+
+    replication_opts = "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 2}"
+    async with new_test_keyspace(manager, f"WITH replication = {replication_opts} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
+        load = CounterLoad(ks, 'counters', num_keys)
+        load.connect(cql, hosts)
+
+        async def restart_and_check(idx: int, mode: str):
+            cql, hosts = await restart_node_into(manager, servers, idx, mode)
+            # The node must have switched, or it still increments under its old counter ID.
+            node_modes[host_ids[idx]] = (mode, mode)
+            await verify_migration_status(manager, servers[0], ks,
+                expected_status='migrating_to_tablets', expected_node_statuses=node_modes)
+            logger.info(f"Incrementing counters with nodes in modes {node_modes}")
+            load.connect(cql, hosts)
+            await load.run_checked_rounds(rounds, writer_ids())
+
+        logger.info("Incrementing counters while every node uses vnodes")
+        await load.run_checked_rounds(rounds, writer_ids())
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await load.run_checked_rounds(rounds, writer_ids())
+
+        for idx, mode in [(0, 'tablets'), (1, 'tablets'), (0, 'vnodes'), (0, 'tablets'), (2, 'tablets')]:
+            await restart_and_check(idx, mode)
+
+        logger.info("Finalizing the migration and waiting for pow2 convergence while incrementing counters")
+        applied_before, failed_before = sum(load.applied), sum(load.unknown)
+        stop = asyncio.Event()
+        background = asyncio.create_task(load.run_until(stop))
+        try:
+            await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+            # The tablet merges take longer under the load, and much longer in debug mode.
+            await wait_for_pow2_convergence(manager, servers[0], ks, 'counters', timeout=300)
+        except BaseException:
+            # Don't wait for the round in flight, it may take a request timeout to fail.
+            background.cancel()
+            await asyncio.wait([background])
+            raise
+        stop.set()
+        background_rounds = await background
+        applied, failed = sum(load.applied) - applied_before, sum(load.unknown) - failed_before
+        logger.info(f"Ran {background_rounds} rounds of increments in the background: {applied} applied, {failed} failed")
+        # The increments must have kept running, or the checks below would accept any value.
+        assert applied > 10 * failed, f"Too few increments succeeded in the background: {applied} applied, {failed} failed"
+
+        await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
+        # A tablet migration gives its pending replica the negated rack ID, so finish any before checking the IDs.
+        await manager.disable_tablet_balancing()
+        await load.run_checked_rounds(rounds, writer_ids())
+
+
 async def setup_single_node(manager: ScyllaClusterManager):
     """Start a single node with random tokens for migration error tests."""
     cfg = {'num_tokens': 16}
