@@ -29,7 +29,9 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <iterator>
 #include <ranges>
 #include <utility>
@@ -961,6 +963,10 @@ class load_balancer {
     size_t max_write_streaming_load;
     size_t max_read_streaming_load;
 
+    // Upper bound on the fraction of a table's token space in transition, to limit how many requests
+    // pay the double-quorum overhead.
+    double max_token_space_fraction;
+
     replica::database& _db;
     const db::cluster_config_manager& _cluster_config_manager;
     token_metadata_ptr _tm;
@@ -1168,6 +1174,22 @@ public:
         }
         max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
         max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
+        namespace opt = db::cluster_config_registry::option_name;
+        auto token_space_pct = _cluster_config_manager.resolve_floating_point_config(
+                cluster_config_option(opt::tablet_streaming_max_token_space_percentage), {});
+        // Set at runtime, so clamp before comparing against accumulated token space.
+        max_token_space_fraction = std::isnan(token_space_pct) ? 0.0 : std::clamp(token_space_pct, 0.0, 100.0) / 100.0;
+    }
+
+    // Options resolve cluster-wide, to their registered default while nothing is stored for them.
+    // Planning starts only after startup has loaded the cluster config, so it never misses a
+    // stored value.
+    static const db::cluster_config_registry::option& cluster_config_option(std::string_view name) {
+        const auto* option = db::cluster_config_registry::find(name);
+        if (!option) {
+            on_internal_error(lblogger, format("{} is not a registered cluster config option", name));
+        }
+        return *option;
     }
 
     bool ongoing_rack_list_colocation() const {
@@ -1377,6 +1399,26 @@ public:
                 sload.dusage = disk_usage{ load.dusage->capacity / load.shard_count, 0 };
             }
         }
+    }
+
+    // Whether the table may put more of its token space in transition: what is in transition according
+    // to tablet metadata, plus what this round has scheduled, is within the budget. The candidate is
+    // not counted, so the last migration may exceed the budget by one tablet. Otherwise a table with
+    // few tablets could not migrate at all.
+    bool within_token_space_budget(table_id table) const {
+        table = _tm->tablets().get_base_table(table);
+        double used = 0;
+        if (auto i = _token_space_in_transition_per_table.find(table); i != _token_space_in_transition_per_table.end()) {
+            used += i->second;
+        }
+        if (auto i = _scheduled_token_space_per_table.find(table); i != _scheduled_token_space_per_table.end()) {
+            used += i->second;
+        }
+        if (used > max_token_space_fraction) {
+            lblogger.debug("Migration skipped because table {} is out of token space budget ({} in transition)", table, used);
+            return false;
+        }
+        return true;
     }
 
     // Tablets scheduled during plan-making are counted separately, by mark_as_scheduled().
@@ -1714,7 +1756,7 @@ public:
                 auto& tmap = tmeta.get_tablet_map(source_tablets.table());
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
                 pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                if (can_accept_load(nodes, mig_streaming_info)) {
+                if (within_token_space_budget(source_tablets.table()) && can_accept_load(nodes, mig_streaming_info)) {
                     apply_load(nodes, mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
@@ -2092,7 +2134,7 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, tmap, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (within_token_space_budget(source_tablets.table()) && can_accept_load(nodes, mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
                             apply_load(nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
@@ -2117,7 +2159,7 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (within_token_space_budget(source_tablets.table()) && can_accept_load(nodes, mig_streaming_info)) {
                             apply_load(nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
@@ -2363,7 +2405,7 @@ public:
 
                 auto mig = create_migration_info(t2_id, src, dst);
                 auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), tmap, mig);
-                if (!can_accept_load(nodes, mig_streaming_info)) {
+                if (!within_token_space_budget(t2_id.table) || !can_accept_load(nodes, mig_streaming_info)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
@@ -3690,7 +3732,7 @@ public:
             auto& tmap = tmeta.get_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
-            if (!can_accept_load(nodes, mig_streaming_info)) {
+            if (!within_token_space_budget(tablets.table()) || !can_accept_load(nodes, mig_streaming_info)) {
                 _current_stats->migrations_skipped++;
                 lblogger.debug("Unable to balance {}: load limit reached", host);
                 break;
@@ -4402,7 +4444,7 @@ public:
 
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
-            if (can_accept_load(nodes, mig_streaming_info)) {
+            if (within_token_space_budget(source_tablets.table()) && can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 _current_stats->migrations_produced++;
