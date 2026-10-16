@@ -44,7 +44,9 @@ CONTENT_RANGE_RE = re.compile(r"^bytes (?:(\d+)-(\d+)|\*)/(?:(\d+)|\*)$")
 # a 308 reply reports what the server holds as "bytes=<first>-<last>"
 REPLY_RANGE_RE = re.compile(r"^bytes=(\d+)-(\d+)$")
 
-HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "authorization",
+              "x-amz-date", "x-amz-content-sha256", "amz-sdk-invocation-id", "amz-sdk-request",
+              "host",
               "te", "trailers", "transfer-encoding", "upgrade"}
 
 BLOCK = 128 * 1024
