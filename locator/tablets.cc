@@ -286,6 +286,8 @@ tablet_info::tablet_info(const tablet_info& o)
     , repair_task_info(o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr)
     , migration_task_info(o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr)
     , sstables_repaired_at(o.sstables_repaired_at)
+    , cluster_compaction_request_id(o.cluster_compaction_request_id)
+    , cluster_compaction_failed(o.cluster_compaction_failed)
 {}
 
 tablet_info& tablet_info::operator=(const tablet_info& o) {
@@ -295,6 +297,8 @@ tablet_info& tablet_info::operator=(const tablet_info& o) {
         repair_task_info = o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr;
         migration_task_info = o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr;
         sstables_repaired_at = o.sstables_repaired_at;
+        cluster_compaction_request_id = o.cluster_compaction_request_id;
+        cluster_compaction_failed = o.cluster_compaction_failed;
     }
     return *this;
 }
@@ -307,7 +311,9 @@ bool tablet_info::operator==(const tablet_info& o) const {
         && repair_time == o.repair_time
         && eq(repair_task_info, o.repair_task_info)
         && eq(migration_task_info, o.migration_task_info)
-        && sstables_repaired_at == o.sstables_repaired_at;
+        && sstables_repaired_at == o.sstables_repaired_at
+        && cluster_compaction_request_id == o.cluster_compaction_request_id
+        && cluster_compaction_failed == o.cluster_compaction_failed;
 }
 
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
@@ -331,6 +337,24 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
     auto info = tablet_info(std::move(a.replicas), repair_time, std::make_unique<tablet_task_info>(*repair_task_info),
         a.migration_task_info ? std::make_unique<tablet_task_info>(*a.migration_task_info) : nullptr, sstables_repaired_at);
+    // The merged tablet was compacted by a request only if both of its halves were. A request
+    // doesn't retry a tablet which it failed to compact, so a failure of either half sticks.
+    if (a.cluster_compaction_request_id == b.cluster_compaction_request_id) {
+        info.cluster_compaction_request_id = a.cluster_compaction_request_id;
+        info.cluster_compaction_failed = a.cluster_compaction_failed || b.cluster_compaction_failed;
+    } else if (a.cluster_compaction_failed || b.cluster_compaction_failed) {
+        // Both halves may have failed, under different requests. Only the newer one can still be
+        // ongoing, so keep its failure, lest it retries the merged tablet.
+        const tablet_info* failed = nullptr;
+        for (const auto* half : {&a, &b}) {
+            if (half->cluster_compaction_failed && (!failed || utils::timeuuid_tri_compare(
+                    half->cluster_compaction_request_id.uuid(), failed->cluster_compaction_request_id.uuid()) > 0)) {
+                failed = half;
+            }
+        }
+        info.cluster_compaction_request_id = failed->cluster_compaction_request_id;
+        info.cluster_compaction_failed = true;
+    }
     return info;
 }
 
