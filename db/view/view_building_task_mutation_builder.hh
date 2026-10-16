@@ -41,6 +41,8 @@ public:
     view_building_task_mutation_builder& set_last_token(utils::UUID id, dht::token last_token);
     view_building_task_mutation_builder& set_replica(utils::UUID id, const locator::tablet_replica& replica);
     view_building_task_mutation_builder& del_task(utils::UUID id);
+    // Deletes all tasks of a base table: view tasks and staging tasks.
+    view_building_task_mutation_builder& del_tasks(const base_table_tasks& tasks);
     // Deletes all tasks with clustering key < id using a range tombstone.
     view_building_task_mutation_builder& del_tasks_before(utils::UUID id);
     // Deletes all tasks using a range tombstone covering the entire clustering range.
