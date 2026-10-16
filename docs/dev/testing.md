@@ -269,19 +269,26 @@ selection described in the Usage section.
 
 Since there can be many pytests in a single directory (e.g. cqlpy)
 `test.py` runs them in parallel in several `pytest-xdist` workers,
-each with its own servers. Within a worker, a cluster is created per
-test file and shared by all its test cases, to save on setup/teardown
-steps. While this speeds up execution, sharing servers complicates debugging
-if a test fails.
+each with its own servers. Within a worker, a server is shared by all
+test cases of a test file, and then handed to the next file of the same
+suite, to save on setup/teardown steps. While this speeds up execution,
+sharing servers complicates debugging if a test fails.
 
 Specifically, you should avoid leaving global artifacts in your test, even
 if it fails. Typically, you could use a built-in `keyspace()` fixture
-to create a randomly named keyspace.
+to create a randomly named keyspace, and `config_value_context()` to
+change a live-updatable config option.  This is nothing new: the `run`
+scripts of cqlpy and alternator run all test files against one server.
 
-At start and end of each test, `test.py` performs a number of sanity checks
-of the used server:
-- it should be up and running,
-- it should not contain non-system keyspaces.
+At the end of each test file, `test.py` checks the used server, and boots
+a new one for the next file instead if a test of the file failed, or if
+the server:
+- is no longer up and running,
+- has different keyspaces than it had after boot.
+
+A test file which changes the server in a way that breaks other tests and
+can't be undone should be listed under `dirties_cluster` in the suite's
+test_config.yaml: the server it used is never handed to another file.
 
 ### Debugging a pytest.
 

@@ -12,6 +12,7 @@ import importlib
 import logging
 import pathlib
 import uuid
+import warnings
 from collections import ChainMap
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple, Optional, Set, Union
@@ -90,6 +91,12 @@ class ScyllaCluster:
         # cluster is started (but it might not have running servers);
         # cleared by stop(), which is a no-op when it is False
         self.is_running: bool = True
+        # Set when the cluster must not be handed to another test module: a
+        # test that used it failed, or it no longer matches its initial state.
+        self.is_dirty: bool = False
+        # keyspaces() right after the cluster was set up, for
+        # check_unchanged() to compare with.
+        self.initial_keyspaces: Optional[set[str]] = None
         self.api = ScyllaRESTAPIClient(build_mode=self.mode)
         self.logger.info("Created new cluster %s", self.name)
 
@@ -324,6 +331,57 @@ class ScyllaCluster:
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""
         return next(server.ip_addr for server in self.running.values())
+
+    def mark_dirty(self, reason: str) -> None:
+        """Keep the cluster from being reused by another test module."""
+        if not self.is_dirty:
+            self.logger.info("Cluster %s is dirty: %s", self.name, reason)
+        self.is_dirty = True
+
+    def keyspaces(self) -> Optional[set[str]]:
+        """The keyspaces of the cluster's only server, or None if the cluster
+        isn't a single running server or they can't be read."""
+        if len(self.running) != 1 or self.stopped or self.starting:
+            return None
+        server = next(iter(self.running.values()))
+        if server.control_connection is None:
+            return None
+        try:
+            rows = server.control_connection.execute("SELECT keyspace_name FROM system_schema.keyspaces")
+            return {row.keyspace_name for row in rows}
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.warning("Cannot read the keyspaces of cluster %s: %s", self.name, exc)
+            return None
+
+    def servers_alive(self) -> bool:
+        """Whether the processes of all running servers are still alive."""
+        return all(server.cmd is not None and server.cmd.returncode is None for server in self.running.values())
+
+    def check_unchanged(self) -> None:
+        """Mark the cluster dirty unless its server is alive and has the
+        keyspaces it had right after setup."""
+        if self.is_dirty:
+            return
+        if not self.servers_alive():
+            self.mark_dirty("a server is not running")
+            return
+        keyspaces = self.keyspaces()
+        if keyspaces is None or self.initial_keyspaces is None:
+            self.mark_dirty("cannot read the keyspaces")
+            return
+        if keyspaces != self.initial_keyspaces:
+            # Also a warning in the test summary, where the developer sees it:
+            # a test that doesn't clean up costs the next module a server boot.
+            message = (f"The test must drop the keyspaces it creates: left behind {sorted(keyspaces - self.initial_keyspaces)},"
+                       f" dropped {sorted(self.initial_keyspaces - keyspaces)}")
+            self.logger.warning("Cluster %s: %s", self.name, message)
+            warnings.warn(message)
+            self.mark_dirty("the test changed the keyspaces")
+
+    def write_log_marker(self, msg: str) -> None:
+        """Write a marker line to the log files of all running servers."""
+        for server in self.running.values():
+            server.write_log_marker(msg)
 
     def take_log_savepoint(self) -> None:
         """Save the log size on all running servers"""
