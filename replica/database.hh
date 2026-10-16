@@ -1290,6 +1290,9 @@ public:
     // Disk space used by the storage of this table on this shard.
     utils::file_size_stats live_disk_space_used() const;
     utils::file_size_stats total_disk_space_used() const;
+    // The data this table holds on this shard, as compaction_group::data_size() counts it: the
+    // sstables as in live_disk_space_used(), and the live record bytes of the logstor groups.
+    uint64_t data_size() const;
     // Space taken by the logstor segments this table owns. Zero for a table that doesn't use logstor.
     uint64_t logstor_disk_space_used() const;
     // Number of logstor segments this table owns.

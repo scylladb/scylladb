@@ -2519,6 +2519,14 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
     return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk() + logstor_disk_space_used();
 }
 
+uint64_t compaction_group::logstor_live_record_bytes() const noexcept {
+    return _t.uses_logstor() ? logstor_segments().live_record_bytes() : 0;
+}
+
+uint64_t compaction_group::data_size() const noexcept {
+    return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk() + logstor_live_record_bytes();
+}
+
 utils::file_size_stats compaction_group::live_sstable_disk_space_used() const noexcept {
     return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
 }
@@ -2526,6 +2534,14 @@ utils::file_size_stats compaction_group::live_sstable_disk_space_used() const no
 uint64_t storage_group::live_disk_space_used() const {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
+}
+
+uint64_t storage_group::data_size() const {
+    uint64_t size = 0;
+    for_each_compaction_group([&size] (const compaction_group_ptr& cg) {
+        size += cg->data_size();
+    });
+    return size;
 }
 
 uint64_t compaction_group::total_disk_space_used() const noexcept {
@@ -2573,6 +2589,14 @@ uint64_t table::logstor_live_record_bytes() const {
 utils::file_size_stats table::live_disk_space_used() const {
     const int64_t logstor_size = logstor_disk_space_used();
     return _stats.sstables_live_disk_space_used.clamped_to_zero() + utils::file_size_stats{logstor_size, logstor_size};
+}
+
+uint64_t table::data_size() const {
+    uint64_t logstor_size = 0;
+    for_each_compaction_group([&logstor_size] (const compaction_group& cg) {
+        logstor_size += cg.logstor_live_record_bytes();
+    });
+    return _stats.sstables_live_disk_space_used.clamped_to_zero().on_disk + logstor_size;
 }
 
 utils::file_size_stats table::total_disk_space_used() const {
