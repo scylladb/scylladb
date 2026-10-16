@@ -1636,6 +1636,65 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
     }, cfg);
 }
 
+// Reproducer for SCYLLADB-3537.
+//
+// Reproduces a bug where a memtable was omitted from a range scan due to
+// a bad conversion from a partition range to a token range.
+//
+// The scanned range starts right after a key whose token `t` is the last token of a
+// tablet. After the bad conversion, the start bound would become `after t`,
+// so the tablet would not be selected for the read, even though it intersects the range.
+SEASTAR_TEST_CASE(test_memtable_selection_for_range_starting_after_key_with_boundary_token) {
+    cql_test_config cfg;
+    cfg.initial_tablets = 2;
+
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        replica::database& db = env.local_db();
+
+        // This test needs a stable tablet layout.
+        env.get_storage_service().local().set_tablet_balancing_enabled(false).get();
+
+        env.execute_cql("CREATE TABLE ks.tbl (pk int, ck int, v text, PRIMARY KEY(pk, ck));").get();
+        auto& tbl = db.find_column_family("ks", "tbl");
+        BOOST_REQUIRE(tbl.uses_tablets());
+
+        const auto& tablet_map = db.get_token_metadata().tablets().get_tablet_map(tbl.schema()->id());
+        const auto tablet_id = tablet_map.first_tablet();
+        // The token shared by both keys below. It is the last token of the first
+        // tablet, which is the token a faulty conversion excludes from the read.
+        const auto shared_token = tablet_map.get_last_token(tablet_id);
+        const auto owner_shard = tablet_map.get_tablet_info(tablet_id).replicas.front().shard;
+
+        env.db().invoke_on(owner_shard, [shared_token] (replica::database& db) {
+            return async([&db, shared_token] {
+                auto& tbl = db.find_column_family("ks", "tbl");
+                const auto schema = tbl.schema();
+
+                // The keys are decorated by hand so that they share a token.
+                // Finding two real keys with the same token is not feasible.
+                auto make_key = [&] (int32_t pk) {
+                    return dht::decorated_key(shared_token, partition_key::from_single_value(*schema, int32_type->decompose(pk)));
+                };
+                // The key which the range starts after, and the key the range contains.
+                const auto start_key = make_key(1);
+                const auto present_key = make_key(2);
+
+                mutation m(schema, present_key);
+                const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+                m.set_clustered_cell(clustering_key::from_single_value(*schema, int32_type->decompose(0)), v_def,
+                        atomic_cell::make_live(*v_def.type, next_timestamp(), utf8_type->decompose(sstring("v"))));
+                tbl.apply(m);
+
+                const auto range = dht::partition_range(dht::partition_range::bound(dht::ring_position(start_key), false), {});
+                auto permit = db.obtain_reader_permit(tbl, "test", db::no_timeout, {}).get();
+                assert_that(tbl.make_mutation_reader(schema, std::move(permit), range, schema->full_slice()))
+                        .produces(m)
+                        .produces_end_of_stream();
+            });
+        }).get();
+    }, cfg);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_memtable_reader_abort) {
     simple_schema ss;
     const auto s = ss.schema();

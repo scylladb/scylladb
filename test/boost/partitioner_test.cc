@@ -791,3 +791,64 @@ SEASTAR_THREAD_TEST_CASE(test_token_range_overlap_ratio) {
     // returns 1.0f since base (half full) range is 100% covered by the full range.
     BOOST_REQUIRE(dht::overlap_ratio(dht::token_range::make(dht::first_token(), token_midpoint), full_range) == 1.0f);
 }
+
+// Test for dht::to_token_range
+SEASTAR_THREAD_TEST_CASE(test_to_token_range) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+
+    const auto key = partition_key::from_single_value(*s, "key1");
+    const auto t = token_from_long(100);
+    const auto other = token_from_long(200);
+
+    using bound = dht::partition_range::bound;
+    using token_bound = dht::token_range::bound;
+
+    auto with_key = dht::ring_position(t, key);
+    auto before_keys = dht::ring_position::starting_at(t);
+    auto after_keys = dht::ring_position::ending_at(t);
+
+    auto as_pair = [] (const auto& b) { return std::make_pair(b.value(), b.is_inclusive()); };
+    auto start_bound_of = [&] (dht::ring_position pos, bool inclusive) {
+        return as_pair(*dht::to_token_range(dht::partition_range(bound(std::move(pos), inclusive),
+                bound(dht::ring_position::ending_at(other), true))).start());
+    };
+    auto end_bound_of = [&] (dht::ring_position pos, bool inclusive) {
+        return as_pair(*dht::to_token_range(dht::partition_range(bound(dht::ring_position::starting_at(token_from_long(0)), true),
+                bound(std::move(pos), inclusive))).end());
+    };
+    auto expected = [] (dht::token t, bool inclusive) { return std::make_pair(t, inclusive); };
+
+    // A start bound which can be followed by keys of its token keeps the token.
+    // Note that this holds for an exclusive bound too, because other keys can
+    // share the token of the excluded key.
+    BOOST_REQUIRE(start_bound_of(with_key, true) == expected(t, true));
+    BOOST_REQUIRE(start_bound_of(with_key, false) == expected(t, true));
+    BOOST_REQUIRE(start_bound_of(before_keys, true) == expected(t, true));
+    BOOST_REQUIRE(start_bound_of(before_keys, false) == expected(t, true));
+    // A start bound which lies after all keys of its token drops the token.
+    BOOST_REQUIRE(start_bound_of(after_keys, true) == expected(t, false));
+    BOOST_REQUIRE(start_bound_of(after_keys, false) == expected(t, false));
+
+    // Symmetrically for end bounds.
+    BOOST_REQUIRE(end_bound_of(with_key, true) == expected(t, true));
+    BOOST_REQUIRE(end_bound_of(with_key, false) == expected(t, true));
+    BOOST_REQUIRE(end_bound_of(after_keys, true) == expected(t, true));
+    BOOST_REQUIRE(end_bound_of(after_keys, false) == expected(t, true));
+    BOOST_REQUIRE(end_bound_of(before_keys, true) == expected(t, false));
+    BOOST_REQUIRE(end_bound_of(before_keys, false) == expected(t, false));
+
+    // Open-ended bounds stay open-ended.
+    auto open = dht::to_token_range(dht::partition_range::make_open_ended_both_sides());
+    BOOST_REQUIRE(!open.start() && !open.end());
+
+    // A range obtained from a token range converts back to the same token range.
+    for (auto tr : {dht::token_range(token_bound(t, true), token_bound(other, true)),
+                    dht::token_range(token_bound(t, false), token_bound(other, false)),
+                    dht::token_range(token_bound(t, true), token_bound(other, false)),
+                    dht::token_range(token_bound(t, false), token_bound(other, true))}) {
+        BOOST_REQUIRE(dht::to_token_range(dht::to_partition_range(tr)) == tr);
+    }
+}
