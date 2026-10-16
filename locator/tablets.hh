@@ -202,6 +202,13 @@ struct tablet_info {
     // coordinator moves it to repair_task_info when it starts the repair
     // transition of the tablet.
     std::unique_ptr<tablet_task_info> pending_repair_request;
+    // The id of the last cluster-wide compaction request (a topology request) which
+    // processed this tablet, or null. A tablet is pending compaction by a request as long
+    // as this differs from the request's id.
+    cluster_compaction_id cluster_compaction_request_id;
+    // Set when the request of cluster_compaction_request_id failed to compact this tablet.
+    // The request doesn't retry it.
+    bool cluster_compaction_failed = false;
 
     tablet_info() = default;
     tablet_info(tablet_replica_set, db_clock::time_point, std::unique_ptr<tablet_task_info> repair_task_info, std::unique_ptr<tablet_task_info> migration_task_info, int64_t sstables_repaired_at);
