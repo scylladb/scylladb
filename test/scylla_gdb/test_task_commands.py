@@ -25,8 +25,10 @@ def test_coroutine_frame(gdb_cmd):
     to the inner `seastar::task`, as required by `$coro_frame`, which expects
     a `seastar::task*`.
     """
+    # Printing static members drags in debug info: 12.8GB/104s vs 2.8GB/6s without.
     result = execute_gdb_command(
-        gdb_cmd, full_command="p *$coro_frame($get_coroutine() + 16)"
+        [*gdb_cmd, "-ex", "set print static-members off"],
+        full_command="p *$coro_frame($get_coroutine() + 16)",
     )
     if "COROUTINE_NOT_FOUND" in result.stdout:
         # See https://github.com/scylladb/scylladb/issues/22501
