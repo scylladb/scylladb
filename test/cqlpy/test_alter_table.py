@@ -255,6 +255,20 @@ def test_readd_column_with_same_nonfrozen_udt(cql, test_keyspace, scylla_only):
             cql.execute(f'ALTER TABLE {table} DROP x')
             cql.execute(f'ALTER TABLE {table} ADD x {udt}')
 
+# Re-adding a dropped non-frozen collection column with the same type must be
+# allowed also when the collection contains a user type. Reproduces #7936,
+# where this was refused with "Cannot add a collection with the name ...
+# because a collection with the same name and a different type has already
+# been used in the past": the check compared the collection type with the
+# type recorded for the dropped column, in which the user type is replaced
+# by a tuple. Cassandra has a similar bug (CASSANDRA-21761).
+def test_readd_collection_column_with_same_udt(cql, test_keyspace, cassandra_bug):
+    with new_type(cql, test_keyspace, '(a int, b text)') as udt:
+        for t in [f'map<text, frozen<{udt}>>', f'list<frozen<{udt}>>', f'set<frozen<{udt}>>']:
+            with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x {t}') as table:
+                cql.execute(f'ALTER TABLE {table} DROP x')
+                cql.execute(f'ALTER TABLE {table} ADD x {t}')
+
 # Re-adding a dropped int column as blob, which can hold any value, is
 # allowed. The value written to the int column before the DROP belongs to the
 # dropped column, so it must not reappear as a blob. The test reads with
