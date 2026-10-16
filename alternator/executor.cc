@@ -352,6 +352,10 @@ double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
+static bool has_warm_throughput_units(const rjson::value& warm) {
+    return rjson::find(warm, "ReadUnitsPerSecond") || rjson::find(warm, "WriteUnitsPerSecond");
+}
+
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto creation_time = get_table_creation_time(schema);
 
@@ -365,8 +369,13 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     // Alternator's CreateTable is synchronous and this response already says
     // TableStatus ACTIVE, so the warm throughput is active with it.
     rjson::value* warm = rjson::find(descr, "WarmThroughput");
-    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
-        rjson::add(*warm, "Status", "ACTIVE");
+    if (warm && warm->IsObject()) {
+        if (!has_warm_throughput_units(*warm)) {
+            // One with neither unit configures nothing, and DynamoDB leaves it out.
+            rjson::remove_member(descr, "WarmThroughput");
+        } else if (!rjson::find(*warm, "Status")) {
+            rjson::add(*warm, "Status", "ACTIVE");
+        }
     }
 
     // DynamoDB reports every GSI's ProvisionedThroughput here - zeros in
@@ -2755,6 +2764,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
     }
 
+    // Unlike CreateTable, DynamoDB refuses an update to a WarmThroughput with neither unit.
+    if (const rjson::value* warm = rjson::find(request, "WarmThroughput"); warm && warm->IsObject() && !has_warm_throughput_units(*warm)) {
+        co_await coroutine::return_exception(api_error::validation("One or more parameter values were invalid: "
+                "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified"));
+    }
+
     bool empty_request = true;
     bool switch_to_pay_per_request = false;
 
@@ -3260,6 +3275,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         const rjson::value* warm = rjson::find(it->value, "WarmThroughput");
                         if (!warm || !warm->IsObject() || it->value.MemberCount() != 2) {
                             co_return api_error::validation("GlobalSecondaryIndexUpdates Update supports only WarmThroughput");
+                        }
+                        if (!has_warm_throughput_units(*warm)) {
+                            co_return api_error::validation(fmt::format("One or more parameter values were invalid: "
+                                "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified for index: {}", index_name));
                         }
                         gsi_update_view_name = vname;
                         gsi_update_action = &it->value;
