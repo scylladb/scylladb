@@ -126,6 +126,22 @@ def test_writetime_ttl_frozen_udt_elements_pk(cql, test_keyspace):
             with pytest.raises(InvalidRequest, match='primary key|PRIMARY KEY'):
                 cql.execute(f"SELECT TTL(pk.a) FROM {table}")
 
+# CREATE TABLE refuses a non-frozen column of a UDT which has a non-frozen
+# collection field. But if such a field is added to the UDT with ALTER TYPE
+# ADD while a table already has a non-frozen column of this UDT, the ALTER
+# is allowed - in Cassandra as well - and the new field works like a frozen
+# collection: it can be set and read as a whole (CQL has no syntax for
+# modifying an element of a collection inside a UDT field anyway). We decided
+# to keep allowing this, so as not to break existing applications nor
+# diverge from Cassandra, and this test checks that it keeps working.
+def test_alter_type_add_collection_to_type_of_nonfrozen_column(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v {typ}') as table:
+            p = unique_key_int()
+            cql.execute(f'ALTER TYPE {typ} ADD b list<int>')
+            cql.execute(f'UPDATE {table} SET v.b = [1, 2] WHERE p = {p}')
+            assert list(cql.execute(f'SELECT v.b FROM {table} WHERE p = {p}')) == [([1, 2],)]
+
 # Test WRITETIME() on an entire frozen UDT column. A frozen UDT is stored as
 # a single atomic cell, so it has a single timestamp like any atomic column.
 def test_writetime_frozen_udt(cql, test_keyspace):
