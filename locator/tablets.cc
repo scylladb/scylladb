@@ -138,6 +138,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::next;
         case tablet_transition_stage::restore:
             return write_replica_set_selector::previous;
+        case tablet_transition_stage::tablet_compaction:
+            return write_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -176,6 +178,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::end_migration:
             return read_replica_set_selector::next;
         case tablet_transition_stage::restore:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::tablet_compaction:
             return read_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
@@ -252,6 +256,15 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
         case tablet_transition_kind::restore: {
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             result.stream_weight = locator::tablet_migration_stream_weight_restore;
+            result.read_from = s;
+            result.written_to = std::move(s);
+            return result;
+        }
+        case tablet_transition_kind::tablet_compaction: {
+            // Doesn't stream, but reads and writes the tablet on all of its replicas, like repair,
+            // so it's accounted in the same per-shard budget.
+            auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            result.stream_weight = locator::tablet_migration_stream_weight_tablet_compaction;
             result.read_from = s;
             result.written_to = std::move(s);
             return result;
@@ -412,7 +425,8 @@ tablet_storage_state get_tablet_storage_state(const tablet_replica& replica, con
         case tablet_transition_stage::sc_remove_pending:                       [[fallthrough]];
         case tablet_transition_stage::repair:                                  [[fallthrough]];
         case tablet_transition_stage::end_repair:                              [[fallthrough]];
-        case tablet_transition_stage::restore:
+        case tablet_transition_stage::restore:                                 [[fallthrough]];
+        case tablet_transition_stage::tablet_compaction:
             return as_replica;
         case tablet_transition_stage::cleanup:
             return is_leaving ? being_cleaned : as_replica;
@@ -1115,6 +1129,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::revert_migration, "revert_migration"},
     {tablet_transition_stage::end_migration, "end_migration"},
     {tablet_transition_stage::restore, "restore"},
+    {tablet_transition_stage::tablet_compaction, "tablet_compaction"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
@@ -1144,6 +1159,7 @@ bool can_cancel_tablet_transition(tablet_transition_stage stage) {
         case tablet_transition_stage::end_migration:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
+        case tablet_transition_stage::tablet_compaction:
             return false;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
@@ -1180,6 +1196,7 @@ static const std::unordered_map<tablet_transition_kind, sstring> tablet_transiti
         {tablet_transition_kind::rebuild_v2, "rebuild_v2"},
         {tablet_transition_kind::repair, "repair"},
         {tablet_transition_kind::restore, "restore"},
+        {tablet_transition_kind::tablet_compaction, "tablet_compaction"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_kind> tablet_transition_kind_from_name = std::invoke([] {
@@ -1477,6 +1494,8 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
             case tablet_transition_kind::intranode_migration:
                 [[fallthrough]];
             case tablet_transition_kind::restore:
+                [[fallthrough]];
+            case tablet_transition_kind::tablet_compaction:
                 [[fallthrough]];
             case tablet_transition_kind::repair:
                 break;
