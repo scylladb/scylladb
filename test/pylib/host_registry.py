@@ -60,7 +60,11 @@ class HostRegistry:
         # locked and reused.
 
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
-        second_octet = int(worker_id[2:]) + 1
+        # Wrapped into 1..254: a scheduler that replaces workers during the run numbers them
+        # past 254 (gw270 in a debug run), and 127.256.x.y is not an address -- every node on
+        # such a worker failed to start.  Two workers that wrap onto the same octet cannot
+        # collide: the subnet is claimed with a lock below, and a taken one is retried.
+        second_octet = int(worker_id[2:]) % 254 + 1
         # HostRegistry is a singleton, so there should be no possibility to mess and overlap in IP for one use
         # however, when there are several users using the same machine for testing, they can overlap,
         # so this simple retry should help to eliminate the overlap and just find another random IP
