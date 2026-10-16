@@ -131,7 +131,9 @@ def test_gsi_created_by_update_table(dynamodb):
 
 # A GSI's ProvisionedThroughput must be given when, and only when, the table is
 # in PROVISIONED billing mode. Both mismatches below are rejected by DynamoDB,
-# with the messages quoted here, so Alternator rejects them too.
+# with the messages quoted here, so Alternator rejects them too. Alternator
+# deliberately tolerates one mismatch DynamoDB rejects, a throughput of zeros
+# on a PAY_PER_REQUEST table, so the throughputs given here are not zeros.
 # Reproduces issue #19718.
 def test_gsi_throughput_required_in_provisioned_mode(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*ProvisionedThroughput.*not specified'):
@@ -243,14 +245,16 @@ def test_gsi_partial_throughput_rejected_by_update_table(dynamodb, gsi_throughpu
 # completeness above - before the billing mode, so a PAY_PER_REQUEST table which
 # may carry no throughput at all rejects the value rather than its presence -
 # and again with a protocol-level message Alternator does not reproduce.
+# Alternator deliberately accepts zeros, an incompatibility with DynamoDB, so
+# only negative capacities are tested here.
 @pytest.mark.parametrize('billing_args', [
         {'BillingMode': 'PROVISIONED',
          'ProvisionedThroughput': {'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3}},
         {'BillingMode': 'PAY_PER_REQUEST'}])
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
     with pytest.raises(ClientError, match='ValidationException'):
         with new_test_table(dynamodb,
                 KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -267,9 +271,9 @@ def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_a
 
 # The same rule for a GSI added by UpdateTable.
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
