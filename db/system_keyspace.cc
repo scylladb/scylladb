@@ -1673,8 +1673,7 @@ std::optional<db::replay_position> system_keyspace::commitlog_cleanup_local_map:
 future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cleanup_records() {
     commitlog_cleanup_map ret;
     const auto req = format("SELECT * from {}.{}", NAME, COMMITLOG_CLEANUPS);
-    auto result_set = co_await execute_cql(req);
-    for (const auto& row: *result_set) {
+    co_await _qp.query_internal(req, [&ret] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
         auto table = table_id(row.get_as<utils::UUID>("table_uuid"));
         auto shard = row.get_as<int32_t>("shard");
         auto start_token_exclusive = row.get_as<int64_t>("start_token_exclusive");
@@ -1687,7 +1686,8 @@ future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cl
         );
         auto& inner_map = ret.try_emplace(std::make_pair(table, shard)).first->second;
         inner_map._pimpl->_map += std::make_pair(boost::icl::left_open_interval<int64_t>(start_token_exclusive, end_token_inclusive), rp);
-    }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
     co_return ret;
 }
 
