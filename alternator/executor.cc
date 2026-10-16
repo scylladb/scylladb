@@ -111,7 +111,7 @@ logging::logger elogger("alternator-executor");
 // Alternator adds to tables:
 //
 // Tags storing the "ReadCapacityUnits" and "WriteCapacityUnits"
-// configured for a table with BillingMode=PROVISIONED.
+// configured for a table with BillingMode=PROVISIONED, or for a GSI in its view.
 const sstring RCU_TAG_KEY("system:provisioned_rcu");
 const sstring WCU_TAG_KEY("system:provisioned_wcu");
 // Tags storing the "ReadUnitsPerSecond" and "WriteUnitsPerSecond" of a table's
@@ -1443,6 +1443,32 @@ static billing_mode_type verify_billing_mode(const rjson::value& request) {
     return billing_mode_type();
 }
 
+// Store a table's billing mode in its tags, the way DescribeTable reads it
+// back: the capacities in PROVISIONED mode, no capacities in PAY_PER_REQUEST
+// mode. Only in PAY_PER_REQUEST mode does it also suit a GSI's view: in
+// PROVISIONED mode a GSI has capacities of its own, not the table's.
+static void set_billing_mode_tags(std::map<sstring, sstring>& tags, const billing_mode_type& bm) {
+    if (bm.provisioned) {
+        tags[RCU_TAG_KEY] = std::to_string(bm.rcu);
+        tags[WCU_TAG_KEY] = std::to_string(bm.wcu);
+    } else {
+        tags.erase(RCU_TAG_KEY);
+        tags.erase(WCU_TAG_KEY);
+    }
+}
+
+// Return a copy of a view with its tags changed by modify().
+static view_ptr view_with_modified_tags(const schema_ptr& view, std::invocable<std::map<sstring, sstring>&> auto&& modify) {
+    std::map<sstring, sstring> tags;
+    if (const auto* tags_ptr = db::get_tags_of_table(view)) {
+        tags = *tags_ptr;
+    }
+    modify(tags);
+    schema_builder builder(view);
+    builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
+    return view_ptr(builder.build());
+}
+
 // Validate that a AttributeDefinitions parameter in CreateTable is valid, and
 // throws user-facing api_error::validation if it's not.
 // In particular, verify that the same AttributeName doesn't appear more than
@@ -2433,10 +2459,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     if (tags && tags->IsArray()) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
-    if (bm.provisioned) {
-        tags_map[RCU_TAG_KEY] = std::to_string(bm.rcu);
-        tags_map[WCU_TAG_KEY] = std::to_string(bm.wcu);
-    }
+    set_billing_mode_tags(tags_map, bm);
     add_warm_throughput_tags(tags_map, request);
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
@@ -2746,10 +2769,14 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     }
 
     bool empty_request = true;
+    // UpdateTable can switch a table only to PAY_PER_REQUEST: it refuses a
+    // ProvisionedThroughput above, and verify_billing_mode() refuses
+    // BillingMode=PROVISIONED without one. The switch to PROVISIONED is #19718.
+    std::optional<billing_mode_type> billing_mode;
 
     if (rjson::find(request, "BillingMode")) {
         empty_request = false;
-        verify_billing_mode(request);
+        billing_mode = verify_billing_mode(request);
     }
 
     // Note: audit_info is captured by reference into the invoke_on() lambda and written on shard 0.
@@ -2757,7 +2784,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     // the entire duration of invoke_on(). Only the unique_ptr itself is read/written cross-shard —
     // no concurrent access occurs since the caller is suspended during invoke_on().
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
-                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container(), &audit_info]
+                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, billing_mode, &e = this->container(), &audit_info]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
@@ -2781,16 +2808,23 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
+            // The table's tags hold its WarmThroughput and its billing mode.
             // DynamoDB accepts an UpdateTable carrying only WarmThroughput.
             // Alternator has no throughput caps and nothing to pre-warm, so it
             // just remembers the request for DescribeTable to report back.
-            std::map<sstring, sstring> warm_tags;
+            std::map<sstring, sstring> table_tags;
             if (const auto* tags_ptr = db::get_tags_of_table(tab)) {
-                warm_tags = *tags_ptr;
+                table_tags = *tags_ptr;
             }
-            if (add_warm_throughput_tags(warm_tags, request)) {
+            const bool warm_throughput_given = add_warm_throughput_tags(table_tags, request);
+            if (warm_throughput_given) {
                 empty_request = false;
-                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(warm_tags)));
+            }
+            if (billing_mode) {
+                set_billing_mode_tags(table_tags, *billing_mode);
+            }
+            if (warm_throughput_given || billing_mode) {
+                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(table_tags)));
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
@@ -3234,12 +3268,29 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 }
             }
 
+            // A switch to PAY_PER_REQUEST also erases the stored capacities of
+            // the table's GSIs: DynamoDB reports zeros for a GSI in that mode,
+            // and so does DescribeTable for a GSI without stored capacities.
+            // Only such a switch changes the tags of existing GSIs here.
+            std::vector<view_ptr> updated_views;
+            if (billing_mode && !billing_mode->provisioned) {
+                for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                    // Skip a GSI which this request deletes, and a GSI
+                    // without stored capacities.
+                    if (std::ranges::contains(dropped_views, std::string_view(view->cf_name())) || !get_provisioned_throughput(db::get_tags_of_table(view))) {
+                        continue;
+                    }
+                    updated_views.push_back(view_with_modified_tags(view,
+                            [&] (auto& tags) { set_billing_mode_tags(tags, *billing_mode); }));
+                }
+            }
+
             if (empty_request) {
                 co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
-            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
+            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(updated_views), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
                 std::move(m2.begin(), m2.end(), std::back_inserter(m));
