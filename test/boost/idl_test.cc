@@ -192,6 +192,40 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
     BOOST_REQUIRE_EQUAL(sc.bar, sc_view.bar());
 }
 
+BOOST_AUTO_TEST_CASE(test_versioned_view_field_absent_on_wire)
+{
+    // Old-format bytes: the [[version 1.1]] tail is absent on the wire.
+    bytes_ostream buf1;
+    ser::writer_of_writable_versioned_compound_old<bytes_ostream> old_writer(buf1);
+    std::move(old_writer).write_foo(0xdeadbeef).write_bar(0xbadc0ffe).end_writable_versioned_compound_old();
+
+    auto bv1 = buf1.linearize();
+    auto in1 = ser::as_input_stream(bv1);
+    auto view1 = ser::deserialize(in1, std::type_identity<ser::writable_versioned_compound_view>());
+    // Cold access of the absent versioned field yields the default.
+    BOOST_REQUIRE(!view1.opt());
+    // Ascending access reaches the absent versioned field via the cached position.
+    BOOST_REQUIRE_EQUAL(view1.foo(), 0xdeadbeef);
+    BOOST_REQUIRE_EQUAL(view1.bar(), 0xbadc0ffe);
+    BOOST_REQUIRE(!view1.opt());
+
+    // New-format bytes: the versioned field is present.
+    bytes_ostream buf2;
+    ser::writer_of_writable_versioned_compound<bytes_ostream> new_writer(buf2);
+    std::move(new_writer).write_foo(1).write_bar(2).write_opt(3).end_writable_versioned_compound();
+
+    auto bv2 = buf2.linearize();
+    auto in2 = ser::as_input_stream(bv2);
+    auto view2 = ser::deserialize(in2, std::type_identity<ser::writable_versioned_compound_view>());
+    BOOST_REQUIRE_EQUAL(view2.foo(), 1u);
+    BOOST_REQUIRE_EQUAL(view2.bar(), 2u);
+    BOOST_REQUIRE_EQUAL(*view2.opt(), 3u);
+    // Out-of-order and repeated access falls back to a full restart.
+    BOOST_REQUIRE_EQUAL(*view2.opt(), 3u);
+    BOOST_REQUIRE_EQUAL(view2.foo(), 1u);
+    BOOST_REQUIRE_EQUAL(view2.bar(), 2u);
+}
+
 BOOST_AUTO_TEST_CASE(test_vector)
 {
     std::vector<simple_compound> vec1 = {
