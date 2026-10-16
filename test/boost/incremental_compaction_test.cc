@@ -502,6 +502,48 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
     });
 }
 
+// Sstables sharing a run identifier may still overlap, e.g. those written for different
+// time windows by a single TWCS compaction. Verify that ICS treats each of them as a run,
+// rather than silently dropping all but one of them.
+SEASTAR_TEST_CASE(ics_overlapping_sstables_of_same_run_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "ics_overlapping_sstables_of_same_run_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+        auto s = builder.build();
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, s->compaction_strategy_options());
+
+        auto key = tests::generate_partition_key(s);
+        auto make_row = [&] () {
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(1)), 1);
+            return m;
+        };
+
+        auto sst_gen = env.make_sst_factory(s);
+        const unsigned sstable_count = s->max_compaction_threshold() * 2;
+        auto sstable_run_id = run_id::create_random_id();
+        std::vector<sstables::shared_sstable> sstables;
+        sstables.reserve(sstable_count);
+        for (unsigned i = 0; i < sstable_count; i++) {
+            auto sst = make_sstable_containing(sst_gen, {make_row()}).get();
+            sstables::test(sst).set_run_identifier(sstable_run_id);
+            sstables.push_back(std::move(sst));
+        }
+
+        auto runs = compaction::incremental_compaction_strategy::sstables_to_runs(sstables);
+        BOOST_REQUIRE_EQUAL(runs.size(), sstable_count);
+        auto in_runs = compaction::incremental_compaction_strategy::runs_to_sstables(std::move(runs)) | std::ranges::to<std::unordered_set>();
+        BOOST_REQUIRE(in_runs == (sstables | std::ranges::to<std::unordered_set>()));
+
+        auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
+        BOOST_REQUIRE_EQUAL(ret.sstables.size(), uint64_t(s->max_compaction_threshold()));
+    });
+}
+
 SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
     return test_env::do_with_async([](test_env &env) {
         auto gc_grace_seconds = 5;

@@ -465,12 +465,24 @@ incremental_compaction_strategy::runs_to_sstables(std::vector<sstables::frozen_s
 std::vector<sstables::frozen_sstable_run>
 incremental_compaction_strategy::sstables_to_runs(std::vector<sstables::shared_sstable> sstables) {
     std::unordered_map<sstables::run_id, sstables::sstable_run> runs;
+    std::unordered_set<sstables::shared_sstable> seen;
+    std::vector<sstables::frozen_sstable_run> ret;
     for (auto&& sst : sstables) {
         // okay to ignore duplicates
-        (void)runs[sst->run_identifier()].insert(std::move(sst));
+        if (!seen.insert(sst).second) {
+            continue;
+        }
+        // Sstables sharing a run identifier may still overlap, e.g. the sstables written for
+        // different time windows by a single compaction. Like sstable_set::all_sstable_runs(),
+        // treat an sstable that its run cannot accept as a single-fragment run, rather than
+        // dropping it.
+        if (!runs[sst->run_identifier()].insert(sst)) {
+            ret.push_back(make_lw_shared<const sstables::sstable_run>(std::move(sst)));
+        }
     }
     auto freeze = [] (const sstables::sstable_run& run) { return make_lw_shared<const sstables::sstable_run>(run); };
-    return runs | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>();
+    std::ranges::copy(runs | std::views::values | std::views::transform(freeze), std::back_inserter(ret));
+    return ret;
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
@@ -492,7 +504,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
         offstrategy_threshold = max_sstables;
     }
 
-    auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
+    auto run_count = sstables_to_runs(input).size();
     if (run_count >= offstrategy_threshold && mode == reshape_mode::strict) {
         std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
