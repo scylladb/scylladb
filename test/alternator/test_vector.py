@@ -5019,6 +5019,72 @@ def test_searchvectors_searchschema_attribute_modified(dynamodb, needs_vector_st
         wait_until(lambda: not found(x_new),
                    "Timed out waiting for item to disappear after removing its HASH attribute")
 
+# Test that when an item loses its INLINE_FILTER attribute and its projected
+# (INCLUDE) attribute - either by UpdateItem's REMOVE or by a PutItem that
+# replaces the whole item with one lacking them - the item remains in the
+# index, but SearchVectors no longer returns, or filters on, the stale values
+# of these attributes. Removing an attribute is a delicate case for the
+# vector store, which needs to clear the stored value of that attribute but
+# not delete the entire item from the index. The previous test checked that
+# a search filtering on the removed attribute no longer finds the item, but
+# that check alone would also pass if the vector store wrongly deleted the
+# entire item.
+def test_searchvectors_searchschema_and_projected_attribute_removed(dynamodb, needs_vector_store):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'y', 'AttributeType': 'S'},
+            ],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v'},
+                'Dimensions': 3,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['z']},
+                'SearchSchema': [
+                    {'AttributeName': 'y', 'SearchSchemaElementType': 'INLINE_FILTER'},
+                ],
+            }]) as table:
+        wait_for_vector_index_active(table, 'vind')
+        client = table.meta.client
+        get_items = lambda result: [r['Item'] for r in result.get('SearchResults', [])]
+        # Check both ways to remove the attributes on the same table. Each
+        # iteration uses its own item, with its own vector, so that an
+        # unfiltered search with TopK=1 for that vector finds that item and
+        # not the item left over from the previous iteration.
+        for use_update_item, vector in [(False, [1, 0, 0]), (True, [0, 1, 0])]:
+            p = random_string()
+            yval = random_string()
+            zval = random_string()
+            table.put_item(Item={'p': p, 'v': vector, 'y': yval, 'z': zval})
+            # Wait until the item is indexed and can be found filtering on y.
+            # Both the INLINE_FILTER attribute y and the projected z are returned.
+            result = wait_for_search_vectors(client,
+                condition=lambda result: result.get('SearchResults'),
+                message='Timed out waiting for item to be indexed',
+                TableName=table.name, IndexName='vind', SearchVector=vector, TopK=1,
+                SearchConditionExpression='y = :y', ExpressionAttributeValues={':y': yval})
+            assert get_items(result) == [{'p': p, 'y': yval, 'z': zval}]
+            # Remove y and z from the item, keeping its vector unchanged:
+            if use_update_item:
+                table.update_item(Key={'p': p}, UpdateExpression='REMOVE y, z')
+            else:
+                table.put_item(Item={'p': p, 'v': vector})
+            # Eventually, a search without a filter returns the item without y
+            # and z. If the item disappears from the index, this will time out.
+            wait_for_search_vectors(client,
+                condition=lambda result: get_items(result) == [{'p': p}],
+                message=lambda result: f'Timed out waiting for item without y and z, '
+                    f'got {get_items(result) if result else None}',
+                TableName=table.name, IndexName='vind', SearchVector=vector, TopK=1)
+            # The removal has now reached the index, so a search filtering on
+            # the old value of y no longer finds the item:
+            result = client.search_vectors(TableName=table.name, IndexName='vind',
+                SearchVector=vector, TopK=1,
+                SearchConditionExpression='y = :y', ExpressionAttributeValues={':y': yval})
+            assert get_items(result) == []
+
 # Test that base-table keys, and also GSI and LSI keys, may be also double as
 # as HASH or INLINE_FILTER attributes in a vector index's SearchSchema.
 def test_createtable_vectorindexes_searchschema_reuse_keys(dynamodb):
@@ -5712,12 +5778,14 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
             }]) as table:
         client = table.meta.client
         h = random_string()
-        # The n=3 and n=4 items are the nearest to the query vector [0, 0, 1],
+        # The n=10 and n=20 items are the nearest to the query vector [0, 0, 1],
         # so a filter keeping only n=1 and n=2 can return them with TopK=2 only
         # if it is applied *before* the ANN search - which is what these
         # operators ask the vector store to do.
+        # The two-digit n=10 and n=20 also check that numbers are compared
+        # numerically, not as strings - as strings, "10" < "2".
         for n, x, vec in [(1, 'a', [1, 0, 0]), (2, 'b', [0.9, 0, 0]),
-                          (3, 'c', [0, 0, 1]), (4, 'd', [0, 0.1, 1])]:
+                          (10, 'c', [0, 0, 1]), (20, 'd', [0, 0.1, 1])]:
             table.put_item(Item={'p': random_string(), 'h': h, 'x': x, 'n': n,
                                  'v': [Decimal(str(e)) for e in vec]})
         query_vector = [Decimal(0), Decimal(0), Decimal(1)]
@@ -5725,7 +5793,7 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
         # Wait for the items to be indexed, using an equality-only filter
         # which works regardless of this option.
         wait_for_search_vectors(client,
-            condition=lambda result: got_n(result) == {3, 4},
+            condition=lambda result: got_n(result) == {10, 20},
             message='Timed out waiting for items to be indexed',
             TableName=table.name, IndexName='vind', SearchVector=query_vector, TopK=2,
             SearchConditionExpression='h = :h',
@@ -5737,8 +5805,8 @@ def test_searchconditionexpression_extra_operators(dynamodb, needs_vector_store,
                 # the same, with the constant on the left-hand side:
                 ('h = :h AND :x > x', {':x': 'c'}, {1, 2}),
                 ('h = :h AND n <= :n', {':n': 2}, {1, 2}),
-                ('h = :h AND n >= :n', {':n': 3}, {3, 4}),
-                ('h = :h AND n > :n', {':n': 2}, {3, 4}),
+                ('h = :h AND n >= :n', {':n': 3}, {10, 20}),
+                ('h = :h AND n > :n', {':n': 2}, {10, 20}),
                 ]:
             result = client.search_vectors(TableName=table.name, IndexName='vind',
                 SearchVector=query_vector, TopK=2,
