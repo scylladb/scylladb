@@ -1440,10 +1440,10 @@ mutation_partition::row_count() const {
 rows_entry::rows_entry(rows_entry&& o) noexcept
     : evictable(std::move(o))
     , _link(std::move(o._link))
-    , _key(std::move(o._key))
     , _row(std::move(o._row))
     , _range_tombstone(std::move(o._range_tombstone))
     , _flags(std::move(o._flags))
+    , _key(std::move(o._key))
 {
 }
 
