@@ -97,7 +97,8 @@ uint32_t crc_impl(const seastar::rpc::rcv_buf& data) noexcept;
 
 // Size of the history buffer maintained by both sides of the compressed connection.
 // Governs the memory usage and effectiveness of streaming LZ4 compression.
-// (Note that the decompressor's history buffer is twice this size. See lz4_dstream::_buf).
+// (Note that the decompressor's history buffer is twice this size plus 64 bytes.
+// See lz4_dstream::_buf).
 //
 // There is no value in making it greater than 64 kiB, because LZ4 doesn't support
 // greater history sizes, at least in the official releases of LZ4.
@@ -162,7 +163,7 @@ class lz4_dstream final : public stream_decompressor {
     // The decompression-side counterpart of lz4_cstream::_buf. See its comment for the basics.
     //
     // Note that this is *not* a mirror image of the compressor's ring buffer:
-    // it's twice as big and block boundaries fall at different offsets within it.
+    // it's more than twice as big and block boundaries fall at different offsets within it.
     //
     // The alternative would LZ4's "synchronized" scheme, where the two ring buffers have
     // exactly the same size and are updated in lockstep. But that scheme additionally requires
@@ -174,9 +175,15 @@ class lz4_dstream final : public stream_decompressor {
     // are backreferenced by the next sequence in the stream, which causes corrupt results.
     //
     // So we use the third scheme from the LZ4_decompress_safe_continue() comment instead:
-    // this buffer is at least `max block size` bytes bigger than the compressor's,
+    // this buffer is at least `max block size + 64` bytes bigger than the compressor's,
     // which allows the two sides to be unsynchronized,
     // and makes an upper bound on the block size good enough.
+    //
+    // The 64 bytes matter. When LZ4 decompresses a block into a buffer bigger than the block,
+    // its copies are done in 32-byte (64-byte on aarch64) steps, so it can scribble up to 63
+    // bytes past the end of a copy. Without the extra margin, those bytes land on the oldest
+    // history the next match may still reference, and the result is silently corrupt.
+    // (lz4 documented `max block size` until 1.10.0; see lz4 PRs #1838 and #1840).
     // The price is a doubled history buffer on the decompressor's side.
     // (Which doesn't matter because we only have one decompressor per shard.
     // It would matter if we e.g. had a decompressor per RPC connection, which we probably
@@ -185,6 +192,8 @@ class lz4_dstream final : public stream_decompressor {
     // An upper bound on the decompressed size of a single block, which is what the third scheme
     // above is parameterized by. The compressor never emits a block bigger than its own ring
     // buffer, so its window size is a valid bound.
+    // It is also the wrap threshold: we restart at the beginning of `_buf` as soon as the
+    // contiguous tail is shorter than this.
     size_t _max_block_size;
     // The write position in `_buf`. New input will be decompressed to this offset.
     size_t _buf_end = 0;

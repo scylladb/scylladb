@@ -11,7 +11,6 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/scylla_test_case.hh"
-#include "utils/small_vector.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -22,6 +21,7 @@
 #include <bit>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <random>
 #include <span>
@@ -157,42 +157,62 @@ BOOST_AUTO_TEST_CASE(test_correctness) {
 //   space, so that "small" values aren't drowned out by the exponentially more numerous
 //   "big" ones. (With a uniform draw over [0, 512 kiB], we would practically never see
 //   a message shorter than a few kiB).
+// - The same holds for the distance from the upper end of the range, so values just below
+//   `hi` are as likely as values just above `lo`, at every scale.
 // - Powers of two, their immediate neighbours, and the ends of the range get an extra
 //   boost, since that's where off-by-one bugs tend to hide.
+//
+// This is called for every run of the generated data, so it has to be cheap.
+// (In particular, a BOOST_REQUIRE here would cost more than everything else).
 static uint64_t draw_interesting(std::mt19937_64& rng, uint64_t lo, uint64_t hi) {
-    BOOST_REQUIRE_LE(lo, hi);
+    if (lo > hi) {
+        BOOST_FAIL(fmt::format("draw_interesting: lo={} > hi={}", lo, hi));
+    }
     auto uniform = [&rng] (uint64_t a, uint64_t b) {
         return std::uniform_int_distribution<uint64_t>(a, b)(rng);
     };
-    // One in three draws lands on a "special" value.
+    // One in three draws lands on a "special" value: lo, lo+1, hi-1, hi, or 2^k+delta
+    // for delta in [-2, 2], whichever of them lie within [lo, hi].
+    //
+    // Instead of listing the candidates, we draw one of the slots which can hold
+    // a valid one, and draw again if it doesn't. (lo is always valid, so this terminates).
     if (uniform(0, 2) == 0) {
-        utils::small_vector<uint64_t, 64> candidates;
-        auto add = [&] (int64_t v) {
+        // The smallest k with 2^k + 2 >= lo, and the largest k with 2^k - 2 <= hi.
+        const int k_lo = lo <= 3 ? 0 : std::bit_width(lo - 3);
+        const int k_hi = std::min(62, std::bit_width(hi + 2) - 1);
+        const uint64_t power_slots = k_hi >= k_lo ? 5 * uint64_t(k_hi - k_lo + 1) : 0;
+        while (true) {
+            const uint64_t slot = uniform(0, 3 + power_slots);
+            int64_t v;
+            if (slot < 4) {
+                const int64_t ends[] = {int64_t(lo), int64_t(lo) + 1, int64_t(hi) - 1, int64_t(hi)};
+                v = ends[slot];
+            } else {
+                v = int64_t(uint64_t(1) << (k_lo + (slot - 4) / 5)) + int64_t((slot - 4) % 5) - 2;
+            }
             if (v >= int64_t(lo) && v <= int64_t(hi)) {
-                candidates.push_back(uint64_t(v));
+                return uint64_t(v);
             }
-        };
-        add(int64_t(lo));
-        add(int64_t(lo) + 1);
-        add(int64_t(hi) - 1);
-        add(int64_t(hi));
-        for (int k = 0; k < 63 && (uint64_t(1) << k) <= hi + 2; ++k) {
-            for (int64_t delta = -2; delta <= 2; ++delta) {
-                add(int64_t(uint64_t(1) << k) + delta);
-            }
-        }
-        if (!candidates.empty()) {
-            return candidates[uniform(0, candidates.size() - 1)];
         }
     }
     // Otherwise: draw a bit width uniformly, then draw uniformly within that bit width.
-    const int width = int(uniform(std::bit_width(lo), std::bit_width(hi)));
-    const uint64_t band_lo = width ? (uint64_t(1) << (width - 1)) : 0;
-    const uint64_t band_hi = width ? ((uint64_t(1) << width) - 1) : 0;
-    return uniform(std::max(lo, band_lo), std::min(hi, band_hi));
+    // Half of the time, that's the bit width of the value itself,
+    // and the other half, the bit width of its distance from `hi`.
+    if (uniform(0, 1)) {
+        const int width = int(uniform(std::bit_width(lo), std::bit_width(hi)));
+        const uint64_t band_lo = width ? (uint64_t(1) << (width - 1)) : 0;
+        const uint64_t band_hi = width ? ((uint64_t(1) << width) - 1) : 0;
+        return uniform(std::max(lo, band_lo), std::min(hi, band_hi));
+    } else {
+        const uint64_t span = hi - lo;
+        const int width = int(uniform(0, std::bit_width(span)));
+        const uint64_t band_lo = width ? (uint64_t(1) << (width - 1)) : 0;
+        const uint64_t band_hi = width ? ((uint64_t(1) << width) - 1) : 0;
+        return hi - uniform(band_lo, std::min(span, band_hi));
+    }
 }
 
-// A string of `size` bytes, each drawn from the first `alphabet_size` byte values.
+// Fills `out` with bytes, each drawn from the first `alphabet_size` byte values.
 // The alphabet size is a cheap knob for the compressibility of the data:
 // a 1-letter alphabet compresses to nothing, a 256-letter alphabet is incompressible.
 //
@@ -201,16 +221,101 @@ static uint64_t draw_interesting(std::mt19937_64& rng, uint64_t lo, uint64_t hi)
 // output), we spend one draw per 8 bytes and map each byte into the alphabet by a
 // multiply-shift. That's about 4x faster, and the resulting negligible bias
 // (for alphabet sizes which aren't a power of two) doesn't matter for test data.
-static bytes draw_message(std::mt19937_64& rng, size_t size, unsigned alphabet_size) {
-    auto b = bytes(bytes::initialized_later{}, size);
-    for (size_t i = 0; i < size; i += 8) {
+static void fill_letters(std::mt19937_64& rng, std::span<bytes::value_type> out, unsigned alphabet_size) {
+    for (size_t i = 0; i < out.size(); i += 8) {
         uint64_t r = rng();
-        for (size_t k = i, end = std::min(i + 8, size); k < end; ++k) {
-            b[k] = static_cast<bytes::value_type>((alphabet_size * (r & 0xff)) >> 8);
+        for (size_t k = i, end = std::min(i + 8, out.size()); k < end; ++k) {
+            out[k] = static_cast<bytes::value_type>((alphabet_size * (r & 0xff)) >> 8);
             r >>= 8;
         }
     }
+}
+
+// The knobs of draw_data().
+struct data_shape {
+    // See fill_letters().
+    unsigned alphabet_size;
+    // The upper bound on the length of a single run (see draw_data()).
+    size_t max_run_length;
+    // The chance, in percent, that a run is a copy rather than fresh letters.
+    unsigned copy_percent;
+    // The window of the codec under test. Half of the copies stay within it.
+    size_t window_size;
+
+    friend auto format_as(const data_shape& s) {
+        return fmt::format("alphabet_size={} max_run_length={} copy_percent={}",
+                s.alphabet_size, s.max_run_length, s.copy_percent);
+    }
+};
+
+// A string of `size` bytes, made of runs of two kinds:
+//
+// - fresh letters (see fill_letters()),
+// - copies of earlier parts of the string, from a random distance back.
+//
+// Letters alone only produce repeats at short distances (with a small alphabet) or no repeats
+// at all (with a big one). Real data also repeats itself over long distances, and a compressor
+// must handle matches at every distance it can reach, so the copies draw their distances
+// with the same bias towards boundary values as everything else. Half of them draw over
+// the whole history, and half only over the codec's window, whose far edge is the
+// boundary that matters most to an LZ codec.
+static bytes draw_data(std::mt19937_64& rng, size_t size, const data_shape& shape) {
+    auto b = bytes(bytes::initialized_later{}, size);
+    size_t pos = 0;
+    while (pos < size) {
+        const size_t len = std::min(size - pos, draw_interesting(rng, 1, shape.max_run_length));
+        if (pos > 0 && std::uniform_int_distribution<unsigned>(1, 100)(rng) <= shape.copy_percent) {
+            const bool within_window = std::uniform_int_distribution<int>(0, 1)(rng);
+            const size_t distance = draw_interesting(rng, 1, within_window ? std::min(pos, shape.window_size) : pos);
+            if (distance >= len) {
+                std::memcpy(b.data() + pos, b.data() + pos - distance, len);
+            } else {
+                // Byte by byte, because the source and the destination overlap.
+                for (size_t i = pos; i < pos + len; ++i) {
+                    b[i] = b[i - distance];
+                }
+            }
+        } else {
+            fill_letters(rng, std::span(b.data() + pos, len), shape.alphabet_size);
+        }
+        pos += len;
+    }
     return b;
+}
+
+// Splits `message` into an rpc::snd_buf.
+//
+// The fragment boundaries decide where the compressor has to cut the message into blocks,
+// so they are drawn just as carefully as the message itself.
+static rpc::snd_buf draw_fragmentation(std::mt19937_64& rng, bytes_view message, std::string& description) {
+    auto fragment = [&message] (size_t pos, size_t len) {
+        return temporary_buffer<char>(reinterpret_cast<const char*>(message.data()) + pos, len);
+    };
+    // A quarter of the messages are a single contiguous buffer.
+    if (message.empty() || std::uniform_int_distribution<int>(0, 3)(rng) == 0) {
+        description += " fragmentation=contiguous";
+        return rpc::snd_buf(fragment(0, message.size()));
+    }
+    // Hundreds of thousands of 1-byte fragments would cost a lot and add little,
+    // so beyond this many fragments, the rest of the message goes into the last one.
+    constexpr size_t max_fragments = 4096;
+    const size_t max_fragment_size = draw_interesting(rng, 1, message.size());
+    // Either all fragments (but the last) are of the same size, like rpc::snd_buf's own
+    // chunks, or every one has its own size, which can also be 0.
+    const bool fixed = std::uniform_int_distribution<int>(0, 1)(rng);
+    description += fmt::format(" fragmentation={} max_fragment_size={}", fixed ? "fixed" : "variable", max_fragment_size);
+    std::vector<temporary_buffer<char>> frags;
+    size_t pos = 0;
+    while (pos < message.size()) {
+        size_t len = fixed ? max_fragment_size : draw_interesting(rng, 0, max_fragment_size);
+        if (frags.size() + 1 == max_fragments) {
+            len = message.size() - pos;
+        }
+        len = std::min(len, message.size() - pos);
+        frags.push_back(fragment(pos, len));
+        pos += len;
+    }
+    return rpc::snd_buf(std::move(frags), message.size());
 }
 
 // The compression algorithms exercised by the randomized round-trip test.
@@ -289,23 +394,22 @@ static std::unique_ptr<codec_pair> make_codec_pair(codec_algorithm algo, size_t 
     std::abort();
 }
 
-// Pushes `message` through a compress_impl()/decompress_impl() round trip
+// Pushes `input` through a compress_impl()/decompress_impl() round trip
 // with the given codec pair, and returns what came out.
-static bytes round_trip(codec_pair& codec, bytes_view message) {
-    const auto input = rpc::snd_buf(temporary_buffer<char>(reinterpret_cast<const char*>(message.data()), message.size()));
+static bytes round_trip(codec_pair& codec, const rpc::snd_buf& input) {
     auto compressed = netw::compress_impl(0, input, codec.compressor(), true, rpc::snd_buf::chunk_size);
     auto rcv_buf = convert_rpc_buf<rpc::rcv_buf>(std::move(compressed));
     return rpc_buf_to_bytes(netw::decompress_impl(rcv_buf, codec.decompressor(), true, rpc::snd_buf::chunk_size));
 }
 
-// Checks that `message` survives a round trip. On failure, points at the first difference
-// and dumps the message to a file (named after `case_name`) for inspection.
-static void check_round_trip(codec_algorithm algo, bytes_view message, bytes_view dict, size_t lz4_window_size,
+// Checks that `message`, fragmented as `input`, survives a round trip. On failure, points at
+// the first difference and dumps the message to a file (named after `case_name`) for inspection.
+static void check_round_trip(codec_algorithm algo, bytes_view message, const rpc::snd_buf& input, bytes_view dict, size_t lz4_window_size,
         std::string_view case_name, std::string_view description) {
     bytes decompressed;
     try {
         auto codec = make_codec_pair(algo, lz4_window_size, dict);
-        decompressed = round_trip(*codec, message);
+        decompressed = round_trip(*codec, input);
     } catch (...) {
         // Without this, the case parameters would be lost, and the failure unreproducible.
         BOOST_FAIL(fmt::format("{} round trip threw: {} exception={}",
@@ -333,16 +437,25 @@ static void run_roundtrip_case(codec_algorithm algo, uint64_t case_seed) {
     const size_t window_size = draw_interesting(rng, 2, netw::max_lz4_window_size);
     const size_t message_size = draw_interesting(rng, 0, max_message_size);
     const size_t dict_size = draw_interesting(rng, 0, max_dict_size);
-    const unsigned alphabet_size = draw_interesting(rng, 1, 256);
+    const data_shape shape{
+        .alphabet_size = unsigned(draw_interesting(rng, 1, 256)),
+        .max_run_length = draw_interesting(rng, 1, max_message_size),
+        .copy_percent = unsigned(draw_interesting(rng, 0, 100)),
+        .window_size = window_size,
+    };
 
-    const auto description = fmt::format(
-            "case_seed={} window_size={} message_size={} dict_size={} alphabet_size={}",
-            case_seed, window_size, message_size, dict_size, alphabet_size);
+    auto description = fmt::format(
+            "case_seed={} window_size={} message_size={} dict_size={} {}",
+            case_seed, window_size, message_size, dict_size, shape);
 
-    const auto dict = draw_message(rng, dict_size, alphabet_size);
-    const auto message = draw_message(rng, message_size, alphabet_size);
+    // The dictionary and the message are drawn as one string,
+    // so that the message can repeat parts of the dictionary.
+    const auto data = draw_data(rng, dict_size + message_size, shape);
+    const auto dict = bytes_view(data).substr(0, dict_size);
+    const auto message = bytes_view(data).substr(dict_size);
+    const auto input = draw_fragmentation(rng, message, description);
 
-    check_round_trip(algo, message, dict, window_size,
+    check_round_trip(algo, message, input, dict, window_size,
             fmt::format("{}.{}", codec_algorithm_name(algo), case_seed), description);
 }
 
