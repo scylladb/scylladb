@@ -283,6 +283,40 @@ def test_fromjson_bigint_scientific_notation_limit(cql, table1, scylla_only):
         with pytest.raises(FunctionFailure):
             cql.execute(stmt, [p, n])
 
+# A JSON number that isn't an integer fitting 64 bits is read by Scylla's
+# JSON parser as a double, which holds only about 16 significant digits. So
+# the documented way to give a varint or decimal value that needs more digits
+# is to write it as a JSON string, which is read exactly. This test checks
+# that this works, in fromJson() and in INSERT JSON.
+def test_fromjson_varint_decimal_as_string(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, vi, dec) VALUES (?, fromJson(?), fromJson(?))")
+    cql.execute(stmt, [p, '"12345678901234567890123"', '"1.2345678901234567890123"'])
+    assert list(cql.execute(f"SELECT vi, dec from {table1} where p = {p}")) == [(12345678901234567890123, Decimal('1.2345678901234567890123'))]
+    p = unique_key_int()
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "vi": "-12345678901234567890123", "dec": "1e-30"}}'""")
+    assert list(cql.execute(f"SELECT vi, dec from {table1} where p = {p}")) == [(-12345678901234567890123, Decimal('1e-30'))]
+
+# A JSON integer too large for 64 bits, written as a JSON number rather than
+# as a string, is read by Scylla's JSON parser as a double, so Scylla rejects
+# it for a varint column, while Cassandra reads it exactly. This is a known
+# incompatibility which we'll probably never fix: the JSON standard (RFC 8259)
+# only promises that implementations agree on the value of integers in the
+# range [-(2^53)+1, (2^53)-1], so a larger number should be written as a JSON
+# string, which works in both (see test_fromjson_varint_decimal_as_string).
+# Scylla already rejects, for the same reason, an unquoted integer of 2^53 or
+# more written with an exponent or a decimal point (see
+# test_fromjson_bigint_scientific_notation_limit).
+# Reproduces SCYLLADB-5440.
+@pytest.mark.xfail(reason='SCYLLADB-5440')
+def test_fromjson_varint_large_number(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))')
+    cql.execute(stmt, [p, '12345678901234567890123'])
+    assert list(cql.execute(f'SELECT vi from {table1} where p = {p}')) == [(12345678901234567890123,)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "vi": -12345678901234567890123}}'""")
+    assert list(cql.execute(f'SELECT vi from {table1} where p = {p}')) == [(-12345678901234567890123,)]
+
 # When writing to an integer column, Cassandra's fromJson() function allows
 # not just JSON number constants, it also allows a string containing a number.
 # Strings which do not hold a number fail with a FunctionFailure. In

@@ -104,6 +104,20 @@ arguments) as well as the format ScyllaDB will use when returning data for ``SEL
  ``vector``      list, string             list            Uses JSON's native list representation
 =============== ======================== =============== ==============================================================
 
+A JSON number is read exactly if it is an integer - written without an exponent or a decimal point - that fits in 64
+bits. Any other number is read as the nearest 64-bit IEEE-754 floating point number (``double``), which holds only
+about 16 significant digits. This is common among JSON implementations, and the JSON standard (RFC 8259) only promises
+that implementations agree on the exact value of integers in the range [-(2\ :sup:`53`)+1, (2\ :sup:`53`)-1]. So a
+``varint`` or ``decimal`` value that needs more digits should be written as a JSON string, which is read exactly. For
+example, for a ``decimal`` column, ``1.2345678901234567890123`` is stored as 1.234567890123457, but
+``"1.2345678901234567890123"`` is stored exactly. For a ``varint`` column, ``12345678901234567890123`` is rejected,
+because it is read as the ``double`` 1.2345678901234568e22, but ``"12345678901234567890123"`` is stored exactly - unlike
+Cassandra, which reads a JSON integer of any size exactly for a ``varint`` column.
+
+Unlike Cassandra, ScyllaDB also accepts a number with an exponent or a decimal point, like ``1.5e9``, for a
+``tinyint``, ``smallint``, ``int`` or ``bigint`` column (but not for ``varint``) if its value is an integer. Because it is
+read as a ``double``, it is accepted only if it is less than 2\ :sup:`53` in absolute value.
+
 The fromJson() Function
 ^^^^^^^^^^^^^^^^^^^^^^^
 
