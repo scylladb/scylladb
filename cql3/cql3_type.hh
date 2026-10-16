@@ -42,6 +42,11 @@ public:
     // This limitation is acquired from the maximum number of dimensions in OpenSearch.
     static constexpr vector_dimension_t MAX_VECTOR_DIMENSION = 16000;
 
+    // Collections, tuples, vectors and user types each add a nesting level.
+    static constexpr unsigned max_nesting = 32;
+    static unsigned nesting(const abstract_type& t);
+    static void check_nesting(const abstract_type& t);
+
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {

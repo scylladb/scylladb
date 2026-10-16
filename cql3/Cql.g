@@ -144,6 +144,9 @@ using unwrap_uninitialized_t = typename unwrap_uninitialized<T>::type;
 using uexpression = uninitialized<expression>;
 
 inline int max_expression_nesting = 12;
+// Parser levels for a type at the limit: two per level, frozen<...> and the
+// type itself, plus one for the innermost type.
+inline constexpr int max_type_nesting = 2 * cql3_type::max_nesting + 1;
 
 }
 
@@ -155,6 +158,7 @@ inline int max_expression_nesting = 12;
 
     dialect _dialect;
     int _nesting = 0;
+    int _type_nesting = 0;
 
     // Keeps the names of all bind variables. For bind variables without a name ('?'), the name is nullptr.
     // Maps bind_index -> name.
@@ -257,9 +261,10 @@ inline int max_expression_nesting = 12;
     class nesting_guard {
         int& _nesting_ref;
     public:
-        nesting_guard(CqlParser& context) : _nesting_ref(context._nesting) {
-            if (++_nesting_ref > max_expression_nesting) {
-                context.add_recognition_error("expression nested too deeply");
+        nesting_guard(CqlParser& context) : nesting_guard(context, context._nesting, max_expression_nesting, "expression nested too deeply") {}
+        nesting_guard(CqlParser& context, int& nesting, int max_nesting, const char* error) : _nesting_ref(nesting) {
+            if (++_nesting_ref > max_nesting) {
+                context.add_recognition_error(error);
             }
         }
         ~nesting_guard() {
@@ -2088,7 +2093,10 @@ tupleOfMarkersForTuples returns [std::vector<expression> markers]
 // If a user (internal=false) tries to use "empty" as a type, it is treated -
 // as do all unknown types - as an attempt to use a user-defined type, and
 // we report this name is reserved (as for _reserved_type_names()).
+// Only users' queries are limited in nesting: schemas stored before the limit
+// may be deeper, and they must load.
 comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
+    @init { nesting_guard guard(*this, _type_nesting, internal ? std::numeric_limits<int>::max() : max_type_nesting, "type nested too deeply"); }
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
