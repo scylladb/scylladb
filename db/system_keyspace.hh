@@ -471,6 +471,7 @@ public:
     // Saves a record of a token range affected by cleanup.
     // After reboot, tokens from this range will be replayed only if they are on replay positions
     // strictly greater than the given one.
+    // Does nothing if the replay position is invalid, such a record wouldn't filter anything.
     // Also drops the records made obsolete by the commitlog: those which apply only to
     // positions older than its minimum position, i.e. to segments which are already deleted.
     // The record and the dropping are written as a single mutation.

@@ -1593,6 +1593,12 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
 }
 
 future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
+    // An invalid replay position (e.g. the highest flushed replay position of a table
+    // which wasn't flushed yet on this shard) precedes all commitlog entries, so such
+    // a record would filter nothing on replay.
+    if (!rp.valid()) {
+        co_return;
+    }
     auto s = commitlog_cleanups();
     auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
     auto serialize_position = [] (db::replay_position rp) {
