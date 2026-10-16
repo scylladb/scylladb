@@ -431,6 +431,17 @@ void partition_entry::apply(logalloc::region& r,
     apply(r, c, s, mutation_partition_v2(mp_schema, std::move(mp_v1)), mp_schema, app_stats, tracker);
 }
 
+void partition_entry::apply(logalloc::region& r,
+           mutation_cleaner& c,
+           const schema& s,
+           mutation_partition&& mp,
+           const schema& mp_schema,
+           mutation_application_stats& app_stats,
+           db::large_data_cache_tracker* tracker) {
+    mp.make_fully_continuous();
+    apply(r, c, s, mutation_partition_v2(mp_schema, std::move(mp)), mp_schema, app_stats, tracker);
+}
+
 void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, mutation_partition_v2&& mp, const schema& mp_schema,
         mutation_application_stats& app_stats, db::large_data_cache_tracker* tracker) {
     // A note about app_stats: it may happen that mp has rows that overwrite other rows
