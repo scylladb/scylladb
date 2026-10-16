@@ -7,11 +7,17 @@ import os
 import glob
 import json
 import time
+import uuid
 import pytest
 import asyncio
+import hashlib
 import logging
 import subprocess
+from cassandra import OperationTimedOut, RequestExecutionException
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from cassandra.cluster import NoHostAvailable, Session
+from cassandra.connection import ConnectionException
+from cassandra.pool import Host
 
 from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -822,6 +828,124 @@ async def test_migration_multidc(manager: ScyllaClusterManager):
 
         logger.info("Waiting for pow2 convergence to complete")
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
+
+
+async def restart_node_into(manager: ScyllaClusterManager, servers: list[ServerInfo], idx: int,
+                            mode: str) -> tuple[Session, list[Host]]:
+    """Mark servers[idx] for the storage mode, 'tablets' or 'vnodes', and restart it into it.
+
+    Returns a new session and the hosts of all the servers, as the restart invalidates the old ones.
+    """
+    s = servers[idx]
+    logger.info(f"Restarting node {s.server_id} into {mode}")
+    if mode == 'tablets':
+        await manager.api.upgrade_node_to_tablets(s.ip_addr)
+    else:
+        await manager.api.downgrade_node_to_vnodes(s.ip_addr)
+    await manager.server_restart(s.server_id)
+    await reconnect_driver(manager)
+    return await manager.get_ready_cql(servers)
+
+
+def rack_counter_id(dc: str, rack: str) -> uuid.UUID:
+    """Return the counter ID used by a rack's replicas of a tablet table.
+
+    Mirrors locator::topology::get_rack_uuid(): a name-based (version 3) UUID of "<dc>:<rack>".
+    """
+    return uuid.UUID(bytes=hashlib.md5(f"{dc}:{rack}".encode(), usedforsecurity=False).digest(), version=3)
+
+
+async def get_counter_shards(cql, hosts, ks: str, table: str) -> dict[int, dict[uuid.UUID, tuple[int, int]]]:
+    """Return the shards of the table's counter column c, as {pk: {counter ID: (clock, value)}}.
+
+    The hosts may also store older versions of a shard, in other replicas or sstables,
+    so the version with the highest clock is returned.
+    """
+    stmt = f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{table})"
+    shards = {}
+    for rows in await asyncio.gather(*(cql.run_async(stmt, host=host) for host in hosts)):
+        for row in rows:
+            cells = json.loads(row.value) if row.value else {}  # only rows have a value, not partition bounds
+            for shard in cells.get("c") or []:  # null if the cell is deleted
+                key_shards = shards.setdefault(row.pk, {})
+                counter_id, version = uuid.UUID(shard["id"]), (shard["clock"], shard["value"])
+                key_shards[counter_id] = max(key_shards.get(counter_id, version), version)
+    return shards
+
+
+class CounterLoad:
+    """Increments every counter of a table through every node, counting the increments.
+
+    A round sends one increment per node and key, all at once, so that updates led
+    by different nodes race on the same counters.
+    """
+
+    def __init__(self, ks: str, table: str, num_keys: int):
+        self.ks = ks
+        self.table = table
+        self.num_keys = num_keys
+        # Per key: increments acknowledged to the client, and increments that failed,
+        # which may or may not have been applied.
+        self.applied = [0] * num_keys
+        self.unknown = [0] * num_keys
+
+    def connect(self, cql, hosts: list[Host]):
+        """Send further increments through the given session, coordinated by each of the hosts."""
+        self.cql = cql
+        self.hosts = hosts
+        self.stmt = cql.prepare(f"UPDATE {self.ks}.{self.table} SET c = c + 1 WHERE pk = ?")
+        self.stmt.consistency_level = ConsistencyLevel.QUORUM
+
+    async def run_rounds(self, rounds: int, tolerate_failures: bool = False):
+        async def increment(host, key):
+            try:
+                await self.cql.run_async(self.stmt, [key], host=host)
+            except (RequestExecutionException, OperationTimedOut, NoHostAvailable, ConnectionException) as e:
+                # Any of these can arrive after the leader applied the increment, so it stays unknown.
+                if not tolerate_failures:
+                    raise
+                logger.info(f"Increment of key {key} through {host} failed: {e}")
+                self.unknown[key] += 1
+            else:
+                self.applied[key] += 1
+
+        for _ in range(rounds):
+            await asyncio.gather(*(increment(host, key) for host in self.hosts for key in range(self.num_keys)))
+
+    async def run_until(self, stop: asyncio.Event) -> int:
+        rounds = 0
+        while not stop.is_set():
+            await self.run_rounds(1, tolerate_failures=True)
+            rounds += 1
+        return rounds
+
+    async def verify(self):
+        stmt = SimpleStatement(f"SELECT pk, c FROM {self.ks}.{self.table}", consistency_level=ConsistencyLevel.ALL)
+        actual = {r.pk: r.c for r in await self.cql.run_async(stmt)}
+        wrong = {k: (actual.get(k), self.applied[k], self.applied[k] + self.unknown[k])
+                 for k in range(self.num_keys)
+                 if not self.applied[k] <= actual.get(k, 0) <= self.applied[k] + self.unknown[k]}
+        assert not wrong, f"Counter values outside of the expected range, key: (actual, min, max): {wrong}"
+
+    async def run_checked_rounds(self, rounds: int, writer_ids: set[uuid.UUID]) -> dict[int, dict[uuid.UUID, tuple[int, int]]]:
+        """Run the rounds, verify the counters, and check that the nodes wrote under the given counter IDs.
+
+        Every node leads the increments it coordinates, so in every key the shard of each
+        writer ID must advance by one per round, and every other shard must stay as it was.
+        A shard is compared with its previous version, so a node that resumes a shard must
+        continue from the value it left there. Returns the shards after the rounds.
+        """
+        before = await get_counter_shards(self.cql, self.hosts, self.ks, self.table)
+        await self.run_rounds(rounds)
+        await self.verify()
+        after = await get_counter_shards(self.cql, self.hosts, self.ks, self.table)
+        expected = {counter_id: rounds for counter_id in writer_ids}
+        for key in range(self.num_keys):
+            old = before.get(key, {})
+            advanced = {counter_id: value - old.get(counter_id, (0, 0))[1]
+                        for counter_id, (clock, value) in after[key].items() if (clock, value) != old.get(counter_id)}
+            assert advanced == expected, f"Key {key}: expected shards to advance by {expected}, but they advanced by {advanced}"
+        return after
 
 
 async def setup_single_node(manager: ScyllaClusterManager):
