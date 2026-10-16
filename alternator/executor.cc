@@ -111,7 +111,7 @@ logging::logger elogger("alternator-executor");
 // Alternator adds to tables:
 //
 // Tags storing the "ReadCapacityUnits" and "WriteCapacityUnits"
-// configured for a table with BillingMode=PROVISIONED.
+// configured for a table with BillingMode=PROVISIONED, or for a GSI in its view.
 const sstring RCU_TAG_KEY("system:provisioned_rcu");
 const sstring WCU_TAG_KEY("system:provisioned_wcu");
 // Tags storing the "ReadUnitsPerSecond" and "WriteUnitsPerSecond" of a table's
@@ -2746,10 +2746,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     }
 
     bool empty_request = true;
+    bool switch_to_pay_per_request = false;
 
     if (rjson::find(request, "BillingMode")) {
         empty_request = false;
-        verify_billing_mode(request);
+        switch_to_pay_per_request = !verify_billing_mode(request).provisioned;
     }
 
     // Note: audit_info is captured by reference into the invoke_on() lambda and written on shard 0.
@@ -2757,7 +2758,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     // the entire duration of invoke_on(). Only the unique_ptr itself is read/written cross-shard —
     // no concurrent access occurs since the caller is suspended during invoke_on().
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
-                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container(), &audit_info]
+                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, switch_to_pay_per_request, &e = this->container(), &audit_info]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
@@ -2784,13 +2785,21 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // DynamoDB accepts an UpdateTable carrying only WarmThroughput.
             // Alternator has no throughput caps and nothing to pre-warm, so it
             // just remembers the request for DescribeTable to report back.
-            std::map<sstring, sstring> warm_tags;
+            std::map<sstring, sstring> table_tags;
             if (const auto* tags_ptr = db::get_tags_of_table(tab)) {
-                warm_tags = *tags_ptr;
+                table_tags = *tags_ptr;
             }
-            if (add_warm_throughput_tags(warm_tags, request)) {
+            const bool warm_throughput_given = add_warm_throughput_tags(table_tags, request);
+            if (warm_throughput_given) {
                 empty_request = false;
-                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(warm_tags)));
+            }
+            // A table without stored capacities is in PAY_PER_REQUEST mode.
+            if (switch_to_pay_per_request) {
+                table_tags.erase(RCU_TAG_KEY);
+                table_tags.erase(WCU_TAG_KEY);
+            }
+            if (warm_throughput_given || switch_to_pay_per_request) {
+                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(table_tags)));
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
@@ -3234,12 +3243,37 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 }
             }
 
+            // Rewrite the tags of each GSI this request changes.
+            std::vector<view_ptr> updated_views;
+            for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                // A GSI which this request deletes needs no update.
+                if (std::ranges::contains(dropped_views, std::string_view(view->cf_name()))) {
+                    continue;
+                }
+                std::map<sstring, sstring> view_tags;
+                if (const auto* view_tags_ptr = db::get_tags_of_table(view)) {
+                    view_tags = *view_tags_ptr;
+                }
+                bool view_tags_changed = false;
+                // As for the table, a GSI has no capacities of its own in PAY_PER_REQUEST mode.
+                if (switch_to_pay_per_request && get_provisioned_throughput(&view_tags)) {
+                    view_tags.erase(RCU_TAG_KEY);
+                    view_tags.erase(WCU_TAG_KEY);
+                    view_tags_changed = true;
+                }
+                if (view_tags_changed) {
+                    schema_builder view_builder(view);
+                    view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(view_tags)));
+                    updated_views.emplace_back(view_builder.build());
+                }
+            }
+
             if (empty_request) {
                 co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
-            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
+            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(updated_views), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
                 std::move(m2.begin(), m2.end(), std::back_inserter(m));
