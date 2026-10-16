@@ -117,9 +117,17 @@ def test_user_displays_as_authenticated(cql):
                 # the connection's status is still stuck at ESTABLISHED or AUTHENTICATING,
                 # and we must handle this case as well,
                 # so we simply sleep and retry later.
+                # We only check connections authenticated as "cassandra",
+                # i.e., those of our sessions. Other clients may have
+                # connections which never authenticate - such as a
+                # connection stranded by the driver used by test/cqlpy/run
+                # to check if Scylla is up - which are displayed as
+                # "anonymous" and may remain ESTABLISHED indefinitely.
                 for retry in range(0, 5):
-                    res = user_session_1.execute("SELECT connection_stage FROM system.clients")
-                    if all([r[0] == "READY" for r in res]):
+                    res = user_session_1.execute("SELECT connection_stage, username FROM system.clients")
+                    stages = [r.connection_stage for r in res if r.username == 'cassandra']
+                    assert stages
+                    if all([stage == "READY" for stage in stages]):
                         return
                     else:
                         time.sleep(2)
