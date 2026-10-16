@@ -23,6 +23,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/metrics_api.hh>
@@ -143,6 +144,29 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_no_sync){
                         BOOST_REQUIRE(n == 0);
                     });
         });
+}
+
+// check that a sync entry whose wait for the flush times out doesn't close the
+// segment, since the write itself goes on in the background
+SEASTAR_TEST_CASE(test_commitlog_sync_timeout_keeps_segment){
+    commitlog::config cfg;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "hej bubba cow";
+        auto add = [&] (db::timeout_clock::time_point timeout) {
+            return log.add_mutation(uuid, tmp.size(), timeout, db::commitlog::force_sync::yes, [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+        };
+
+        auto h1 = co_await add(db::timeout_clock::time_point::max());
+        // The deadline has passed already, so the entry is added but waiting
+        // for its flush times out.
+        auto f = co_await coroutine::as_future(add(db::timeout_clock::now() - std::chrono::seconds(1)));
+        BOOST_REQUIRE_THROW(f.get(), timed_out_error);
+        auto h2 = co_await add(db::timeout_clock::time_point::max());
+        BOOST_REQUIRE_EQUAL(h1.rp().id, h2.rp().id);
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
