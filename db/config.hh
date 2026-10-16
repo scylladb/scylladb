@@ -558,6 +558,7 @@ public:
     named_value<bool> restrict_future_timestamp;
 
     named_value<bool> ignore_truncation_record;
+    named_value<bool> unsafe_ignore_commitlog_manifest;
     named_value<bool> force_schema_commit_log;
 
     named_value<uint32_t> task_ttl_seconds;

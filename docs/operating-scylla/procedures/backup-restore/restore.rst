@@ -251,8 +251,16 @@ Repeat the following steps for each node in the cluster:
 
       sudo chown -R scylla:scylla /var/lib/scylla/data/mykeyspace/team_players-6e856600017f11e790f4000000000000
 
+#. Deleting the commitlog removes the commitlog manifest. A node whose commitlog manifest is missing refuses to start. For the first start after the restore, set the following in ``scylla.yaml``:
+
+   .. code-block:: yaml
+
+      unsafe_ignore_commitlog_manifest: true
+
 #. Start the node
 
    .. include:: /rst_include/scylla-commands-start-index.rst
+
+#. Once the node has started, remove ``unsafe_ignore_commitlog_manifest`` from ``scylla.yaml``. The node writes a new manifest on start, so the option is not needed again.
 
 After performing the above on all nodes, run a full cluster repair: for vnode-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on **every** node; for tablet-based keyspaces, run :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>` on any single node; run both if you restored keyspaces of both kinds. This makes sure that the data is consistent on all nodes and between each node.

@@ -131,6 +131,9 @@ public:
     // whereas without it, it will fail the insert - i.e. for things like raft etc _all_ nodes should
     // have it or none, otherwise we can get partial failures on writes.
     gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
+    // Commitlog segment manifests are a node-local on-disk change. Gated so that a node
+    // rolled back inside the upgrade window finds no manifests the older binary never maintained.
+    gms::feature commitlog_manifest { *this, "COMMITLOG_MANIFEST"sv };
     gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
 
     gms::feature tablet_incremental_repair { *this, "TABLET_INCREMENTAL_REPAIR"sv };
