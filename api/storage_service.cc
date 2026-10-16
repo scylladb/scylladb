@@ -1571,6 +1571,63 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
 
 static
 future<json::json_return_type>
+rest_tablet_compaction(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto ks = req->get_query_param("ks");
+    auto table = req->get_query_param("table");
+    auto table_id_param = req->get_query_param("table_id");
+    bool await_completion = get_query_param<bool>(*req, "await_completion");
+    bool recursive = get_query_param<bool>(*req, "recursive");
+    auto compaction_type = req->get_query_param("type", service::storage_service::major_tablet_compaction_type);
+    // The query parameters other than these are the options of the compaction type, e.g. the mode
+    // of a scrub compaction, so that a new type or option doesn't need a new API. Options which the
+    // type doesn't support are rejected, which also catches misspelled parameters.
+    static const std::unordered_set<std::string_view> params = {"ks", "table", "table_id", "recursive", "await_completion", "type"};
+    std::unordered_map<sstring, sstring> options;
+    for (const auto& [name, values] : req->get_query_params()) {
+        if (params.contains(name)) {
+            continue;
+        }
+        if (values.size() != 1) {
+            throw bad_param_exception(fmt::format("Option {} must be given once", name));
+        }
+        options.emplace(name, values.front());
+    }
+    ::table_id table_id;
+    if (!table_id_param.empty()) {
+        if (!table.empty()) {
+            throw bad_param_exception("Specify either table or table_id, not both");
+        }
+        table_id = ::table_id(parse_uuid_param("table_id", table_id_param));
+        auto& db = ctx.db.local();
+        if (!db.column_family_exists(table_id)) {
+            throw bad_param_exception(fmt::format("Table with id {} does not exist", table_id));
+        }
+        if (auto s = db.find_schema(table_id); !ks.empty() && ks != s->ks_name()) {
+            throw bad_param_exception(fmt::format("Table with id {} belongs to keyspace {}, not to {}", table_id, s->ks_name(), ks));
+        }
+    } else {
+        if (ks.empty() || table.empty()) {
+            throw bad_param_exception("Both ks and table are required, unless table_id is given");
+        }
+        table_id = validate_table(ctx.db.local(), ks, table);
+    }
+    utils::UUID request_id;
+    try {
+        request_id = co_await ss.local().compact_tablets(table_id, recursive, std::move(compaction_type), std::move(options));
+    } catch (std::invalid_argument& e) {
+        throw httpd::bad_param_exception(e.what());
+    }
+    if (await_completion) {
+        auto error = co_await ss.local().wait_for_topology_request_completion(request_id);
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+    }
+    co_return json::json_return_type(fmt::to_string(request_id));
+}
+
+static
+future<json::json_return_type>
 rest_tablet_balancing_enable(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto enabled = require_query_param<bool>(*req, "enabled");
         co_await ss.local().set_tablet_balancing_enabled(enabled);
@@ -1844,6 +1901,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::add_tablet_replica.set(r, gated(ss, rest_bind(rest_add_tablet_replica, ctx, ss)));
     ss::del_tablet_replica.set(r, gated(ss, rest_bind(rest_del_tablet_replica, ctx, ss)));
     ss::repair_tablet.set(r, gated(ss, rest_bind(rest_repair_tablet, ctx, ss)));
+    ss::tablet_compaction.set(r, gated(ss, rest_bind(rest_tablet_compaction, ctx, ss)));
     ss::tablet_balancing_enable.set(r, gated(ss, rest_bind(rest_tablet_balancing_enable, ss)));
     ss::create_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_create_vnode_tablet_migration, ctx, ss)));
     ss::get_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_get_vnode_tablet_migration, ctx, ss)));
@@ -1922,6 +1980,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::add_tablet_replica.unset(r);
     ss::del_tablet_replica.unset(r);
     ss::repair_tablet.unset(r);
+    ss::tablet_compaction.unset(r);
     ss::tablet_balancing_enable.unset(r);
     ss::create_vnode_tablet_migration.unset(r);
     ss::get_vnode_tablet_migration.unset(r);
