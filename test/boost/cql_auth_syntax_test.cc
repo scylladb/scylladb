@@ -63,6 +63,8 @@ BOOST_AUTO_TEST_CASE(maybe_quote) {
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl"), "ttl");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("int"), "int");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("as"), "as");
+    // The EXPORT permission keyword is unreserved, as `export` is a common column name.
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("export"), "export");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl hi"), "\"ttl hi\"");
 }
 

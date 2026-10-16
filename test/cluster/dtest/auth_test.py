@@ -997,12 +997,14 @@ class TestAuth(Tester):
             ("chuk", "<table ks.cf2>", "ALTER"),
             ("chuk", "<table ks.cf2>", "AUTHORIZE"),
             ("chuk", "<table ks.cf2>", "DROP"),
+            ("chuk", "<table ks.cf2>", "EXPORT"),
             ("chuk", "<table ks.cf2>", "MODIFY"),
             ("chuk", "<table ks.cf2>", "SELECT"),
             ("dave", "<all keyspaces>", "SELECT"),
             ("dave", "<table ks.cf>", "ALTER"),
             ("dave", "<table ks.cf>", "AUTHORIZE"),
             ("dave", "<table ks.cf>", "DROP"),
+            ("dave", "<table ks.cf>", "EXPORT"),
             ("dave", "<table ks.cf>", "MODIFY"),
             ("dave", "<table ks.cf>", "SELECT"),
         ]
@@ -1017,6 +1019,7 @@ class TestAuth(Tester):
             ("dave", "<table ks.cf>", "ALTER"),
             ("dave", "<table ks.cf>", "AUTHORIZE"),
             ("dave", "<table ks.cf>", "DROP"),
+            ("dave", "<table ks.cf>", "EXPORT"),
             ("dave", "<table ks.cf>", "MODIFY"),
             ("dave", "<table ks.cf>", "SELECT"),
         ]

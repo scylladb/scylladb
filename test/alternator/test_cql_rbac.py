@@ -22,10 +22,11 @@ from functools import cache
 import re
 
 from test.pylib.skip_types import skip_env
-from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert
+from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert, get_table_arn
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
 from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT, need_vector_search_in_botocore
+from .test_export import unknown_export_id
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
@@ -889,6 +890,90 @@ def test_rbac_updatetimetolive(dynamodb, cql):
                 with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
                     authorized(lambda: d.meta.client.update_time_to_live(TableName=table.name,
                         TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': True}))
+
+# DescribeExport of an export of the table which does not exist, so that a
+# role which is allowed to describe it gets ExportNotFoundException.
+def describe_unknown_export(client, table_arn):
+    export_arn = f'{table_arn}/export/{unknown_export_id()}'
+    try:
+        client.describe_export(ExportArn=export_arn)
+        pytest.fail(f'DescribeExport found {export_arn}')
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ExportNotFoundException':
+            raise
+
+def list_table_exports(client, table_arn):
+    client.list_exports(TableArn=table_arn)
+
+# Test that ExportTableToPointInTime needs both the SELECT and the EXPORT
+# permission on the table, or on something containing it, like its keyspace.
+def test_rbac_export_table_to_point_in_time(dynamodb, cql, test_table_s, test_table_ss):
+    table_arn = get_table_arn(test_table_s)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            export = lambda arn=table_arn: d.meta.client.export_table_to_point_in_time(TableArn=arn, S3Bucket='my-bucket')
+            # Either permission alone is not enough. GetItem and ListExports
+            # show that the grant has taken effect.
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                authorized(lambda: tab.get_item(Key={'p': random_string()}))
+                unauthorized(export)
+            with temporary_grant(cql, 'EXPORT', cql_table_name(tab), role):
+                authorized(lambda: list_table_exports(d.meta.client, table_arn))
+                unauthorized(export)
+                with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                    authorized(export)
+            keyspace = 'KEYSPACE ' + cql_keyspace_name(tab)
+            with temporary_grant(cql, 'SELECT', keyspace, role), temporary_grant(cql, 'EXPORT', keyspace, role):
+                authorized(export)
+                # Another table has a keyspace of its own.
+                unauthorized(lambda: export(get_table_arn(test_table_ss)))
+
+# Test that DescribeExport, and ListExports with a TableArn, need just the
+# EXPORT permission on the table.
+@pytest.mark.parametrize('call', [describe_unknown_export, list_table_exports], ids=['DescribeExport', 'ListExports'])
+def test_rbac_export_of_table(dynamodb, cql, test_table_s, call):
+    table_arn = get_table_arn(test_table_s)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            unauthorized(lambda: call(d.meta.client, table_arn))
+            with temporary_grant(cql, 'EXPORT', cql_table_name(test_table_s), role):
+                authorized(lambda: call(d.meta.client, table_arn))
+
+# Test that ListExports without a TableArn needs the EXPORT permission on ALL
+# KEYSPACES: a grant on the keyspace of a table, which allows ListExports
+# with the TableArn of that table, is not enough.
+def test_rbac_list_exports_unfiltered(dynamodb, cql, test_table_s):
+    table_arn = get_table_arn(test_table_s)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            with temporary_grant(cql, 'EXPORT', 'KEYSPACE ' + cql_keyspace_name(test_table_s), role):
+                authorized(lambda: list_table_exports(d.meta.client, table_arn))
+                unauthorized(lambda: d.meta.client.list_exports())
+            with temporary_grant(cql, 'EXPORT', 'ALL KEYSPACES', role):
+                authorized(lambda: d.meta.client.list_exports())
+
+# Test that the creator of a table may export it, as CreateTable grants it
+# EXPORT with the other permissions. Once the creator deletes the table,
+# which revokes these permissions, it can no longer describe or list the
+# exports of the table, while EXPORT on ALL KEYSPACES still allows both.
+def test_rbac_exports_table_deleted(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            client = d.meta.client
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                with new_named_table(d, unique_table_name(), **schema) as tab:
+                    table_arn = get_table_arn(tab)
+                    authorized(lambda: client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket'))
+            for call in (describe_unknown_export, list_table_exports):
+                unauthorized(lambda: call(client, table_arn))
+            with temporary_grant(cql, 'EXPORT', 'ALL KEYSPACES', role):
+                for call in (describe_unknown_export, list_table_exports):
+                    authorized(lambda: call(client, table_arn))
 
 @pytest.fixture(scope="module")
 def dot_table(dynamodb):
