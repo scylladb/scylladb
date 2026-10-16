@@ -10,7 +10,9 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/sleep.hh>
 #include "test/lib/cql_test_env.hh"
+#include "replica/database.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
@@ -369,6 +371,47 @@ SEASTAR_TEST_CASE(test_invalid_replay_position_commitlog_cleanup_record) {
         sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position()).get();
         BOOST_REQUIRE_EQUAL(t.get_stats().writes().count(), writes_before);
         BOOST_REQUIRE_EQUAL(get_num_records(), 0);
+    });
+}
+
+// Test that the tombstones of deleted commitlog cleanup records don't linger
+// on disk: once compacted, the deleted records are gone for good.
+SEASTAR_TEST_CASE(test_deleted_commitlog_cleanup_records_purged) {
+    BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& t = e.local_db().find_column_family(db::system_keyspace::NAME, db::system_keyspace::COMMITLOG_CLEANUPS);
+        BOOST_REQUIRE_EQUAL(t.schema()->gc_grace_seconds().count(), 0);
+
+        auto tableid = table_id(utils::UUID_gen::get_time_UUID());
+        // Use a segment id far ahead of the commitlog's, so the records are never
+        // obsolete (no commitlog segment precedes them).
+        const db::segment_id_type segment_id = db::replay_position::ts_mask;
+        for (unsigned shard : {0, 1}) {
+            for (int i = 0; i < 10; ++i) {
+                auto tr = dht::token_range::make({dht::token::from_int64(i), false}, {dht::token::from_int64(i + 1), true});
+                sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position(shard, segment_id, i + 1)).get();
+            }
+        }
+        t.flush().get();
+        BOOST_REQUIRE_GT(t.sstables_count(), 0);
+
+        sys_ks.drop_all_commitlog_cleanup_records().get();
+
+        // Tombstones are not purged while commitlog segments holding (possibly shadowed)
+        // writes of the table are around, so flush all tables and wait for the released
+        // commitlog segments to disappear. The table uses the schema commitlog.
+        BOOST_REQUIRE(t.schema()->static_props().use_schema_commitlog);
+        auto& cl = *e.local_db().schema_commitlog();
+        cl.force_new_active_segment().get();
+        e.local_db().flush_all_tables().get();
+        cl.wait_for_pending_deletes().get();
+
+        // Tombstones are purgeable only if their deletion time is strictly before
+        // gc_before (now - gc_grace_seconds), which has a granularity of seconds.
+        seastar::sleep(std::chrono::seconds(1)).get();
+        t.compact_all_sstables(tasks::make_empty_task_info()).get();
+        BOOST_REQUIRE_EQUAL(t.sstables_count(), 0);
     });
 }
 
