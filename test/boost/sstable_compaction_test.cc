@@ -1515,6 +1515,25 @@ SEASTAR_TEST_CASE(leveled_estimated_tasks_L0_promotion) {
     });
 }
 
+// A major compaction which doesn't run, because compaction is disabled for the table, completes
+// as if it succeeded, unless asked to throw if stopping, as callers which need to know whether
+// the table was compacted do.
+SEASTAR_TEST_CASE(major_compaction_throws_if_not_run_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto cf = env.make_table_for_tests(table_for_tests::make_default_schema());
+        auto close_cf = deferred_stop(cf);
+        auto& cm = env.test_compaction_manager().get_compaction_manager();
+        auto& view = cf.as_compaction_group_view();
+
+        cm.perform_major_compaction(view, tasks::make_empty_task_info(), false, compaction::throw_if_stopping::yes).get();
+
+        auto reenabler = cm.stop_and_disable_compaction("test", view).get();
+        cm.perform_major_compaction(view, tasks::make_empty_task_info()).get();
+        BOOST_REQUIRE_THROW(cm.perform_major_compaction(view, tasks::make_empty_task_info(), false, compaction::throw_if_stopping::yes).get(),
+                compaction::compaction_stopped_exception);
+    });
+}
+
 // The compaction manager closes the gates of the compaction states as soon as the node is asked
 // to stop, while other services still run: e.g. the group0 state machine can be truncating a
 // table for a schema change, and so disable its compaction. A stopped manager runs no compaction,
