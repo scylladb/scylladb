@@ -341,7 +341,10 @@ future<> controller::do_stop_server() {
 
     try {
         co_await unsubscribe_server(server);
-        co_await server.invoke_on_all([] (auto& s) { return s.shutdown(); });
+        co_await server.invoke_on_all([] (auto& s) -> future<> {
+            co_await s.shutdown_connections();
+            s.abort_requests();
+        });
     } catch (...) {
         if (!ex) {
             ex = std::current_exception();
