@@ -39,6 +39,7 @@ from test.alternator.test_cql_rbac import new_dynamodb, new_dynamodb_streams, ne
 from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name, metrics, get_metrics, get_metric, check_increases_metric, check_increases_metric_exact, check_increases_operation, check_table_increases_operation
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
+from test.alternator.test_export import accepted_export_row, export_metadata, unstarted_export_arn
 
 @lru_cache
 def histogram_bucket_offsets(size, ratio=1.2):
@@ -328,6 +329,22 @@ def test_export_table_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['ExportTableToPointInTime']):
         with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
             test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
+
+# DescribeExport counts against the table named by the export ARN, whether the export exists or
+# not - the counter tracks the request, not its outcome. Nothing writes export rows until export
+# orchestration lands, so the existing export's row is put there over CQL, as test_export.py does.
+def test_describe_export_operations(test_table_s, cql, metrics):
+    client = test_table_s.meta.client
+    table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    export_arn = unstarted_export_arn(client, table_arn)
+    with export_metadata(cql, export_arn, accepted_export_row(table_arn)):
+        with check_increases_operation(metrics, ['DescribeExport']):
+            with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):
+                client.describe_export(ExportArn=export_arn)
+    with check_increases_operation(metrics, ['DescribeExport']):
+        with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):
+            with pytest.raises(ClientError, match='ExportNotFoundException'):
+                client.describe_export(ExportArn=f'{table_arn}/export/01790264607542-abcdef12')
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
