@@ -2519,9 +2519,19 @@ def test_scylla_sstable_layout_default_tombstone_gc(cql, test_keyspace, scylla_p
 
     The default of the keyspace is resolved when the table is created and
     recorded as a schema extension, so the schema tables have the mode the table
-    actually uses -- repair, for a keyspace which is not on a local strategy."""
+    actually uses -- repair, for a keyspace which is not on a local strategy.
+
+    The test framework sets default_tombstone_gc_mode to timeout, which is also
+    what the tool would fall back to if no mode was recorded. So we set it back
+    to its default, repair, while creating the table."""
     table = util.unique_name()
-    cql.execute(f"CREATE TABLE {test_keyspace}.{table} (pk int PRIMARY KEY, v int)")
+    name = 'default_tombstone_gc_mode'
+    original = json.loads(cql.execute(f"SELECT value FROM system.config WHERE name = '{name}'").one().value)
+    cql.execute(f"UPDATE system.config SET value = 'repair' WHERE name = '{name}'")
+    try:
+        cql.execute(f"CREATE TABLE {test_keyspace}.{table} (pk int PRIMARY KEY, v int)")
+    finally:
+        cql.execute(f"UPDATE system.config SET value = '{original}' WHERE name = '{name}'")
     try:
         cql.execute(f"INSERT INTO {test_keyspace}.{table} (pk, v) VALUES (0, 0)")
         nodetool.flush(cql, f"{test_keyspace}.{table}")

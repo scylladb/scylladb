@@ -327,6 +327,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::tombstone_gc_mode_t>>() {
+    static config_type ct(
+        "tombstone gc mode", printable_to_json<enum_option<db::tombstone_gc_mode_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -520,6 +527,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::tombstone_gc_mode_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::tombstone_gc_mode_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1468,6 +1492,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_tombstone_gc_for_streaming_and_repair(this, "enable_tombstone_gc_for_streaming_and_repair", liveness::LiveUpdate, value_status::Used, false,
             "If the compacting reader is enabled for streaming and repair (see enable_compacting_data_for_streaming_and_repair), allow it to garbage-collect tombstones."
             " This can reduce the amount of data repair has to process.")
+    , default_tombstone_gc_mode(this, "default_tombstone_gc_mode", liveness::LiveUpdate, value_status::Used, tombstone_gc_mode::repair,
+            "The tombstone_gc mode of a new table, materialized view or secondary index created without an explicit tombstone_gc option."
+            " Can be set to repair, timeout, disabled or immediate. Tables which cannot use the repair mode, such as tables with local"
+            " replication and CDC log tables, default to timeout regardless of this option. Existing tables are not affected."
+            " The value used for a new table is taken from the configuration of the node coordinating the table creation,"
+            " so the option should be set identically on all nodes.")
     , repair_partition_count_estimation_ratio(this, "repair_partition_count_estimation_ratio", liveness::LiveUpdate, value_status::Used, 0.1,
         "Specify the fraction of partitions written by repair out of the total partitions. The value is currently only used for bloom filter estimation. Value is between 0 and 1.")
     , repair_hints_batchlog_flush_cache_time_in_ms(this, "repair_hints_batchlog_flush_cache_time_in_ms", liveness::LiveUpdate, value_status::Used, 60 * 1000, "The repair hints and batchlog flush request cache time. Setting 0 disables the flush cache. The cache reduces the number of hints and batchlog flushes during repair when tombstone_gc is set to repair mode. When the cache is on, a slightly smaller repair time will be used with the benefits of dropped hints and batchlog flushes.")
@@ -2190,6 +2220,13 @@ std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() 
             };
 }
 
+std::unordered_map<sstring, tombstone_gc_mode> db::tombstone_gc_mode_t::map() {
+    return {{"timeout", tombstone_gc_mode::timeout},
+            {"disabled", tombstone_gc_mode::disabled},
+            {"immediate", tombstone_gc_mode::immediate},
+            {"repair", tombstone_gc_mode::repair}};
+}
+
 template struct utils::config_file::named_value<seastar::log_level>;
 
 // Explicit instantiation definitions for all named_value<T> specializations
@@ -2223,6 +2260,7 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<db::tombstone_gc_mode_t>>;
 template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
