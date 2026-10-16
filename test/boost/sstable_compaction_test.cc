@@ -292,6 +292,7 @@ static void regular_compaction_quarantines_malformed_sstable(test_env& env, ssta
     }));
 
     BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+    BOOST_REQUIRE_EQUAL(cm.get_stats().automatic_sstable_quarantines, 1);
     for (auto& sst : ssts) {
         if (sst != malformed) {
             BOOST_REQUIRE(!sst->is_quarantined());
@@ -342,6 +343,7 @@ SEASTAR_TEST_CASE(regular_compaction_quarantines_multiple_malformed_sstables_tes
         }));
 
         BOOST_REQUIRE_EQUAL(cm.get_stats().errors, malformed.size());
+        BOOST_REQUIRE_EQUAL(cm.get_stats().automatic_sstable_quarantines, malformed.size());
     });
 }
 
@@ -370,6 +372,7 @@ SEASTAR_TEST_CASE(regular_compaction_quarantine_failure_test) {
 
         // Counted once by maybe_retry() for the abort, not again for the malformed sstable.
         BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 1);
+        BOOST_REQUIRE_EQUAL(cm.get_stats().automatic_sstable_quarantines, 0);
         for (auto& sst : ssts) {
             BOOST_REQUIRE(!sst->is_quarantined());
             BOOST_REQUIRE(cf->get_sstables()->contains(sst));
