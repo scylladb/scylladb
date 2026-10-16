@@ -59,6 +59,7 @@
 #include "message/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
+#include "db/commitlog/commitlog.hh"
 #include "mutation/async_utils.hh"
 #include "utils/chunked_string.hh"
 
@@ -1591,20 +1592,51 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     });
 }
 
-future<> system_keyspace::drop_old_commitlog_cleanup_records(replay_position min_position) {
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({
-        int64_t(min_position.base_id()),
-        int32_t(min_position.pos)
-    }));
-    sstring req = format("DELETE FROM {}.{} WHERE shard = ? AND position < ?", NAME, COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(min_position.shard_id()), pos}, cql3::query_processor::cache_internal::yes);
-}
-
 future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
+    auto s = commitlog_cleanups();
     auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)}));
-    sstring req = format("INSERT INTO {}.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", NAME, COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(rp.shard_id()), pos, table.uuid(), start_token_exclusive, end_token_inclusive}, cql3::query_processor::cache_internal::yes);
+    auto serialize_position = [] (db::replay_position rp) {
+        return make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)})).serialize_nonnull();
+    };
+    const auto ts = api::new_timestamp();
+
+    // INSERT INTO system.commitlog_cleanups (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES (...)
+    mutation m(s, partition_key::from_singular(*s, int32_t(rp.shard_id())));
+    auto ck = clustering_key::from_exploded(*s, {
+        serialize_position(rp),
+        data_value(table.uuid()).serialize_nonnull(),
+        data_value(start_token_exclusive).serialize_nonnull(),
+        data_value(end_token_inclusive).serialize_nonnull(),
+    });
+    m.partition().clustered_row(*s, ck).apply(row_marker(ts));
+
+    // Drop the records made obsolete by the commitlog: those below its minimum position,
+    // which apply only to commitlog segments which are already deleted.
+    // DELETE FROM system.commitlog_cleanups WHERE shard = ? AND position < min_position
+    //
+    // The range tombstone is added to the mutation of the record, so the save is a single
+    // write, instead of a write for the record and another one for the pruning. The table
+    // uses the (synced) schema commitlog, and all its partitions live on shard 0, so each
+    // write is a synced, cross-shard one. A failure to apply the mutation fails the save.
+    //
+    // If the record is below the minimum position, it is obsolete already: the range
+    // tombstone covers it, and having the same timestamp, the tombstone wins, so the
+    // record is effectively not written.
+    //
+    // The record and the pruned records are in the same partition: the records saved on
+    // a shard have the replay positions of the commitlog of that shard. Only tests save
+    // records with replay positions of other shards, for these the pruning is skipped.
+    if (const auto* cl = _db.commitlog()) {
+        const auto min_position = cl->min_position();
+        if (min_position.shard_id() == rp.shard_id()) {
+            auto range = query::clustering_range::make_ending_with({
+                    clustering_key_prefix::from_single_value(*s, serialize_position(min_position)), false});
+            auto bv = bound_view::from_range(range);
+            m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_clock::now()}});
+        }
+    }
+
+    co_await apply_mutation(std::move(m));
 }
 
 std::pair<int64_t, int64_t> system_keyspace::canonical_token_range(dht::token_range tr) {
