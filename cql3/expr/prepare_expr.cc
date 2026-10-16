@@ -2268,16 +2268,13 @@ static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column
     }
 }
 
-class like_constant_function : public cql3::functions::scalar_function {
+class like_function_base : public cql3::functions::scalar_function {
     functions::function_name _name;
-    like_matcher _matcher;
-    std::vector<data_type> _lhs_types;
+    std::vector<data_type> _arg_types;
 public:
-    like_constant_function(data_type arg_type, bytes_view pattern)
-            : _name("system", fmt::format("like({})",
-                    std::string_view(reinterpret_cast<const char*>(pattern.data()), pattern.size())))
-            , _matcher(pattern) {
-        _lhs_types.push_back(std::move(arg_type));
+    like_function_base(functions::function_name name, std::vector<data_type> arg_types)
+            : _name(std::move(name))
+            , _arg_types(std::move(arg_types)) {
     }
 
     virtual const functions::function_name& name() const override {
@@ -2285,7 +2282,7 @@ public:
     }
 
     virtual const std::vector<data_type>& arg_types() const override {
-        return _lhs_types;
+        return _arg_types;
     }
 
     virtual const data_type& return_type() const override {
@@ -2315,22 +2312,70 @@ public:
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "LIKE";
     }
+protected:
+    static managed_bytes_opt match(const like_matcher& matcher, const managed_bytes& str) {
+        // like_matcher only works on a linear buffer.
+        bool match_result = str.with_linearized([&] (bytes_view str) { return matcher(str); });
+        return managed_bytes(data_value(match_result).serialize_nonnull());
+    }
+};
+
+// LIKE with a constant pattern, compiled once.
+class like_constant_function : public like_function_base {
+    like_matcher _matcher;
+public:
+    like_constant_function(data_type arg_type, bytes_view pattern)
+            : like_function_base(functions::function_name("system", fmt::format("like({})",
+                    std::string_view(reinterpret_cast<const char*>(pattern.data()), pattern.size()))),
+                    {std::move(arg_type)})
+            , _matcher(pattern) {
+    }
 
     virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         auto& str_opt = parameters[0];
         if (!str_opt) {
             return std::nullopt;
         }
-        // like_matcher only works on a linear buffer.
-        bool match_result = str_opt->with_linearized([this] (bytes_view str) { return _matcher(str); });
-        return managed_bytes(data_value(match_result).serialize_nonnull());
+        return match(_matcher, *str_opt);
+    }
+};
+
+// LIKE with a pattern that is only known at execution time (a bind variable). The matcher
+// for the most recent pattern is kept, so it is only recompiled when the pattern changes
+// (typically once per execution) rather than for every row.
+//
+// The function is shared by all concurrent executions of the prepared statement (on this
+// shard), each possibly with a different pattern. This is safe because every call passes its
+// own pattern, like_matcher::reset() compares it with the current one and recompiles if it
+// differs, and execute() does not yield between reset() and matching.
+class like_variable_function : public like_function_base {
+    std::optional<like_matcher> _matcher;
+public:
+    like_variable_function(data_type arg_type, data_type pattern_type)
+            : like_function_base(functions::function_name("system", "like"), {std::move(arg_type), std::move(pattern_type)}) {
+    }
+
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
+        auto& str_opt = parameters[0];
+        auto& pattern_opt = parameters[1];
+        if (!str_opt || !pattern_opt) {
+            return std::nullopt;
+        }
+        pattern_opt->with_linearized([&] (bytes_view pattern) {
+            if (_matcher) {
+                _matcher->reset(pattern);
+            } else {
+                _matcher.emplace(pattern);
+            }
+        });
+        return match(*_matcher, *str_opt);
     }
 };
 
 expression
 optimize_like(const expression& e) {
-    // Check for LIKE with constant pattern; replace with anonymous 
-    // function that contains the compiled regex.
+    // Check for LIKE with a constant or bind variable pattern; replace with an
+    // anonymous function that contains the compiled pattern.
     return search_and_replace(e, [] (const expression& subexpression) -> std::optional<expression> {
         if (auto* binop = as_if<binary_operator>(&subexpression)) {
             if (binop->op == oper_t::LIKE) {
@@ -2342,6 +2387,12 @@ optimize_like(const expression& e) {
                         args.push_back(binop->lhs);
                         return function_call{std::move(func), std::move(args)};
                     }
+                } else if (is<bind_variable>(binop->rhs)) {
+                    auto func = ::make_shared<like_variable_function>(type_of(binop->lhs), type_of(binop->rhs));
+                    auto args = std::vector<expression>();
+                    args.push_back(binop->lhs);
+                    args.push_back(binop->rhs);
+                    return function_call{std::move(func), std::move(args)};
                 }
             }
         }

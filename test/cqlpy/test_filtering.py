@@ -14,7 +14,7 @@ import pytest
 import re
 from .util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
-from cassandra.query import UNSET_VALUE
+from cassandra.query import SimpleStatement, UNSET_VALUE
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -114,6 +114,36 @@ def test_filter_like_on_desc_column(cql, test_keyspace, cassandra_bug):
         cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 'one')")
         res = cql.execute(f"SELECT b FROM {table} WHERE b LIKE '%%%' ALLOW FILTERING")
         assert res.one().b == "one"
+
+# Test LIKE filtering on every kind of column, with the pattern given both
+# as a literal and as a bind marker, across several pages. Patterns are
+# compiled when the statement is prepared (or, for a bind marker, when its
+# value changes) rather than per row, so this checks that each compiled
+# pattern is applied to the right column and that a prepared statement
+# follows its bound pattern across executions.
+def test_filter_like_column_kinds(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "p text, c text, s text static, v text, primary key(p, c)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, c, s, v) VALUES (?, ?, ?, ?)")
+        for p in ['pa', 'pb']:
+            for c in ['ca', 'cb', 'xca']:
+                cql.execute(insert, [p, c, 's' + p, 'v' + c])
+        for column, pattern, expected in [
+                ('p', 'pa', {('pa', 'ca'), ('pa', 'cb'), ('pa', 'xca')}),
+                ('c', '%ca', {('pa', 'ca'), ('pa', 'xca'), ('pb', 'ca'), ('pb', 'xca')}),
+                ('s', '%b', {('pb', 'ca'), ('pb', 'cb'), ('pb', 'xca')}),
+                ('v', 'vc%', {('pa', 'ca'), ('pa', 'cb'), ('pb', 'ca'), ('pb', 'cb')}),
+                ('v', '%c%', {('pa', 'ca'), ('pa', 'cb'), ('pa', 'xca'), ('pb', 'ca'), ('pb', 'cb'), ('pb', 'xca')})]:
+            literal = SimpleStatement(f"SELECT p, c FROM {table} WHERE {column} LIKE '{pattern}' ALLOW FILTERING", fetch_size=1)
+            assert {(r.p, r.c) for r in cql.execute(literal)} == expected
+            bound = cql.prepare(f"SELECT p, c FROM {table} WHERE {column} LIKE ? ALLOW FILTERING")
+            bound.fetch_size = 1
+            assert {(r.p, r.c) for r in cql.execute(bound, [pattern])} == expected
+        # Both a literal and a bound pattern in the same query
+        both = cql.prepare(f"SELECT p, c FROM {table} WHERE c LIKE '%ca' AND v LIKE ? ALLOW FILTERING")
+        assert {(r.p, r.c) for r in cql.execute(both, ['vx%'])} == {('pa', 'xca'), ('pb', 'xca')}
+        # A null bound pattern matches nothing
+        null_pattern = cql.prepare(f"SELECT p, c FROM {table} WHERE v LIKE ? ALLOW FILTERING")
+        assert list(cql.execute(null_pattern, [None])) == []
 
 # Test that the fact that a column is indexed does not cause us to fetch
 # incorrect results from a filtering query (issue #10300).
