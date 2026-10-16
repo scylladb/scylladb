@@ -1512,7 +1512,7 @@ SEASTAR_TEST_CASE(test_uncompressed_counters_read) {
         std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([&, timestamp, value, clock] (const column_definition& def,
-                                                           const atomic_cell_or_collection* cell) {
+                                                           std::optional<atomic_cell_or_collection_view> cell) {
             BOOST_REQUIRE(def.is_counter());
             {
                 counter_cell_view cv(cell->as_atomic_cell(def));
@@ -2428,7 +2428,7 @@ SEASTAR_TEST_CASE(test_uncompressed_deleted_cells_read) {
         std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([timestamp, deletion_time] (const column_definition& def,
-                                 const atomic_cell_or_collection* cell) {
+                                 std::optional<atomic_cell_or_collection_view> cell) {
             auto c = cell->as_atomic_cell(def);
             BOOST_REQUIRE(!c.is_live());
             BOOST_REQUIRE_EQUAL(timestamp, c.timestamp());
@@ -2897,7 +2897,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
         std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([val = std::move(set_val)] (const column_definition& def,
-                                                         const atomic_cell_or_collection* cell) {
+                                                         std::optional<atomic_cell_or_collection_view> cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
             for (const auto& entry : cell->as_collection_mutation()) {
@@ -2913,7 +2913,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
         });
 
         assertions.push_back([val = std::move(list_val)] (const column_definition& def,
-                                                          const atomic_cell_or_collection* cell) {
+                                                          std::optional<atomic_cell_or_collection_view> cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
             for (const auto& entry : cell->as_collection_mutation()) {
@@ -2929,7 +2929,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
         });
 
         assertions.push_back([val = std::move(map_val)] (const column_definition& def,
-                                                         const atomic_cell_or_collection* cell) {
+                                                         std::optional<atomic_cell_or_collection_view> cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
             for (const auto& entry : cell->as_collection_mutation()) {
@@ -3081,8 +3081,8 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
     auto& cells = row.cells();
     auto& rc1 = *s->get_column_definition("rc1");
     auto& rc2 = *s->get_column_definition("rc2");
-    BOOST_REQUIRE(cells.find_cell(rc1.id) == nullptr);
-    BOOST_REQUIRE(cells.find_cell(rc2.id) != nullptr);
+    BOOST_REQUIRE(!cells.find_cell(rc1.id).has_value());
+    BOOST_REQUIRE(cells.find_cell(rc2.id).has_value());
   });
 }
 

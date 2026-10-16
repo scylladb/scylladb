@@ -3,6 +3,7 @@ target_sources(mutation
   PRIVATE
     async_utils.cc
     atomic_cell.cc
+    atomic_cell_or_collection_block.cc
     canonical_mutation.cc
     collection_mutation.cc
     converting_mutation_partition_applier.cc

@@ -15,13 +15,13 @@
 
 namespace cql3 {
 void
-sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+sets::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     cql3::raw_value value = expr::evaluate(*_e, params._options);
     execute(m, row_key, params, column, std::move(value));
 }
 
 void
-sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
+sets::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
     if (column.type->is_multi_cell()) {
         // Delete all cells first, then add new ones
         m.set_cell(row_key, column, collection_mutation_writer(params.make_tombstone_just_before()).finish());
@@ -30,14 +30,14 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 }
 
 void
-sets::adder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+sets::adder::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
     throwing_assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
     do_add(m, row_key, params, value, column);
 }
 
 void
-sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
+sets::adder::do_add(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params,
         const cql3::raw_value& value, const column_definition& column) {
     auto& set_type = dynamic_cast<const set_type_impl&>(column.type->without_reversed());
     if (column.type->is_multi_cell()) {
@@ -73,7 +73,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
 }
 
 void
-sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
+sets::discarder::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     throwing_assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
     cql3::raw_value svalue = expr::evaluate(*_e, params._options);
@@ -92,7 +92,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
     m.set_cell(row_key, column, std::move(mut).finish());
 }
 
-void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
+void sets::element_discarder::execute(mutation_cell_collector& m, const clustering_key_prefix& row_key, const update_parameters& params)
 {
     throwing_assert(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
     cql3::raw_value elt = expr::evaluate(*_e, params._options);

@@ -223,7 +223,7 @@ public:
             BOOST_FAIL(format("Expected static row with {} columns, but has {}", columns.size(), cells.size()));
         }
         for (size_t i = 0; i < columns.size(); ++i) {
-            const atomic_cell_or_collection* cell = cells.find_cell(columns[i].id);
+            auto cell = cells.find_cell(columns[i].id);
             if (!cell) {
                 BOOST_FAIL(format("Expected static row with column {}, but it is not present", columns[i].name));
             }
@@ -257,7 +257,7 @@ public:
             BOOST_FAIL(format("Expected row with {} columns, but has {}", columns.size(), cells.size()));
         }
         for (size_t i = 0; i < columns.size(); ++i) {
-            const atomic_cell_or_collection* cell = cells.find_cell(columns[i].id);
+            auto cell = cells.find_cell(columns[i].id);
             if (!cell) {
                 BOOST_FAIL(format("Expected row with column {}, but it is not present", columns[i].name));
             }
@@ -274,7 +274,7 @@ public:
         return *this;
     }
 
-    using assert_function = noncopyable_function<void(const column_definition&, const atomic_cell_or_collection*)>;
+    using assert_function = noncopyable_function<void(const column_definition&, std::optional<atomic_cell_or_collection_view>)>;
 
     mutation_reader_assertions& produces_row(const clustering_key& ck,
                                          const std::vector<column_id>& column_ids,
@@ -296,7 +296,7 @@ public:
             BOOST_FAIL(format("Expected row with {} columns, but has {}", column_ids.size(), cells.size()));
         }
         for (size_t i = 0; i < column_ids.size(); ++i) {
-            const atomic_cell_or_collection* cell = cells.find_cell(column_ids[i]);
+            auto cell = cells.find_cell(column_ids[i]);
             if (!cell) {
                 BOOST_FAIL(format("Expected row with column {:d}, but it is not present", column_ids[i]));
             }

@@ -797,7 +797,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
-            cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+            cr->cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
                 counter_cell_view ccv(c.as_atomic_cell(s->regular_column_at(id)));
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
@@ -825,7 +825,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             BOOST_REQUIRE(mfopt);
             BOOST_REQUIRE(mfopt->is_clustering_row());
             cr = &mfopt->as_clustering_row();
-            cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+            cr->cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
                     BOOST_REQUIRE(!c.as_atomic_cell(col).is_live());
@@ -2161,7 +2161,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                 BOOST_REQUIRE(mf.is_clustering_row());
                 auto& row = mf.as_clustering_row();
                 size_t n = 0;
-                row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+                row.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view ac_o_c) {
                     auto acv = ac_o_c.as_atomic_cell(s->regular_column_at(id));
                     counter_cell_view ccv(acv);
                     counter_shard_view::less_compare_by_id cmp;

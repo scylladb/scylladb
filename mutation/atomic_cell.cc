@@ -133,7 +133,18 @@ atomic_cell_or_collection::atomic_cell_or_collection(const abstract_type& type, 
 {
 }
 
-bool atomic_cell_or_collection::equals(const abstract_type& type, const atomic_cell_or_collection& other) const
+atomic_cell_or_collection atomic_cell_or_collection_view::copy(const abstract_type& type) const {
+    if (_data.empty()) {
+        return atomic_cell_or_collection();
+    }
+    return atomic_cell_or_collection(managed_bytes(_data));
+}
+
+bool atomic_cell_or_collection::equals(const abstract_type& type, const atomic_cell_or_collection& other) const {
+    return atomic_cell_or_collection_view(*this).equals(type, other);
+}
+
+bool atomic_cell_or_collection_view::equals(const abstract_type& type, atomic_cell_or_collection_view other) const
 {
     if (_data.empty() || other._data.empty()) {
         return _data.empty() && other._data.empty();
@@ -222,8 +233,13 @@ auto fmt::formatter<atomic_cell_view::printer>::format(const atomic_cell_view::p
 
 auto fmt::formatter<atomic_cell_or_collection::printer>::format(const atomic_cell_or_collection::printer& p, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", atomic_cell_or_collection_view::printer(p._cdef, p._cell));
+}
+
+auto fmt::formatter<atomic_cell_or_collection_view::printer>::format(const atomic_cell_or_collection_view::printer& p, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
     auto out = ctx.out();
-    if (p._cell._data.empty()) {
+    if (!p._cell) {
         return fmt::format_to(out, "{{ null atomic_cell_or_collection }}");
     }
     out = fmt::format_to(out, "{{");

@@ -26,7 +26,8 @@
 #include "utils/preempt.hh"
 #include "utils/lru.hh"
 #include "utils/managed_ref.hh"
-#include "utils/compact-radix-tree.hh"
+#include "mutation/atomic_cell_or_collection_block.hh"
+#include "mutation/cell_hash.hh"
 #include "utils/immutable-collection.hh"
 #include "tombstone_gc.hh"
 #include "mutation/compact_and_expire_result.hh"
@@ -44,27 +45,6 @@ namespace query {
     class clustering_key_filter_ranges;
 } // namespace query
 
-struct cell_hash {
-    using size_type = uint64_t;
-    static constexpr size_type no_hash = 0;
-
-    size_type hash = no_hash;
-
-    explicit operator bool() const noexcept {
-        return hash != no_hash;
-    }
-};
-
-template<>
-struct appending_hash<cell_hash> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const cell_hash& ch) const {
-        feed_hash(h, ch.hash);
-    }
-};
-
-using cell_hash_opt = seastar::optimized_optional<cell_hash>;
-
 struct cell_and_hash {
     atomic_cell_or_collection cell;
     mutable cell_hash_opt hash;
@@ -79,6 +59,13 @@ struct cell_and_hash {
     { }
 };
 
+// A cell stored in a row, together with its cached hash, which may be
+// updated in place.
+struct cell_and_hash_view {
+    atomic_cell_or_collection_view cell;
+    cell_hash_opt& hash;
+};
+
 class compaction_garbage_collector;
 
 //
@@ -88,13 +75,28 @@ class compaction_garbage_collector;
 // for space-efficiency reasons. Whenever a method accepts a column_kind,
 // the caller must always supply the same column_kind.
 //
+// Cells are stored packed in atomic_cell_or_collection_blocks; see
+// atomic_cell_or_collection_block.hh. Access to cells is through views,
+// which are invalidated by any modification of the row.
 //
 class row {
     friend class size_calculator;
     using size_type = std::make_unsigned_t<column_id>;
-    size_type _size = 0;
-    using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
-    sparse_array_type _cells;
+    using cells_type = atomic_cell_or_collection_block_tree;
+    using block_index_type = cells_type::block_index_type;
+    using block_type = atomic_cell_or_collection_block;
+    using block_ptr = block_type::ptr;
+    cells_type _cells;
+
+    static block_index_type block_index_of(column_id id) noexcept {
+        return id >> atomic_cell_or_collection_block_slot_bits;
+    }
+    static unsigned slot_of(column_id id) noexcept {
+        return id & (atomic_cell_or_collection_block_nr_cells - 1);
+    }
+    static column_id column_of(block_index_type block_index, unsigned slot) noexcept {
+        return (column_id(block_index) << atomic_cell_or_collection_block_slot_bits) | slot;
+    }
 public:
     row();
     ~row();
@@ -102,66 +104,123 @@ public:
     static row construct(const schema& our_schema, const schema& their_schema, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
-    size_t size() const { return _size; }
-    bool empty() const { return _size == 0; }
+    size_t size() const { return _cells.size(); }
+    bool empty() const { return _cells.empty(); }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const;
+    atomic_cell_or_collection_view cell_at(column_id id) const;
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const;
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const;
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const;
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const;
 
-    template<typename Func>
-    void remove_if(Func&& func) {
-        _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
-            if (!func(id, cah.cell)) {
-                return false;
-            }
+    // Builds the cells of a row a block at a time, rather than rebuilding a
+    // block for every cell, as append_cell() and apply() do.
+    //
+    // Cells are collected until a cell of another block is appended, or finish()
+    // is called, so cells of the same block (columns with the same
+    // id / atomic_cell_or_collection_block_nr_cells) should be appended
+    // consecutively, e.g. in increasing column id order. Appending in another
+    // order works, but is slower.
+    //
+    // The appended columns must not be set in the row. Appended cells are not
+    // visible in the row until finish() is called; neither the row nor the
+    // appender may be used after an exception.
+    class cell_appender {
+        row& _row;
+        atomic_cell_or_collection_block_builder _builder;
+        block_index_type _block_index = 0;
 
-            _size--;
-            return true;
-        });
-    }
+        void flush();
+        // Prepares for appending `id`, returning its slot.
+        unsigned prepare_append(column_id id);
+    public:
+        explicit cell_appender(row& r) noexcept : _row(r) {}
+        cell_appender(const cell_appender&) = delete;
+        cell_appender& operator=(const cell_appender&) = delete;
+        void append(column_id id, atomic_cell_or_collection&& cell);
+        void append(column_id id, atomic_cell_or_collection_view cell);
+        // Appends a cell whose serialized form of `size` bytes is written by
+        // write(managed_bytes_mutable_view). `size` must not be zero.
+        template <std::invocable<managed_bytes_mutable_view> Writer>
+        void append_serialized(column_id id, size_t size, Writer&& write) {
+            auto slot = prepare_append(id);
+            write(_builder.add_uninitialized(slot, size, {}));
+        }
+        void finish();
+        // Whether there are appended cells which finish() would add to the row.
+        bool has_pending_cells() const noexcept { return !_builder.empty(); }
+    };
 
 private:
-    template<typename Func>
-    void consume_with(Func&&);
+    // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
+    // `value` and may be moved from.
+    void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
+    void apply_cell(const column_definition& column, atomic_cell_or_collection_view value, managed_bytes* stealable, cell_hash_opt hash,
+            db::large_data_cache_tracker* tracker);
+    // Merges the block of other at block_index into this row. If steal is true,
+    // external cells of other_block may be moved from, and if the merged block
+    // would be other_block itself (it has all of this block's columns, and wins
+    // all of their merges), nothing is done and true is returned, so that the
+    // caller can install other_block instead.
+    bool merge_block(const schema& s, column_kind kind, block_index_type block_index, const block_type& other_block, bool steal,
+            db::large_data_cache_tracker* tracker);
 
     // Func obeys the same requirements as for for_each_cell below.
-    template<typename Func, typename MaybeConstCellAndHash>
-    static constexpr auto maybe_invoke_with_hash(Func& func, column_id id, MaybeConstCellAndHash& c_a_h) {
-        if constexpr (std::is_invocable_v<Func, column_id, const cell_and_hash&>) {
-            return func(id, c_a_h);
+    template<typename Func>
+    static constexpr auto invoke_const(Func& func, column_id& id, const block_type::cell_entry& e) {
+        auto cell = atomic_cell_or_collection_view(e.cell);
+        if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>) {
+            return func(id, cell_and_hash_view{cell, e.hash});
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>) {
+            return func(id, cell);
+        } else if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash&>) {
+            // Compatibility path, materializes a copy of the cell.
+            auto cah = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash);
+            return func(id, std::as_const(cah));
         } else {
-            return func(id, c_a_h.cell);
+            // Compatibility path, materializes a copy of the cell.
+            static_assert(std::is_invocable_v<Func&, column_id&, const atomic_cell_or_collection&>);
+            auto c = atomic_cell_or_collection::from_serialized(managed_bytes(e.cell));
+            return func(id, std::as_const(c));
         }
     }
 
 public:
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
+    // Calls Func(column_id, const cell_and_hash_view&) or Func(column_id, atomic_cell_or_collection_view)
     // for each cell in this row, depending on the concrete Func type.
     // noexcept if Func doesn't throw.
     template<typename Func>
-    void for_each_cell(Func&& func) {
-        _cells.walk([func] (column_id id, cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
-            return true;
-        });
-    }
-
-    template<typename Func>
     void for_each_cell(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            maybe_invoke_with_hash(func, id, cah);
-            return true;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                invoke_const(func, id, e);
+            });
         });
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
-            return maybe_invoke_with_hash(func, id, cah) != stop_iteration::yes;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            return block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                return invoke_const(func, id, e);
+            });
+        });
+    }
+
+    // Calls func(column_id, managed_bytes_mutable_view) for each cell, with a view of the
+    // serialized cell which may be modified in place, as long as its size doesn't change
+    // (e.g. atomic_cell_mutable_view::from_bytes(v).set_timestamp()). Doesn't allocate.
+    template<typename Func>
+    void for_each_cell_in_place(Func&& func) {
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            auto& mutable_block = const_cast<block_type&>(block);
+            for (auto m = block.present(); m; m &= m - 1) {
+                auto slot = std::countr_zero(m);
+                func(column_of(block_index, slot), mutable_block.mutable_cell(slot));
+            }
         });
     }
 
@@ -221,6 +280,10 @@ public:
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     size_t external_memory_usage(const schema&, column_kind) const;
+
+    // The total size of the serialized cells, independent of how they are
+    // represented in memory.
+    size_t data_size() const;
 
     cell_hash_opt cell_hash_for(column_id id) const;
 
@@ -310,7 +373,7 @@ public:
         }
     }
 
-    const atomic_cell_or_collection& cell_at(column_id id) const {
+    atomic_cell_or_collection_view cell_at(column_id id) const {
         if (!_row) {
             throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
         } else {
@@ -318,33 +381,23 @@ public:
         }
     }
 
-    // Returns a pointer to cell's value or nullptr if column is not set.
-    const atomic_cell_or_collection* find_cell(column_id id) const {
+    // Returns a view of cell's value or a disengaged optional if column is not set.
+    std::optional<atomic_cell_or_collection_view> find_cell(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell(id);
     }
 
-    // Returns a pointer to cell's value and hash or nullptr if column is not set.
-    const cell_and_hash* find_cell_and_hash(column_id id) const {
+    // Returns a view of cell's value and hash or a disengaged optional if column is not set.
+    std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const {
         if (!_row) {
-            return nullptr;
+            return std::nullopt;
         }
         return _row->find_cell_and_hash(id);
     }
 
-    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
-    // for each cell in this row, depending on the concrete Func type.
-    // noexcept if Func doesn't throw.
-    template<typename Func>
-    void for_each_cell(Func&& func) {
-        if (!_row) {
-            return;
-        }
-        _row->for_each_cell(std::forward<Func>(func));
-    }
-
+    // See row::for_each_cell().
     template<typename Func>
     void for_each_cell(Func&& func) const {
         if (!_row) {
@@ -1067,6 +1120,9 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage(const schema&) const;
+    // The size of the row's data, independent of its in-memory representation;
+    // see mutation_partition::data_size().
+    size_t data_size() const;
 
     // Handles eviction of the row, but doesn't attempt to handle eviction
     // of the containing partition_entry in case this is the last row.
@@ -1512,6 +1568,11 @@ public:
     uint64_t row_count() const;
 
     size_t external_memory_usage(const schema&) const;
+    // The size of the data in the partition (excluding the partition key),
+    // independent of how it is represented in memory: the sizes of the clustering
+    // keys and of the serialized cells, plus the sizes of tombstones and row markers
+    // as timestamps and times.
+    size_t data_size(const schema&) const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;

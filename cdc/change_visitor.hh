@@ -156,7 +156,7 @@ concept ChangeVisitor = requires(V v,
 
 template <RowCellsVisitor V>
 void inspect_row_cells(const schema& s, column_kind ckind, const row& r, V& v) {
-    r.for_each_cell_until([&s, ckind, &v] (column_id id, const atomic_cell_or_collection& acoc) {
+    r.for_each_cell_until([&s, ckind, &v] (column_id id, atomic_cell_or_collection_view acoc) {
         auto& cdef = s.column_at(ckind, id);
 
         if (cdef.is_atomic()) {

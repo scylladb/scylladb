@@ -319,7 +319,7 @@ private:
 
         writer.writer().StartObject();
 
-        value->for_each_cell([this, kind, &writer] (column_id id, const atomic_cell_or_collection& cell) {
+        value->for_each_cell([this, kind, &writer] (column_id id, atomic_cell_or_collection_view cell) {
             auto& cdef = _underlying_schema->column_at(kind, id);
             writer.writer().Key(cdef.name_as_text());
             if (cdef.is_atomic()) {
