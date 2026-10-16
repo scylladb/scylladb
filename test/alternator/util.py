@@ -181,6 +181,27 @@ def new_test_table(dynamodb, **kwargs):
         print(f"Deleting table {table.name}")
         table.delete()
 
+# A variant of new_test_table() which yields the TableDescription returned by
+# CreateTable instead of the table, for tests checking that response itself.
+@contextmanager
+def new_test_table_description(dynamodb, **kwargs):
+    name = unique_table_name()
+    description = dynamodb.meta.client.create_table(TableName=name, **kwargs)['TableDescription']
+    try:
+        yield description
+    finally:
+        # DynamoDB's CreateTable is asynchronous, and a table cannot be
+        # deleted until it and its GSIs finish being created.
+        table = dynamodb.Table(name)
+        waiter = table.meta.client.get_waiter('table_exists')
+        waiter.config.delay = 1
+        waiter.config.max_attempts = 200
+        waiter.wait(TableName=name)
+        for gsi in description.get('GlobalSecondaryIndexes', []):
+            wait_for_gsi(table, gsi['IndexName'])
+        print(f"Deleting table {name}")
+        table.delete()
+
 # DynamoDB's ListTables request returns up to a single page of table names
 # (e.g., up to 100) and it is up to the caller to call it again and again
 # to get the next page. This is a utility function which calls it repeatedly

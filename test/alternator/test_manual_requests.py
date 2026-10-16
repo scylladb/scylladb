@@ -19,7 +19,8 @@ from packaging.version import Version
 
 from test.pylib.skip_types import skip_env
 
-from test.alternator.util import random_bytes, random_string, get_signed_request, client_ssl_context, manual_request, ManualRequestError
+from test.alternator.util import random_bytes, random_string, get_signed_request, client_ssl_context, manual_request, ManualRequestError, new_test_table
+from test.alternator.test_streams import wait_for_status_active
 from test.cqlpy.util import config_value_context
 
 
@@ -715,3 +716,18 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
         assert 'ResourceNotFoundException' in body, body
     finally:
         conn.close()
+
+# UpdateTable has no GlobalSecondaryIndexes member, and DynamoDB ignores a stray
+# one whatever it holds. Alternator echoes the request back as its response, and
+# must not fail on such a member after the update has been applied.
+def test_update_table_stray_global_secondary_indexes(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        manual_request(dynamodb, 'UpdateTable', json.dumps({
+            'TableName': table.name,
+            'BillingMode': 'PAY_PER_REQUEST',
+            'GlobalSecondaryIndexes': [1, {'ProvisionedThroughput': 1}]}))
+        # DynamoDB applies the update asynchronously, and cannot delete the
+        # table before it is done.
+        wait_for_status_active(table)
