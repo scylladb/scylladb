@@ -7,6 +7,7 @@
  */
 
 #include "db/system_keyspace.hh"
+#include "db/snapshot_types.hh"
 #include "node_ops/task_manager_module.hh"
 #include "service/storage_service.hh"
 #include "service/topology_coordinator.hh"

@@ -23,6 +23,10 @@
 #include "mutation/timestamp.hh"
 #include "utils/UUID.hh"
 
+namespace db {
+struct snapshot_dc_location;
+}
+
 namespace service {
 
 template<typename Builder>
@@ -176,9 +180,11 @@ public:
     // together, so that they are all stamped with the same time.
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt,
             std::optional<db_clock::time_point> end_time = std::nullopt);
+    topology_request_tracking_mutation_builder& percent_complete(uint32_t);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
+    topology_request_tracking_mutation_builder& set_backup_snapshot_data(const std::unordered_set<table_id>&, const std::unordered_map<sstring, db::snapshot_dc_location>&, const sstring& tag, bool);
     topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
 
