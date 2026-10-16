@@ -107,6 +107,8 @@ private:
         return bucket_key >= now;
     }
 
+    size_t window_min_threshold(const compaction_group_view& cg, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
+
     // Returns which compaction type should be performed on a given window bucket.
     bucket_compaction_mode
     compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
