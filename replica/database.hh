@@ -1204,6 +1204,13 @@ public:
     // sitting in the memtable, will be compacted with shadowed data.
     future<> compact_all_sstables(tasks::task_info info, do_flush = do_flush::yes, bool consider_only_existing_data = false);
 
+    // Major compaction of a single tablet replica, the one on this shard: its memtables are
+    // flushed, and each of its compaction group views is reshaped off-strategy and major
+    // compacted, one at a time, so that the temporary space overhead is bounded by the
+    // tablet's size. Fails unless the tablet was compacted, e.g. when a compaction is stopped by the
+    // node's shutdown. Stops the compactions and fails when `as` is aborted.
+    future<> major_compact_tablet(locator::tablet_id tid, tasks::task_info info, abort_source& as);
+
     future<bool> snapshot_exists(sstring name);
 
     db::replay_position set_low_replay_position_mark();
