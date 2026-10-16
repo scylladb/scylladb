@@ -476,10 +476,17 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
     gc_clock::time_point flush_time;
     bool hints_batchlog_flushed = false;
     if (needs_flush_before_repair) {
+        // An ignored node may hold hints or batchlog entries for the repaired
+        // ranges, as a coordinator, even if it is not a replica of them. Its
+        // flush cannot be skipped, like that of a down node: recording the
+        // repair time would let tombstone GC purge tombstones which may still
+        // shadow those writes, resurrecting them when they are replayed.
+        if (!ignore_nodes.empty()) {
+            rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to ignore_nodes={}, continue to run repair",
+                    uuid, ignore_nodes);
+            co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
+        }
         auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
-        std::erase_if(waiting_nodes, [&] (const auto& addr) {
-            return ignore_nodes.contains(addr);
-        });
         auto hints_timeout = std::chrono::seconds(300);
         auto batchlog_timeout = std::chrono::seconds(300);
         // Lets a test shorten the timeouts it would otherwise have to wait out.
