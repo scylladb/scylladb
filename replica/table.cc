@@ -3758,7 +3758,7 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
         auto tid = locator::tablet_id(id);
         locator::global_tablet_id gid { _t.schema()->id(), tid };
         locator::tablet_replica me { _my_host_id, this_shard_id() };
-        const uint64_t tablet_size = sg.live_disk_space_used();
+        const uint64_t tablet_size = sg.data_size();
 
         auto transition = _tablet_map->get_tablet_transition_info(tid);
         auto& info = _tablet_map->get_tablet_info(tid);
