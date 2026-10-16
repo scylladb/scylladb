@@ -736,3 +736,38 @@ def test_return_consumed_capacity_indexes_with_indexes(dynamodb):
         # either, so no need to update the index, so uses_indexes=False
         response = table.put_item(Item={'p': p, 'c': c, 'animal': 'dog'}, ReturnConsumedCapacity='INDEXES')
         check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+
+# DynamoDB's ReturnConsumedCapacity parameter takes one of three values:
+# "INDEXES", "TOTAL" and "NONE". "NONE" means not to report the consumed
+# capacity, and is also the documented default when the parameter is omitted -
+# so the two parametrizations of this test, passing "NONE" and passing nothing
+# at all, ask for exactly the same thing and must behave identically: every
+# operation should succeed, and no response should have a ConsumedCapacity.
+# Reproduces SCYLLADB-4682.
+@pytest.mark.parametrize('kwargs', [{}, {'ReturnConsumedCapacity': 'NONE'}],
+                         ids=['omitted', 'NONE'])
+def test_return_consumed_capacity_none(test_table_s, kwargs):
+    p = random_string()
+    response = test_table_s.put_item(Item={'p': p}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.get_item(Key={'p': p}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': 'hi'}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.query(KeyConditionExpression='p = :pk',
+        ExpressionAttributeValues={':pk': p}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.scan(Limit=1, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.delete_item(Key={'p': p}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    # BatchGetItem and BatchWriteItem may involve several tables, so when they
+    # do report consumed capacity they report a *list* of ConsumedCapacity -
+    # but here we expect the field to be missing altogether, just like above.
+    response = test_table_s.meta.client.batch_get_item(RequestItems = {
+        test_table_s.name: {'Keys': [{'p': p}]}}, **kwargs)
+    assert 'ConsumedCapacity' not in response
+    response = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'a': 'hi'}}}]}, **kwargs)
+    assert 'ConsumedCapacity' not in response
