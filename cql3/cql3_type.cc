@@ -60,10 +60,36 @@ cql3_type::kind_enum_set::prepared cql3_type::get_kind() const {
     return kind_enum_set::prepare(get_cql3_kind(*_type));
 }
 
+unsigned cql3_type::nesting(const abstract_type& t) {
+    struct visitor {
+        unsigned operator()(const abstract_type&) { return 0; }
+        unsigned operator()(const reversed_type_impl& r) { return nesting(*r.underlying_type()); }
+        unsigned operator()(const listlike_collection_type_impl& l) { return 1 + nesting(*l.get_elements_type()); }
+        unsigned operator()(const map_type_impl& m) { return 1 + std::max(nesting(*m.get_keys_type()), nesting(*m.get_values_type())); }
+        unsigned operator()(const vector_type_impl& v) { return 1 + nesting(*v.get_elements_type()); }
+        unsigned operator()(const tuple_type_impl& t) {
+            unsigned n = 0;
+            for (const auto& dt : t.all_types()) {
+                n = std::max(n, nesting(*dt));
+            }
+            return 1 + n;
+        }
+    };
+    return visit(t, visitor{});
+}
+
+void cql3_type::check_nesting(const abstract_type& t) {
+    if (auto depth = nesting(t); depth > max_nesting) {
+        throw exceptions::invalid_request_exception(format("Type {} is nested too deeply: {} levels, the limit is {}", t.as_cql3_type(), depth, max_nesting));
+    }
+}
+
 cql3_type cql3_type::raw::prepare(data_dictionary::database db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);
-        return prepare_internal(keyspace, ks.metadata()->user_types());
+        auto type = prepare_internal(keyspace, ks.metadata()->user_types());
+        check_nesting(*type.get_type());
+        return type;
     } catch (data_dictionary::no_such_keyspace& nsk) {
         throw exceptions::invalid_request_exception("Unknown keyspace " + keyspace);
     }
