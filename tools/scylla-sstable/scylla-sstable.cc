@@ -2133,6 +2133,8 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
             sstable_schema->id(),
             schema->id());
 
+    // The table already exists, so client limits must not reject its CREATE TABLE.
+    env.db_config().max_type_nesting.set(std::numeric_limits<uint32_t>::max());
     co_await env.execute_cql(schema_create_statement);
 
     co_return std::ref(db.find_column_family(keyspace_name, table_name));

@@ -13,6 +13,7 @@
 #include "types/types.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include <iosfwd>
+#include <limits>
 #include "enum_set.hh"
 
 namespace data_dictionary {
@@ -42,12 +43,18 @@ public:
     // This limitation is acquired from the maximum number of dimensions in OpenSearch.
     static constexpr vector_dimension_t MAX_VECTOR_DIMENSION = 16000;
 
+    // Collections, tuples, vectors and user types each add a nesting level.
+    static unsigned nesting(const abstract_type& t);
+    static void check_nesting(const abstract_type& t, unsigned max_nesting);
+
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
         virtual sstring to_string() const = 0;
     protected:
         bool _frozen = false;
+        // Set by the parser from the dialect. Types built by code are not limited.
+        unsigned _max_nesting = std::numeric_limits<unsigned>::max();
     public:
         virtual ~raw() {}
         virtual bool supports_freezing() const = 0;
@@ -59,6 +66,7 @@ public:
         virtual bool references_user_type(const sstring&) const;
         virtual std::optional<sstring> keyspace() const;
         virtual void freeze();
+        void set_max_nesting(unsigned max_nesting) { _max_nesting = max_nesting; }
         virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata&) = 0;
         virtual cql3_type prepare(data_dictionary::database db, const sstring& keyspace);
         static shared_ptr<raw> from(cql3_type type);

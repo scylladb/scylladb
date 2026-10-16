@@ -10,7 +10,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest, SyntaxException
-from .util import new_function, new_test_table, new_type
+from .util import config_value_context, new_function, new_test_table, new_type
 
 def frozen_lists(depth, inner='int'):
     """Build frozen<list<frozen<list<... inner ...>>>>, nested depth levels"""
@@ -29,7 +29,6 @@ def test_type_nesting_at_limit(cql, test_keyspace):
 
 # With a single frozen<>, 33 lists stay within the parser's own limit, so the
 # check after parsing is the one that rejects this type.
-@pytest.mark.xfail(reason="SCYLLADB-5432: types are not limited in nesting")
 def test_type_nesting_over_limit(cql, test_keyspace, scylla_only):
     lists_33 = 'frozen<' + 'list<' * 33 + 'int' + '>' * 33 + '>'
     with pytest.raises(InvalidRequest, match='nested too deeply: 33 levels, the limit is 32'):
@@ -38,10 +37,6 @@ def test_type_nesting_over_limit(cql, test_keyspace, scylla_only):
 
 # A type nested this deep overflows the parser's stack unless the parser stops
 # early.
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-5432",
-    reason="the parser overflows the stack and crashes the node",
-)
 def test_type_nesting_huge(cql, test_keyspace, scylla_only):
     lists_100000 = 'list<' * 100000 + 'int' + '>' * 100000
     with pytest.raises(SyntaxException, match='type nested too deeply'):
@@ -50,7 +45,6 @@ def test_type_nesting_huge(cql, test_keyspace, scylla_only):
 
 # A user type adds a level, so a chain of user types can nest deeply without
 # any deep statement. The limit must cover the whole type, user types included.
-@pytest.mark.xfail(reason="SCYLLADB-5432: types are not limited in nesting")
 def test_user_type_nesting_limit(cql, test_keyspace, scylla_only):
     too_deep = 'nested too deeply: 33 levels, the limit is 32'
     with new_type(cql, test_keyspace, '(a int)') as t:
@@ -71,7 +65,6 @@ def test_user_type_nesting_limit(cql, test_keyspace, scylla_only):
 # An ALTER TYPE that makes a type deeper must keep it within the limit, and also
 # every type, table and function that contains it, since they get deeper with it.
 # Otherwise a chain of user types altered one by one could nest without limit.
-@pytest.mark.xfail(reason="SCYLLADB-5432: types are not limited in nesting")
 def test_alter_type_nesting_limit(cql, test_keyspace, scylla_only):
     # A frozen<list<int>> field gives t a second level, so everything that
     # contains t gets one level deeper.
@@ -133,3 +126,16 @@ def test_alter_type_at_limit(cql, test_keyspace):
             cql.execute(f'ALTER TYPE {t} ADD b int')
             cql.execute(f'ALTER TYPE {u} ADD b int')
             cql.execute(f'ALTER TYPE {u} RENAME a TO c')
+
+# The limit is the max_type_nesting option, so a node can accept a deeper type,
+# for example to recreate a schema created before the limit.
+def test_type_nesting_limit_option(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, 'max_type_nesting', '33'):
+        # Every level has its own frozen<>, so the parser's limit must follow too.
+        lists_33 = frozen_lists(33)
+        with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, v {lists_33}'):
+            pass
+        lists_34 = 'frozen<' + 'list<' * 34 + 'int' + '>' * 34 + '>'
+        with pytest.raises(InvalidRequest, match='nested too deeply: 34 levels, the limit is 33'):
+            with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, v {lists_34}'):
+                pass
