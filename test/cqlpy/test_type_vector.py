@@ -6,7 +6,7 @@
 # Tests involving the "vector" column type.
 
 import pytest
-from .util import new_test_table, is_scylla
+from .util import new_test_table, is_scylla, unique_name
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 
@@ -67,3 +67,22 @@ def test_vector_dimension_non_integer_is_rejected(cql, test_keyspace, invalid_di
     with pytest.raises(SyntaxException):
         with new_test_table(cql, test_keyspace, f"pk int primary key, v vector<float, {invalid_dimension}>"):
             pass
+
+# When a column is dropped, its type is recorded with its user types replaced
+# by tuples, so the user type can later be dropped. Reproduces SCYLLADB-5423,
+# where a dropped vector of a user type was recorded with the user type's
+# name. So after the user type was dropped, the next schema change of the
+# table failed to parse the recorded type - which stopped group 0, so every
+# later schema change, of any table, failed too.
+def test_drop_type_used_by_dropped_vector_column(cql, test_keyspace):
+    udt = f'{test_keyspace}.{unique_name()}'
+    cql.execute(f'CREATE TYPE {udt} (a int, b text)')
+    try:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v vector<frozen<{udt}>, 2>') as table:
+            cql.execute(f'ALTER TABLE {table} DROP v')
+            cql.execute(f'DROP TYPE {udt}')
+            cql.execute(f'ALTER TABLE {table} ADD z int')
+            cql.execute(f'INSERT INTO {table} (p, z) VALUES (1, 2)')
+            assert list(cql.execute(f'SELECT p, z FROM {table}')) == [(1, 2)]
+    finally:
+        cql.execute(f'DROP TYPE IF EXISTS {udt}')
