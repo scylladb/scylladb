@@ -16,6 +16,7 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "cql3/query_processor.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_cleanup_test)
 
@@ -223,6 +224,48 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
         step_cf("cf2");
         BOOST_REQUIRE_EQUAL(get_num_records(), 1);
     }, cfg);
+}
+
+// Test that system_keyspace::drop_all_commitlog_cleanup_records() deletes all records,
+// including those of shards which don't exist in the current boot cycle, and that it
+// issues one DELETE per partition (shard), not one per record.
+// Reproduces SCYLLADB-3522.
+SEASTAR_TEST_CASE(test_drop_all_commitlog_cleanup_records) {
+    BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto tableid = table_id(utils::UUID_gen::get_time_UUID());
+
+        // Shards >= smp::count model a previous boot cycle with more shards.
+        const std::vector<unsigned> shards = {0, 1, 7, 42};
+        const int records_per_shard = 1000;
+        for (auto shard : shards) {
+            for (int i = 0; i < records_per_shard; ++i) {
+                auto tr = dht::token_range::make({dht::token::from_int64(i), false}, {dht::token::from_int64(i + 1), true});
+                sys_ks.save_commitlog_cleanup_record(tableid, tr, db::replay_position(shard, 1, i)).get();
+            }
+        }
+
+        auto get_num_records = [&] {
+            auto res = e.execute_cql("select * from system.commitlog_cleanups;").get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+        BOOST_REQUIRE_EQUAL(get_num_records(), shards.size() * records_per_shard);
+
+        auto get_num_system_deletes = [&] {
+            return e.local_qp().get_cql_stats().query_cnt(cql3::source_selector::INTERNAL, cql3::ks_selector::SYSTEM,
+                    cql3::cond_selector::NO_CONDITIONS, cql3::statements::statement_type::DELETE);
+        };
+        const auto deletes_before = get_num_system_deletes();
+
+        sys_ks.drop_all_commitlog_cleanup_records().get();
+
+        // One DELETE per shard (partition), not one per record.
+        BOOST_REQUIRE_EQUAL(get_num_system_deletes() - deletes_before, shards.size());
+        BOOST_REQUIRE_EQUAL(get_num_records(), 0);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
