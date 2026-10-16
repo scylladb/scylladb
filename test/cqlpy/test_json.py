@@ -11,9 +11,9 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int, new_test_table
+from .util import unique_name, unique_key_int, new_test_table, is_scylla
 
-from cassandra.protocol import FunctionFailure
+from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
 
 import pytest
@@ -622,6 +622,31 @@ def test_select_json_with_alias(cql, table1):
     }
     for input, output in input_and_output.items():
         assert list(cql.execute(f"SELECT JSON {input} from {table1} where p = {p}")) == [(EquivalentJson(output),)]
+
+# Unlike a regular INSERT, INSERT JSON needs the clustering key even when it
+# sets only static columns. Cassandra rejects it too, see SCYLLADB-4466.
+def test_insert_json_static_only_requires_clustering_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, s int static, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, s) VALUES ({p}, 7)")
+        assert list(cql.execute(f"SELECT p, c, s FROM {table} WHERE p = {p}")) == [(p, None, 7)]
+        scylla = is_scylla(cql)
+        json_value = f'{{"p": {p}, "s": 8}}'
+        for suffix in ["", " DEFAULT UNSET", " IF NOT EXISTS"]:
+            if scylla:
+                missing_c = "Missing mandatory PRIMARY KEY part c"
+            elif suffix == " DEFAULT UNSET":
+                missing_c = "Invalid unset value for column c"
+            else:
+                cassandra_up_to_5 = "Invalid null value in condition for column c"
+                cassandra_6 = "Invalid null value for column c"
+                missing_c = f"{cassandra_up_to_5}|{cassandra_6}"
+            with pytest.raises(InvalidRequest, match=missing_c):
+                cql.execute(f"INSERT INTO {table} JSON '{json_value}'{suffix}")
+            stmt = cql.prepare(f"INSERT INTO {table} JSON ?{suffix}")
+            with pytest.raises(InvalidRequest, match=missing_c):
+                cql.execute(stmt, [json_value])
+        assert list(cql.execute(f"SELECT p, c, s FROM {table} WHERE p = {p}")) == [(p, None, 7)]
 
 # The grammar around DISTINCT and JSON is hairy. Test the combination.
 def test_select_distinct_json(cql, test_keyspace):
