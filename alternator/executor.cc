@@ -2090,9 +2090,11 @@ enum class gsi_creator { create_table, update_table };
 
 // A GSI carries its own ProvisionedThroughput, separate from the base table's.
 // DynamoDB requires it when, and only when, the table is PROVISIONED, and
-// always wants both capacities in it. Verify that, and store the throughput in
-// the view's tags the way the base table's is stored, so that DescribeTable can
-// report it back. Like the base table's, the values themselves are not enforced.
+// always wants both capacities in it, each at least 1. Verify that - except
+// for zero capacities, which Alternator deliberately accepts, unlike DynamoDB -
+// and store the throughput in the view's tags the way the base table's is
+// stored, so that DescribeTable can report it back. Like the base table's, the
+// values themselves are not enforced.
 static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstring>& tags,
         const rjson::value& index, std::string_view index_name, bool table_provisioned,
         gsi_creator creator) {
@@ -2108,13 +2110,19 @@ static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstr
             throw api_error::validation(fmt::format("One or more parameter values were invalid: "
                 "Both ReadCapacityUnits and WriteCapacityUnits must be specified for index: {}", index_name));
         }
-        if (*rcu < 1 || *wcu < 1) {
+        // Incompatible with DynamoDB on purpose: zeros are accepted, as
+        // Alternator only remembers the values, and Scylla Migrator copies the
+        // zeros DynamoDB reports for a PAY_PER_REQUEST table's GSIs into the
+        // GSIs of a PAY_PER_REQUEST table it creates.
+        if (*rcu < 0 || *wcu < 0) {
             throw api_error::validation(fmt::format("One or more parameter values were invalid: "
-                "ReadCapacityUnits and WriteCapacityUnits must be at least 1 for index: {}", index_name));
+                "ReadCapacityUnits and WriteCapacityUnits must not be negative for index: {}", index_name));
         }
     }
     if (!table_provisioned) {
-        if (throughput) {
+        // Also incompatible on purpose: zeros, which DynamoDB refuses here as
+        // below 1, are taken as no throughput at all.
+        if (throughput && (*rcu != 0 || *wcu != 0)) {
             throw api_error::validation(creator == gsi_creator::create_table
                 ? fmt::format("One or more parameter values were invalid: ProvisionedThroughput should not be "
                     "specified for index: {} when BillingMode is PAY_PER_REQUEST", index_name)

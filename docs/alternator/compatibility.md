@@ -20,7 +20,10 @@ not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
 on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB's
 `BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
 throughput cap. The values provisioned for a table and for each of its GSIs
-are remembered and returned by `DescribeTable`, but are not enforced.
+are remembered and returned by `DescribeTable`, but are not enforced. Unlike
+DynamoDB, which requires at least 1, Alternator also accepts zero capacities
+for a GSI, as DynamoDB reports them for the GSIs of a `PAY_PER_REQUEST` table,
+and on a `PAY_PER_REQUEST` table takes them as no throughput at all.
 
 ## Load balancing
 
