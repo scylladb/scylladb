@@ -384,6 +384,7 @@ enum class tablet_transition_stage {
     repair,
     end_repair,
     restore,
+    tablet_compaction,
 
     start_migration = allow_write_both_read_old,
     sc_add_nonvoter = write_both_read_old,
@@ -414,6 +415,9 @@ enum class tablet_transition_kind {
 
     // Download sstables for tablet
     restore,
+
+    // Major compaction of the tablet replicas, on behalf of a cluster-wide major compaction
+    tablet_compaction,
 };
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
@@ -478,6 +482,7 @@ tablet_transition_info migration_to_transition_info(const tablet_info&, const ta
 constexpr int tablet_migration_stream_weight_default = 1;
 constexpr int tablet_migration_stream_weight_repair = 2;
 constexpr int tablet_migration_stream_weight_restore = 2;
+constexpr int tablet_migration_stream_weight_tablet_compaction = 2;
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;

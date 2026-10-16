@@ -2089,6 +2089,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         background_action_holder repair;
         background_action_holder repair_update_compaction_ctrl;
         background_action_holder restore;
+        background_action_holder tablet_compaction;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Driving the tablet's raft group to the configuration a stage implies, for
         // the stages of a strongly consistent migration which change it. Per tablet
@@ -3219,6 +3220,51 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
                     break;
+                case locator::tablet_transition_stage::tablet_compaction: {
+                    // A barrier before compacting, so that no replica still runs the compaction of
+                    // an earlier transition of the tablet, which was canceled: the replica's
+                    // operation would otherwise be joined by the new one, which would inherit its
+                    // failure, and the old RPC could run under the new transition.
+                    if (!do_barrier()) {
+                        break;
+                    }
+                    // A failure isn't retried: the transition ends, and the tablet is reported as failed.
+                    if (action_failed(tablet_state.tablet_compaction)) {
+                        rtlogger.warn("Compaction of tablet {} failed: {}", gid, tablet_state.tablet_compaction->get_exception());
+                        _tablets.erase(gid);
+                        get_mutation_builder().del_transition(last_token);
+                        break;
+                    }
+                    if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction", [this, gid, gids, &tmap] () -> future<> {
+                        auto replicas = tmap.get_tablet_info(gid.tablet).replicas;
+                        rtlogger.info("Initiating compaction of tablet {} on {}", gid, replicas);
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids] (locator::tablet_replica r) -> future<> {
+                            auto dst = raft::server_id(r.host.uuid());
+                            if (is_excluded(dst)) {
+                                co_return;
+                            }
+                            // A replica which is down can't compact the tablet. Fail the tablet rather
+                            // than wait for the node, as the RPC has no timeout.
+                            if (!_gossiper.is_alive(r.host)) {
+                                throw std::runtime_error(fmt::format("Cannot compact tablet {} because host {} is down", gid, r.host));
+                            }
+                            // The tablets of a co-location group are compacted one at a time, to
+                            // bound the space overhead to the size of one tablet.
+                            for (auto& g : gids) {
+                                // Nothing creates the transition yet. The cluster-wide compaction request
+                                // which is going to create it is going to supply the compaction type and options.
+                                co_await ser::storage_service_rpc_verbs::send_tablet_compaction(&_messaging, r.host, _as, dst, g,
+                                        sstring("major"), std::unordered_map<sstring, sstring>{});
+                            }
+                            rtlogger.debug("Tablet {} compacted on {}", gid, r.host);
+                        });
+                    })) {
+                        rtlogger.info("Finished compaction of tablet {}", gid);
+                        _tablets.erase(gid);
+                        get_mutation_builder().del_transition(last_token);
+                    }
+                }
+                    break;
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
                         if (tablet_state.session_id.uuid().is_null()) {
@@ -3408,6 +3454,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             case locator::tablet_transition_kind::repair:
                 [[fallthrough]];
             case locator::tablet_transition_kind::restore:
+                [[fallthrough]];
+            case locator::tablet_transition_kind::tablet_compaction:
                 [[fallthrough]];
             case locator::tablet_transition_kind::intranode_migration:
                 break;
