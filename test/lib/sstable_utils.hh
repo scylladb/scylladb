@@ -113,6 +113,12 @@ public:
         return _sst->_recognized_components;
     }
 
+    void set_largest_partition_size(uint64_t size) {
+        scylla_metadata::large_data_stats stats;
+        stats.map[large_data_type::partition_size] = large_data_stats_entry{ .max_value = size, .threshold = 0, .above_threshold = 0 };
+        _sst->_large_data_stats = std::move(stats);
+    }
+
     void set_data_file_size(uint64_t size) {
         _sst->_data_file_size = size;
     }

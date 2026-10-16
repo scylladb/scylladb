@@ -38,32 +38,30 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
         co_return candidate;
     }
 
-    if (!table_s.tombstone_gc_enabled()) {
-        co_return compaction_descriptor();
-    }
-
-    // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
-    // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
-    // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
-    // theoretically contain oldest non-overlapping data.
-    auto compaction_time = gc_clock::now();
-    for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
-        auto& sstables = manifest.get_level(level);
-        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-        std::erase_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
-            return !worth_dropping_tombstones(sst, compaction_time, table_s);
-        });
-        if (sstables.empty()) {
-            continue;
+    if (table_s.tombstone_gc_enabled()) {
+        // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
+        // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
+        // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
+        // theoretically contain oldest non-overlapping data.
+        auto compaction_time = gc_clock::now();
+        for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
+            auto& sstables = manifest.get_level(level);
+            // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+            std::erase_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
+                return !worth_dropping_tombstones(sst, compaction_time, table_s);
+            });
+            if (sstables.empty()) {
+                continue;
+            }
+            auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
+                auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+                auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+                return ratio_i < ratio_j;
+            });
+            co_return compaction_descriptor({ sst }, sst->get_sstable_level());
         }
-        auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
-            auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
-            auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
-            return ratio_i < ratio_j;
-        });
-        co_return compaction_descriptor({ sst }, sst->get_sstable_level());
     }
-    co_return compaction_descriptor();
+    co_return manifest.get_oversized_l0_rewrite();
 }
 
 compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
@@ -204,7 +202,22 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_ssta
 
     if (level_info[0].size() > offstrategy_threshold) {
         size_tiered_compaction_strategy stcs(_stcs_options);
-        return stcs.get_reshaping_job(std::move(level_info[0]), schema, cfg);
+        compaction_descriptor desc;
+        if (mode == reshape_mode::strict) {
+            desc = stcs.get_reshaping_job(std::move(level_info[0]), schema, cfg);
+            if (!desc.sstables.empty()) {
+                desc.level = ideal_level_for_input(desc.sstables, max_sstable_size_in_bytes);
+            }
+        } else {
+            // On boot the input is the data already on disk and the node is offline: output
+            // placed in a populated level would make that level be compacted before the node
+            // comes online. The output is fed back in, so its fragments must not be tiered again.
+            desc = stcs.get_reshaping_job(leveled_manifest::single_fragment_runs(level_info[0]), schema, cfg);
+        }
+        if (!desc.sstables.empty()) {
+            desc.max_sstable_bytes = max_sstable_size_in_bytes;
+            return desc;
+        }
     }
 
     for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
