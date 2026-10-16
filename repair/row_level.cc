@@ -281,7 +281,7 @@ static bool is_table_migrating(const replica::database& db, const schema& s) {
 }
 
 repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with_hash, const mutation_fragment& mf) {
-    xx_hasher h(_seed);
+    buffered_xx_hasher h(_seed);
     feed_hash(h, mf, *_schema);
     feed_hash(h, dk_with_hash.hash.hash);
     return repair_hash(h.finalize_uint64());

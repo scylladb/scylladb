@@ -32,6 +32,28 @@ BOOST_AUTO_TEST_CASE(xx_hasher_sanity_check) {
     BOOST_CHECK_EQUAL(hash, expected);
 }
 
+BOOST_AUTO_TEST_CASE(buffered_xx_hasher_matches_xx_hasher) {
+    auto data = tests::random::get_bytes(50000);
+    auto seed = tests::random::get_int<uint64_t>();
+    // Tiny chunks mimic per-field feeding; large ones cross and exceed the internal buffer.
+    for (size_t max_chunk : {size_t(16), size_t(9000)}) {
+        xx_hasher plain(seed);
+        buffered_xx_hasher buffered(seed);
+        // Empty values may arrive as a null pointer.
+        plain.update(nullptr, 0);
+        buffered.update(nullptr, 0);
+        size_t pos = 0;
+        while (pos < data.size()) {
+            auto n = std::min(data.size() - pos, tests::random::get_int<size_t>(1, max_chunk));
+            auto p = reinterpret_cast<const char*>(data.data() + pos);
+            plain.update(p, n);
+            buffered.update(p, n);
+            pos += n;
+        }
+        BOOST_REQUIRE_EQUAL(plain.finalize_uint64(), buffered.finalize_uint64());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(md5_hasher_sanity_check) {
     md5_hasher hasher;
     hasher.update(reinterpret_cast<const char*>(std::data(text_part1)), std::size(text_part1));
