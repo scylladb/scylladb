@@ -328,23 +328,36 @@ future<> controller::do_stop_server() {
     }
 
     std::exception_ptr ex;
+    // Runs a step of the stop even if an earlier one failed, and keeps the first error.
+    // Takes a function rather than a future, so that it also catches an exception thrown
+    // before the step returns its future.
+    auto run_step = [&ex] (auto step) -> future<> {
+        try {
+            co_await step();
+        } catch (...) {
+            if (!ex) {
+                ex = std::current_exception();
+            }
+        }
+    };
 
-    try {
-        co_await set_cql_ready(false);
-    } catch (...) {
-        ex = std::current_exception();
-    }
+    co_await run_step([this] { return set_cql_ready(false); });
 
     auto& server = *cserver;
 
-    try {
-        co_await unsubscribe_server(server);
-        co_await server.invoke_on_all([] (auto& s) { return s.shutdown(); });
-    } catch (...) {
-        if (!ex) {
-            ex = std::current_exception();
-        }
-    }
+    co_await run_step([&] { return unsubscribe_server(server); });
+
+    // A request bounced to another shard runs with the abort source of that
+    // shard's server, while its connection is drained by the shard it came
+    // from. Abort only once all shards are done with their connections, or a
+    // shard with no busy connections of its own aborts requests that other
+    // shards are still waiting for.
+    //
+    // invoke_on_all() fails only after all shards are done, so abort even if
+    // some shard failed to shut its connections down: the requests of the
+    // other shards shouldn't wait for the stop() below.
+    co_await run_step([&] { return server.invoke_on_all([] (auto& s) { return s.shutdown_connections(); }); });
+    co_await run_step([&] { return server.invoke_on_all([] (auto& s) { s.abort_requests(); }); });
 
     (void)server.stop().finally([s = std::move(cserver), h = _bg_stops.hold()] {});
 
