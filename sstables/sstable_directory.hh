@@ -181,6 +181,7 @@ public:
 
     class restore_components_lister final : public components_lister {
         std::vector<sstring> _toc_filenames;
+        const bool _unified_layout;
     public:
         restore_components_lister(const data_dictionary::storage_options::value_type& options, std::vector<sstring> toc_filenames);
         virtual future<> scan(sstable_directory& directory) override;

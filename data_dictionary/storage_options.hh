@@ -31,14 +31,14 @@ struct storage_options {
     };
     // How the component objects of an sstable are named under `location`.
     //
-    // The two layouts are not interchangeable: a `live` component name carries
+    // The two layouts are not interchangeable: a `unified` component name carries
     // no descriptor, so the version and format have to come from elsewhere,
     // while a `foreign` one carries them and can be parsed.  Which one applies
     // is decided once, where the options are built, and is fixed for the
     // lifetime of the storage object.
     enum class object_storage_layout {
         // {prefix}/{sstable_id}/{component}, as written by a live table.
-        live,
+        unified,
         // The layout of an externally supplied prefix, as used by backup and
         // restore: the component names carry the version, generation and
         // format.
@@ -52,7 +52,7 @@ struct storage_options {
         seastar::abort_source* abort_source = nullptr;
 
         std::string type;
-        object_storage_layout layout = object_storage_layout::live;
+        object_storage_layout layout = object_storage_layout::unified;
 
         std::map<sstring, sstring> to_map() const;
         std::string_view name() const;
