@@ -290,6 +290,11 @@ std::vector<std::ranges::range_value_t<Range>> compaction_manager::get_candidate
     return candidates;
 }
 
+future<> compaction_manager::quarantine_sstable_and_update_statistic(sstables::sstable& sst) {
+    co_await sst.change_state(sstables::sstable_state::quarantine);
+    _stats.automatic_sstable_quarantines++;
+}
+
 template <std::ranges::range Range>
 requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
 void compaction_manager::register_compacting_sstables(const Range& sstables) {
@@ -1219,6 +1224,8 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
                        sm::description("Holds the number of encountered validation errors.")).set_skip_when_empty(),
+        sm::make_counter("automatic_sstable_quarantines", [this] { return _stats.automatic_sstable_quarantines; },
+                       sm::description("Holds the number of times an sstable was automatically quarantined")),
     });
 }
 
@@ -1553,7 +1560,7 @@ private:
     future<> quarantine_sstable(const sstables::shared_sstable& sst) {
         try {
             utils::get_local_injector().inject("regular_compaction_quarantine_fail", [] { throw std::runtime_error("quarantine failure injection"); });
-            co_await sst->change_state(sstables::sstable_state::quarantine);
+            co_await _cm.quarantine_sstable_and_update_statistic(*sst);
         } catch (const storage_io_error&) {
             throw;
         } catch (...) {

@@ -74,6 +74,7 @@ public:
         int64_t completed_tasks = 0;
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
+        uint64_t automatic_sstable_quarantines = 0;
     };
     using scheduling_group = backlog_controller::scheduling_group;
     struct config {
@@ -218,6 +219,10 @@ private:
     template <std::ranges::range Range>
     requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable> || std::convertible_to<std::ranges::range_value_t<Range>, sstables::frozen_sstable_run>
     std::vector<std::ranges::range_value_t<Range>> get_candidates(compaction_group_view& t, const Range& sstables) const;
+
+    // Increments the `automatic_sstable_quarantines` statistic on success. Should not be called
+    // by quarantine resulting from a manually triggered operation.
+    future<> quarantine_sstable_and_update_statistic(sstables::sstable& sst);
 
     template <std::ranges::range Range>
     requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
