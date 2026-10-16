@@ -12,6 +12,8 @@
 #include "cql3/functions/native_scalar_function.hh"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <chrono>
+#include <cmath>
+#include <limits>
 
 namespace cql3 {
 namespace functions {
@@ -70,6 +72,27 @@ template<typename ToType, typename FromType>
 static data_value castas_fctn_simple(data_value from) {
     auto val_from = value_cast<FromType>(from);
     return static_cast<ToType>(val_from);
+}
+
+// Converting a floating-point value outside the target's range to an integer
+// type is undefined behaviour in C++.  Do what Cassandra (Java) does instead:
+// convert to a long for bigint and to an int otherwise, saturating at that
+// type's limits and taking NaN as 0, then wrap around into the target type.
+template<typename ToType, typename FromType>
+static data_value castas_fctn_from_float_to_integer(data_value from) {
+    using wide = std::conditional_t<sizeof(ToType) == sizeof(int64_t), int64_t, int32_t>;
+    auto val_from = value_cast<FromType>(from);
+    wide val;
+    if (std::isnan(val_from)) {
+        val = 0;
+    } else if (val_from >= static_cast<FromType>(std::numeric_limits<wide>::max())) {
+        val = std::numeric_limits<wide>::max();
+    } else if (val_from <= static_cast<FromType>(std::numeric_limits<wide>::min())) {
+        val = std::numeric_limits<wide>::min();
+    } else {
+        val = static_cast<wide>(val_from);
+    }
+    return static_cast<ToType>(val);
 }
 
 template<typename ToType>
@@ -196,9 +219,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::byte, kind::long_kind):
         return castas_fctn_simple<int8_t, int64_t>;
     case cast_switch_case_val(kind::byte, kind::float_kind):
-        return castas_fctn_simple<int8_t, float>;
+        return castas_fctn_from_float_to_integer<int8_t, float>;
     case cast_switch_case_val(kind::byte, kind::double_kind):
-        return castas_fctn_simple<int8_t, double>;
+        return castas_fctn_from_float_to_integer<int8_t, double>;
     case cast_switch_case_val(kind::byte, kind::varint):
         return castas_fctn_from_varint_to_integer<int8_t>;
     case cast_switch_case_val(kind::byte, kind::decimal):
@@ -211,9 +234,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::short_kind, kind::long_kind):
         return castas_fctn_simple<int16_t, int64_t>;
     case cast_switch_case_val(kind::short_kind, kind::float_kind):
-        return castas_fctn_simple<int16_t, float>;
+        return castas_fctn_from_float_to_integer<int16_t, float>;
     case cast_switch_case_val(kind::short_kind, kind::double_kind):
-        return castas_fctn_simple<int16_t, double>;
+        return castas_fctn_from_float_to_integer<int16_t, double>;
     case cast_switch_case_val(kind::short_kind, kind::varint):
         return castas_fctn_from_varint_to_integer<int16_t>;
     case cast_switch_case_val(kind::short_kind, kind::decimal):
@@ -226,9 +249,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::int32, kind::long_kind):
         return castas_fctn_simple<int32_t, int64_t>;
     case cast_switch_case_val(kind::int32, kind::float_kind):
-        return castas_fctn_simple<int32_t, float>;
+        return castas_fctn_from_float_to_integer<int32_t, float>;
     case cast_switch_case_val(kind::int32, kind::double_kind):
-        return castas_fctn_simple<int32_t, double>;
+        return castas_fctn_from_float_to_integer<int32_t, double>;
     case cast_switch_case_val(kind::int32, kind::varint):
         return castas_fctn_from_varint_to_integer<int32_t>;
     case cast_switch_case_val(kind::int32, kind::decimal):
@@ -241,9 +264,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::long_kind, kind::int32):
         return castas_fctn_simple<int64_t, int32_t>;
     case cast_switch_case_val(kind::long_kind, kind::float_kind):
-        return castas_fctn_simple<int64_t, float>;
+        return castas_fctn_from_float_to_integer<int64_t, float>;
     case cast_switch_case_val(kind::long_kind, kind::double_kind):
-        return castas_fctn_simple<int64_t, double>;
+        return castas_fctn_from_float_to_integer<int64_t, double>;
     case cast_switch_case_val(kind::long_kind, kind::varint):
         return castas_fctn_from_varint_to_integer<int64_t>;
     case cast_switch_case_val(kind::long_kind, kind::decimal):
