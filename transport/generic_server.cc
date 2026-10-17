@@ -16,6 +16,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <set>
 #include <utility>
 
 namespace generic_server {
@@ -114,6 +115,12 @@ connection::connection(server& server, connected_socket&& fd, named_semaphore& s
 
 connection::~connection()
 {
+}
+
+const connection::ssl_info* connection::intern_ssl_info(sstring protocol, sstring cipher_suite) {
+    // Never shrinks; bounded by the protocol x cipher combinations libssl can negotiate.
+    static thread_local std::set<ssl_info> interned;
+    return &*interned.emplace(std::move(protocol), std::move(cipher_suite)).first;
 }
 
 connection::execute_under_tenant_type
@@ -408,15 +415,16 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 conn->shutdown();
                 continue;
             }
-            conn->_ssl_enabled = is_tls;
+            if (is_tls) {
+                conn->_ssl_info = connection::intern_ssl_info({}, {});
+            }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn, is_tls] {
                 return (is_tls
                     ? tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
                             return tls::get_cipher_suite(conn->_fd).then(
                                 [conn, protocol](const sstring& cipher_suite) mutable {
-                                    conn->_ssl_protocol = protocol;
-                                    conn->_ssl_cipher_suite = cipher_suite;
+                                    conn->_ssl_info = connection::intern_ssl_info(protocol, cipher_suite);
                                     return make_ready_future<bool>(true);
                                 });
                         }).handle_exception([conn](std::exception_ptr ep) {
