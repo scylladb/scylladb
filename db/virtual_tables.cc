@@ -12,6 +12,7 @@
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/reactor.hh>
 
@@ -45,6 +46,7 @@
 #include "types/map.hh"
 #include "types/types.hh"
 #include "utils/build_id.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
@@ -2238,6 +2240,62 @@ static future<> add_virtual_table(
     cf.set_virtual_writer([&vt = *vt] (const frozen_mutation& m) { return vt.apply(m); });
 }
 
+// Replace old physical system.large_* tables with virtual ones in memory.
+// Must run on shard 0 (uses cross-shard operations).  Returns the replaced
+// tables, whose storage is dropped by drop_legacy_large_data_tables().
+static future<std::vector<replica::global_table_ptr>> replace_legacy_large_data_tables(
+        sharded<replica::database>& dist_db,
+        sharded<db::system_keyspace>& sys_ks,
+        sharded<service::storage_service>& dist_ss) {
+    // Drop old physical system.large_* tables.  Their data is now
+    // served from SSTable metadata via virtual tables.
+    // TODO: In a follow-up, read existing large data entries from
+    // the old tables and populate per-sstable LargeDataRecords
+    // metadata via component_rewrite before dropping.
+    std::vector<replica::global_table_ptr> legacy_tables;
+    {
+        auto locks = co_await replica::database::lock_tables_metadata(dist_db);
+        std::array table_names{
+                db::system_keyspace::LARGE_PARTITIONS,
+                db::system_keyspace::LARGE_ROWS,
+                db::system_keyspace::LARGE_CELLS};
+        co_await coroutine::parallel_for_each(table_names, [&] (const char* table_name) -> future<> {
+            if (!dist_db.local().has_schema(db::system_keyspace::NAME, table_name)) {
+                // Already dropped (e.g. restart after feature was enabled).
+                co_return;
+            }
+            auto uuid = dist_db.local().find_uuid(db::system_keyspace::NAME, table_name);
+            auto table_shards = co_await replica::database::prepare_drop_table_on_all_shards(dist_db, uuid);
+            co_await dist_db.invoke_on_all([&] (replica::database& db) {
+                return db.drop_table(dist_db, db::system_keyspace::NAME, table_name, false, table_shards);
+            });
+            legacy_tables.push_back(std::move(table_shards));
+        });
+    }
+
+    // Add virtual tables on all shards.
+    co_await smp::invoke_on_all([&dist_db, &sys_ks, &dist_ss] () -> future<> {
+        co_await add_virtual_table(sys_ks, dist_db, dist_ss,
+                std::make_unique<large_partitions_virtual_table>(dist_db));
+        co_await add_virtual_table(sys_ks, dist_db, dist_ss,
+                std::make_unique<large_rows_virtual_table>(dist_db));
+        co_await add_virtual_table(sys_ks, dist_db, dist_ss,
+                std::make_unique<large_cells_virtual_table>(dist_db));
+    });
+    co_return legacy_tables;
+}
+
+static future<> drop_legacy_large_data_tables(
+        sharded<replica::database>& dist_db,
+        sharded<db::system_keyspace>& sys_ks,
+        std::vector<replica::global_table_ptr> legacy_tables) {
+    co_await utils::get_local_injector().inject("pause_legacy_large_data_tables_drop",
+            utils::wait_for_message(std::chrono::minutes(5)));
+    co_await coroutine::parallel_for_each(legacy_tables, [&] (replica::global_table_ptr& table_shards) {
+        return replica::database::cleanup_drop_table_on_all_shards(dist_db, sys_ks, false, table_shards);
+    });
+}
+
 future<> initialize_virtual_tables(
         sharded<replica::database>& dist_db, sharded<service::storage_service>& dist_ss,
         sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr,
@@ -2276,42 +2334,12 @@ future<> initialize_virtual_tables(
         db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
     });
 
-    // Drop old physical system.large_* tables and register virtual
-    // replacements.  Must run on shard 0 (uses cross-shard operations).
-    auto activate_large_data_virtual_tables = [&dist_db, &sys_ks, &dist_ss] () -> future<> {
-        // Drop old physical system.large_* tables.  Their data is now
-        // served from SSTable metadata via virtual tables.
-        // TODO: In a follow-up, read existing large data entries from
-        // the old tables and populate per-sstable LargeDataRecords
-        // metadata via component_rewrite before dropping.
-        for (auto table_name : {
-                db::system_keyspace::LARGE_PARTITIONS,
-                db::system_keyspace::LARGE_ROWS,
-                db::system_keyspace::LARGE_CELLS}) {
-            try {
-                co_await replica::database::legacy_drop_table_on_all_shards(
-                        dist_db, sys_ks, db::system_keyspace::NAME, table_name, false);
-            } catch (const replica::no_such_column_family&) {
-                // Already dropped (e.g. restart after feature was enabled).
-            }
-        }
-
-        // Add virtual tables on all shards.
-        co_await smp::invoke_on_all([&dist_db, &sys_ks, &dist_ss] () -> future<> {
-            co_await add_virtual_table(sys_ks, dist_db, dist_ss,
-                    std::make_unique<large_partitions_virtual_table>(dist_db));
-            co_await add_virtual_table(sys_ks, dist_db, dist_ss,
-                    std::make_unique<large_rows_virtual_table>(dist_db));
-            co_await add_virtual_table(sys_ks, dist_db, dist_ss,
-                    std::make_unique<large_cells_virtual_table>(dist_db));
-        });
-    };
-
     if (feat.large_data_virtual_tables) {
         // Feature already enabled (e.g. test environment or restart after
         // upgrade).  Activate directly as a coroutine — no seastar::async
         // context needed.
-        co_await activate_large_data_virtual_tables();
+        auto legacy_tables = co_await replace_legacy_large_data_tables(dist_db, sys_ks, dist_ss);
+        co_await drop_legacy_large_data_tables(dist_db, sys_ks, std::move(legacy_tables));
     } else {
         // Feature not yet enabled.  Register a callback that will fire
         // when the feature is enabled during rolling upgrade.  The callback
@@ -2322,9 +2350,19 @@ future<> initialize_virtual_tables(
         // it in a static variable (process lifetime).  This function is
         // only called on shard 0, so the listener fires only on shard 0.
         static gms::feature::listener_registration large_data_vt_listener;
-        large_data_vt_listener = feat.large_data_virtual_tables.when_enabled(
-                [activate_large_data_virtual_tables = std::move(activate_large_data_virtual_tables)] {
-            activate_large_data_virtual_tables().get();
+        large_data_vt_listener = feat.large_data_virtual_tables.when_enabled([&dist_db, &sys_ks, &dist_ss] {
+            auto legacy_tables = replace_legacy_large_data_tables(dist_db, sys_ks, dist_ss).get();
+            // Dropping the storage flushes system tables, so it runs in the
+            // background. The group 0 state machine enables features and
+            // must not wait for it.
+            auto holder = sys_ks.local().async_gate().try_hold();
+            if (!holder) {
+                // Shutting down. The next start drops the tables again.
+                return;
+            }
+            (void)drop_legacy_large_data_tables(dist_db, sys_ks, std::move(legacy_tables)).handle_exception([] (std::exception_ptr ep) {
+                vtlog.warn("Failed to drop the legacy large data tables, the next start drops them again: {}", ep);
+            }).finally([holder = std::move(*holder)] {});
         });
     }
 }
