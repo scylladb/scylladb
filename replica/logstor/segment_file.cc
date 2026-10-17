@@ -27,6 +27,7 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
+#include "exceptions/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
@@ -34,6 +35,28 @@
 #include "utils/lister.hh"
 
 namespace replica::logstor {
+
+segment_geometry::segment_geometry(uint64_t segment_size, uint64_t file_size, uint64_t disk_size)
+    : _segment_size(checked_segment_size(segment_size, file_size, disk_size))
+    , _segments_per_file(file_size / segment_size)
+    , _file_count(disk_size / file_size)
+{}
+
+uint64_t segment_geometry::checked_segment_size(uint64_t segment_size, uint64_t file_size, uint64_t disk_size) {
+    if (segment_size == 0) {
+        throw exceptions::configuration_exception("Segment size must not be zero");
+    }
+    if (file_size == 0) {
+        throw exceptions::configuration_exception("File size must not be zero");
+    }
+    if (segment_size > file_size) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to file size {}", segment_size, file_size));
+    }
+    if (file_size > disk_size) {
+        throw exceptions::configuration_exception(fmt::format("Disk size {} must be greater than or equal to file size {}", disk_size, file_size));
+    }
+    return segment_size;
+}
 
 file_manager::file_manager(file_manager_config cfg)
     : _cfg(std::move(cfg))

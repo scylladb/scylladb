@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string_view>
 #include <vector>
 
@@ -38,6 +39,57 @@ namespace replica::logstor {
 extern seastar::logger logstor_logger;
 
 using file_id_t = uint64_t;
+
+// Where a segment is on disk.
+struct segment_location {
+    file_id_t file_id;
+    // The offset in the file where the segment starts.
+    uint64_t file_offset;
+};
+
+// The layout of the segments in the files of one shard. Each file holds the same count of
+// segments, one after the other, and the segment ids continue from one file to the next. The
+// configured disk size gives the file count and the segment count. Recovery can find more files,
+// from an earlier, larger configuration, and their segments have the same layout.
+class segment_geometry {
+public:
+    // Throws exceptions::configuration_exception when a size is zero, when a segment is larger than
+    // a file, or when a file is larger than the disk size.
+    segment_geometry(uint64_t segment_size, uint64_t file_size, uint64_t disk_size);
+
+    uint64_t segments_per_file() const noexcept { return _segments_per_file; }
+
+    // The file count of the configuration.
+    uint64_t file_count() const noexcept { return _file_count; }
+
+    // The segment count of the configuration. New segment ids are allocated only below it.
+    // Recovery can find more segments, in files from an earlier, larger configuration. Those
+    // segments stay usable until they are freed, and a freed segment at or above this count is
+    // retired and not allocated again.
+    uint64_t segment_count() const noexcept { return _file_count * _segments_per_file; }
+
+    segment_location location_of(log_segment_id segment_id) const noexcept {
+        return segment_location{
+            .file_id = segment_id.value / _segments_per_file,
+            .file_offset = (segment_id.value % _segments_per_file) * _segment_size,
+        };
+    }
+
+    auto segments_in_file(file_id_t file_id) const noexcept {
+        return std::views::iota(file_id * _segments_per_file, (file_id + 1) * _segments_per_file)
+            | std::views::transform([] (uint64_t i) {
+                return log_segment_id(i);
+            });
+    }
+
+private:
+    // Checks the sizes before the members are computed from them, and returns the segment size.
+    static uint64_t checked_segment_size(uint64_t segment_size, uint64_t file_size, uint64_t disk_size);
+
+    const uint64_t _segment_size;
+    const uint64_t _segments_per_file;
+    const uint64_t _file_count;
+};
 
 // The configuration of the segment files of one shard.
 struct file_manager_config {
