@@ -1055,8 +1055,8 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         auto seg_holder = seg->hold();
         auto seg_ref = seg->ref();
 
-        auto reservation = co_await seg->reserve(chunk_size);
-        if (!reservation) {
+        auto appender = co_await seg->begin_append(chunk_size);
+        if (!appender) {
             if (_active_segment == seg) {
                 co_await request_segment_switch();
             }
@@ -1075,7 +1075,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
         const auto chunk = wb.chunk();
-        auto append_result = co_await coroutine::as_future(seg->write_reserved(std::move(*reservation), chunk));
+        auto append_result = co_await coroutine::as_future(std::move(*appender).append(chunk));
         if (append_result.failed()) {
             auto ex = append_result.get_exception();
             ++_stats.write_failures;
