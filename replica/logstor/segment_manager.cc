@@ -2363,6 +2363,12 @@ public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
         , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
+            // The data comes from another node. Bad data fails the stream, and must not reach the
+            // internal error of segment::reserve().
+            if (data.size() % ondisk::block_alignment != 0) [[unlikely]] {
+                return make_exception_future<>(std::runtime_error(fmt::format("Streamed data of {} bytes for {} is not a multiple of the block size {}",
+                        data.size(), segment->id(), ondisk::block_alignment)));
+            }
             return segment->append(data).discard_result();
         })
     {}

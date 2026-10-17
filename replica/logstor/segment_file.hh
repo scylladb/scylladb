@@ -240,10 +240,10 @@ public:
         return _write_gate.hold();
     }
 
-    // Reserves the next region of the segment for an append of this size. The reservation holds
-    // the unit of _append_sem until its write completes. Returns nullopt if the data does not fit
-    // in the segment, or if the segment failed. In both cases nothing is written, and the caller
-    // must write to another segment.
+    // Reserves the next region of the segment for an append of this size, which must be a positive
+    // multiple of ondisk::block_alignment. The reservation holds the unit of _append_sem until its write
+    // completes. Returns nullopt if the data does not fit in the segment, or if the segment failed.
+    // In both cases nothing is written, and the caller must write to another segment.
     future<std::optional<append_reservation>> reserve(size_t size);
 
     // Writes the data to the region of the reservation. The data must have the size of the

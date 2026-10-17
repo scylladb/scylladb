@@ -369,6 +369,13 @@ future<> segment::stop() {
 }
 
 future<std::optional<segment::append_reservation>> segment::reserve(size_t size) {
+    // A chunk starts at a block boundary, and the file takes only aligned direct writes. The file
+    // reports a failed write as a disk error, which isolates the node. An empty reservation is
+    // refused too, because its position is the position of the next append.
+    if (size == 0 || size % ondisk::block_alignment != 0) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to reserve {} bytes in {}, which is not a positive multiple of the block size {}",
+                size, _id, ondisk::block_alignment));
+    }
     if (_failed) [[unlikely]] {
         co_return std::nullopt;
     }
