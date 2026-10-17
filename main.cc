@@ -1625,7 +1625,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, {}, "schema").get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -2236,6 +2236,36 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // each tablet has a valid shard replica, we check this assumption here, and refuse startup if violated.
             if (!locator::check_tablet_replica_shards(ss.local().get_token_metadata_ptr()->tablets(), host_id).get()) {
                 throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
+            }
+
+            // init_non_system_keyspaces() below reads system.sstables, and
+            // the commitlog carrying its updates is only replayed further down,
+            // so it has to be replayed here first.  The system keyspaces are
+            // the ones init_system_keyspace() has already loaded, which is what
+            // makes them the set a pass this early can apply.
+            //
+            // The replay further down covers these segments again, and that
+            // does not double the sstables they produce: a pass only applies
+            // mutations into memtables, and no pass flushes - the single flush
+            // runs after the second one - so what this pass applies is still in
+            // the memtable when the second pass re-applies it, and the two
+            // squash into the same rows.  A flush forced by memory pressure in
+            // between would cost an extra sstable, not correctness.
+            if (auto* cl = db.local().commitlog(); cl != nullptr) {
+                auto paths = cl->get_segments_to_replay().get();
+                if (!paths.empty()) {
+                    checkpoint(stop_signal, "replaying commit log for the system tables");
+                    std::unordered_set<table_id> system_tables;
+                    db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> t) {
+                        if (is_system_keyspace(t->schema()->ks_name())) {
+                            system_tables.insert(id);
+                        }
+                    });
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                            [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); },
+                            "system tables").get();
+                    rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+                }
             }
 
             checkpoint(stop_signal, "loading non-system sstables");

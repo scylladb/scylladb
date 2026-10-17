@@ -81,6 +81,10 @@ namespace {
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
+            // wipe() records the removal here before deleting the objects,
+            // which are durable at once; the ordering needs this write to be
+            // durable when it returns.
+            system_keyspace::SSTABLES_REGISTRY,
         };
         if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
             builder.set_wait_for_sync_to_commitlog(true);
