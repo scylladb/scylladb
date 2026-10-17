@@ -1887,7 +1887,6 @@ def testContainsOnPartitionKey(cql, test_keyspace):
 def testContainsOnPartitionKeyPart(cql, test_keyspace):
     dotestContainsOnPartitionKey(cql, test_keyspace, "(pk frozen<map<int, int>>, ck int, v int, PRIMARY KEY ((pk, ck)))")
 
-@pytest.mark.xfail(reason="#10443")
 def testFilteringWithOrderClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d list<int>, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 11, 12, 13, [1,4])

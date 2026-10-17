@@ -1440,6 +1440,83 @@ def test_order_by(cql, test_keyspace):
         check("p1 = 0 order by c1 asc, c2 asc limit 1", [(1, 1, 4)])
 
 
+# Like test_order_by, ORDER BY with IN on the partition key, but in a query
+# that needs filtering. All the rows from the different partitions must be
+# sorted together, also when there is a LIMIT: it must return the first rows
+# in the requested order, not the first rows read. Reproduces #10443.
+def test_order_by_with_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, c1 int, c2 int, r1 int, PRIMARY KEY(p1, c1, c2)') as table:
+        def check(where_and_order, expected):
+            # ORDER BY with IN on the partition key cannot be paged, so disable
+            # paging for all queries here.
+            stmt = SimpleStatement(f'select c1, c2, r1 from {table} where {where_and_order} allow filtering', fetch_size=None)
+            assert list(cql.execute(stmt)) == expected
+        for p1, c1, c2, r1 in [(0, 1, 2, 3), (0, 2, 1, 0), (0, 1, 1, 4), (0, 2, 2, 5), (1, 1, 0, 6), (1, 2, 3, 7)]:
+            cql.execute(f'insert into {table} (p1, c1, c2, r1) values ({p1}, {c1}, {c2}, {r1})')
+        check('p1 in (0, 1) and r1 > 0 order by c1 desc, c2 desc',
+            [(2, 3, 7), (2, 2, 5), (1, 2, 3), (1, 1, 4), (1, 0, 6)])
+        check('p1 in (0, 1) and r1 > 0 order by c1 asc, c2 asc',
+            [(1, 0, 6), (1, 1, 4), (1, 2, 3), (2, 2, 5), (2, 3, 7)])
+        check('p1 in (0, 1) and r1 > 0 order by c1 desc, c2 desc limit 2',
+            [(2, 3, 7), (2, 2, 5)])
+        check('p1 in (0, 1) and r1 > 0 order by c1 asc, c2 asc limit 2',
+            [(1, 0, 6), (1, 1, 4)])
+        # Sorting also works when the selected columns are not simply the
+        # table's columns - with SELECT JSON (see also #8100) or a function
+        # in the selection (see also #9435):
+        stmt = SimpleStatement(f'select json c1, c2 from {table} where p1 in (0, 1) and r1 > 0 order by c1 desc, c2 desc limit 3 allow filtering', fetch_size=None)
+        assert [r[0] for r in cql.execute(stmt)] == ['{"c1": 2, "c2": 3}', '{"c1": 2, "c2": 2}', '{"c1": 1, "c2": 2}']
+        stmt = SimpleStatement(f'select c1, ttl(r1), c2 from {table} where p1 in (0, 1) and r1 > 0 order by c1 desc, c2 desc limit 3 allow filtering', fetch_size=None)
+        assert list(cql.execute(stmt)) == [(2, None, 3), (2, None, 2), (1, None, 2)]
+        # As usual for ORDER BY with IN, a paged query is not allowed:
+        stmt = SimpleStatement(f'select c1, c2, r1 from {table} where p1 in (0, 1) and r1 > 0 order by c1 desc allow filtering', fetch_size=10)
+        with pytest.raises(InvalidRequest, match='page'):
+            cql.execute(stmt)
+
+# ORDER BY with IN on the partition key, in a GROUP BY query: the groups from
+# the different partitions must be sorted together, also when there is a
+# LIMIT. Reproduces #13109.
+def test_order_by_with_group_by(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, c1 int, c2 int, r1 int, PRIMARY KEY(p1, c1, c2)') as table:
+        def check(order_and_limit, expected):
+            stmt = SimpleStatement(f'select p1, c1, count(*), max(r1) from {table} where p1 in (0, 1) group by p1, c1 {order_and_limit}', fetch_size=None)
+            assert list(cql.execute(stmt)) == expected
+        for p1, c1, c2, r1 in [(0, 1, 1, 1), (0, 1, 2, 2), (0, 3, 1, 3), (1, 2, 1, 4), (1, 4, 1, 5), (1, 4, 2, 6)]:
+            cql.execute(f'insert into {table} (p1, c1, c2, r1) values ({p1}, {c1}, {c2}, {r1})')
+        check('order by c1 desc', [(1, 4, 2, 6), (0, 3, 1, 3), (1, 2, 1, 4), (0, 1, 2, 2)])
+        check('order by c1 asc', [(0, 1, 2, 2), (1, 2, 1, 4), (0, 3, 1, 3), (1, 4, 2, 6)])
+        check('order by c1 desc limit 2', [(1, 4, 2, 6), (0, 3, 1, 3)])
+        check('order by c1 asc limit 2', [(0, 1, 2, 2), (1, 2, 1, 4)])
+
+# CQL doesn't specify the order of "ties" - rows which are equal in all the
+# ORDER BY columns - in a query with IN on the partition key. In Scylla, the
+# result of such a query ordered in one direction is exactly the reverse of
+# its result ordered in the other direction, ties included. This test is
+# scylla_only because Cassandra orders ties by token in both directions, so
+# its result in one direction isn't the reverse of the other (see #15099).
+# What matters is whether the requested order is the clustering order or its
+# reverse, so we check both a table with ascending and one with descending
+# clustering order. We check a plain query, a query with filtering and a
+# GROUP BY query, which are sorted by different code, and check that all of
+# them order the ties in the same way.
+@pytest.mark.parametrize('clustering_order', ['ASC', 'DESC'])
+def test_order_by_ties(cql, test_keyspace, scylla_only, clustering_order):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)', f'WITH CLUSTERING ORDER BY (c {clustering_order})') as table:
+        for p in range(3):
+            for c in range(2):
+                cql.execute(f'insert into {table} (p, c, v) values ({p}, {c}, 1)')
+        def query(what, where, order, suffix):
+            stmt = SimpleStatement(f'select {what} from {table} where p in (0, 1, 2) {where} order by c {order} {suffix}', fetch_size=None)
+            return [tuple(r) for r in cql.execute(stmt)]
+        plain_asc = query('p, c', '', 'asc', '')
+        assert [c for p, c in plain_asc] == [0, 0, 0, 1, 1, 1]
+        for what, where, suffix in [('p, c', '', ''), ('p, c', 'and v = 1', 'allow filtering'), ('p, c, count(*)', 'group by p, c', '')]:
+            asc = query(what, where, 'asc', suffix)
+            desc = query(what, where, 'desc', suffix)
+            assert [r[:2] for r in asc] == plain_asc
+            assert desc == list(reversed(asc))
+
+
 def test_order_by_validate(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2)") as table:
         with pytest.raises(InvalidRequest):
