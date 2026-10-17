@@ -1140,7 +1140,12 @@ private:
             add_object_metadata_headers(req, _metadata);
         }
 
-        co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::ok, _as);
+        co_await _client->make_request(std::move(req), [](const http::reply& rep, input_stream<char>&& in) -> future<> {
+            auto payload = std::move(in);
+            if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload))) {
+                throw aws::aws_exception(std::move(possible_error.value()));
+            }
+        }, http::reply::status_type::ok, _as);
     }
 
     future<> copy_multipart(size_t source_size) {
@@ -1187,6 +1192,9 @@ private:
         co_await _client->make_request(std::move(req),[this, part_number](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
             auto _in = std::move(in);
             auto body = co_await util::read_entire_stream_contiguous(_in);
+            if (auto possible_error = aws::aws_error::parse(sstring(body))) {
+                throw aws::aws_exception(std::move(possible_error.value()));
+            }
             auto etag = parse_multipart_copy_upload_etag(body);
             if (etag.empty()) {
                 throw std::runtime_error("Cannot parse ETag");
@@ -1368,11 +1376,14 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
     auto gh = _bg_flushes.hold();
     (void)_client->make_request(std::move(req), [this, size, part_number] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        auto in = std::move(in_);
+        if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(in))) {
+            throw aws::aws_exception(std::move(possible_error.value()));
+        }
         auto etag = rep.get_header("ETag");
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
         gc.write_bytes += size;
-        return make_ready_future<>();
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
@@ -1587,6 +1598,9 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
         return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
             return do_with(std::move(in_), [this, part_number] (auto& in) mutable {
                 return util::read_entire_stream_contiguous(in).then([this, part_number] (auto body) mutable {
+                    if (auto possible_error = aws::aws_error::parse(sstring(body))) {
+                        return make_exception_future<>(aws::aws_exception(std::move(possible_error.value())));
+                    }
                     auto etag = parse_multipart_copy_upload_etag(body);
                     if (etag.empty()) {
                         return make_exception_future<>(std::runtime_error("cannot copy part upload"));
@@ -2091,11 +2105,14 @@ class client::do_upload_file : private multipart_upload {
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
         co_await _client->make_request(std::move(req), [this, part_size, part_number] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+            auto in = std::move(in_);
+            if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(in))) {
+                throw aws::aws_exception(std::move(possible_error.value()));
+            }
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
             gc.write_bytes += part_size;
-            return make_ready_future();
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         });
