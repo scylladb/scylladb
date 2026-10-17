@@ -26,6 +26,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/try_future.hh>
 
 #include "replica/logstor/ondisk.hh"
 #include "utils/checked-file-impl.hh"
@@ -385,12 +386,11 @@ future<std::optional<segment::appender>> segment::begin_append(size_t size) {
         co_return std::nullopt;
     }
 
-    std::optional<seastar::semaphore_units<>> units;
-    try {
-        units = co_await get_units(_append_sem, 1);
-    } catch (...) {
+    auto units_result = co_await coroutine::as_future(get_units(_append_sem, 1));
+    if (units_result.failed()) [[unlikely]] {
         // Only a failed write breaks _append_sem, and the failure can occur while this call waits
         // for the unit. Nothing is written, thus the caller can try again on another segment.
+        units_result.ignore_ready_future();
         co_return std::nullopt;
     }
 
@@ -398,17 +398,17 @@ future<std::optional<segment::appender>> segment::begin_append(size_t size) {
         co_return std::nullopt;
     }
 
-    co_return appender(*this, std::move(*units));
+    co_return appender(*this, units_result.get());
 }
 
 future<segment_position> segment::append(bytes_view data) {
-    auto a = co_await begin_append(data.size());
+    auto a = co_await coroutine::try_future(begin_append(data.size()));
     if (!a) {
-        co_return coroutine::return_exception(std::runtime_error(_failed
+        co_await coroutine::return_exception(std::runtime_error(_failed
                 ? fmt::format("Cannot append write of size {} to {}, which failed a write", data.size(), _id)
                 : fmt::format("Cannot append write of size {} to {} with {} bytes remaining", data.size(), _id, bytes_remaining())));
     }
-    co_return co_await std::move(*a).append(data);
+    co_return co_await coroutine::try_future(std::move(*a).append(data));
 }
 
 future<segment_position> segment::appender::append(bytes_view data) && {
@@ -472,8 +472,8 @@ future<> segment::do_write(segment_position pos, bytes_view data) {
     uint64_t written = 0;
 
     while (written < total) {
-        auto new_written = co_await _file.dma_write(
-                base_offset + written, data.data() + written, total - written);
+        auto new_written = co_await coroutine::try_future(_file.dma_write(
+                base_offset + written, data.data() + written, total - written));
 
         const auto previous_written = written;
         written += new_written;
