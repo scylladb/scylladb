@@ -73,6 +73,27 @@ functions::init() noexcept {
 
     std::unordered_multimap<function_name, shared_ptr<function>> ret;
     auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), f); };
+    // Cassandra 5 (CASSANDRA-18037) gave snake_case names to the native
+    // functions whose names were several words run together - e.g.,
+    // to_timestamp instead of totimestamp - and kept the old names as
+    // deprecated aliases. The old name is always the new one without its
+    // underscores, so declare_snake_case() declares the already-declared
+    // functions with the old name under the new name too.
+    auto declare_snake_case = [&ret] (std::string_view snake_case_name) {
+        std::string old_name(snake_case_name);
+        std::erase(old_name, '_');
+        auto [begin, end] = ret.equal_range(function_name::native_function(old_name));
+        if (begin == end) {
+            utils::on_internal_error(seastar::format("no function {} to declare as {}", old_name, snake_case_name));
+        }
+        std::vector<shared_ptr<function>> renamed;
+        for (auto it = begin; it != end; ++it) {
+            renamed.push_back(dynamic_pointer_cast<native_scalar_function>(it->second)->renamed(sstring(snake_case_name)));
+        }
+        for (auto& f : renamed) {
+            ret.emplace(f->name(), std::move(f));
+        }
+    };
     declare(aggregate_fcts::make_count_rows_function());
     declare(time_uuid_fcts::make_now_fct());
     declare(time_uuid_fcts::make_min_timeuuid_fct());
@@ -101,10 +122,18 @@ functions::init() noexcept {
 
         declare(make_to_blob_function(type.get_type()));
         declare(make_from_blob_function(type.get_type()));
+        declare_snake_case(type.to_string() + "_as_blob");
+        declare_snake_case("blob_as_" + type.to_string());
     }
 
     declare(make_varchar_as_blob_fct());
     declare(make_blob_as_varchar_fct());
+    declare_snake_case("varchar_as_blob");
+    declare_snake_case("blob_as_varchar");
+    for (auto name : {"min_timeuuid", "max_timeuuid", "current_timestamp", "current_date", "current_time",
+            "current_timeuuid", "to_date", "to_timestamp", "to_unix_timestamp"}) {
+        declare_snake_case(name);
+    }
     add_agg_functions(ret);
 
     declare(error_injection::make_enable_injection_function());
@@ -209,8 +238,8 @@ functions::make_arg_spec(const sstring& receiver_ks, std::optional<const std::st
 
 inline
 shared_ptr<function>
-make_to_json_function(data_type t) {
-    return make_native_scalar_function<true>("tojson", utf8_type, {t},
+make_to_json_function(sstring name, data_type t) {
+    return make_native_scalar_function<true>(std::move(name), utf8_type, {t},
             [t](std::span<const managed_bytes_opt> parameters) -> managed_bytes_opt {
         // FIXME: to_json_string() linearizes its input
         auto json = parameters[0]
@@ -222,8 +251,8 @@ make_to_json_function(data_type t) {
 
 inline
 shared_ptr<function>
-make_from_json_function(data_dictionary::database db, const sstring& keyspace, data_type t) {
-    return make_native_scalar_function<true>("fromjson", t, {utf8_type},
+make_from_json_function(sstring name, data_dictionary::database db, const sstring& keyspace, data_type t) {
+    return make_native_scalar_function<true>(std::move(name), t, {utf8_type},
             [keyspace, t](std::span<const managed_bytes_opt> parameters) -> managed_bytes_opt {
         try {
             // FIXME: avoid linearization of the parameter
@@ -418,6 +447,9 @@ functions::try_get(data_dictionary::database db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
+    // The snake_case names that Cassandra 5 gave these functions (see init()).
+    static const function_name TO_JSON_SNAKE_CASE_FUNCTION_NAME = function_name::native_function("to_json");
+    static const function_name FROM_JSON_SNAKE_CASE_FUNCTION_NAME = function_name::native_function("from_json");
 
     auto schema = std::invoke([&] () -> schema_ptr {
         if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
@@ -468,9 +500,7 @@ functions::try_get(data_dictionary::database db,
         return fun;
     }
 
-    if (name.has_keyspace()
-                ? name == TO_JSON_FUNCTION_NAME
-                : name.name == TO_JSON_FUNCTION_NAME.name) {
+    if (func_name == TO_JSON_FUNCTION_NAME || func_name == TO_JSON_SNAKE_CASE_FUNCTION_NAME) {
         if (provided_args.size() != 1) {
             return resolution_failed("toJson() accepts 1 argument only");
         }
@@ -478,19 +508,17 @@ functions::try_get(data_dictionary::database db,
         if (!arg_type_opt) {
             return resolution_failed("toJson() is only valid when its argument type is known");
         }
-        return make_to_json_function(*arg_type_opt);
+        return make_to_json_function(func_name.name, *arg_type_opt);
     }
 
-    if (name.has_keyspace()
-                ? name == FROM_JSON_FUNCTION_NAME
-                : name.name == FROM_JSON_FUNCTION_NAME.name) {
+    if (func_name == FROM_JSON_FUNCTION_NAME || func_name == FROM_JSON_SNAKE_CASE_FUNCTION_NAME) {
         if (provided_args.size() != 1) {
             return resolution_failed("fromJson() accepts 1 argument only");
         }
         if (!receiver) {
             return resolution_failed("fromJson() can only be called if receiver type is known");
         }
-        return make_from_json_function(db, keyspace, receiver->type);
+        return make_from_json_function(func_name.name, db, keyspace, receiver->type);
     }
 
     // FIXME: add proper support for generic functions

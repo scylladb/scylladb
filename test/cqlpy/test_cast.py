@@ -181,3 +181,16 @@ def test_function_arg_type_hint(cql, table2):
     # In prepared_timeuuid the bind variable has type timeuuid, so passing a timestamp value should fail
     with pytest.raises(TypeError):
         cql.execute(prepared_timeuuid, [timestamp_value])
+
+# Cassandra implements CAST(x AS type) with native functions, which can also
+# be called by name: CAST(v AS int) is the same as cast_as_int(v), the name
+# which Cassandra 5 gave this function (CASSANDRA-18037, which gave native
+# functions snake_case names), or "castAsInt"(v), its old name, which has
+# to be quoted because it isn't lowercase (Cassandra 4.1 and 5 support it).
+# Scylla doesn't support calling these functions by name.
+# Reproduces SCYLLADB-5347.
+@pytest.mark.xfail(reason='SCYLLADB-5347')
+def test_cast_function_by_name(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (pk, bigint_col) VALUES ({p}, 7)')
+    assert list(cql.execute(f'SELECT cast_as_int(bigint_col), "castAsInt"(bigint_col), CAST(bigint_col AS int) FROM {table1} WHERE pk = {p}')) == [(7, 7, 7)]
