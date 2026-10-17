@@ -9,8 +9,11 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <unordered_set>
 #include <utility>
 #include "utils/UUID_gen.hh"
+#include "clocks-impl.hh"
+#include <seastar/util/defer.hh>
 #include "marshal_exception.hh"
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
@@ -313,4 +316,43 @@ BOOST_AUTO_TEST_CASE(check_get_random_time_UUID_from_micros_variant) {
         // check that variant is RFC 4122 (IETF)
         BOOST_CHECK_EQUAL((uuid.get_least_significant_bits() >> 62) & 0x3, 2);
     }
+}
+
+// UUID_gen::reset_last_used_time(), which the test-only clocks offset calls
+// when it changes, allows the time of the next time UUID to go back to the
+// current time, and repeat that of an earlier one. Check that time UUIDs, each
+// generated right after a reset, are still unique. Before this was fixed, those
+// generated within the same millisecond were equal, so sstables could get the
+// generation of an existing sstable.
+BOOST_AUTO_TEST_CASE(test_time_uuid_unique_after_reset) {
+    std::unordered_set<utils::UUID> seen;
+    for (int i = 0; i < 1000; i++) {
+        utils::UUID_gen::reset_last_used_time();
+        auto uuid = utils::UUID_gen::get_time_UUID();
+        BOOST_REQUIRE_MESSAGE(seen.insert(uuid).second, fmt::format("time UUID {} was generated twice", uuid));
+    }
+}
+
+// Check that reset_last_used_time() changes the clock sequence when the clock
+// moves back behind the time of a UUID generated before an earlier reset: A
+// UUID is generated with the clocks jumped forward, then they jump further
+// forward without generating a UUID, and then the jumps are undone. If the
+// clock sequence stayed the same, the UUIDs generated when the clock reaches
+// again the time of the first UUID could repeat it.
+BOOST_AUTO_TEST_CASE(test_time_uuid_clock_seq_after_two_resets) {
+    auto original_offset = get_clocks_offset();
+    auto restore_offset = seastar::defer([original_offset] () noexcept {
+        set_clocks_offset(original_offset);
+        utils::UUID_gen::reset_last_used_time();
+    });
+    set_clocks_offset(original_offset + std::chrono::seconds(1000));
+    utils::UUID_gen::reset_last_used_time();
+    auto uuid1 = utils::UUID_gen::get_time_UUID();
+    set_clocks_offset(original_offset + std::chrono::seconds(2000));
+    utils::UUID_gen::reset_last_used_time();
+    set_clocks_offset(original_offset);
+    utils::UUID_gen::reset_last_used_time();
+    auto uuid2 = utils::UUID_gen::get_time_UUID();
+    BOOST_REQUIRE_LT(utils::UUID_gen::micros_timestamp(uuid2), utils::UUID_gen::micros_timestamp(uuid1));
+    BOOST_REQUIRE_NE(uuid1.get_least_significant_bits(), uuid2.get_least_significant_bits());
 }
