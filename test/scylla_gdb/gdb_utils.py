@@ -7,7 +7,7 @@ They should be loaded to GDB by "-x {dir}/gdb_utils.py}",
 when loaded, they can be run in gdb e.g. `$get_sstables()`
 
 Depends on helper functions injected to GDB by `scylla-gdb.py` script.
-(sharded, for_each_table, seastar_lw_shared_ptr, find_sstables, find_vptrs, resolve,
+(sharded, for_each_table, seastar_lw_shared_ptr, find_sstables, schema_ptr, find_vptrs, resolve,
 get_seastar_memory_start_and_size).
 """
 
@@ -35,6 +35,20 @@ class get_sstable(gdb.Function):
 
     def invoke(self):
         return next(find_sstables())
+
+
+class get_table_sstable(gdb.Function):
+    """Finds and returns an sstable pointer of the given keyspace and table."""
+
+    def __init__(self):
+        super(get_table_sstable, self).__init__('get_table_sstable')
+
+    def invoke(self, ks, cf):
+        for sst in find_sstables():
+            schema = schema_ptr(sst['_schema'])
+            if (schema.ks_name, schema.cf_name) == (ks.string(), cf.string()):
+                return sst
+        raise gdb.GdbError(f"No sstable of {ks.string()}.{cf.string()} on this shard")
 
 
 class get_task(gdb.Function):
@@ -75,5 +89,6 @@ class get_coroutine(gdb.Function):
 # Register the functions in GDB
 get_schema()
 get_sstable()
+get_table_sstable()
 get_task()
 get_coroutine()
