@@ -591,6 +591,7 @@ scylla_tests = set([
     'test/boost/hwlb_test',
     'test/boost/idl_test',
     'test/boost/incremental_compaction_test',
+    'test/boost/index_position_resolver_test',
     'test/boost/index_reader_test',
     'test/boost/input_stream_test',
     'test/boost/interval_index_test',
@@ -1649,6 +1650,7 @@ pure_boost_tests = set([
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/idl_test',
+    'test/boost/index_position_resolver_test',
     'test/boost/interval_index_test',
     'test/boost/json_test',
     'test/boost/keys_test',
@@ -1840,6 +1842,7 @@ deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_t
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/boost/sstable_position_test'] = ['test/boost/sstable_position_test.cc']
+deps['test/boost/index_position_resolver_test'] = ['test/boost/index_position_resolver_test.cc']
 deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']

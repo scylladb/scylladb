@@ -144,6 +144,8 @@ add_scylla_test(idl_test
   LIBRARIES idl)
 add_scylla_test(incremental_compaction_test
   KIND SEASTAR)
+add_scylla_test(index_position_resolver_test
+  KIND BOOST)
 add_scylla_test(index_reader_test
   KIND SEASTAR)
 add_scylla_test(input_stream_test
