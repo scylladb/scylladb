@@ -10,12 +10,31 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import cassandra.cluster as cassandra_cluster  # type: ignore
 from cassandra.cluster import Cluster  # type: ignore # pylint: disable=no-name-in-module
 
 logger = logging.getLogger(__name__)
 
 # How long to wait for the driver's Task Scheduler thread to finish
 _SCHEDULER_JOIN_TIMEOUT = 2.0
+
+
+def control_connection_query_fallback_options(*, skip_pool_creation: bool = False) -> dict[str, object]:
+    """Return the driver's option for running queries over its control connection.
+
+    Fallback uses a normal query pool when one is available and sends queries
+    over the control connection when no pool is usable. SkipPoolCreation skips
+    pools and sends every query over the control connection. Scylla driver 3.29.7
+    predates this option but retains explicit contact points as query hosts, so
+    neither mode is needed there. Scylla driver 3.29.8 and 3.29.9 neither retain
+    those hosts nor expose this option, so they cannot query excluded contact points.
+    """
+    fallback = getattr(cassandra_cluster, "ControlConnectionQueryFallback", None)
+    if fallback is None:
+        return {}
+
+    mode = fallback.SkipPoolCreation if skip_pool_creation else fallback.Fallback
+    return {"allow_control_connection_query_fallback": mode}
 
 
 def safe_driver_shutdown(cluster: Cluster) -> None:
