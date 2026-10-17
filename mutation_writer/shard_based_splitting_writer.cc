@@ -20,6 +20,7 @@ class shard_based_splitting_mutation_writer {
 private:
     schema_ptr _schema;
     reader_permit _permit;
+    const dht::sharder& _sharder;
     mutation_reader_consumer _consumer;
     unsigned _current_shard;
     std::vector<std::optional<shard_writer>> _shards;
@@ -29,15 +30,16 @@ private:
         return writer.consume(std::move(mf));
     }
 public:
-    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer consumer)
+    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, const dht::sharder& sharder, mutation_reader_consumer consumer)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
+        , _sharder(sharder)
         , _consumer(std::move(consumer))
         , _shards(this_smp_shard_count())
     {}
 
     future<> consume(partition_start&& ps) {
-        _current_shard = dht::static_shard_of(*_schema, ps.key().token()); // FIXME: Use table sharder
+        _current_shard = _sharder.shard_for_reads(ps.key().token());
         if (!_shards[_current_shard]) {
             _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
         }
@@ -82,11 +84,11 @@ public:
     }
 };
 
-future<> segregate_by_shard(mutation_reader producer, mutation_reader_consumer consumer) {
+future<> segregate_by_shard(mutation_reader producer, const dht::sharder& sharder, mutation_reader_consumer consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
     return feed_writer(
         std::move(producer),
-        shard_based_splitting_mutation_writer(std::move(schema), std::move(permit), std::move(consumer)));
+        shard_based_splitting_mutation_writer(std::move(schema), std::move(permit), sharder, std::move(consumer)));
 }
 } // namespace mutation_writer
