@@ -402,6 +402,11 @@ public:
 
     void set_load_stats(locator::load_stats_ptr);
 
+    /// Installs new_stats only if old_stats are still installed. For a caller which derives
+    /// new stats from the installed ones and may yield meanwhile: stats installed in between
+    /// are newer than anything derived from the old ones.
+    bool replace_load_stats(const locator::load_stats_ptr& old_stats, locator::load_stats_ptr new_stats);
+
     locator::load_stats_ptr get_load_stats();
 
     load_balancer_stats_manager& stats();

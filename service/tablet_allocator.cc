@@ -4858,6 +4858,14 @@ public:
         _load_stats = std::move(load_stats);
     }
 
+    bool replace_load_stats(const locator::load_stats_ptr& old_stats, locator::load_stats_ptr new_stats) {
+        if (_load_stats != old_stats) {
+            return false;
+        }
+        _load_stats = std::move(new_stats);
+        return true;
+    }
+
     locator::load_stats_ptr get_load_stats() {
         return _load_stats;
     }
@@ -5154,6 +5162,10 @@ future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata
 
 void tablet_allocator::set_load_stats(locator::load_stats_ptr load_stats) {
     impl().set_load_stats(std::move(load_stats));
+}
+
+bool tablet_allocator::replace_load_stats(const locator::load_stats_ptr& old_stats, locator::load_stats_ptr new_stats) {
+    return impl().replace_load_stats(old_stats, std::move(new_stats));
 }
 
 locator::load_stats_ptr tablet_allocator::get_load_stats() {
