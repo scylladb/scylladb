@@ -156,7 +156,12 @@ inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
         .the_context = std::make_unique<DataConsumeRowsContext>(
                 s, std::move(sst), consumer,
                 std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(input_stream<char>(std::move(reversing_data_source.the_source))),
-                toread.start, toread.end),
+                // The context reads the stream that the reversing data source
+                // produces, not Data.db. Positions in that stream are logical
+                // offsets from its start, also when the sstable uses physical
+                // positions. current_position_in_sstable is the position in
+                // Data.db.
+                sstable_position::from_logical(0), std::nullopt),
         .current_position_in_sstable = reversing_data_source.current_position_in_sstable
     };
 }
