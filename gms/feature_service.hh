@@ -202,6 +202,10 @@ public:
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates the per-table `aggregated_metrics` WITH-clause property so it
+    // can't be set until every node in the cluster understands the new
+    // scylla_tables column and metrics-selection logic.
+    gms::feature per_table_aggregated_metrics { *this, "PER_TABLE_AGGREGATED_METRICS"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
