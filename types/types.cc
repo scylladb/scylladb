@@ -377,13 +377,37 @@ uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
 
+// Parses one numeric component of the time string s. std::stol() reports a
+// malformed or out-of-range number with std::invalid_argument or
+// std::out_of_range, which we convert to a marshal_exception.
+static int64_t parse_time_component(std::string_view s, std::string_view component) {
+    try {
+        return std::stol(sstring(component));
+    } catch (const std::invalid_argument&) {
+    } catch (const std::out_of_range&) {
+    }
+    throw marshal_exception(seastar::format("Unable to coerce '{}' to a formatted time (long)", s));
+}
+
 int64_t time_type_impl::from_string_view(std::string_view s) {
+    // A time may also be given as an integer: the number of nanoseconds
+    // since midnight.
+    auto digits = s.starts_with('-') ? s.substr(1) : s;
+    if (!digits.empty() && std::ranges::all_of(digits, [] (char c) { return c >= '0' && c <= '9'; })) {
+        int64_t nanoseconds;
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), nanoseconds);
+        constexpr int64_t nanoseconds_per_day = int64_t(24) * 60 * 60 * 1000 * 1000 * 1000;
+        if (ec != std::errc() || ptr != s.data() + s.size() || nanoseconds < 0 || nanoseconds >= nanoseconds_per_day) {
+            throw marshal_exception(seastar::format("Unable to make long (for time) from: '{}'", s));
+        }
+        return nanoseconds;
+    }
     static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
     auto hours_end = s.find(':');
     if (hours_end == std::string::npos) {
         throw marshal_exception(format_error);
     }
-    int64_t hours = std::stol(sstring(s.substr(0, hours_end)));
+    int64_t hours = parse_time_component(s, s.substr(0, hours_end));
     if (hours < 0 || hours >= 24) {
         throw marshal_exception(format("Hour out of bounds ({:d}).", hours));
     }
@@ -391,7 +415,7 @@ int64_t time_type_impl::from_string_view(std::string_view s) {
     if (minutes_end == std::string::npos) {
         throw marshal_exception(format_error);
     }
-    int64_t minutes = std::stol(sstring(s.substr(hours_end + 1, hours_end - minutes_end)));
+    int64_t minutes = parse_time_component(s, s.substr(hours_end + 1, hours_end - minutes_end));
     if (minutes < 0 || minutes >= 60) {
         throw marshal_exception(format("Minute out of bounds ({:d}).", minutes));
     }
@@ -399,13 +423,13 @@ int64_t time_type_impl::from_string_view(std::string_view s) {
     if (seconds_end == std::string::npos) {
         seconds_end = s.length();
     }
-    int64_t seconds = std::stol(sstring(s.substr(minutes_end + 1, minutes_end - seconds_end)));
+    int64_t seconds = parse_time_component(s, s.substr(minutes_end + 1, minutes_end - seconds_end));
     if (seconds < 0 || seconds >= 60) {
         throw marshal_exception(format("Second out of bounds ({:d}).", seconds));
     }
     int64_t nanoseconds = 0;
     if (seconds_end < s.length()) {
-        nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
+        nanoseconds = parse_time_component(s, s.substr(seconds_end + 1));
         auto nano_digits = s.length() - (seconds_end + 1);
         if (nano_digits > 9) {
             throw marshal_exception(seastar::format("more than 9 nanosecond digits: {}", s));
