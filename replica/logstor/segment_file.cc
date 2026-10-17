@@ -392,12 +392,11 @@ future<std::optional<segment::append_reservation>> segment::reserve(size_t size)
         co_return std::nullopt;
     }
 
-    std::optional<seastar::semaphore_units<>> units;
-    try {
-        units = co_await get_units(_append_sem, 1);
-    } catch (...) {
+    auto units_result = co_await coroutine::as_future(get_units(_append_sem, 1));
+    if (units_result.failed()) [[unlikely]] {
         // Only a failed write breaks _append_sem, and the failure can occur while this call waits
         // for the unit. Nothing is reserved, thus the caller can try again on another segment.
+        units_result.ignore_ready_future();
         co_return std::nullopt;
     }
 
@@ -411,7 +410,7 @@ future<std::optional<segment::append_reservation>> segment::reserve(size_t size)
             .offset = _append_offset,
         },
         .size = size,
-        .units = std::move(*units),
+        .units = units_result.get(),
     };
 
     _append_offset += size;
