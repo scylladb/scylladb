@@ -2012,12 +2012,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             *fenced = true;
         }
         guard = co_await start_operation();
-        if (drain_failed) {
-            // if drain failed need to wait for fence to be active on all nodes
-            co_return co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, exclude_nodes, drop_guard_and_retake::yes);
-        } else {
-            co_return std::move(guard);
-        }
+        // Wait for the fence to be active on all nodes: the barrier handler
+        // runs group0 read_barrier() first, so the commit above is applied by then.
+        co_return co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, exclude_nodes, drop_guard_and_retake::yes);
     }
 
     future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
@@ -2032,13 +2029,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         //     which guarantees that the new version and the previous fence_version are
         //     published on all shards before we drain them. After that we drain all
         //     requests with versions < x ==> no current and future requests are possible
-        //     with versions < x - 1 since the fence for x - 1 is set. Future stale
-        //     requests with version x - 1 are sill possible until the next
-        //     global barrier.
-        // * a quorum of replicas doesn't allow new requests with versions < x,
+        //     with versions < x - 1 since the fence for x - 1 is set. New stale
+        //     requests with version x - 1 are not possible either, see the next
+        //     bullet.
+        // * all replicas reject new requests with versions < x,
         //   but there could be arbitrary number of already running read or mutation
         //   requests with version x - 1 on those replicas
-        // * some replicas could still be accepting new requests with versions == x - 1
+        //     Why? The barrier which follows the fence_version := x commit returns
+        //     only after every node has applied that commit.
 
         bool* const fenced = nullptr;
         const auto drain_all_nodes = true;        
@@ -5001,8 +4999,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (...) {
                 // The barrier does its best to ensure no data plane requests are affected
                 // by fencing. It runs barrier_and_drain command on all nodes and then
-                // commits fence_version := version to the raft group0. If the first barrier
-                // failed it runs another barrier with the new fence_version.
+                // commits fence_version := version to the raft group0. After that it always
+                // runs a barrier, so that every node applies the new fence_version.
                 // Both of these barriers might fail, but if we managed to commit the
                 // new fence_version to group0 then we can continue with the cleanup. Why?
                 // Cleanup on a replica first calls `read_barrier()`. This ensures that
