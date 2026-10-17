@@ -391,6 +391,7 @@ future<std::optional<segment::append_reservation>> segment::reserve(size_t size)
             .segment = _id,
             .offset = _append_offset,
         },
+        .size = size,
         .units = std::move(*units),
     };
 
@@ -400,6 +401,14 @@ future<std::optional<segment::append_reservation>> segment::reserve(size_t size)
 }
 
 future<segment_position> segment::write_reserved(append_reservation reservation, bytes_view data) {
+    // Other data would leave a hole in the segment, or overwrite the region of the next append. The
+    // reservation already moved the append offset, thus the segment fails, as after a failed write.
+    if (data.size() != reservation.size) [[unlikely]] {
+        _failed = true;
+        _append_sem.broken();
+        on_internal_error(logstor_logger, fmt::format("Attempted to write {} bytes to a reservation of {} bytes in {}",
+                data.size(), reservation.size, _id));
+    }
     auto write_result = co_await coroutine::as_future(do_write(reservation.pos, data));
     if (write_result.failed()) {
         auto ex = write_result.get_exception();
@@ -420,7 +429,7 @@ future<segment_position> segment::append(bytes_view data) {
     auto reservation = co_await reserve(data.size());
     if (!reservation) {
         co_return coroutine::return_exception(std::runtime_error(_failed
-                ? fmt::format("Cannot append write of size {} to segment {}, which failed a write", data.size(), _id)
+                ? fmt::format("Cannot append write of size {} to segment {}, which failed", data.size(), _id)
                 : fmt::format("Cannot append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
     }
     co_return co_await write_reserved(std::move(*reservation), data);
