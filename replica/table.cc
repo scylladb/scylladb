@@ -5188,6 +5188,25 @@ api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) 
         }));
 }
 
+// Runs func, which applies a write to the memtable of a compaction group, once
+// dirty memory allows it. The caller selects the compaction group before the write
+// waits for memory, and must hold the group's sstable_add_gate() until func ran:
+// the write is invisible to compaction_group::empty() until it reaches the memtable,
+// and tablet split must not be acked on the strength of an empty main group, which
+// the parked write then lands in (SCYLLADB-4775).
+template <typename Func>
+static future<> run_write_when_memory_available(const schema& s, dirty_memory_manager_logalloc::region_group& rg, Func&& func,
+        db::timeout_clock::time_point timeout) {
+    // Simulates a write waiting for memory, for writes to the table named by the injection's "table" parameter.
+    if (utils::get_local_injector().inject_parameter<std::string_view>("table_apply_wait_for_memory", "table") == std::string_view(s.cf_name())) [[unlikely]] {
+        return utils::get_local_injector().inject("table_apply_wait_for_memory", utils::wait_for_message(std::chrono::minutes(5))).then(
+                [&rg, func = std::forward<Func>(func), timeout] () mutable {
+            return rg.run_when_memory_available(std::move(func), timeout);
+        });
+    }
+    return rg.run_when_memory_available(std::forward<Func>(func), timeout);
+}
+
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(freeze(m));
@@ -5195,13 +5214,13 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 
     auto& cg = compaction_group_for_token(m.token());
     auto holder = cg.async_gate().hold();
+    auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        auto ss_holder = cg.sstable_add_gate().hold();
         return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
+    return run_write_when_memory_available(*m.schema(), dirty_memory_region_group(), [this, &m, h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder)] () mutable {
         do_apply(cg, std::move(h), m, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
     }, timeout);
 }
@@ -5214,15 +5233,16 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
         return (*_virtual_writer)(m);
     }
 
+    const auto& s = *m_schema;
     auto& cg = compaction_group_for_key(m.key(), m_schema);
     auto holder = cg.async_gate().hold();
+    auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        auto ss_holder = cg.sstable_add_gate().hold();
         return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
+    return run_write_when_memory_available(s, dirty_memory_region_group(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder), guardrails = std::move(guardrails), violations_out]() mutable {
         return do_apply(cg, std::move(h), m, m_schema, *guardrails, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()), std::move(violations_out));
     }, timeout);
 }
