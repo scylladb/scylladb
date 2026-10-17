@@ -631,9 +631,8 @@ static future<> scan_table_ranges(
                 // without iterating through it like we do here and compare
                 // the key?
                 for (const auto& entry : value_cast<map_type_impl::native_type>(v)) {
-                    std::string attr_name = value_cast<sstring>(entry.first);
-                    if (value_cast<sstring>(entry.first) == *scan_ctx.member) {
-                        bytes value = value_cast<bytes>(entry.second);
+                    if (value_cast<sstring>(entry.first) == std::string_view(*scan_ctx.member)) {
+                        const bytes& value = value_cast<bytes>(entry.second);
                         rjson::value json = deserialize_item(value);
                         expired = is_expired(json, now);
                         break;

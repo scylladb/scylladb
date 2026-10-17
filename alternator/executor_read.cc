@@ -468,7 +468,7 @@ public:
             return;
         }
         result_bytes_view->with_linearized([this] (bytes_view bv) {
-            std::string column_name = (*_column_it)->name_as_text();
+            const sstring& column_name = (*_column_it)->name_as_text();
             if (column_name != executor::ATTRS_COLUMN_NAME) {
                 if (!_attrs_to_get || _attrs_to_get->contains(column_name) || _extra_filter_attrs.contains(column_name)) {
                     if (!_item.HasMember(column_name.c_str())) {
@@ -479,11 +479,11 @@ public:
                 }
             } else {
                 auto deserialized = attrs_type()->deserialize(bv);
-                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-                for (auto entry : keys_and_values) {
-                    std::string attr_name = value_cast<sstring>(entry.first);
+                const auto& keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+                for (const auto& entry : keys_and_values) {
+                    const sstring& attr_name = value_cast<sstring>(entry.first);
                     if (!_attrs_to_get || _attrs_to_get->contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
-                        bytes value = value_cast<bytes>(entry.second);
+                        const bytes& value = value_cast<bytes>(entry.second);
                         // Even if _attrs_to_get asked to keep only a part of a
                         // top-level attribute, we keep the entire attribute
                         // at this stage, because the item filter might still
