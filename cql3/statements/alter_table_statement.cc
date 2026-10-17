@@ -169,7 +169,7 @@ static void validate_column_rename(data_dictionary::database db, const schema& s
     }
 }
 
-void alter_table_statement::add_column(const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::add_column(data_dictionary::database db, const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (is_static) {
         if (!schema.is_compound()) {
             throw exceptions::invalid_request_exception("Static columns are not allowed in COMPACT STORAGE tables");
@@ -204,11 +204,13 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
 
         // If there used to be a non-frozen collection column with the same name (that has been dropped),
         // we could still have some data using the old type, and so we can't allow adding a collection
-        // with the same name unless the types are compatible (see #6276).
+        // with the same name unless the types are compatible (see #6276). The
+        // dropped column's type is stored with its user types replaced by
+        // tuples, so do the same to the new type.
         auto& dropped = schema.dropped_columns();
         auto i = dropped.find(column_name.text());
         if (i != dropped.end() && i->second.type->is_collection() && i->second.type->is_multi_cell()
-                && !type->is_compatible_with(*i->second.type)) {
+                && !db::schema_tables::expand_user_type(type)->is_compatible_with(*db::schema_tables::expand_user_type(i->second.type))) {
             throw exceptions::invalid_request_exception(fmt::format("Cannot add a collection with the name {} "
                 "because a collection with the same name and a different type has already been used in the past", column_name));
         }
@@ -221,6 +223,23 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
                 throw exceptions::invalid_request_exception(format("Non-frozen UDTs with nested non-frozen collections are not supported for column {}", column_name));
             }
         }
+    }
+    // A client may still hold a statement prepared before the column was
+    // dropped, and send values serialized for the dropped column's type. So,
+    // as when altering a column's type, the new type must be able to
+    // interpret the old type's values. The dropped column's type is stored
+    // with its user types replaced by tuples, so do the same to the new type.
+    // This check comes after the checks above, which the option
+    // allow_readd_column_with_incompatible_type can't override, so the error
+    // below suggests this option only when it can help.
+    if (auto i = schema.dropped_columns().find(column_name.text()); i != schema.dropped_columns().end()
+            && !db::schema_tables::expand_user_type(type)->is_value_compatible_with(*db::schema_tables::expand_user_type(i->second.type))
+            && !db.get_config().allow_readd_column_with_incompatible_type()) {
+        throw exceptions::invalid_request_exception(fmt::format("Cannot add a column '{}' of type {}, incompatible with previously dropped column '{}' of type {}. "
+                "A statement prepared before the column was dropped could write values that the new type would misinterpret. "
+                "If no client can use such statements, e.g., when restoring a backup, you can set the configuration option "
+                "allow_readd_column_with_incompatible_type to allow this.",
+                column_name, validator, column_name, i->second.type->as_cql3_type()));
     }
     if (type->is_counter() && !schema.is_counter()) {
         throw exceptions::configuration_exception(format("Cannot add a counter column ({}) in a non counter column family", column_name));
@@ -248,7 +267,7 @@ void alter_table_statement::add_column(const query_options&, const schema& schem
     }
 }
 
-void alter_table_statement::alter_column(const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::alter_column(data_dictionary::database, const query_options&, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -270,7 +289,7 @@ void alter_table_statement::alter_column(const query_options&, const schema& sch
     }
 }
 
-void alter_table_statement::drop_column(const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
+void alter_table_statement::drop_column(data_dictionary::database, const query_options& options, const schema& schema, data_dictionary::table cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const column_identifier& column_name, const cql3_type validator, const column_definition* def, bool is_static) const {
     if (!def) {
         throw exceptions::invalid_request_exception(format("Column {} was not found in table {}", column_name, column_family()));
     }
@@ -380,14 +399,14 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
     auto cf = db.find_column_family(s);
     std::vector<view_ptr> view_updates;
 
-    using column_change_fn = std::function<void (const alter_table_statement*, const query_options&, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
+    using column_change_fn = std::function<void (const alter_table_statement*, data_dictionary::database, const query_options&, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
 
     auto invoke_column_change_fn = [&] (column_change_fn fn) {
          for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
              auto column_name = raw_name->prepare_column_identifier(*s);
              auto validator = raw_validator ? raw_validator->prepare(db, keyspace()).get_type() : nullptr;
              auto* def = get_column_definition(*s, *column_name);
-             fn(this, options, *s, cf, cfm, view_updates, *column_name, validator, def, is_static);
+             fn(this, db, options, *s, cf, cfm, view_updates, *column_name, validator, def, is_static);
          }
     };
 

@@ -1751,6 +1751,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Regular expression used by CertificateAuthenticator to extract role name from an accepted transport authentication certificate subject info.")
     , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
     , allow_deprecated_size_tiered_compaction_strategy(this, "allow_deprecated_size_tiered_compaction_strategy", liveness::LiveUpdate, value_status::Used, true, "Allow the deprecated SizeTieredCompactionStrategy to be named when creating or altering a table or a materialized view.  It is an alias of IncrementalCompactionStrategy, which the table is compacted with either way, so naming it returns a CQL warning.  When disabled, naming it is an error instead.  This option defaults to true for backward compatibility, and will default to false in a future version.")
+    , allow_readd_column_with_incompatible_type(this, "allow_readd_column_with_incompatible_type", liveness::LiveUpdate, value_status::Used, false,
+        "Allow re-adding a dropped column with a type that cannot correctly interpret values of the dropped column's type. "
+        "This is normally refused, because a client may still use a statement prepared before the column was dropped, "
+        "and write values serialized for the old type, which the new type would misinterpret. "
+        "Only set this if no client can use such statements - e.g., when restoring a backup of a table "
+        "in which an older version allowed re-adding such a column.")
     , minimum_replication_factor_fail_threshold(this, "minimum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , minimum_replication_factor_warn_threshold(this, "minimum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used,  3, "")
     , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
