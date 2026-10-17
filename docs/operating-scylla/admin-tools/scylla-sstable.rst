@@ -25,9 +25,13 @@ You can specify more than one SSTable.
 
 A single directory can be passed in place of the individual SSTables in it --
 typically the table directory -- in which case all the SSTables found in it are
-processed. Note that the data directory of a running node is a moving target:
-SSTables which are not sealed yet are left out, and ones deleted while being
-loaded are reported and skipped.
+processed. SSTables which are not sealed yet are left out.
+
+An SSTable with components missing fails the operation, whether it is named on
+the command line or found in a directory. Note that the data directory of a
+running node is a moving target: the node can delete an SSTable while the tool
+is loading it. Pass ``--ignore-incomplete-sstables`` to have such SSTables
+reported and skipped instead.
 
 Additionally, the path to SSTable can point to an object storage fully qualified
 path in the form of ``s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``
@@ -1104,7 +1108,9 @@ they live in a directory of the data dir or in a bucket of an object store. The
 data dir is the one ``--scylla-data-dir`` names, or the one the scylla.yaml
 configures. The system tables the SSTables of a table are looked up in have to
 be on disk: ``nodetool flush system_schema``, and for a table on object storage
-``nodetool flush system sstables`` as well. SSTables named on the command line
+``nodetool flush system sstables`` as well. Describing the table of a running
+node usually needs ``--ignore-incomplete-sstables``, as the node can delete
+SSTables, e.g. by compacting them, while they are being loaded. SSTables named on the command line
 are the ones described, ``--keyspace`` and ``--table`` then only saying which
 schema to load.
 
