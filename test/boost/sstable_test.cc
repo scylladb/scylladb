@@ -23,6 +23,7 @@
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/log.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -1033,6 +1034,66 @@ static future<> test_component_digest_persistence(component_type component, ssta
         auto scylla_data = util::read_entire_stream_contiguous(stream2).get();
         auto calc_scylla_digest = crc32_utils::checksum(scylla_data.begin(), scylla_data.size() - sizeof(uint32_t));
         BOOST_REQUIRE_EQUAL(calc_scylla_digest, sst_reopened->get_component_digest(sstables::component_type::Scylla).value());
+    });
+}
+
+// CRC.db starts with the chunk size, which the checksummed readers turn into
+// shifts and masks. Anything but a non-zero power of two must be rejected as a
+// malformed sstable naming the component file.
+SEASTAR_TEST_CASE(test_read_malformed_crc_chunk_size) {
+    return test_env::do_with_async([] (test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            compress_sstable::no);
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        const auto muts = tests::generate_random_mutations(random_schema, 1).get();
+        auto sst = make_sstable_containing(env.make_sstable(random_schema.schema(), sstable::version_types::me), muts, validate::no).get();
+        BOOST_REQUIRE(sstables::test(sst).get_components().contains(component_type::CRC));
+
+        auto& storage = sstables::test(sst).get_storage();
+        auto write_crc = [&] (uint32_t chunk_size, std::vector<uint32_t> checksums) {
+            auto os = output_stream<char>(storage.make_component_sink(*sst, component_type::CRC, open_flags::wo | open_flags::truncate, {}).get());
+            auto close_os = deferred_close(os);
+            auto write_be = [&] (uint32_t v) {
+                v = net::hton(v);
+                os.write(reinterpret_cast<const char*>(&v), sizeof(v)).get();
+            };
+            write_be(chunk_size);
+            for (auto c : checksums) {
+                write_be(c);
+            }
+            os.flush().get();
+        };
+        const auto crc_filename = sst->get_filename(component_type::CRC).format();
+
+        auto require_malformed = [&] (uint32_t chunk_size) {
+            write_crc(chunk_size, {1, 2, 3});
+            BOOST_REQUIRE_EXCEPTION(sst->read_checksum().get(), malformed_sstable_exception, [&] (const malformed_sstable_exception& e) {
+                const std::string_view what = e.what();
+                const auto expected = fmt::format("CRC chunk size {} is not a power of two", chunk_size);
+                if (what.find(expected) == std::string_view::npos || what.find(crc_filename) == std::string_view::npos) {
+                    testlog.error("unexpected exception message: {}", what);
+                    return false;
+                }
+                return true;
+            });
+        };
+        require_malformed(0);
+        require_malformed(3);
+        require_malformed(65535);
+
+        // Valid content is accepted and parsed back as written.
+        write_crc(65536, {1, 2, 3});
+        auto checksum = sst->read_checksum().get();
+        BOOST_REQUIRE(checksum);
+        BOOST_REQUIRE_EQUAL(checksum->chunk_size, 65536u);
+        BOOST_REQUIRE_EQUAL(checksum->checksums.size(), 3u);
     });
 }
 

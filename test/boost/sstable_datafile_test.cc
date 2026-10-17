@@ -3484,8 +3484,8 @@ SEASTAR_TEST_CASE(test_stats_metadata_error_includes_filename) {
             sstables::test(sst)._statistics().contents.erase(metadata_type::Stats);
 
             // Now get_stats_metadata() should throw with the filename in the message
-            auto filename = fmt::to_string(sst->get_filename());
-            BOOST_REQUIRE_EXCEPTION(sst->get_stats_metadata(), std::runtime_error,
+            auto filename = fmt::to_string(sst->get_filename(component_type::Statistics));
+            BOOST_REQUIRE_EXCEPTION(sst->get_stats_metadata(), sstables::malformed_sstable_exception,
                 exception_predicate::message_contains(filename));
         }
     });
