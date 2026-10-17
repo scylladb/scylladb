@@ -478,11 +478,7 @@ class ScyllaCluster:
 
         self.logger.info("Cluster %s get process status for server %s", self.name, server_id)
         server = self.running[server_id]
-        try:
-            process = psutil.Process(server.cmd.pid)
-            status = process.status()
-        except psutil.NoSuchProcess:
-            status = psutil.STATUS_DEAD
+        status = server.process_status()
 
         self.logger.info("Cluster %s process status for server %s is %s", self.name, server_id, status)
         return status

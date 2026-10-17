@@ -29,6 +29,7 @@ from io import BufferedWriter
 from typing import Any, Dict, List, NamedTuple, NoReturn, Optional, Union
 
 import aiohttp
+import psutil
 import yaml
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
@@ -1031,14 +1032,17 @@ class ScyllaServer:
             self.shutdown_control_connection()
             return
 
-        # Dump the profile if exists and supported by the API.
-        try:
-            api = ScyllaRESTAPIClient()
-            await api.dump_llvm_profile(self.ip_addr)
-        except:
-            # since it is not part of the test functionality, allow
-            # this step to fail unconditionally.
-            pass
+        # Dump the profile if exists and supported by the API. A stopped process
+        # (paused by the test, or by one of the SIGSTOP error injections) can't
+        # answer, so the request would only block until it times out.
+        if self.process_status() != psutil.STATUS_STOPPED:
+            try:
+                api = ScyllaRESTAPIClient()
+                await api.dump_llvm_profile(self.ip_addr)
+            except:
+                # since it is not part of the test functionality, allow
+                # this step to fail unconditionally.
+                pass
         self.shutdown_control_connection()
 
         if cmd.returncode is not None:
@@ -1094,13 +1098,28 @@ class ScyllaServer:
                 self.logger.info("gracefully stopped %s", self)
             self.cmd = None
 
+    def process_status(self) -> str:
+        """Return the status of the server's process, as reported by psutil.
+
+        Return psutil.STATUS_DEAD if the server has no process or it no longer exists."""
+        if not self.cmd:
+            return psutil.STATUS_DEAD
+        try:
+            return psutil.Process(self.cmd.pid).status()
+        except psutil.NoSuchProcess:
+            return psutil.STATUS_DEAD
+
     def pause(self) -> None:
         """Pause a running server."""
+        status = self.process_status()
+        assert status != psutil.STATUS_STOPPED, f"{self} is already paused"
         if self.cmd:
             self.cmd.send_signal(signal.SIGSTOP)
 
     def unpause(self) -> None:
         """Unpause a paused server."""
+        status = self.process_status()
+        assert status == psutil.STATUS_STOPPED, f"{self} is not paused (process status: {status})"
         if self.cmd:
             self.cmd.send_signal(signal.SIGCONT)
 
