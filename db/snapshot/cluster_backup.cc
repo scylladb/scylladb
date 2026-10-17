@@ -399,7 +399,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
     auto sstables = co_await sth.get_snapshot_sstables(tag, ksname, cfname 
         , local.dc
         , local.rack
-        , db::consistency_level::LOCAL_ONE // we are querying our own data
+        , db::consistency_level::ONE // we are querying our own data
         , first_token
         , last_token
     );
