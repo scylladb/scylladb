@@ -2264,6 +2264,60 @@ async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: Sc
         await wait_for_valid_load_stats(cql, table_id, timeout=60)
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_resize_reconciliation_does_not_overwrite_newer_load_stats(manager: ScyllaClusterManager):
+    """
+    A load stats refresh which completes while the resize finalization reconciles the stats
+    (triggered by a table creation, say) must not be overwritten by the reconciled copy, which
+    has no sizes for the new table.
+    """
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'load_balancer=debug',
+    ]
+    # No periodic refresh: only the refreshes the code asks for.
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 3600 }
+    server = await manager.server_add(cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(256)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Reconciliation needs a size for every pre-resize replica.
+        await wait_for_valid_load_stats(cql, table_id)
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+
+        # Hold the finalization between reading the stats and installing the reconciled copy.
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_load_stats_before_install", one_shot=True)
+        log = await manager.server_open_log(server.server_id)
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 4}}")
+        await manager.enable_tablet_balancing()
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_resize_load_stats_before_install")
+        assert await get_tablet_count(manager, server, ks, 'test') == 4
+
+        # A table creation triggers a refresh, which completes while the finalization waits.
+        mark = await log.mark()
+        await cql.run_async(f"CREATE TABLE {ks}.other (pk int PRIMARY KEY, c int);")
+        other_id = await manager.get_table_or_view_id(ks, 'other')
+        await log.wait_for('Refreshed table load stats for all DC', from_mark=mark)
+        await wait_for_valid_load_stats(cql, other_id, timeout=30)
+        logger.info("The new table has a size for every tablet replica; releasing the reconciliation")
+
+        mark = await log.mark()
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_load_stats_before_install")
+        # The barrier which ends the finalization runs after the stats are installed.
+        await log.wait_for('executing global topology command barrier_and_drain', from_mark=mark)
+
+        # The new table's sizes must survive the reconciliation.
+        await wait_for_valid_load_stats(cql, other_id, timeout=30)
+        # The refreshed stats already have the new keys for the resized table, so reconciling
+        # them fails and the fallback refresh must bring its sizes back.
+        await wait_for_valid_load_stats(cql, table_id, timeout=30)
+
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
