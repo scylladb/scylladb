@@ -16,6 +16,7 @@
 #include "db/timeout_clock.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "service/raft/group0_fwd.hh"
+#include "utils/error_injection.hh"
 #include "idl/raft.dist.hh"
 
 namespace service {
@@ -213,10 +214,20 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
+    if (_shutdown_gate.is_closed()) {
+        throw raft::stopped_error{};
+    }
+    // Hold the gate for the whole call, so that abort() does not resolve
+    // while the transfer (or its continuation) is still running.
+    auto holder = _shutdown_gate.hold();
     co_await _sm.transfer_snapshot(from, snp.snp);
-    co_return co_await raft_with_gate(_shutdown_gate, [&] {
-        return _client->apply_snapshot(from, std::move(snp));
-    });
+    co_await utils::get_local_injector().inject("raft_rpc_apply_snapshot_after_transfer", utils::wait_for_message(std::chrono::seconds(60)));
+    // abort() may have run during the transfer. `_client` must not be called after
+    // that, and there must be no suspension point between this check and the call.
+    if (_shutdown_gate.is_closed()) {
+        throw raft::stopped_error{};
+    }
+    co_return co_await _client->apply_snapshot(from, std::move(snp));
 }
 
 future<raft::add_entry_reply> raft_rpc::execute_add_entry(raft::server_id from, raft::command cmd) {
