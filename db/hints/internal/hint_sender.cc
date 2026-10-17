@@ -249,7 +249,6 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(token);
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
-    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         const auto& tm = ermp->get_token_metadata();
@@ -258,7 +257,7 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
         if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
             manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
             // dst is not duplicated in pending_endpoints because it's in natural_endpoints
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+            co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
                 if (tm.is_leaving(end_point_key())) {
@@ -267,9 +266,8 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
                     manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
                 }
             }
-            return _proxy.send_hint_to_all_replicas(std::move(m));
+            co_await _proxy.send_hint_to_all_replicas(std::move(m));
         }
-    });
 }
 
 future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
