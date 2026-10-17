@@ -2787,6 +2787,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_hinted_handoff(ctx).get();
             });
 
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+            api::set_hinted_handoff_test(ctx, proxy).get();
+            auto stop_hinted_handoff_test_api = defer_verbose_shutdown("hinted handoff test API", [&ctx] {
+                api::unset_hinted_handoff_test(ctx).get();
+            });
+#endif
+
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "Launching generate_mv_updates for non system tables");
                 with_scheduling_group(dbcfg.streaming_scheduling_group, [] {

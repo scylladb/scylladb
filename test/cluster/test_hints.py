@@ -5,6 +5,7 @@
 #
 import asyncio
 import glob
+import itertools
 import os
 import pytest
 import time
@@ -53,6 +54,7 @@ async def get_all_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress
         "discarded",
         "send_errors",
         "corrupted_files",
+        "discarded_segments",
         "pending_drains",
         "pending_sends"]
 
@@ -132,6 +134,30 @@ async def await_sync_point(client: TCPRESTClient, server_ip: IPAddress, sync_poi
             return True
         case _:
             pytest.fail(f"Unexpected response from the server: {response}")
+
+
+async def discard_hint_segments(client: TCPRESTClient, server_ip: IPAddress, sync_point: str) -> None:
+    """
+    Make the regular hint managers on `server_ip` discard all hint segments
+    containing hints at or below the replay positions of `sync_point`.
+    The segments are discarded asynchronously.
+
+    Only available in non-release modes.
+    """
+    params = {"id": sync_point}
+    await client.post("/hinted_handoff_test/discard_segments", host=server_ip, port=10_000, params=params)
+
+
+async def flush_hints(client: TCPRESTClient, server_ip: IPAddress) -> None:
+    """
+    Make the regular hint managers on `server_ip` close the hint segments
+    currently being written to. The closed segments are queued for replay
+    once the hint senders are done with the segments they're
+    already replaying.
+
+    Only available in non-release modes.
+    """
+    await client.post("/hinted_handoff_test/flush", host=server_ip, port=10_000)
 
 
 async def update_hh_enabled_via_http_api(manager: ScyllaClusterManager, server: ServerInfo, new_value: str) -> None:
@@ -289,6 +315,197 @@ async def test_sync_point(manager: ScyllaClusterManager):
         await manager.server_sees_other_server(node1.ip_addr, node3.ip_addr)
 
         assert await await_sync_point(manager.api.client, node1.ip_addr, sync_point1, 30)
+
+
+@pytest.mark.skip_mode(
+    mode="release",
+    reason="the hinted handoff test API and error injections aren't available in release mode")
+async def test_discard_hint_segments_up_to_sync_point(manager: ScyllaClusterManager):
+    """
+    Verify that discarding hint segments up to a sync point:
+
+    - Drops the hints written before the sync point was created, including
+      those from older segments.
+    - Drops whole segments, i.e. even if a hint was written after a sync point
+      was created, as long as it landed in the same segment, it's also discarded.
+    - Drops the hints even if the target node is down.
+    - Dropping the hints resolves the corresponding sync points just like
+      they would be resolved if the hints were sent normally.
+    - Dropping the hints doesn't affect newer segments.
+    """
+
+    # Use one shard so that we can control which hints go into which segment.
+    cmdline = ["--smp", "1", "--logger-log-level", "hints_manager=debug"]
+    config = {
+        "error_injections_at_startup": [
+            # Disable automatic flushing so we have full control over which hints
+            # land in which segment.
+            "hinted_handoff_skip_periodic_flush",
+            # Make hint sender refresh faster to speed up the test.
+            "decrease_hints_flush_period"
+        ]
+    }
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    async def write_rows_and_wait_for_hints(keys: range) -> None:
+        await gather_safely(*[cql.run_async(stmt, (key, key)) for key in keys])
+        await wait_until_hint_writing_settled(manager, [node1])
+        assert await get_hint_metrics(manager.metrics, node1.ip_addr, "written") == keys.stop
+
+    # These hints are going to be in an older segment than the one
+    # corresponding to the sync point, so they're going to be discarded too.
+    keys1 = range(0, 10)
+    await write_rows_and_wait_for_hints(keys1)
+    sync_point1 = await create_sync_point(manager.api.client, node1.ip_addr)
+    wait_task1 = asyncio.create_task(await_sync_point(manager.api.client, node1.ip_addr,
+                                                      sync_point1, timeout=120))
+
+    # Move on to the next segment.
+    await flush_hints(manager.api.client, node1.ip_addr)
+
+    # These keys are going to be covered by the sync point itself,
+    # so they're going to be discarded.
+    keys2 = range(10, 20)
+    await write_rows_and_wait_for_hints(keys2)
+    sync_point2 = await create_sync_point(manager.api.client, node1.ip_addr)
+    wait_task2 = asyncio.create_task(await_sync_point(manager.api.client, node1.ip_addr,
+                                                      sync_point2, timeout=120))
+
+    # These hints are going to land in the same segment as keys2,
+    # so they're going to be discarded as well.
+    keys3 = range(20, 30)
+    await write_rows_and_wait_for_hints(keys3)
+
+    # Move on to the next segment.
+    await flush_hints(manager.api.client, node1.ip_addr)
+
+    # These keys are going to land in a new segment.
+    keys4 = range(30, 40)
+    await write_rows_and_wait_for_hints(keys4)
+
+    # Schedule discarding the hints.
+    await discard_hint_segments(manager.api.client, node1.ip_addr, sync_point2)
+    # Close the segment.
+    await flush_hints(manager.api.client, node1.ip_addr)
+
+    discarded_keys = list(itertools.chain(keys1, keys2, keys3))
+    preserved_keys = list(keys4)
+
+    # Now that all of the segments are in place, allow hint sender to
+    # refresh its state.
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_skip_periodic_flush")
+
+    # The discarded hints count as replayed, so the sync points should
+    # resolve even though node 2 is still down.
+    assert await wait_task1
+    assert await wait_task2
+    metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+    assert metrics["discarded_segments"] == 2, f"Unexpected number of discarded segments: {metrics}"
+    assert metrics["sent_total"] == 0, f"Some hints have been sent: {metrics}"
+
+    sync_point = await create_sync_point(manager.api.client, node1.ip_addr)
+
+    await manager.server_start(node2.server_id)
+    assert await await_sync_point(manager.api.client, node1.ip_addr, sync_point, timeout=120)
+
+    metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+    # No new segment should be discarded.
+    assert metrics["discarded_segments"] == 2, f"Unexpected number of discarded segments: {metrics}"
+    # Inequality in case there are some retries.
+    assert metrics["sent_total"] >= len(preserved_keys), f"Too few hints have been sent: {metrics}"
+
+    # Hints are the only way the written rows could have reached node2.
+    await manager.server_stop_gracefully(node1.server_id)
+    cql = await manager.get_cql_exclusive(node2)
+
+    await assert_rows_present(cql, "ks.tbl", "pk", discarded_keys, present=False)
+    await assert_rows_present(cql, "ks.tbl", "pk", preserved_keys, present=True)
+
+
+@pytest.mark.skip_mode(
+    mode="release",
+    reason="the hinted handoff test API and error injections aren't available in release mode")
+async def test_discard_hint_segments_only_for_sync_point_hosts(manager: ScyllaClusterManager):
+    """
+    Verify that discarding hint segments up to a sync point only affects hints
+    towards the hosts the sync point was created for.
+    """
+
+    # Use one shard so that we can control which hints go into which segment.
+    cmdline = ["--smp", "1", "--logger-log-level", "hints_manager=debug"]
+    config = {
+        "error_injections_at_startup": [
+            # Disable automatic flushing so we have full control over which hints
+            # land in which segment.
+            "hinted_handoff_skip_periodic_flush",
+            # Make hint sender refresh faster to speed up the test.
+            "decrease_hints_flush_period"
+        ]
+    }
+
+    node1, node2, node3 = await manager.servers_add(3, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, v int)")
+
+    await gather_safely(*[manager.server_stop_gracefully(srv.server_id) for srv in (node2, node3)])
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+    await manager.server_not_sees_other_server(node1.ip_addr, node3.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    keys = range(0, 10)
+    await gather_safely(*[cql.run_async(stmt, (key, key)) for key in keys])
+    await wait_until_hint_writing_settled(manager, [node1])
+    # Every write generates two hints: towards node 2 and node 3.
+    assert await get_hint_metrics(manager.metrics, node1.ip_addr, "written") == 2 * len(keys)
+
+    node2_sync_point = await create_sync_point(manager.api.client, node1.ip_addr,
+                                               target_hosts=node2.ip_addr)
+    sync_point = await create_sync_point(manager.api.client, node1.ip_addr)
+    await discard_hint_segments(manager.api.client, node1.ip_addr, node2_sync_point)
+
+    # Close the segments so that the hint senders can process them.
+    await flush_hints(manager.api.client, node1.ip_addr)
+    # All segments are in place now, so let the hint sender refresh freely.
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_skip_periodic_flush")
+
+    await gather_safely(*[manager.server_start(srv.server_id) for srv in (node2, node3)])
+    await manager.servers_see_each_other([node1, node2, node3])
+    assert await await_sync_point(manager.api.client, node1.ip_addr, sync_point, timeout=120)
+
+    metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+    # Only the segment with hints towards node 2 should have been discarded.
+    assert metrics["discarded_segments"] == 1, f"Unexpected number of discarded segments: {metrics}"
+    # The hints towards node 3 should be sent normally.
+    # We use the inequality here because some hints may be retried.
+    assert metrics["sent_total"] >= len(keys), f"Too few hints have been sent: {metrics}"
+
+    # Hints are the only way the written rows could have reached node 2 and node 3.
+    await gather_safely(*[manager.server_stop_gracefully(srv.server_id) for srv in (node1, node3)])
+    cql = await manager.get_cql_exclusive(node2)
+    await assert_rows_present(cql, "ks.tbl", "pk", keys, present=False)
+
+    await gather_safely(*[
+        manager.server_start(node3.server_id),
+        manager.server_stop_gracefully(node2.server_id)])
+
+    cql = await manager.get_cql_exclusive(node3)
+    await assert_rows_present(cql, "ks.tbl", "pk", keys, present=True)
 
 
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
