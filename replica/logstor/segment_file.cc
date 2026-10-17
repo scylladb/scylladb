@@ -18,11 +18,13 @@
 #include <utility>
 #include <vector>
 
+#include <seastar/core/align.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
 #include "replica/logstor/ondisk.hh"
@@ -345,6 +347,113 @@ future<> file_manager::zero_region(file_id_t file_id, uint64_t offset, uint64_t 
                 offset, offset + size, file_id, _cfg.file_size));
     }
     co_await write_zeros(get_open_file(file_id), offset, size);
+}
+
+segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size)
+    : _id(id)
+    , _file(std::move(file))
+    , _file_offset(file_offset)
+    , _max_size(max_size) {
+}
+
+void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
+    _seg_ref = std::move(seg_ref);
+    _seq_num = seq_num;
+}
+
+future<> writeable_segment::stop() {
+    if (_write_gate.is_closed()) {
+        co_return;
+    }
+    co_await _write_gate.close();
+}
+
+future<std::optional<writeable_segment::append_reservation>> writeable_segment::reserve(size_t size) {
+    if (_failed) [[unlikely]] {
+        co_return std::nullopt;
+    }
+
+    std::optional<seastar::semaphore_units<>> units;
+    try {
+        units = co_await get_units(_append_sem, 1);
+    } catch (...) {
+        // The only way _append_sem breaks is a failed write retiring the segment, which
+        // may have happened while we were waiting for the permit. Nothing was reserved,
+        // so the caller can retry on another segment.
+        co_return std::nullopt;
+    }
+
+    if (!can_fit(size)) {
+        co_return std::nullopt;
+    }
+
+    append_reservation reservation {
+        .pos = segment_position {
+            .segment = _id,
+            .offset = _current_offset,
+        },
+        .units = std::move(*units),
+    };
+
+    _current_offset += size;
+
+    co_return std::move(reservation);
+}
+
+future<segment_position> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
+    auto write_result = co_await coroutine::as_future(do_write(reservation.pos, data));
+    if (write_result.failed()) {
+        auto ex = write_result.get_exception();
+
+        // if a write fails, fail also all later writes to the segment, since we assume no holes in a segment.
+        // the segment is retired, so that callers switch to a new segment instead of failing forever.
+        _failed = true;
+        _append_sem.broken(ex);
+        logstor_logger.warn("Write to segment {} seq {} failed: {}, retiring segment", _id, _seq_num, ex);
+
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return reservation.pos;
+}
+
+future<segment_position> writeable_segment::append(bytes_view data) {
+    auto reservation = co_await reserve(data.size());
+    if (!reservation) {
+        co_return coroutine::return_exception(std::runtime_error(_failed
+                ? fmt::format("Can't append write of size {} to segment {} retired by a failed write", data.size(), _id)
+                : fmt::format("Can't append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
+    }
+    co_return co_await write_reserved(std::move(*reservation), data);
+}
+
+future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
+    utils::get_local_injector().inject("logstor_fail_segment_write", [] {
+        throw std::runtime_error("segment write failed by injection");
+    });
+
+    utils::get_local_injector().inject("logstor_segment_write_io_error", [] {
+        // Simulates a device error reported by the file layer: the handler fires the logstor
+        // disk error signal, which isolates the node, and turns it into a storage_io_error.
+        logstor_error_handler(std::make_exception_ptr(std::system_error(EIO, std::system_category(),
+                "segment write I/O error by injection")));
+    });
+
+    const auto alignment = _file.disk_write_dma_alignment();
+    const uint64_t total = data.size();
+    auto base_offset = absolute_offset(pos.offset);
+    uint64_t written = 0;
+
+    while (written < total) {
+        auto new_written = co_await _file.dma_write(
+                base_offset + written, data.data() + written, total - written);
+
+        written += new_written;
+        if (written == total) {
+            break;
+        }
+
+        written = align_down(written, alignment);
+    }
 }
 
 }
