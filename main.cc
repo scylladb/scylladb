@@ -1909,6 +1909,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
                     gossiper.local(), feature_service.local(), group0_client, dbcfg.gossip_scheduling_group};
 
+            // Before the tablet allocator, which resolves cluster config options through it.
+            checkpoint(stop_signal, "starting cluster config manager");
+            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
+            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
+                cluster_config_manager.stop().get();
+            });
+
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
                 .background_sg = dbcfg.maintenance_scheduling_group,
@@ -2145,12 +2152,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
-
-            checkpoint(stop_signal, "starting cluster config manager");
-            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
-            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
-                cluster_config_manager.stop().get();
-            });
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();

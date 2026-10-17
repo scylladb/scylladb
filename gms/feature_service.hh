@@ -202,6 +202,7 @@ public:
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    gms::feature cluster_config_registry_v1 { *this, "CLUSTER_CONFIG_REGISTRY_V1"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
