@@ -404,6 +404,14 @@ future<segment_position> segment::appender::append(bytes_view data) && {
     auto units = std::move(_units);
     segment& seg = *_segment;
 
+    // A chunk starts at a block boundary, and the file takes only aligned direct writes. The file
+    // reports a failed write as a disk error, which isolates the node. Empty data is refused too,
+    // because its position is the position of the next append.
+    if (data.size() == 0 || data.size() % ondisk::block_alignment != 0) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to append {} bytes to {}, which is not a positive multiple of the block size {}",
+                data.size(), seg._id, ondisk::block_alignment));
+    }
+
     // Data that does not fit would overwrite the next segment in the file. Nothing is written, thus
     // the segment does not fail.
     if (!seg.can_fit(data.size())) [[unlikely]] {
