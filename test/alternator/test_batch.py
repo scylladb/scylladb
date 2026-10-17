@@ -6,16 +6,39 @@
 # Note that various other tests in other files also use these operations,
 # so they are actually tested by other tests as well.
 
+import concurrent.futures
 import random
 import sys
 import traceback
 import time
 
 import pytest
+import requests
 import urllib3
 from botocore.exceptions import ClientError, HTTPClientError
 
 from test.alternator.util import random_string, full_query, multiset, scylla_inject_error, client_no_transform
+
+
+def error_injection_enter_count(rest_api, injection):
+    response = requests.get(f'{rest_api}/v2/error_injection/injection/{injection}/enters', timeout=5)
+    response.raise_for_status()
+    return response.json()
+
+
+def wait_for_error_injection(rest_api, injection, threshold=1):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        count = error_injection_enter_count(rest_api, injection)
+        if count >= threshold:
+            return count
+        time.sleep(0.1)
+    pytest.fail(f'Timed out waiting for error injection {injection}')
+
+
+def message_error_injection(rest_api, injection):
+    response = requests.post(f'{rest_api}/v2/error_injection/injection/{injection}/message', timeout=5)
+    response.raise_for_status()
 
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
@@ -613,6 +636,77 @@ def test_batch_get_item_partial(scylla_only, dynamodb, rest_api, test_table_sn):
         assert multiset(responses) == multiset(
             [{'p': p + str(i % partitions), 'c': i, 'content': content} for i in range(count)])
         assert some_keys_were_unprocessed
+
+# Regression test for #31295: a synchronous failure while launching one read
+# must not abandon an earlier read or misassociate later results with keys.
+def test_batch_get_item_launch_failure(scylla_only, rest_api, test_table_sn):
+    count = 2
+    prefix = random_string()
+    content = random_string()
+    items = [{'p': prefix + str(i), 'c': i, 'content': content} for i in range(count)]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(Item=item)
+
+    request_items = {
+        test_table_sn.name: {
+            'Keys': [{'p': item['p'], 'c': item['c']} for item in items],
+            'ConsistentRead': True,
+        }
+    }
+    pause_injection = "alternator_batch_get_item_pause_read"
+    launch_failure_injection = "alternator_batch_get_item_launch_failure"
+    table_parameters = {'table_name': test_table_sn.name}
+    pause_parameters = {**table_parameters, 'position': 'first'}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        with scylla_inject_error(rest_api, pause_injection, parameters=pause_parameters):
+            with scylla_inject_error(rest_api, launch_failure_injection, one_shot=True, parameters=table_parameters):
+                request_future = executor.submit(
+                    test_table_sn.meta.client.batch_get_item, RequestItems=request_items)
+                try:
+                    wait_for_error_injection(rest_api, pause_injection)
+                    assert not request_future.done()
+                finally:
+                    message_error_injection(rest_api, pause_injection)
+                reply = request_future.result(timeout=60)
+
+    assert len(reply['UnprocessedKeys'][test_table_sn.name]['Keys']) == 1
+    responses = reply['Responses'][test_table_sn.name]
+    retry = test_table_sn.meta.client.batch_get_item(RequestItems=reply['UnprocessedKeys'])
+    responses.extend(retry['Responses'][test_table_sn.name])
+    assert multiset(responses) == multiset(items)
+
+
+# Response processing must wait for every read, because it can throw while a
+# later read still references request-owned state. Reproduces #31295.
+def test_batch_get_item_response_failure_drains_reads(scylla_only, rest_api, test_table_sn):
+    prefix = random_string()
+    items = [{'p': prefix + str(i), 'c': i} for i in range(2)]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(Item=item)
+
+    keys = [{'p': item['p'], 'c': item['c']} for item in items]
+    request_items = {test_table_sn.name: {'Keys': keys, 'ConsistentRead': True}}
+    pause_injection = "alternator_batch_get_item_pause_read"
+    response_failure_injection = "alternator_batch_get_item_response_failure"
+    table_parameters = {'table_name': test_table_sn.name}
+    pause_parameters = {**table_parameters, 'position': 'later'}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        with scylla_inject_error(rest_api, response_failure_injection, parameters=table_parameters):
+            with scylla_inject_error(rest_api, pause_injection, parameters=pause_parameters):
+                request_future = executor.submit(
+                    test_table_sn.meta.client.batch_get_item, RequestItems=request_items)
+                try:
+                    wait_for_error_injection(rest_api, pause_injection)
+                    assert error_injection_enter_count(rest_api, response_failure_injection) == 0
+                    assert not request_future.done()
+                finally:
+                    message_error_injection(rest_api, pause_injection)
+                with pytest.raises(ClientError, match="InternalServerError"):
+                    request_future.result(timeout=60)
+                assert error_injection_enter_count(rest_api, response_failure_injection) == 1
+
 
 # Test that if the batch read failure is total, i.e. all read requests
 # failed, it's reported as an error and not as a regular response with
