@@ -10,8 +10,10 @@
 ###############################################################################
 
 import pytest
+import re
 from .util import new_test_table, unique_key_int
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
@@ -216,3 +218,133 @@ def test_native_function_in_system_keyspace_query(cql):
     list(cql.execute(stmt, [4]))
     # Fully-qualified call takes the single-candidate path; regression guard.
     list(cql.execute("SELECT system.intAsBlob(4) FROM system.local"))
+
+# The following tests are for the format_bytes() and format_time() functions,
+# added in Cassandra 6. The translated tests in
+# cassandra_tests/functions/format_*_fct_test.py test them thoroughly, but
+# always pass them table columns, so these tests check what those don't.
+
+# The value argument of format_bytes() and format_time() can also be a
+# literal - an integer, also one too big for an int, or a string holding an
+# integer - or a bind marker.
+def test_format_functions_literal_and_bound_values(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    # An integer literal, also one too big for an int, or a string literal:
+    assert one('format_bytes(102)') == '102 B'
+    assert one('format_bytes(1563401650)') == '1.46 GiB'
+    assert one('format_bytes(4294967296)') == '4 GiB'
+    assert one("format_bytes('2048')") == '2 KiB'
+    assert one('format_time(9000000)') == '2.5 h'
+    # A bound value:
+    stmt = cql.prepare(f'SELECT format_bytes(?), format_time(?) FROM {table1} WHERE p = {p}')
+    assert tuple(cql.execute(stmt, [2048, 90000]).one()) == ('2 KiB', '1.5 m')
+
+# When the value argument of format_bytes() is a string, it must hold an
+# integer: an optional sign followed by decimal digits, and nothing else - no
+# spaces, exponent or hexadecimal - which fits in a bigint. format_time()
+# parses a string value in the same way.
+def test_format_bytes_string_value(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    assert one("format_bytes('+100')") == '100 B'
+    assert one("format_bytes('007')") == '7 B'
+    assert one("format_bytes('-0')") == '0 B'
+    assert one("format_bytes('9223372036854775807')") == '8589934592 GiB'
+    for s in ['', ' 100', '100 ', '+-1', '1e3', '0x10', '9223372036854775808']:
+        with pytest.raises(InvalidRequest, match=re.escape(f"unable to convert string '{s}' to a value of type long")):
+            one(f"format_bytes('{s}')")
+
+# The units of format_bytes() and format_time() are case-insensitive.
+# format_bytes() prints its unit in the standard case, but format_time()
+# prints the target unit as the user wrote it.
+def test_format_functions_unit_case(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p, i) VALUES ({p}, 1024)')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    assert one("format_bytes(i, 'kib')") == '1 KiB'
+    assert one("format_bytes(i, 'KIB', 'b')") == '1048576 B'
+    assert one("format_time(i, 'MS', 'S')") == '1.02 S'
+
+# format_time()'s microseconds unit can be written as "us" or as "µs", with
+# the micro sign. Cassandra's documentation lists "µs" too, but Cassandra
+# rejects it, because its units are ascii and "µs" isn't ascii
+# (CASSANDRA-21758).
+def test_format_time_micro_sign(cql, table1, new_to_cassandra_6, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    assert one("format_time(5, 'ms', 'us')") == '5000 us'
+    assert one("format_time(5, 'ms', 'µs')") == '5000 µs'
+    assert one("format_time(5000, 'µs', 'ms')") == '5 ms'
+
+# The result of format_time() and format_bytes() is rounded to two decimal
+# places, according to the exact binary value of the double. A value which
+# looks like a decimal tie usually isn't one: 1005 ms is
+# 1.00500000000000000444 s in a double, so it is rounded up, but 1025 ms is
+# 1.02499999999999991118 s, so it is rounded down. An exact tie is only
+# possible for the fractions .125, .375, .625 and .875, and there Cassandra
+# rounds up and Scylla rounds to even - which gives the same result for .375
+# and .875 but not for .125 and .625, so the test accepts both.
+def test_format_functions_rounding(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    assert one("format_time(1005, 'ms', 's')") == '1.01 s'
+    assert one("format_time(1025, 'ms', 's')") == '1.02 s'
+    assert one("format_time(1, 'ns', 'd')") == '0 d'
+    assert one("format_time(125, 'ms', 's')") in ['0.12 s', '0.13 s']
+    assert one("format_time(375, 'ms', 's')") == '0.38 s'
+    # An exact tie in a large number, 2^44 + 0.125 KiB:
+    assert one("format_bytes(18014398509482112, 'B', 'KiB')") in ['17592186044416.12 KiB', '17592186044416.13 KiB']
+
+# format_bytes() prints a result of 10^16 or more - always an integer - with
+# the shortest digits that identify the double, padded with zeros, not with
+# the exact value of the double. A result just below 10^16 is printed
+# exactly.
+def test_format_bytes_large_numbers(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    def one(expr):
+        return cql.execute(f'SELECT {expr} FROM {table1} WHERE p = {p}').one()[0]
+    assert one("format_bytes(9999999999999998, 'B', 'B')") == '9999999999999998 B'
+    assert one("format_bytes(10000000000000000, 'B', 'B')") == '10000000000000000 B'
+    assert one("format_bytes(9223372036854775807, 'B', 'B')") == '9223372036854776000 B'
+
+# The acceptable ways to format a number with at most two decimal places,
+# rounding according to the exact binary value of the double, as Decimal(value)
+# does: on an exact tie, Cassandra rounds up and Scylla rounds to even.
+def acceptable_formats(value):
+    ret = set()
+    for rounding in [ROUND_HALF_UP, ROUND_HALF_EVEN]:
+        s = format(Decimal(value).quantize(Decimal('0.01'), rounding=rounding), 'f')
+        ret.add(s.rstrip('0').rstrip('.') if '.' in s else s)
+    return ret
+
+# Check the rounding of many results of format_bytes() and format_time().
+# n bytes is n/1024 KiB, so n from 0 to 2047 gives every multiple of 1/1024
+# below 2, including all four kinds of exact ties (.125, .375, .625 and
+# .875). n milliseconds is n * 0.001 seconds, which is never an exact tie,
+# but often looks like a decimal tie.
+def test_format_functions_rounding_many(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    stmt = cql.prepare(f"SELECT format_bytes(?, 'B', 'KiB'), format_time(?, 'ms', 's') FROM {table1} WHERE p = {p}")
+    for n in range(2048):
+        kib, s = cql.execute(stmt, [n, n]).one()
+        assert kib in {f + ' KiB' for f in acceptable_formats(n / 1024)}
+        assert s in {f + ' s' for f in acceptable_formats(n * (1e6 / 1e9))}
+
+# format_bytes() and format_time() also accept a column whose type is
+# reversed - a clustering column with descending order.
+def test_format_functions_desc_column(cql, test_keyspace, new_to_cassandra_6):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c)', 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        cql.execute(f'INSERT INTO {table} (p, c) VALUES (1, 2048)')
+        assert tuple(cql.execute(f"SELECT format_bytes(c), format_time(c, 's') FROM {table} WHERE p = 1").one()) == ('2 KiB', '2.05 s')
