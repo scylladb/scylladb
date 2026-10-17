@@ -10,7 +10,6 @@
 
 from ...porting import *
 
-@pytest.mark.xfail(reason="Issue #2060, #13109")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
 
@@ -605,7 +604,6 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(1, 1, 2, 2, 2),
                    row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #13109")
 def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
@@ -1069,19 +1067,24 @@ def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
                    row(2, 2, 1, 1))
 
         # Multi-partitions query with ORDER BY
-        # Reproduces #13109:
-        assertRows(execute_without_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC"),
+        # Reproduces #13109.
+        # The groups (1, 4) and (2, 4) both have b = 4 and c = 3, and the
+        # order of such ties isn't specified, and is different in Scylla and
+        # Cassandra (see #15099).
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC"),
                    row(4, 8, None, 1, 0),
-                   row(1, 4, 1, 2, 2),
-                   row(2, 4, 2, 1, 1),
+                   ties(row(1, 4, 1, 2, 2), row(2, 4, 2, 1, 1)),
                    row(2, 2, 2, 1, 1),
                    row(1, 2, 1, 2, 2))
 
         # Multi-partitions queries with ORDER BY and LIMIT
         # Reproduces #5361:
-        assertRows(execute_without_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC LIMIT 2"),
-                   row(4, 8, None, 1, 0),
-                   row(1, 4, 1, 2, 2))
+        # As above, the groups (1, 4) and (2, 4) are a tie, and here the
+        # LIMIT keeps just one of them - which one isn't specified, and is
+        # different in Scylla and Cassandra (see #15099).
+        assert_rows2(execute_without_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b ORDER BY b DESC, c DESC LIMIT 2"),
+                   [row(4, 8, None, 1, 0), row(1, 4, 1, 2, 2)],
+                   [row(4, 8, None, 1, 0), row(2, 4, 2, 1, 1)])
 
 def testGroupByWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:

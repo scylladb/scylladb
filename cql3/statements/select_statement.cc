@@ -562,10 +562,15 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_aggregate_or_nonpaged_filtering(std::unique_ptr<service::pager::query_pager> p, const query_options& options,
         gc_clock::time_point now, int32_t page_size, db::timeout_clock::time_point timeout, uint64_t limit) const {
     auto per_partition_limit = get_limit(options, _per_partition_limit, true);
-    auto builder = cql3::selection::result_set_builder(*_selection, now, &options, *_group_by_cell_indices, limit, per_partition_limit);
+    // With post-query ordering (IN on the partition key and ORDER BY), the
+    // first "limit" rows (or groups) we read are the first ones in partition
+    // order, not in the requested order. So we must collect all of them,
+    // sort, and only then apply the limit.
+    const uint64_t collect_limit = needs_post_query_ordering() ? query::max_rows : limit;
+    auto builder = cql3::selection::result_set_builder(*_selection, now, &options, *_group_by_cell_indices, collect_limit, per_partition_limit);
     coordinator_result<void> result_void = co_await utils::result_do_until(
-            [&p, &builder, limit] {
-                return p->is_exhausted() || (limit < builder.result_set_size());
+            [&p, &builder, collect_limit] {
+                return p->is_exhausted() || (collect_limit < builder.result_set_size());
             },
             [&p, &builder, page_size, now, timeout] {
                 return p->fetch_page_result(builder, page_size, now, timeout);
@@ -574,8 +579,15 @@ select_statement::execute_aggregate_or_nonpaged_filtering(std::unique_ptr<servic
     if (result_void.has_error()) {
         co_return failed_result_to_result_message(std::move(result_void));
     }
-    co_return co_await builder.with_thread_if_needed([this, &p, &builder] {
+    co_return co_await builder.with_thread_if_needed([this, &p, &builder, limit] {
         auto rs = builder.build();
+        if (needs_post_query_ordering()) {
+            rs->sort(_ordering_comparator);
+            if (_is_reversed) {
+                rs->reverse();
+            }
+            rs->trim(limit);
+        }
         if (needs_post_filtering()) {
             _stats.filtered_rows_read_total += p->stats().rows_read_total;
             _stats.filtered_rows_matched_total += rs->size();
@@ -594,6 +606,11 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
+    if ((aggregate || nonpaged_filtering) && needs_post_query_ordering()) {
+        // execute_aggregate_or_nonpaged_filtering() needs to read all the
+        // rows, and apply the limit only after sorting them.
+        command->set_row_limit(query::max_rows);
+    }
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
             state, options, command, std::move(key_ranges), needs_post_filtering() ? _restrictions : nullptr, std::move(cas_shard));
 

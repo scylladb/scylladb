@@ -1955,3 +1955,17 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+# A materialized view's WHERE clause cannot restrict both the token and the
+# partition key columns. Cassandra doesn't allow token restrictions in a view
+# at all (CASSANDRA-13464), while Scylla allows a view with just token
+# restrictions - cassandra_tests/view_schema_test.py's
+# testViewTokenRestrictions checks that such a view works.
+def test_token_and_partition_key_in_view(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, PRIMARY KEY (p, c)') as table:
+        with pytest.raises(InvalidRequest, match='cannot restrict both the token'):
+            with new_materialized_view(cql, table, '*', 'c, p', 'p = 1 AND token(p) > 0 AND c IS NOT NULL'):
+                pass
+        with pytest.raises(InvalidRequest, match='cannot restrict both the token'):
+            with new_materialized_view(cql, table, '*', 'c, p', 'p > 1 AND token(p) > 0 AND c IS NOT NULL'):
+                pass
