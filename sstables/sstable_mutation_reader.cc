@@ -136,6 +136,16 @@ std::vector<column_translation::column_info> column_translation::state::build(
                 type = freeze_types_in_collections(std::move(type));
             }
             const column_definition* def = s.get_column_definition(desc.name.value);
+            // If the sstable's column is static and the schema's column of
+            // the same name is regular, or vice versa, then the sstable's
+            // column was dropped and later a column of the other kind was
+            // added with the same name. The sstable's column is then just a
+            // dropped column, missing in the current schema. The exception is
+            // a static compact table, whose regular columns are written to the
+            // static row.
+            if (def && def->is_static() != is_static && !s.is_static_compact_table()) {
+                def = nullptr;
+            }
             std::optional<column_id> id;
             bool schema_mismatch = false;
             if (def) {
