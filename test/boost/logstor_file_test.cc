@@ -29,6 +29,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 
+#include "exceptions/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
 #include "replica/logstor/segment_file.hh"
 #include "test/lib/eventually.hh"
@@ -76,6 +77,69 @@ void make_file(const std::filesystem::path& path) {
 }
 
 } // anonymous namespace
+
+// Checks that the segment ids continue from one file to the next, also in the files above the
+// configured count, and that segments_in_file() gives the segments that location_of() puts in the
+// file.
+BOOST_AUTO_TEST_CASE(test_segment_geometry_maps_a_segment_to_its_file) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    const segment_geometry geometry(segment_size, 4 * segment_size, 17 * segment_size);
+    BOOST_REQUIRE_EQUAL(geometry.segments_per_file(), 4);
+    BOOST_REQUIRE_EQUAL(geometry.file_count(), 4);
+    BOOST_REQUIRE_EQUAL(geometry.segment_count(), 16);
+
+    auto location = geometry.location_of(log_segment_id(0));
+    BOOST_REQUIRE_EQUAL(location.file_id, 0);
+    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
+    location = geometry.location_of(log_segment_id(3));
+    BOOST_REQUIRE_EQUAL(location.file_id, 0);
+    BOOST_REQUIRE_EQUAL(location.file_offset, 3 * segment_size);
+    location = geometry.location_of(log_segment_id(4));
+    BOOST_REQUIRE_EQUAL(location.file_id, 1);
+    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
+    location = geometry.location_of(log_segment_id(21));
+    BOOST_REQUIRE_EQUAL(location.file_id, 5);
+    BOOST_REQUIRE_EQUAL(location.file_offset, segment_size);
+
+    for (file_id_t file_id = 0; file_id < 6; ++file_id) {
+        uint64_t expected_offset = 0;
+        for (auto segment_id : geometry.segments_in_file(file_id)) {
+            BOOST_REQUIRE_EQUAL(segment_id.value, file_id * 4 + expected_offset / segment_size);
+            location = geometry.location_of(segment_id);
+            BOOST_REQUIRE_EQUAL(location.file_id, file_id);
+            BOOST_REQUIRE_EQUAL(location.file_offset, expected_offset);
+            expected_offset += segment_size;
+        }
+        BOOST_REQUIRE_EQUAL(expected_offset, 4 * segment_size);
+    }
+}
+
+// Checks that a file holds only the segments that fit in it completely, and that the disk holds
+// only complete files.
+BOOST_AUTO_TEST_CASE(test_segment_geometry_counts_only_complete_segments_and_files) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    const segment_geometry geometry(segment_size, 2 * segment_size + segment_size / 2, 8 * segment_size);
+    BOOST_REQUIRE_EQUAL(geometry.segments_per_file(), 2);
+    BOOST_REQUIRE_EQUAL(geometry.file_count(), 3);
+    BOOST_REQUIRE_EQUAL(geometry.segment_count(), 6);
+
+    const auto location = geometry.location_of(log_segment_id(2));
+    BOOST_REQUIRE_EQUAL(location.file_id, 1);
+    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
+}
+
+// Checks that a configuration without one complete segment in a file, or without one complete file
+// in the disk size, is refused, and that one segment in one file is accepted.
+BOOST_AUTO_TEST_CASE(test_segment_geometry_refuses_an_invalid_configuration) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    BOOST_REQUIRE_THROW(segment_geometry(0, segment_size, segment_size), exceptions::configuration_exception);
+    BOOST_REQUIRE_THROW(segment_geometry(segment_size, 0, segment_size), exceptions::configuration_exception);
+    BOOST_REQUIRE_THROW(segment_geometry(2 * segment_size, segment_size, 2 * segment_size), exceptions::configuration_exception);
+    BOOST_REQUIRE_THROW(segment_geometry(segment_size, 2 * segment_size, segment_size), exceptions::configuration_exception);
+
+    const segment_geometry geometry(segment_size, segment_size, segment_size);
+    BOOST_REQUIRE_EQUAL(geometry.segment_count(), 1);
+}
 
 // Checks that a file is allocated by its first segment, and not when its background format ends. A
 // file manager that takes a formatted file as allocated starts no format of the next file, and the
