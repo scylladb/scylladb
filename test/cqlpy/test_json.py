@@ -13,7 +13,7 @@
 
 from .util import unique_name, unique_key_int, new_test_table
 
-from cassandra.protocol import FunctionFailure
+from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
 
 import pytest
@@ -643,3 +643,23 @@ def test_select_distinct_json(cql, test_keyspace):
         result = list(cql.execute(f"SELECT JSON p FROM {table} WHERE p IN ({p1}, {p2})"))
         json_values = [json.loads(row[0])["p"] for row in result]
         assert sorted(json_values) == sorted([p1, p1, p2, p2])
+
+# A COMPACT STORAGE table without regular columns has, internally, a hidden
+# regular column named "value", which INSERT JSON must not accept, just like
+# the other forms of INSERT don't. Reproduces #12815. It's scylla_only
+# because Cassandra no longer allows creating COMPACT STORAGE tables.
+def test_insert_json_compact_storage_hidden_column(cql, test_keyspace, compact_storage, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, b int, PRIMARY KEY (a, b)', 'WITH COMPACT STORAGE') as table:
+        with pytest.raises(InvalidRequest, match='value'):
+            cql.execute(f"""INSERT INTO {table} JSON '{{"a": 1, "b": 1, "value": 2}}'""")
+
+# An INSERT JSON into a COMPACT STORAGE table without regular columns must
+# create the row, just like a regular INSERT does. Reproduces SCYLLADB-5410,
+# where INSERT JSON wrote nothing. It's scylla_only because Cassandra no
+# longer allows creating COMPACT STORAGE tables.
+def test_insert_json_compact_storage_no_regular_columns(cql, test_keyspace, compact_storage, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, b int, PRIMARY KEY (a, b)', 'WITH COMPACT STORAGE') as table:
+        cql.execute(f'INSERT INTO {table} (a, b) VALUES (1, 1)')
+        cql.execute(f"""INSERT INTO {table} JSON '{{"a": 2, "b": 2}}'""")
+        cql.execute(f"""INSERT INTO {table} JSON '{{"a": 3, "b": 3}}' DEFAULT UNSET""")
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(1, 1), (2, 2), (3, 3)]
