@@ -57,7 +57,7 @@ static std::unordered_map<sstring, rjson::value> handle_case_sensitivity(rjson::
 std::unordered_map<sstring, bytes_opt>
 parse(const sstring& json_string, const schema::columns_type& expected_receivers) {
     std::unordered_map<sstring, bytes_opt> json_map;
-    auto prepared_map = handle_case_sensitivity(rjson::parse(json_string));
+    auto prepared_map = handle_case_sensitivity(rjson::parse_full_precision(json_string));
     for (const auto& def : expected_receivers) {
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);

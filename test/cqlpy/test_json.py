@@ -147,15 +147,17 @@ def test_fromjson_nonint_prepared(cql, table1):
 # of int and bigint respectively - so they should be assignable into an int or
 # bigint. This test checks that.
 # Reproduces issue #10100.
-# This test is marked with "cassandra_bug" because it fails in Cassandra as
-# well and we consider this failure a bug.
-def test_fromjson_int_scientific_notation_unprepared(cql, table1, cassandra_bug):
+# Cassandra doesn't accept a number written in scientific notation for an
+# integer column at all, so this is a Scylla extension and the test is
+# scylla_only. The JSON standard doesn't require it either - it only has a
+# single "number" type, and leaves it to the implementation how to read it.
+def test_fromjson_int_scientific_notation_unprepared(cql, table1, scylla_only):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, bigv) VALUES ({p}, fromJson('1.23456789E+9'))")
     assert list(cql.execute(f"SELECT p, bigv from {table1} where p = {p}")) == [(p, 1234567890)]
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('1e6'))")
     assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, 1000000)]
-def test_fromjson_int_scientific_notation_prepared(cql, table1, cassandra_bug):
+def test_fromjson_int_scientific_notation_prepared(cql, table1, scylla_only):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, '1.23456789E+9'])
@@ -200,32 +202,120 @@ def test_fromjson_bigint_nonoverflow(cql, table1):
     cql.execute(stmt, [p, '9223372036854775807'])
     assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(9223372036854775807,)]
 
-# Test the same non-overflowing integer with scientific notation. This is the
-# same test as test_fromjson_int_scientific_notation_prepared above (so
-# reproduces #10100), just with a number higher than 2^53. This presents
-# difficult problem for a parser like the RapidJSON one we use, that decides
-# to read scientific notation numbers through a "double" variable: a double
-# only had 53 significant bits of mantissa, so may not preserve numbers higher
-# than 2^53 accurately.
-# Note that the JSON standard (RFC 8259) explains that because implementations
-# may use double-precision representation (as the Scylla-used RapidJSON does),
-# "numbers that are integers and are in the range [-(2**53)+1, (2**53)-1] are
-# interoperable in the sense that implementations will agree exactly on their
-# numeric values.". Because the number in this test is higher, the JSON
-# standard suggests it may be fine to botch it up, so it might be acceptable
-# to fail this test.
-# Reproduces #10100 and #10137.
-@pytest.mark.xfail(reason="issue #10137")
-def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
+# A number with a decimal point or an exponent should be read as the double
+# nearest to it, which for an integer below 2^53 is that integer exactly. So
+# an integer column should store such a number exactly, e.g.,
+# 9007199254740991.0, which is how Python's json.dumps() writes the float
+# 2^53-1. Scylla's JSON parser used to read some of these numbers into a
+# slightly different double, so it stored 9007199254740990 instead, and even
+# rejected 2000000000000001.0 as having a fraction. scylla_only because
+# Cassandra doesn't accept a number with a decimal point or an exponent for
+# an integer column at all.
+def test_fromjson_bigint_decimal_point_below_limit(cql, table1, scylla_only):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))')
+    for n, expected in [('9007199254740991.0', 9007199254740991),
+                        ('-9007199254740991.0', -9007199254740991),
+                        ('9.0071992547409910e15', 9007199254740991),
+                        ('2000000000000001.0', 2000000000000001)]:
+        cql.execute(stmt, [p, n])
+        assert list(cql.execute(f'SELECT bigv from {table1} where p = {p}')) == [(expected,)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "bigv": 9007199254740991.0}}'""")
+    assert list(cql.execute(f'SELECT bigv from {table1} where p = {p}')) == [(9007199254740991,)]
+
+# A number with a fraction must be rejected for an integer column. Below
+# 2^52, a double can hold a fraction of .5, so the JSON parser must not lose
+# it - Scylla's parser used to read 4503599627370495.5 as 4503599627370495.
+def test_fromjson_bigint_fraction_below_2_52(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))')
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '4503599627370495.5'])
+
+# A decimal value with only a few digits, written as a JSON number, should
+# be stored exactly. Scylla's JSON parser used to read 9.58220516 into a
+# double slightly different from the one nearest to it, so it was stored as
+# 9.582205160000001, and 1e-30 as 9.999999999999999E-31.
+def test_fromjson_decimal_few_digits(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, dec) VALUES (?, fromJson(?))')
+    for n in ['9.58220516', '1e-30']:
+        cql.execute(stmt, [p, n])
+        assert list(cql.execute(f'SELECT dec from {table1} where p = {p}')) == [(Decimal(n),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "dec": 9.58220516}}'""")
+    assert list(cql.execute(f'SELECT dec from {table1} where p = {p}')) == [(Decimal('9.58220516'),)]
+
+# Scylla accepts an integer written in scientific notation, like 1e6 (see
+# test_fromjson_int_scientific_notation_* above), but only below 2^53. The
+# RapidJSON parser that Scylla uses reads such a number into a "double",
+# which holds every integer only below 2^53, so a larger number may lose its
+# lower digits. Reading 115292150460684697.5e1 (2^60-1) used to silently
+# store 1152921504606846976 (issue #10137); now it is rejected. This is fine:
+# the JSON standard (RFC 8259) says that only "numbers that are integers and
+# are in the range [-(2**53)+1, (2**53)-1] are interoperable in the sense that
+# implementations will agree exactly on their numeric values", and Cassandra
+# rejects scientific notation for a bigint anyway. The same number written as
+# an integer, 1152921504606846975, is read exactly (see
+# test_fromjson_bigint_nonoverflow above).
+def test_fromjson_bigint_scientific_notation_large(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
-    # 1152921504606846975 is 2^60-1, more than 2^53 but less than what a
-    # bigint can store (2^63-1). We do not use 2^63-1 in this test because
-    # an inaccuracy there in the up direction can lead us to overflowing
-    # the signed integer and UBSAN errors - while we want to detect the
-    # inaccuracy cleanly, here.
-    cql.execute(stmt, [p, '115292150460684697.5e1'])
-    assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(1152921504606846975,)]
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '115292150460684697.5e1'])
+
+# The largest integer that Scylla accepts in scientific notation is 2^53-1,
+# the end of the range that RFC 8259 calls interoperable. 2^53 itself must be
+# rejected too: 2^53+1 can't be represented as a double, so it is read as
+# 2^53. scylla_only because Cassandra doesn't accept scientific notation for
+# integers at all.
+# Note that a number with a fraction between 2^52 and 2^53, like
+# 4503599627370496.5, is read as an integer and rounded instead of being
+# rejected - a double has no fractional part in that range, so this can't be
+# detected. This test doesn't check that.
+def test_fromjson_bigint_scientific_notation_limit(cql, table1, scylla_only):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '9.007199254740991e15'])
+    assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(9007199254740991,)]
+    cql.execute(stmt, [p, '-9.007199254740991e15'])
+    assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(-9007199254740991,)]
+    for n in ['9.007199254740992e15', '9.007199254740993e15', '-9.007199254740992e15']:
+        with pytest.raises(FunctionFailure):
+            cql.execute(stmt, [p, n])
+
+# A JSON number that isn't an integer fitting 64 bits is read by Scylla's
+# JSON parser as a double, which holds only about 16 significant digits. So
+# the documented way to give a varint or decimal value that needs more digits
+# is to write it as a JSON string, which is read exactly. This test checks
+# that this works, in fromJson() and in INSERT JSON.
+def test_fromjson_varint_decimal_as_string(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, vi, dec) VALUES (?, fromJson(?), fromJson(?))")
+    cql.execute(stmt, [p, '"12345678901234567890123"', '"1.2345678901234567890123"'])
+    assert list(cql.execute(f"SELECT vi, dec from {table1} where p = {p}")) == [(12345678901234567890123, Decimal('1.2345678901234567890123'))]
+    p = unique_key_int()
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "vi": "-12345678901234567890123", "dec": "1e-30"}}'""")
+    assert list(cql.execute(f"SELECT vi, dec from {table1} where p = {p}")) == [(-12345678901234567890123, Decimal('1e-30'))]
+
+# A JSON integer too large for 64 bits, written as a JSON number rather than
+# as a string, is read by Scylla's JSON parser as a double, so Scylla rejects
+# it for a varint column, while Cassandra reads it exactly. This is a known
+# incompatibility which we'll probably never fix: the JSON standard (RFC 8259)
+# only promises that implementations agree on the value of integers in the
+# range [-(2^53)+1, (2^53)-1], so a larger number should be written as a JSON
+# string, which works in both (see test_fromjson_varint_decimal_as_string).
+# Scylla already rejects, for the same reason, an unquoted integer of 2^53 or
+# more written with an exponent or a decimal point (see
+# test_fromjson_bigint_scientific_notation_limit).
+# Reproduces SCYLLADB-5440.
+@pytest.mark.xfail(reason='SCYLLADB-5440')
+def test_fromjson_varint_large_number(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))')
+    cql.execute(stmt, [p, '12345678901234567890123'])
+    assert list(cql.execute(f'SELECT vi from {table1} where p = {p}')) == [(12345678901234567890123,)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "vi": -12345678901234567890123}}'""")
+    assert list(cql.execute(f'SELECT vi from {table1} where p = {p}')) == [(-12345678901234567890123,)]
 
 # When writing to an integer column, Cassandra's fromJson() function allows
 # not just JSON number constants, it also allows a string containing a number.
