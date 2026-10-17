@@ -10,6 +10,8 @@
 #include "utils/crypt_sha512.hh"
 #include <seastar/core/coroutine.hh>
 
+#include <algorithm>
+#include <cctype>
 #include <cerrno>
 
 extern "C" {
@@ -84,6 +86,42 @@ no_supported_schemes::no_supported_schemes()
 seastar::future<bool> check(const sstring& pass, const sstring& salted_hash) {
     const auto pwd_hash = co_await detail::hash_with_salt_async(pass, salted_hash);
     co_return pwd_hash == salted_hash;
+}
+
+seastar::future<bool> is_valid_salted_hash(const sstring& salted_hash) {
+    sstring dummy_hash;
+    try {
+        dummy_hash = co_await detail::hash_with_salt_async("dummy", salted_hash);
+    } catch (const std::system_error&) {
+        // crypt(3) doesn't support this hashing scheme or its parameters.
+        co_return false;
+    }
+    // crypt(3) reads only the setting - the scheme, its parameters and the
+    // salt - from the beginning of the salted hash, and ignores the rest.
+    // The rest is an encoding of the output of the scheme's hash function,
+    // using the characters [./0-9A-Za-z] (crypt(5) documents the exact format
+    // of each scheme, e.g., for bcrypt, "\$2[abxy]\$[0-9]{2}\$[./A-Za-z0-9]{53}").
+    // So check that the given salted hash has the same beginning up to its
+    // last '$' (the scheme and its parameters, and in most schemes also the
+    // salt) as the hash which crypt(3) computed for a dummy password, and that
+    // the rest consists of these characters and has the right length -
+    // otherwise, no password's hash can ever be equal to it.
+    const std::string_view hash(salted_hash);
+    const auto setting_size = hash.rfind('$') + 1; // 0 if no '$'
+    const auto rest = hash.substr(setting_size);
+    if (rest.empty() || hash.substr(0, setting_size) != std::string_view(dummy_hash).substr(0, setting_size)
+            || !std::ranges::all_of(rest, [] (char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '/'; })) {
+        co_return false;
+    }
+    if (setting_size == 0) {
+        // A hash without '$' is of the traditional DES-based scheme, 13
+        // characters long, or of its "bigcrypt" extension, whose hash grows by
+        // 11 characters for every 8 characters of the password beyond 8.
+        co_return hash.size() >= 13 && (hash.size() - 13) % 11 == 0;
+    }
+    // In the other schemes, the hash function's output has a fixed size, so
+    // for a given setting, the hashes of all passwords have the same length.
+    co_return dummy_hash.size() == salted_hash.size();
 }
 
 } // namespace auth::passwords
