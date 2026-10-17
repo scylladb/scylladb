@@ -55,6 +55,13 @@ create_function_statement::audit_info() const {
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    std::unordered_set<sstring> arg_names;
+    for (const auto& arg_name : _arg_names) {
+        if (!arg_names.insert(arg_name->to_string()).second) {
+            throw exceptions::invalid_request_exception(fmt::format("Duplicate argument names for given function {} with argument names [{}]",
+                _name, fmt::join(_arg_names | std::views::transform([] (const auto& n) { return n->to_string(); }), ", ")));
+        }
+    }
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_function_statement>(*this));
 }
 
