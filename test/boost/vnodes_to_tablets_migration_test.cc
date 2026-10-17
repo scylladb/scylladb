@@ -38,6 +38,64 @@ BOOST_AUTO_TEST_SUITE(vnodes_to_tablets_migration_test)
 // MAX_TOKEN. It does not matter where MAX_TOKEN came from. Depending on the
 // vnode layout, MAX_TOKEN may already be present as a vnode boundary; with pow2
 // pre-splitting, it is also the terminal pow2 boundary.
+static void verify_migration_tablet_map(const locator::tablet_map& tmap, const std::set<dht::token>& vnode_boundaries) {
+    // Collect actual tablet boundaries.
+    std::set<dht::token> tablet_boundaries;
+    for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+        tablet_boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+    }
+
+    // Verify all vnode boundaries are present.
+    std::vector<dht::token> missing_vnode;
+    std::set_difference(vnode_boundaries.begin(), vnode_boundaries.end(),
+                        tablet_boundaries.begin(), tablet_boundaries.end(),
+                        std::back_inserter(missing_vnode));
+    BOOST_REQUIRE_MESSAGE(missing_vnode.empty(),
+        fmt::format("Vnode boundaries missing from tablet map: {}", fmt::join(missing_vnode, ", ")));
+
+    // Verify MAX_TOKEN independently from the pow2-boundary check: ending
+    // the tablet map at MAX_TOKEN is a tablet-map invariant, not just an
+    // incidental pow2 boundary.
+    BOOST_REQUIRE_EQUAL(tmap.get_last_token(tmap.last_tablet()), dht::last_token());
+
+    // The tablet map must have a pow2 target set.
+    BOOST_REQUIRE(tmap.is_converging_to_pow2());
+    size_t P = tmap.target_pow2_tablet_count();
+    BOOST_REQUIRE_MESSAGE(std::has_single_bit(P),
+            fmt::format("target_pow2_tablet_count {} is not a power of two", P));
+    BOOST_REQUIRE_MESSAGE(P < tmap.tablet_count(),
+            fmt::format("target_pow2_tablet_count {} must be less than the current tablet count {}", P, tmap.tablet_count()));
+
+    // Verify all pow2 boundaries are present.
+    std::set<dht::token> pow2_boundaries;
+    for (const auto& t : dht::get_uniform_tokens(P)) {
+        pow2_boundaries.insert(dht::token(t));
+    }
+
+    std::vector<dht::token> missing_pow2;
+    std::set_difference(pow2_boundaries.begin(), pow2_boundaries.end(),
+                        tablet_boundaries.begin(), tablet_boundaries.end(),
+                        std::back_inserter(missing_pow2));
+    BOOST_REQUIRE_MESSAGE(missing_pow2.empty(),
+        fmt::format("Pow2 boundaries missing from tablet map: {}", fmt::join(missing_pow2, ", ")));
+
+    // Verify no spurious boundaries.
+    std::set<dht::token> expected_boundaries;
+    std::set_union(vnode_boundaries.begin(), vnode_boundaries.end(),
+                   pow2_boundaries.begin(), pow2_boundaries.end(),
+                   std::inserter(expected_boundaries, expected_boundaries.end()));
+    expected_boundaries.insert(dht::last_token());
+
+    std::vector<dht::token> extra;
+    std::set_difference(tablet_boundaries.begin(), tablet_boundaries.end(),
+                        expected_boundaries.begin(), expected_boundaries.end(),
+                        std::back_inserter(extra));
+    BOOST_REQUIRE_MESSAGE(extra.empty(),
+        fmt::format("Unexpected boundaries in tablet map: {}", fmt::join(extra, ", ")));
+}
+
+// Verify the tablet map that prepare_for_tablets_migration() creates for a
+// table on a node with the given vnode tokens.
 static future<> test_tablet_map_creation(std::vector<int64_t> tokens) {
     cql_test_config cfg;
     auto initial_token = fmt::format("{}", fmt::join(tokens, ", "));
@@ -57,65 +115,11 @@ static future<> test_tablet_map_creation(std::vector<int64_t> tokens) {
         auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(tid);
 
-        // Collect actual tablet boundaries.
-        std::set<dht::token> tablet_boundaries;
-        for (size_t i = 0; i < tmap.tablet_count(); ++i) {
-            tablet_boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
-        }
-
-        // Build expected vnode boundaries.
         std::set<dht::token> vnode_boundaries;
         for (const auto& t : tokens) {
             vnode_boundaries.insert(dht::token(t));
         }
-
-        // Verify all vnode boundaries are present.
-        std::vector<dht::token> missing_vnode;
-        std::set_difference(vnode_boundaries.begin(), vnode_boundaries.end(),
-                            tablet_boundaries.begin(), tablet_boundaries.end(),
-                            std::back_inserter(missing_vnode));
-        BOOST_REQUIRE_MESSAGE(missing_vnode.empty(),
-            fmt::format("Vnode boundaries missing from tablet map: {}", fmt::join(missing_vnode, ", ")));
-
-        // Verify MAX_TOKEN independently from the pow2-boundary check: ending
-        // the tablet map at MAX_TOKEN is a tablet-map invariant, not just an
-        // incidental pow2 boundary.
-        BOOST_REQUIRE_EQUAL(tmap.get_last_token(tmap.last_tablet()), dht::last_token());
-
-        // The tablet map must have a pow2 target set.
-        BOOST_REQUIRE(tmap.is_converging_to_pow2());
-        size_t P = tmap.target_pow2_tablet_count();
-        BOOST_REQUIRE_MESSAGE(std::has_single_bit(P),
-                fmt::format("target_pow2_tablet_count {} is not a power of two", P));
-        BOOST_REQUIRE_MESSAGE(P < tmap.tablet_count(),
-                fmt::format("target_pow2_tablet_count {} must be less than the current tablet count {}", P, tmap.tablet_count()));
-
-        // Verify all pow2 boundaries are present.
-        std::set<dht::token> pow2_boundaries;
-        for (const auto& t : dht::get_uniform_tokens(P)) {
-            pow2_boundaries.insert(dht::token(t));
-        }
-
-        std::vector<dht::token> missing_pow2;
-        std::set_difference(pow2_boundaries.begin(), pow2_boundaries.end(),
-                            tablet_boundaries.begin(), tablet_boundaries.end(),
-                            std::back_inserter(missing_pow2));
-        BOOST_REQUIRE_MESSAGE(missing_pow2.empty(),
-            fmt::format("Pow2 boundaries missing from tablet map: {}", fmt::join(missing_pow2, ", ")));
-
-        // Verify no spurious boundaries.
-        std::set<dht::token> expected_boundaries;
-        std::set_union(vnode_boundaries.begin(), vnode_boundaries.end(),
-                       pow2_boundaries.begin(), pow2_boundaries.end(),
-                       std::inserter(expected_boundaries, expected_boundaries.end()));
-        expected_boundaries.insert(dht::last_token());
-
-        std::vector<dht::token> extra;
-        std::set_difference(tablet_boundaries.begin(), tablet_boundaries.end(),
-                            expected_boundaries.begin(), expected_boundaries.end(),
-                            std::back_inserter(extra));
-        BOOST_REQUIRE_MESSAGE(extra.empty(),
-            fmt::format("Unexpected boundaries in tablet map: {}", fmt::join(extra, ", ")));
+        verify_migration_tablet_map(tmap, vnode_boundaries);
     }, cfg);
 }
 
