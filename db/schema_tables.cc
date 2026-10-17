@@ -1127,7 +1127,8 @@ future<shared_ptr<cql3::functions::user_function>> create_func(replica::database
             row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
-shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch, const data_dictionary::user_types_storage& user_types) {
+shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch, const data_dictionary::user_types_storage& user_types,
+        const managed_bytes_opt* initcond_override) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
     auto arg_types = read_arg_types(row, name.keyspace, user_types);
@@ -1180,7 +1181,9 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
     }
 
     managed_bytes_opt initcond = std::nullopt;
-    if (initcond_str) {
+    if (initcond_override) {
+        initcond = *initcond_override;
+    } else if (initcond_str) {
         // In general using the default dialect is wrong, but here the database is communicating with itself,
         // not the user, so any dialect should work.
         auto expr = cql3::util::do_with_parser(*initcond_str, cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::term));
@@ -1654,25 +1657,37 @@ utils::chunked_vector<mutation> make_create_aggregate_mutations(schema_features 
     utils::chunked_vector<mutation> muts;
 
     data_type state_type = aggregate->sfunc()->arg_types()[0];
+    // If CREATE OR REPLACE AGGREGATE replaces an aggregate, the replaced
+    // aggregate's optional final function and initial condition must be
+    // deleted if the new aggregate doesn't have them.
     if (aggregate->has_finalfunc()) {
         m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc()->name().name, timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("final_func"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     if (aggregate->initcond()) {
         m.set_clustered_cell(ckey, "initcond", state_type->deserialize(managed_bytes_view(*aggregate->initcond())).to_parsable_string(), timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("initcond"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
     muts.emplace_back(std::move(m));
 
-    if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>()) {
         schema_ptr sa_schema = scylla_aggregates();
         auto sa_p = get_mutation(sa_schema, *aggregate);
         mutation& sa_mut = sa_p.first;
         clustering_key& sa_ckey = sa_p.second;
-        sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
-        sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
-
+        if (aggregate->is_reducible()) {
+            sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
+            sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
+        } else {
+            // If CREATE OR REPLACE AGGREGATE replaces a reducible aggregate,
+            // the replaced aggregate's reduce function must be deleted.
+            sa_mut.partition().apply_delete(*sa_schema, sa_ckey, tombstone(timestamp, gc_clock::now()));
+        }
         muts.emplace_back(std::move(sa_mut));
     }
 

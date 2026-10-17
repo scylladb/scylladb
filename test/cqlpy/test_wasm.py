@@ -7,7 +7,7 @@
 # Tests for user defined functions defined with WebAssembly backend
 #############################################################################
 
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.cluster import NoHostAvailable
 from .util import new_test_table, unique_name, new_function, new_aggregate
 
@@ -79,7 +79,7 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
 
         cql.execute(f"INSERT INTO {table} (p) VALUES (997)")
         # The call request takes too much time and resources, and should therefore fail
-        with pytest.raises(InvalidRequest, match="wasm"):
+        with pytest.raises(FunctionFailure, match="wasm"):
             cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 997")
 
 # Reads WASM UDF from a file, which should be located in the "build/wasm" directory.
@@ -123,7 +123,7 @@ def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
 
         cql.execute(f"INSERT INTO {table} (p) VALUES (997)")
         # The call request takes too much time and resources, and should therefore fail
-        with pytest.raises(InvalidRequest, match="wasm"):
+        with pytest.raises(FunctionFailure, match="wasm"):
           cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 997")
 
 # Test that an infinite loop gets broken out of eventually
@@ -152,7 +152,7 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
         cql.execute(f"INSERT INTO {table} (p,i) VALUES (10, 10)")
         import time
         start = time.monotonic()
-        with pytest.raises(InvalidRequest, match="fuel consumed"):
+        with pytest.raises(FunctionFailure, match="fuel consumed"):
             cql.execute(f"SELECT {test_keyspace}.{inf_loop_name}(i) AS result FROM {table} WHERE p = 10")
         elapsed_s = time.monotonic() - start
         print(f"Breaking the loop took {elapsed_s*1000:.2f}ms")
@@ -449,15 +449,15 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
     src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
         cql.execute(f"INSERT INTO {table} (p, i, f, txt) VALUES (700, 7, 7., 'oi')")
-        with pytest.raises(InvalidRequest, match="type mismatch"):
+        with pytest.raises(FunctionFailure, match="type mismatch"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(i) AS result FROM {table} WHERE p = 700")
     src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
-        with pytest.raises(InvalidRequest, match="failed"):
+        with pytest.raises(FunctionFailure, match="failed"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(txt) AS result FROM {table} WHERE p = 700")
     src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
-        with pytest.raises(InvalidRequest, match="Expected i32, got f32"):
+        with pytest.raises(FunctionFailure, match="Expected i32, got f32"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(f) AS result FROM {table} WHERE p = 700")
         with pytest.raises(InvalidRequest, match="number.*arguments"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(i, f) AS result FROM {table} WHERE p = 700")
