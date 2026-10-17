@@ -31,6 +31,19 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
     data_type return_type = prepare_type(qp, *_return_type);
+    if (old) {
+        // CREATE OR REPLACE may only replace the function's body, not change
+        // properties that its users, such as aggregates, depend on.
+        auto& old_function = dynamic_cast<functions::user_function&>(*old);
+        if (old_function.called_on_null_input() != _called_on_null_input) {
+            throw exceptions::invalid_request_exception(format("Function '{}' must have {} directive", _name,
+                old_function.called_on_null_input() ? "CALLED ON NULL INPUT" : "RETURNS NULL ON NULL INPUT"));
+        }
+        if (!return_type->is_compatible_with(*old_function.return_type())) {
+            throw exceptions::invalid_request_exception(format("Cannot replace function '{}', the new return type {} is not compatible with the return type {} of existing function",
+                _name, return_type->as_cql3_type(), old_function.return_type()->as_cql3_type()));
+        }
+    }
     std::vector<sstring> arg_names;
     for (const auto& arg_name : _arg_names) {
         arg_names.push_back(arg_name->to_string());
