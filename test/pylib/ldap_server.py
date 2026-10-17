@@ -124,11 +124,9 @@ def kill_leaked_toxiproxy(host: Host, tp_port: int) -> None:
     """Kills toxiproxy-servers left behind on this subnet by a previous run.
 
     One still holds the port and its proxies, so ours would fail to bind and 'toxiproxy-cli create'
-    would fail with a confusing "proxy already exists". A run holds its subnet lock for as long as
-    it runs tests, so whatever we find on our subnet belongs to a run that is dead or already
-    tearing down: HostRegistry.cleanup() unlinks the lock file concurrently with the ldap
-    finalizer, so the subnet can be re-leased while an old server is still going away. Either way
-    it serves nobody, and reclaiming the port beats failing the whole session.
+    would fail with a confusing "proxy already exists". A run holds its subnet lock until its process
+    exits, so whatever we find on our subnet belongs to a run that is dead. It serves nobody, and
+    reclaiming the port beats failing the whole session.
     """
     cmdline = ['toxiproxy-server', '-host', str(host), '-port', str(tp_port)]
     leaked = [proc for proc in psutil.process_iter(['cmdline']) if proc.info['cmdline'] == cmdline]
