@@ -106,15 +106,53 @@ def test_create_vector_search_index_on_nonvector_column(cql, test_keyspace, scyl
         with pytest.raises(InvalidRequest, match="Vector indexes are only supported on columns of vectors of floats"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
 
+def test_create_vector_search_index_on_key_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """Primary key columns cannot be indexed, while regular columns can."""
+    schema = 'p1 vector<float, 3>, p2 int, c vector<float, 3>, v vector<float, 3>, PRIMARY KEY ((p1, p2), c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for column, kind in [('p1', 'partition key'), ('c', 'clustering key')]:
+            with pytest.raises(InvalidRequest, match=f"Creating a vector index requires a regular column, but column {column} is a {kind} column"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}({column}) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+def test_create_vector_search_index_on_single_column_partition_key_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A single-column partition key is rejected like a component of a composite one."""
+    with new_test_table(cql, test_keyspace, 'p vector<float, 3> PRIMARY KEY, v vector<float, 3>') as table:
+        with pytest.raises(InvalidRequest, match="Creating a vector index requires a regular column, but column p is a partition key column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(p) USING 'vector_index'")
+
+def test_create_vector_search_index_on_static_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """Static columns cannot be indexed."""
+    schema = 'p int, c int, s vector<float, 3> static, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Creating a vector index requires a regular column, but column s is a static column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(s) USING 'vector_index'")
+
 def test_create_vector_search_global_index_with_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, f1, f2) USING 'vector_index'")
 
+def test_create_vector_search_global_index_with_static_filtering_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A static column cannot be a filtering column, while clustering key and regular columns can."""
+    schema = 'p int, c int, s int static, f int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Creating a vector index requires a non-static filtering column, but column s is a static column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, s) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, c, f) USING 'vector_index'")
+
 def test_create_vector_search_local_index_with_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v, f1, f2) USING 'vector_index'")
+
+def test_create_vector_search_local_index_with_static_filtering_column_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A static column cannot be a filtering column, while clustering key and regular columns can."""
+    schema = 'p int, c int, s int static, f int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="static columns are not supported"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}((p), v, s) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p), v, c, f) USING 'vector_index'")
 
 def test_create_vector_search_local_index(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v1 vector<float, 3>, v2 vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'

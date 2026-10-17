@@ -560,63 +560,65 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
 }
 
 void create_index_statement::validate_for_local_index(const schema& schema) const {
-    if (!_raw_targets.empty()) {
-            if (const auto* index_pk = std::get_if<std::vector<::shared_ptr<column_identifier::raw>>>(&_raw_targets.front()->value)) {
-                auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
-                    return raw_ident->prepare_column_identifier(schema);
-                });
-                auto const is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
-                auto remaining_base_pk_columns = schema.partition_key_columns();
-                auto next_expected_base_column = remaining_base_pk_columns.begin();
-                auto used_columns = std::set<bytes>();
-                for (const auto& ident : base_pk_identifiers) {
-                    auto it = schema.columns_by_name().find(ident->name());
+    if (_raw_targets.empty()) {
+        return;
+    }
+    const auto* index_pk = std::get_if<index_target::raw::multiple_columns>(&_raw_targets.front()->value);
+    if (index_pk) {
+        auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
+            return raw_ident->prepare_column_identifier(schema);
+        });
+        auto const is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
+        auto remaining_base_pk_columns = schema.partition_key_columns();
+        auto next_expected_base_column = remaining_base_pk_columns.begin();
+        auto used_columns = std::set<bytes>();
+        for (const auto& ident : base_pk_identifiers) {
+            auto it = schema.columns_by_name().find(ident->name());
 
-                    if (is_vector_index) {
-                        if (it == schema.columns_by_name().end() || !(it->second->is_primary_key() || it->second->is_regular())) {
-                            throw exceptions::invalid_request_exception(format(
-                                    "Local vector index definition must contain primary key or regular columns. Redundant column: {}", ident->to_string()));
-                        }
-
-                        if (used_columns.contains(ident->name())) {
-                            throw exceptions::invalid_request_exception(format("Duplicate column definition in local vector index: {}", ident->to_string()));
-                        }
-                        used_columns.insert(ident->name());
-
-                        // For vector indexes, we only check that the proper columns exist in the table, but we don't require them to be partition key columns.
-                        continue;
-                    }
-
-                    if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
-                        throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Redundant column: {}", ident->to_string()));
-                    }
-                    if (next_expected_base_column == remaining_base_pk_columns.end()) {
-                        throw exceptions::invalid_request_exception(format("Duplicate column definition in local index: {}", it->first));
-                    }
-                    if (&*next_expected_base_column != it->second) {
-                        break;
-                    }
-                    ++next_expected_base_column;
+            if (is_vector_index) {
+                if (it == schema.columns_by_name().end() || !(it->second->is_primary_key() || it->second->is_regular())) {
+                    throw exceptions::invalid_request_exception(format(
+                            "Local vector index definition must contain primary key or regular columns. Redundant column: {}", ident->to_string()));
                 }
-                if (!is_vector_index && next_expected_base_column != remaining_base_pk_columns.end()) {
-                    throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Missing column: {}", next_expected_base_column->name_as_text()));
+
+                if (used_columns.contains(ident->name())) {
+                    throw exceptions::invalid_request_exception(format("Duplicate column definition in local vector index: {}", ident->to_string()));
                 }
-                if (_raw_targets.size() == 1) {
-                    throw exceptions::invalid_request_exception(format("Local index definition must provide an indexed column, not just partition key"));
-                }
+                used_columns.insert(ident->name());
+
+                // For vector indexes, we only check that the proper columns exist in the table, but we don't require them to be partition key columns.
+                continue;
+            }
+
+            if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
+                throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Redundant column: {}", ident->to_string()));
+            }
+            if (next_expected_base_column == remaining_base_pk_columns.end()) {
+                throw exceptions::invalid_request_exception(format("Duplicate column definition in local index: {}", it->first));
+            }
+            if (&*next_expected_base_column != it->second) {
+                break;
+            }
+            ++next_expected_base_column;
+        }
+        if (!is_vector_index && next_expected_base_column != remaining_base_pk_columns.end()) {
+            throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Missing column: {}", next_expected_base_column->name_as_text()));
+        }
+        if (_raw_targets.size() == 1) {
+            throw exceptions::invalid_request_exception(format("Local index definition must provide an indexed column, not just partition key"));
+        }
+    }
+    for (unsigned i = 1; i < _raw_targets.size(); ++i) {
+        if (std::holds_alternative<index_target::raw::multiple_columns>(_raw_targets[i]->value)) {
+            throw exceptions::invalid_request_exception(format("Multi-column index targets are currently only supported for partition key"));
+        } else if (auto* raw_ident = std::get_if<index_target::raw::single_column>(&_raw_targets[i]->value)) {
+            auto ident = (*raw_ident)->prepare_column_identifier(schema);
+            auto it = schema.columns_by_name().find(ident->name());
+            if (index_pk && it != schema.columns_by_name().end() && it->second->is_static()) {
+                throw exceptions::invalid_request_exception("Local indexes containing static columns are not supported.");
             }
         }
-        for (unsigned i = 1; i < _raw_targets.size(); ++i) {
-            if (std::holds_alternative<index_target::raw::multiple_columns>(_raw_targets[i]->value)) {
-                throw exceptions::invalid_request_exception(format("Multi-column index targets are currently only supported for partition key"));
-            } else if (auto* raw_ident = std::get_if<index_target::raw::single_column>(&_raw_targets[i]->value)) {
-                auto ident = (*raw_ident)->prepare_column_identifier(schema);
-                auto it = schema.columns_by_name().find(ident->name());
-                if (it != schema.columns_by_name().end() && it->second->is_static()) {
-                    throw exceptions::invalid_request_exception("Local indexes containing static columns are not supported.");
-                }
-            }
-        }
+    }
 }
 
 void create_index_statement::validate_for_frozen_collection(const index_target& target) const

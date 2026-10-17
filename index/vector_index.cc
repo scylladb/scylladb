@@ -206,6 +206,7 @@ std::optional<cql3::description> vector_index::describe(const index_metadata& im
 void vector_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const {
 
     struct validate_visitor {
+        const vector_index& index;
         const class schema& schema;
         bool& is_vector;
 
@@ -250,6 +251,8 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
             auto type = c_def->type;
 
             if (is_vector) {
+                index.check_regular_column(*c_def);
+
                 auto const* vector_type = dynamic_cast<const vector_type_impl*>(type.get());
                 if (vector_type == nullptr) {
                     throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
@@ -260,6 +263,14 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
                     throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
                 }
                 return;
+            }
+
+            // An update to a static column alone gives a CDC row with a null clustering key,
+            // which the Vector Store skips, so the filtering value of each row would go stale.
+            if (c_def->is_static()) {
+                throw exceptions::invalid_request_exception(
+                    fmt::format("Creating a {} index requires a non-static filtering column, but column {} is a static column",
+                    index.index_type_name(), c_name));
             }
 
             if (!is_supported_filtering_column(*type)) {
@@ -285,7 +296,7 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
 
     bool is_vector = true;
     for (const auto& target : targets) {
-        std::visit(validate_visitor{.schema = schema, .is_vector = is_vector}, target->value);
+        std::visit(validate_visitor{.index = *this, .schema = schema, .is_vector = is_vector}, target->value);
     }
 }
 
