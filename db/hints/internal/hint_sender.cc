@@ -250,6 +250,7 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints] () mutable -> future<> {
 ||||||| parent of deb7e4bbde (db/hints: Coroutinize hint_sender::send_one_mutation)
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
@@ -259,7 +260,17 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
         // to be generated as a result of hints sending.
         const auto& tm = ermp->get_token_metadata();
         const auto dst = end_point_key();
+||||||| parent of 429f25eacd (db/hints: Fix indentation)
+        // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
+        // to be generated as a result of hints sending.
+        const auto dst = end_point_key();
+=======
+    // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
+    // to be generated as a result of hints sending.
+    const auto dst = end_point_key();
+>>>>>>> 429f25eacd (db/hints: Fix indentation)
 
+<<<<<<< HEAD
         if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
             manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
             // dst is not duplicated in pending_endpoints because it's in natural_endpoints
@@ -271,9 +282,36 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
                 } else {
                     manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
                 }
+||||||| parent of 429f25eacd (db/hints: Fix indentation)
+        const bool is_leaving = ermp->is_leaving(dst, token);
+        if (std::ranges::contains(natural_endpoints, dst) && (!is_leaving || !pending_endpoints.empty())) {
+            manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
+            // dst is not duplicated in pending_endpoints because it's in natural_endpoints
+            co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+        } else {
+            if (manager_logger.is_enabled(log_level::trace)) {
+                if (is_leaving) {
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target host or tablet replica is leaving. Mutating from scratch", dst);
+                } else {
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
+                }
+=======
+    const bool is_leaving = ermp->is_leaving(dst, token);
+    if (std::ranges::contains(natural_endpoints, dst) && (!is_leaving || !pending_endpoints.empty())) {
+        manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
+        // dst is not duplicated in pending_endpoints because it's in natural_endpoints
+        co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+    } else {
+        if (manager_logger.is_enabled(log_level::trace)) {
+            if (is_leaving) {
+                manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target host or tablet replica is leaving. Mutating from scratch", dst);
+            } else {
+                manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
+>>>>>>> 429f25eacd (db/hints: Fix indentation)
             }
-            co_await _proxy.send_hint_to_all_replicas(std::move(m));
         }
+        co_await _proxy.send_hint_to_all_replicas(std::move(m));
+    }
 }
 
 future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
