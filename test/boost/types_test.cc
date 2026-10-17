@@ -230,6 +230,10 @@ BOOST_AUTO_TEST_CASE(test_time_type_string_conversions) {
     test_parsing_fails(time_type, "00:-01:00.0000000000");
     test_parsing_fails(time_type, "00:00:-10.0000000000");
     test_parsing_fails(time_type, "00:00:00.-0000000001");
+    // Non-numeric or out-of-range components, which std::stol() rejects
+    test_parsing_fails(time_type, "x:00:00");
+    test_parsing_fails(time_type, "00:00:x");
+    test_parsing_fails(time_type, "99999999999999999999:00:00");
 }
 
 
