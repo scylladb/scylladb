@@ -84,6 +84,33 @@ SEASTAR_TEST_CASE(test_compression_with_yaml_config) {
     }, cfg);
 }
 
+// min_compression_saving_percent is accepted, from CQL and the config default, only once all nodes support it.
+SEASTAR_TEST_CASE(test_min_compression_saving_percent_feature_gate) {
+    for (bool enabled : {false, true}) {
+        auto cfg = seastar::make_shared<db::config>();
+        cfg->read_from_yaml(R"foo(
+            sstable_compression_user_table_options:
+                sstable_compression: LZ4Compressor
+                min_compression_saving_percent: 10
+            )foo");
+        cql_test_config test_cfg(cfg);
+        if (!enabled) {
+            test_cfg.disabled_features.insert("SSTABLE_RAW_CHUNKS");
+        }
+        co_await do_with_cql_env_thread([enabled] (cql_test_env& env) {
+            cquery_nofail(env, "CREATE TABLE ks.t1 (pk int PRIMARY KEY)");
+            BOOST_REQUIRE_EQUAL(get_table_compression_options(env, "ks", "t1").min_compression_saving_percent(), enabled ? 10 : 0);
+            auto alter = "ALTER TABLE ks.t1 WITH compression = {'sstable_compression': 'LZ4Compressor', 'min_compression_saving_percent': 80}";
+            if (enabled) {
+                cquery_nofail(env, alter);
+                BOOST_REQUIRE_EQUAL(get_table_compression_options(env, "ks", "t1").min_compression_saving_percent(), 80);
+            } else {
+                BOOST_REQUIRE_THROW(env.execute_cql(alter).get(), exceptions::configuration_exception);
+            }
+        }, test_cfg);
+    }
+}
+
 // Test that syntax errors are properly detected.
 // (based on sanity checks in the `compression_parameters` constructor)
 //

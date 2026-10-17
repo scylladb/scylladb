@@ -161,7 +161,8 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
         }
         compression_parameters cp(*compression_options);
-        cp.validate(compression_parameters::dicts_feature_enabled(bool(db.features().sstable_compression_dicts)));
+        cp.validate(compression_parameters::dicts_feature_enabled(bool(db.features().sstable_compression_dicts)),
+                compression_parameters::raw_chunks_feature_enabled(bool(db.features().sstable_raw_chunks)));
     }
 
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);

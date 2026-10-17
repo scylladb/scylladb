@@ -30,19 +30,21 @@ namespace {
  * CQL base tables, materialized views, secondary indexes, CDC log tables,
  * Alternator base tables, Alternator GSIs, Alternator LSIs and Alternator Streams.
  */
-inline void register_compression_initializer(db::config& cfg, std::function<bool()> dicts_feature_enabled_fn) {
-    schema_builder::register_schema_initializer([&cfg, dicts_feature_enabled_fn = std::move(dicts_feature_enabled_fn)](schema_builder& builder) {
+inline void register_compression_initializer(db::config& cfg, std::function<bool()> dicts_feature_enabled_fn,
+        std::function<bool()> raw_chunks_feature_enabled_fn) {
+    schema_builder::register_schema_initializer([&cfg, dicts_feature_enabled_fn = std::move(dicts_feature_enabled_fn),
+            raw_chunks_feature_enabled_fn = std::move(raw_chunks_feature_enabled_fn)](schema_builder& builder) {
 
         if (is_internal_keyspace(builder.ks_name()) || cfg.extensions().is_extension_internal_keyspace(builder.ks_name())) {
             builder.set_compressor_params(compression_parameters::algorithm::lz4);
         } else {
-            builder.set_compressor_params(cfg.get_sstable_compression_user_table_options(dicts_feature_enabled_fn()));
+            builder.set_compressor_params(cfg.get_sstable_compression_user_table_options(dicts_feature_enabled_fn(), raw_chunks_feature_enabled_fn()));
         }
     });
 }
 
-inline void register_compression_initializer(db::config& cfg, bool dicts_feature_enabled) {
-    register_compression_initializer(cfg, [dicts_feature_enabled] { return dicts_feature_enabled; });
+inline void register_compression_initializer(db::config& cfg, bool features_enabled) {
+    register_compression_initializer(cfg, [features_enabled] { return features_enabled; }, [features_enabled] { return features_enabled; });
 }
 
 }

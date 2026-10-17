@@ -1272,6 +1272,7 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
+    _components->compression.init_min_compression_saving_percent_from_options();
     auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
     _components->compression.set_compressor(std::move(compressor));
     _components->compression.discard_hidden_options();
