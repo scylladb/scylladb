@@ -85,8 +85,6 @@ future<coordinator_result<>> execute_without_conditions(const batch_statement& b
         }
     }));
 #endif
-    batch.verify_batch_size(qp, mutations);
-
     bool mutate_atomic = true;
     if (batch.batch_type() != batch_statement::type::LOGGED) {
         batch.stats().batches_pure_unlogged += 1;
@@ -274,11 +272,13 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     auto timeout = db::timeout_clock::now() + batch.get_timeout(query_state.get_client_state(), options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
+    auto batch_size_warning = make_lw_shared<std::optional<sstring>>();
 
     return get_mutations(batch, qp, options, timeout, local, now, query_state).then([&batch, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
+                    permit = query_state.get_permit(), violations, batch_size_warning] (utils::chunked_vector<mutation> ms) mutable {
+        *batch_size_warning = batch.verify_batch_size(qp, ms);
         return execute_without_conditions(batch, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
-    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
+    }).then([guardrail_state, cl, violations, batch_size_warning] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
@@ -290,6 +290,9 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
         }
         if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));
+        }
+        if (*batch_size_warning) [[unlikely]] {
+            result->add_warning(std::move(**batch_size_warning));
         }
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
