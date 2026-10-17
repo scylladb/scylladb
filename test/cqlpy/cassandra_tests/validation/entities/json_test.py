@@ -1002,7 +1002,6 @@ def testSelectJsonSyntax(cql, test_keyspace):
                 ["{\"system.tojson(system.blobasint(system.intasblob(v)))\": \"1\"}"])
 
 # Reproduces issues #8085
-@pytest.mark.xfail(reason="issues #8085")
 def testInsertJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"v\": 0}")
@@ -1032,7 +1031,9 @@ def testInsertJsonSyntax(cql, test_keyspace):
         assert_invalid_message(cql, table, "Got null for INSERT JSON values", "INSERT INTO %s JSON ?", "null")
         assert_invalid_message(cql, table, "Could not decode JSON string as a map", "INSERT INTO %s JSON ?", "\"notamap\"")
         assert_invalid_message(cql, table, "Could not decode JSON string as a map", "INSERT INTO %s JSON ?", "12.34")
-        assert_invalid_message(cql, table, "Unable to make int from",
+        # Cassandra's message for a bad int is "Unable to make int from
+        # 'notanint'", Scylla's is "Invalid number format 'notanint'".
+        assert_invalid_message_re(cql, table, "Unable to make int from|Invalid number format",
                 "INSERT INTO %s JSON ?",
                 "{\"k\": 0, \"v\": \"notanint\"}")
 
@@ -1068,7 +1069,6 @@ def testInsertJsonSyntaxDefaultUnset(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k=2"), [2, None, None])
 
 # Reproduces issues #8078, #8086
-@pytest.mark.xfail(reason="issues #8086")
 def testCaseSensitivity(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, \"Foo\" int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"\\\"Foo\\\"\": 0}")
@@ -1234,7 +1234,6 @@ def testInsertJsonSyntaxWithTuplesAndUDTs(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"a\": {\"a\": 0, \"b\": [1, 2, 3], \"c\": null}, \"b\": null}")
 
 # done for CASSANDRA-11146
-@pytest.mark.xfail(reason="issue #8092")
 def testAlterUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as type_name:
         with create_table(cql, test_keyspace, "(" +
