@@ -214,17 +214,36 @@ private:
 // so the writes must end before file_manager::stop() closes the file. stop() waits for the
 // writers that hold the write gate.
 //
-// An append reserves the next region with reserve() and writes it with write_reserved().
-// _append_sem has one unit, and a reservation holds the unit until its write completes, so the
-// writes go to the disk one at a time and in offset order, and the data in the segment has no
-// holes.
+// An append takes an appender with begin_append() and writes the data with appender::append().
+// _append_sem has one unit, and an appender holds the unit until its write completes, so the
+// writes go to the disk one at a time and in offset order. A write starts at the append offset and
+// moves the offset by the size of the data, so the data in the segment has no holes.
 //
 // After a failed write, the segment accepts no more appends, and the callers use a new segment.
 class segment {
 public:
-    struct append_reservation {
-        segment_position pos;
-        seastar::semaphore_units<> units;
+    // The right to append to the segment. It holds the unit of _append_sem, so no other append
+    // runs until the appender is destroyed or its write completes. The caller must keep the
+    // segment alive while it holds the appender.
+    class appender {
+    public:
+        appender(appender&&) noexcept = default;
+        appender& operator=(appender&&) noexcept = default;
+
+        // Writes the data at the append offset of the segment and returns its position. The caller
+        // must give data that fits in the segment. If the write fails, the segment fails.
+        future<segment_position> append(bytes_view data) &&;
+
+    private:
+        friend class segment;
+
+        appender(segment& seg, seastar::semaphore_units<> units) noexcept
+            : _segment(&seg)
+            , _units(std::move(units)) {
+        }
+
+        segment* _segment;
+        seastar::semaphore_units<> _units;
     };
 
     segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t size);
@@ -237,17 +256,13 @@ public:
         return _write_gate.hold();
     }
 
-    // Reserves the next region of the segment for an append of this size. The reservation holds
-    // the unit of _append_sem until its write completes. Returns nullopt if the data does not fit
-    // in the segment, or if the segment failed. In both cases nothing is written, and the caller
-    // must write to another segment.
-    future<std::optional<append_reservation>> reserve(size_t size);
+    // Waits until no other append runs on the segment, and returns an appender if data of this
+    // size fits in the segment. Returns nullopt if the data does not fit, or if the segment failed.
+    // In both cases nothing is written, and the caller must write to another segment.
+    future<std::optional<appender>> begin_append(size_t size);
 
-    // Writes the data to the region of the reservation. If the write fails, the segment fails.
-    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
-
-    // Reserves and writes in one call, for a caller that does not need the two steps. Fails if
-    // the data does not fit in the segment, or if the segment failed.
+    // Calls begin_append() and appender::append() in one step, for a caller that does not need the
+    // two steps. Fails if the data does not fit in the segment, or if the segment failed.
     future<segment_position> append(bytes_view data);
 
     log_segment_id id() const noexcept { return _id; }
@@ -277,7 +292,7 @@ private:
     uint32_t _append_offset = 0;
 
     // Set when a write to the segment fails. Then the segment accepts no more appends, and
-    // reserve() returns nullopt, so that the caller writes to a new segment.
+    // begin_append() returns nullopt, so that the caller writes to a new segment.
     bool _failed = false;
 
     future<> do_write(segment_position, bytes_view data);
