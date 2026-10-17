@@ -682,14 +682,6 @@ private:
         uint64_t file_offset;
     };
 
-    uint64_t file_offset_to_segment_index(uint64_t file_offset) const noexcept {
-        return file_offset / _cfg.segment_size;
-    }
-
-    uint64_t segment_index_to_file_offset(uint64_t segment_index) const noexcept {
-        return segment_index * _cfg.segment_size;
-    }
-
     segment_location segment_id_to_file_location(log_segment_id segment_id) const noexcept {
         file_id_t file_id = segment_id.value / _segments_per_file;
         uint64_t file_offset = (segment_id.value % _segments_per_file) * _cfg.segment_size;
