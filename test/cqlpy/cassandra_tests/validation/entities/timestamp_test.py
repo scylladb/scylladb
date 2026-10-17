@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -37,6 +37,11 @@ def testTimestampTTL(cql, test_keyspace):
                 assert r[2] != None and r[3] != None
 
         # wrap writetime(), ttl() in other functions (test for CASSANDRA-8451)
+        # Cassandra's test now uses the new function names blob_as_bigint(),
+        # bigint_as_blob(), blob_as_int() and int_as_blob(), which Scylla
+        # doesn't support yet (SCYLLADB-5141). Cassandra still supports the
+        # old camelCase names, so we use those, to keep testing this on
+        # Scylla.
         res = list(execute(cql, table, "SELECT k, c, blobAsBigint(bigintAsBlob(writetime(c))), ttl(c) FROM %s"))
         assert len(res) == 2
         for r in res:
@@ -59,6 +64,69 @@ def testTimestampTTL(cql, test_keyspace):
 
         assert_rows(execute(cql, table, "SELECT k, d, writetime(d) FROM %s WHERE k = 1"),
                    [1, None, None])
+
+@contextmanager
+def setupSchemaForMaxTimestamp(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(a int, b int)") as myType, \
+         create_table(cql, test_keyspace, "(k int PRIMARY KEY, a text, " +
+                      "l list<int>, fl frozen<list<int>>," +
+                      "s set<int>, fs frozen<set<int>>," +
+                      "m map<int, text>, fm frozen<map<int, text>>," +
+                      "t " + myType + ", ft frozen<" + myType + ">)") as table:
+        yield table
+
+# Reproduces #10953 (MAXWRITETIME)
+@pytest.mark.xfail(reason="#10953")
+def testCallMaxTimestampOnEmptyCollectionReturnsNull(cql, test_keyspace):
+    with setupSchemaForMaxTimestamp(cql, test_keyspace) as table:
+        execute(cql, table, "INSERT INTO %s (k) VALUES (1)")
+        res = list(execute(cql, table, "SELECT maxwritetime(a), maxwritetime(l), maxwritetime(fl)," +
+                                       "maxwritetime(s), maxwritetime(fs), maxwritetime(m), maxwritetime(fm)," +
+                                       "maxwritetime(t), maxwritetime(ft) FROM %s WHERE k=1"))
+
+        assert 1 == len(res)
+        for v in res[0]:
+            # All the multi-cell data are empty (we did not insert), calling
+            # maxwritetime should return null
+            assert v is None
+
+# Reproduces #10953 (MAXWRITETIME)
+@pytest.mark.xfail(reason="#10953")
+def testMaxTimestamp(cql, test_keyspace):
+    with setupSchemaForMaxTimestamp(cql, test_keyspace) as table:
+        execute(cql, table, "INSERT INTO %s (k, a, l, fl, s, fs, m, fm, t, ft) VALUES " +
+                "(1, 'test', [1], [2], {1}, {2}, {1 : 'a'}, {2 : 'b'}, {a : 1, b : 1 }, {a : 2, b : 2}) USING TIMESTAMP 1")
+
+        # enumerate through all multi-cell types and make sure maxwritetime reflects the expected result
+        maxTimestampWithColumnUpdate(cql, table, [
+           (1, "UPDATE %s USING TIMESTAMP 10 SET l = l + [10] WHERE k = 1"),
+           (3, "UPDATE %s USING TIMESTAMP 11 SET s = s + {10} WHERE k = 1"),
+           (5, "UPDATE %s USING TIMESTAMP 12 SET m = m + {10 : 'c'} WHERE k = 1"),
+           (7, "UPDATE %s USING TIMESTAMP 13 SET t.a = 10 WHERE k = 1")
+        ])
+
+def maxTimestampWithColumnUpdate(cql, table, updateStatements):
+    for fieldPos, statement in updateStatements:
+        # run the update statement and update the timestamp of the column
+        execute(cql, table, statement)
+
+        res = list(execute(cql, table, "SELECT maxwritetime(a), maxwritetime(l), maxwritetime(fl)," +
+                                       "maxwritetime(s), maxwritetime(fs), maxwritetime(m), maxwritetime(fm)," +
+                                       "maxwritetime(t), maxwritetime(ft) FROM %s WHERE k=1"))
+        assert 1 == len(res)
+        # maxwritetime should work on both single cell and complex columns
+        assert 9 == len(res[0])
+        for ts in res[0]:
+            assert isinstance(ts, int) # all the result fields are timestamps
+
+        updatedTs = res[0][fieldPos] # maxwritetime the updated column
+
+        for i in range(len(res[0])):
+            ts = res[0][i]
+            if i != fieldPos:
+                # The updated column should have a large maxwritetime since
+                # it is updated later
+                assert ts < updatedTs
 
 # Migrated from cql_tests.py:TestCQL.invalid_custom_timestamp_test()
 @pytest.mark.parametrize("test_keyspace",

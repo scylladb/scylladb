@@ -171,6 +171,36 @@ def test_totimestamp_date_extreme(cql, table1):
     cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**30})")
     cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
 
+# The functions dateOf(timeuuid) and unixTimestampOf(timeuuid) were
+# deprecated in Cassandra 2.2 (CASSANDRA-9229), in favor of the more general
+# toTimestamp() and toUnixTimestamp(), which also accept other types besides
+# timeuuid. Cassandra 5.0 removed the deprecated functions (CASSANDRA-18328),
+# but Scylla still supports them, for backward compatibility with existing
+# applications. These tests check that they still work, so are Scylla-only.
+# They were moved here from the translations of Cassandra's TimeuuidTest
+# and TypeTest in cassandra_tests/, when Cassandra removed these checks from
+# those tests.
+def test_dateof_unixtimestampof(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, i, u) VALUES ({p}, 1, now())")
+    # dateOf() and unixTimestampOf() return the same as their replacements
+    [(d, ts, expected_d, expected_ts)] = list(cql.execute(f"SELECT dateOf(u), unixTimestampOf(u), toTimestamp(u), toUnixTimestamp(u) FROM {table1} WHERE p={p}"))
+    assert d == expected_d
+    assert ts == expected_ts
+    # The deprecated functions only accept a timeuuid, not an int
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"SELECT dateOf(i) FROM {table1} WHERE p={p}")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"SELECT unixTimestampOf(i) FROM {table1} WHERE p={p}")
+
+# Check that the results of dateOf() (a timestamp) and unixTimestampOf() (a
+# bigint) can be written into columns of a compatible type - a timestamp
+# can be set from a bigint, and a bigint or varint from a timestamp.
+def test_dateof_unixtimestampof_compatibility(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "a int, b timestamp, c bigint, d varint, PRIMARY KEY (a, b, c, d)") as table:
+        cql.execute(f"INSERT INTO {table} (a, b, c, d) VALUES (1, unixTimestampOf(now()), dateOf(now()), dateOf(now()))")
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE a=1 AND b <= toUnixTimestamp(now())"))) == 1
+
 # Test set_intersection() function. Not supported in Cassandra.
 def test_set_intersection_fn(cql, tbl_set, scylla_only):
     p1 = unique_key_int()

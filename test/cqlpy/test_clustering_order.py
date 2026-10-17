@@ -12,7 +12,8 @@
 
 import pytest
 
-from .util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int, sleep_till_whole_second
+from . import nodetool
 
 @pytest.fixture(scope="module")
 def table_int_desc(cql, test_keyspace):
@@ -120,3 +121,31 @@ def test_multi_column_eq_write_all_asc(cql, table_all_asc):
     assert [(1, 2, 1)] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_asc} WHERE p = {p}'))
     cql.execute(f'DELETE FROM {table_all_asc} WHERE p = {p} AND (c1, c2) = (1, 2)')
     assert [] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_asc} WHERE p = {p}'))
+
+# Test a reversed query (ORDER BY DESC) with LIMIT that reads rows and a
+# range tombstone deleting some of them, where the range tombstone is already
+# old enough to be garbage-collected. The query should not return the deleted
+# rows, and neither should later reads of the same partition. Scylla's row
+# cache may drop such a purgeable tombstone when it is read, but it must then
+# drop the rows that the tombstone deleted as well.
+# Reproduces SCYLLADB-5187 (reversed read with LIMIT drops a purgeable range
+# tombstone from the row cache, resurrecting the deleted rows).
+@pytest.mark.xfail(reason="SCYLLADB-5187")
+def test_reversed_read_purgeable_range_tombstone(cql, test_keyspace):
+    schema = "p int, c int, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema, "WITH gc_grace_seconds = 0") as table:
+        for c in range(5):
+            cql.execute(f"INSERT INTO {table} (p, c) VALUES (0, {c})")
+        # Flush the rows before deleting some of them, so that the deleted rows
+        # aren't simply dropped when the deletion is flushed. In Scylla, both
+        # flushes also add their data to the row cache, so the cache holds
+        # both the rows and the range tombstone deleting some of them.
+        nodetool.flush(cql, table)
+        cql.execute(f"DELETE FROM {table} WHERE p = 0 AND c >= 1 AND c <= 3")
+        nodetool.flush(cql, table)
+        # A tombstone's deletion time has a resolution of one second, so the
+        # tombstone becomes purgeable (with gc_grace_seconds = 0, or Scylla's
+        # tombstone_gc "repair" mode with RF=1) only in the next second.
+        sleep_till_whole_second()
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0 AND c <= 2 ORDER BY c DESC LIMIT 1")) == [(0,)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0")) == [(0,), (4,)]

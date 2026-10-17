@@ -1,0 +1,23 @@
+The following test files in Cassandra's
+test/unit/org/apache/cassandra/cql3/functions directory, which this
+directory mirrors, were not translated, because they test Cassandra's
+internal implementation through Java APIs instead of testing CQL:
+
+* ClusterMetadataFctsTest.java: calls Cassandra's internal function for
+  the kind of a cluster metadata transformation (part of Cassandra's
+  transactional cluster metadata, TCM) directly, through Java.
+* MathFctsTest.java: calls the implementations of the abs(), exp(), log(),
+  log10() and round() functions directly, through Java, on Cassandra's
+  internal type classes.
+* NativeFunctionsTest.java: checks Cassandra's internal list of native
+  functions, that each function with an old camelCase name has a new
+  snake_case name, through Cassandra's internal function registry. Scylla's
+  lack of snake_case names is SCYLLADB-5141.
+* TimeFctsTest.java: calls the implementations of the time functions
+  (mintimeuuid(), maxtimeuuid(), totimestamp(), tounixtimestamp(), etc.)
+  directly, through Java. These functions are tested through CQL in
+  validation/entities/timeuuid_test.py and in test_native_functions.py.
+
+Note also that in function_factory_test.py, most of the tests of
+FunctionFactoryTest.java were not translated - see the comment at the top
+of that file - and that the masking/ subdirectory is empty - see its README.

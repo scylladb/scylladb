@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -92,17 +92,19 @@ def testInvalidQueries(cql, test_keyspace):
         assert_invalid_message(cql, table, "Invalid tuple literal for t: component 1 is not of type frozen<tuple<int, text, double>>",
                              "INSERT INTO %s (k, t) VALUES (0, (1, (1, '1', 1.0, 1)))")
 
+        assert_invalid_message(cql, table, "Invalid tuple type literal for k of type int",
+                             "SELECT * FROM %s WHERE k = ('a', 'b')")
+
 def testTupleWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, t tuple<int, text, double>)") as table:
         # invalid positional field substitution
         assert_invalid_message(cql, table, "unset",
                              "INSERT INTO %s (k, t) VALUES(0, (3, ?, 2.1))", UNSET_VALUE)
 
-        #FIXME: The Python driver doesn't agree to send such a command to the server,
-        #so I had to comment out this test.
-        #execute(cql, table, "CREATE INDEX tuple_index ON %s (t)")
+        execute(cql, table, "CREATE INDEX tuple_index ON %s (t)")
         # select using unset
-        #assert_invalid_message("Invalid unset value for tuple field number 0", "SELECT * FROM %s WHERE k = ? and t = (?,?,?)", UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE)
+        # Scylla's message is "Unexpected unset value for bind variable 1".
+        assert_invalid_message_re(cql, table, "Invalid unset value for tuple field number 0|Unexpected unset value for bind variable 1", "SELECT * FROM %s WHERE k = ? and t = (?,?,?)", 42, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE)
 
 # Test the syntax introduced by CASSANDRA-4851,
 # migrated from cql_tests.py:TestCQL.tuple_notation_test()
