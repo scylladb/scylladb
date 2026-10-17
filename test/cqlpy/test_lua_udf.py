@@ -389,8 +389,12 @@ def test_lua_tuple_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, 'return {1.2, 1.2, "foo"}')
         with pytest.raises(InvalidRequest, match="key 4 is not valid for a sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, 'return {1,2.4,"foo", 42}')
-        with pytest.raises(InvalidRequest, match="key 2 missing in sequence of size 3"):
-            call_lua(cql, test_keyspace, table, sig, 'return {[1] = 1, [3] = "foo"}')
+        # A missing key used to be an error ("key 2 missing in sequence of
+        # size 3"). But a Lua table can't hold a nil, so leaving a key out is
+        # the only way a Lua function can return a null component - so a
+        # missing key is a null component (SCYLLADB-5164). Cassandra's Java
+        # functions can also return tuples with null components.
+        assert call_lua(cql, test_keyspace, table, sig, 'return {[1] = 1, [3] = "foo"}') == [(1, None, "foo")]
 
 def test_lua_vector_return(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
@@ -483,8 +487,36 @@ def test_lua_udt_return(cql, test_keyspace, scylla_only):
                 call_lua(cql, test_keyspace, table, sig, "return {my_int = 1, my_float = 2.5}")
             with pytest.raises(InvalidRequest, match="unexpected value"):
                 call_lua(cql, test_keyspace, table, sig, "return {[true] = 2.5}")
-            with pytest.raises(InvalidRequest, match=f"key my_double missing in udt {udt.split('.')[1]}"):
-                call_lua(cql, test_keyspace, table, sig, "return {my_int = 1}")
+            # A missing field used to be an error ("key my_double missing in
+            # udt"). But a Lua table can't hold a nil, so leaving a field out
+            # is the only way a Lua function can return a null field - so a
+            # missing field is a null field (SCYLLADB-5164). A misspelled
+            # field is still an error (checked above).
+            [res] = call_lua(cql, test_keyspace, table, sig, "return {my_int = 1}")
+            assert (res.my_int, res.my_double) == (1, None)
+
+# A Lua function can return a tuple or a UDT with null components, e.g., its
+# argument unchanged. A null component of an argument is a hole in the Lua
+# table, which must become a null again in the returned value. The Python
+# driver returns None for an empty int component just like for a null one,
+# so we also check the result's JSON, where a null is printed as null.
+# Reproduces SCYLLADB-5164.
+def test_lua_return_tuple_with_null(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val frozen<tuple<int, int>>") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (key, val) VALUES ('foo', ?)")
+        with new_function(cql, test_keyspace, "(val tuple<int, int>) CALLED ON NULL INPUT RETURNS tuple<int, int> LANGUAGE lua AS 'return val'") as f:
+            for val, json in [((None, 2), '[null, 2]'), ((1, None), '[1, null]'), ((None, None), '[null, null]')]:
+                cql.execute(insert, [val])
+                assert list(cql.execute(f"SELECT {test_keyspace}.{f}(val), toJson({test_keyspace}.{f}(val)) FROM {table}")) == [(val, json)]
+
+def test_lua_return_udt_with_null(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, "(a int, b int)") as udt:
+        with new_test_table(cql, test_keyspace, f"key text PRIMARY KEY, val frozen<{udt}>") as table:
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{a: null, b: 2}})")
+            with new_function(cql, test_keyspace, f"(val {udt}) CALLED ON NULL INPUT RETURNS {udt} LANGUAGE lua AS 'return val'") as f:
+                [(res, json)] = cql.execute(f"SELECT {test_keyspace}.{f}(val), toJson({test_keyspace}.{f}(val)) FROM {table}")
+                assert (res.a, res.b) == (None, 2)
+                assert json == '{"a": null, "b": 2}'
 
 def test_lua_called_on_null(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
