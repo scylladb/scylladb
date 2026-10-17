@@ -57,6 +57,7 @@
 #include "message/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
+#include "db/commitlog/commitlog.hh"
 #include "mutation/async_utils.hh"
 #include "utils/chunked_string.hh"
 
@@ -973,6 +974,7 @@ schema_ptr system_keyspace::commitlog_cleanups() {
         // comment
         "information about cleanups, for filtering commitlog replay"
        );
+        builder.set_gc_grace_seconds(0);
         builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
@@ -1573,30 +1575,69 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     //
     // But we don't know that here, so we have to SELECT the set of partition keys,
     // and issue DELETEs on that.
-    sstring req = format("SELECT shard from system.{}", COMMITLOG_CLEANUPS);
+    // Use DISTINCT: each partition can hold a large number of records (clustering rows),
+    // and we want one DELETE per partition, not one per record.
+    sstring req = format("SELECT DISTINCT shard from {}.{}", NAME, COMMITLOG_CLEANUPS);
     auto rs = co_await execute_cql(req);
 
     co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto shard = row.get_as<int32_t>("shard");
-        static const sstring delete_req = format("DELETE FROM system.{} WHERE shard = ?", COMMITLOG_CLEANUPS);
+        static const sstring delete_req = format("DELETE FROM {}.{} WHERE shard = ?", NAME, COMMITLOG_CLEANUPS);
         co_await execute_cql(delete_req, shard);
     });
 }
 
-future<> system_keyspace::drop_old_commitlog_cleanup_records(replay_position min_position) {
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({
-        int64_t(min_position.base_id()),
-        int32_t(min_position.pos)
-    }));
-    sstring req = format("DELETE FROM system.{} WHERE shard = ? AND position < ?", COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(min_position.shard_id()), pos}, cql3::query_processor::cache_internal::yes);
-}
-
 future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
+    // An invalid replay position (e.g. the highest flushed replay position of a table
+    // which wasn't flushed yet on this shard) precedes all commitlog entries, so such
+    // a record would filter nothing on replay.
+    if (!rp.valid()) {
+        co_return;
+    }
+    auto s = commitlog_cleanups();
     auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)}));
-    sstring req = format("INSERT INTO system.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(rp.shard_id()), pos, table.uuid(), start_token_exclusive, end_token_inclusive}, cql3::query_processor::cache_internal::yes);
+    auto serialize_position = [] (db::replay_position rp) {
+        return make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)})).serialize_nonnull();
+    };
+    const auto ts = api::new_timestamp();
+
+    // INSERT INTO system.commitlog_cleanups (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES (...)
+    mutation m(s, partition_key::from_singular(*s, int32_t(rp.shard_id())));
+    auto ck = clustering_key::from_exploded(*s, {
+        serialize_position(rp),
+        data_value(table.uuid()).serialize_nonnull(),
+        data_value(start_token_exclusive).serialize_nonnull(),
+        data_value(end_token_inclusive).serialize_nonnull(),
+    });
+    m.partition().clustered_row(*s, ck).apply(row_marker(ts));
+
+    // Drop the records made obsolete by the commitlog: those below its minimum position,
+    // which apply only to commitlog segments which are already deleted.
+    // DELETE FROM system.commitlog_cleanups WHERE shard = ? AND position < min_position
+    //
+    // The range tombstone is added to the mutation of the record, so the save is a single
+    // write, instead of a write for the record and another one for the pruning. The table
+    // uses the (synced) schema commitlog, and all its partitions live on shard 0, so each
+    // write is a synced, cross-shard one. A failure to apply the mutation fails the save.
+    //
+    // If the record is below the minimum position, it is obsolete already: the range
+    // tombstone covers it, and having the same timestamp, the tombstone wins, so the
+    // record is effectively not written.
+    //
+    // The record and the pruned records are in the same partition: the records saved on
+    // a shard have the replay positions of the commitlog of that shard. Only tests save
+    // records with replay positions of other shards, for these the pruning is skipped.
+    if (const auto* cl = _db.commitlog()) {
+        const auto min_position = cl->min_position();
+        if (min_position.shard_id() == rp.shard_id()) {
+            auto range = query::clustering_range::make_ending_with({
+                    clustering_key_prefix::from_single_value(*s, serialize_position(min_position)), false});
+            auto bv = bound_view::from_range(range);
+            m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_clock::now()}});
+        }
+    }
+
+    co_await apply_mutation(std::move(m));
 }
 
 std::pair<int64_t, int64_t> system_keyspace::canonical_token_range(dht::token_range tr) {
@@ -1664,9 +1705,8 @@ std::optional<db::replay_position> system_keyspace::commitlog_cleanup_local_map:
 
 future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cleanup_records() {
     commitlog_cleanup_map ret;
-    const auto req = format("SELECT * from system.{}", COMMITLOG_CLEANUPS);
-    auto result_set = co_await execute_cql(req);
-    for (const auto& row: *result_set) {
+    const auto req = format("SELECT * from {}.{}", NAME, COMMITLOG_CLEANUPS);
+    co_await _qp.query_internal(req, [&ret] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
         auto table = table_id(row.get_as<utils::UUID>("table_uuid"));
         auto shard = row.get_as<int32_t>("shard");
         auto start_token_exclusive = row.get_as<int64_t>("start_token_exclusive");
@@ -1679,7 +1719,8 @@ future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cl
         );
         auto& inner_map = ret.try_emplace(std::make_pair(table, shard)).first->second;
         inner_map._pimpl->_map += std::make_pair(boost::icl::left_open_interval<int64_t>(start_token_exclusive, end_token_inclusive), rp);
-    }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
     co_return ret;
 }
 

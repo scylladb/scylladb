@@ -1113,7 +1113,7 @@ private:
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
-    future<> cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg);
+    future<> cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg);
 public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     // For tests only.
