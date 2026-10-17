@@ -20,6 +20,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
@@ -27,6 +28,9 @@
 
 #include <fmt/format.h>
 
+#include "bytes_fwd.hh"
+#include "replica/logstor/segment_ref.hh"
+#include "replica/logstor/segment_types.hh"
 #include "seastarx.hh"
 
 namespace replica::logstor {
@@ -203,6 +207,88 @@ private:
 
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> open_file(file_id_t);
+};
+
+class segment {
+protected:
+    log_segment_id _id;
+    seastar::file _file;
+    uint64_t _file_offset; // Offset within the shared file where this segment starts
+    uint64_t _max_size;
+
+public:
+    segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size);
+
+    virtual ~segment() = default;
+
+    log_segment_id id() const noexcept { return _id; }
+    seastar::file& get_file() noexcept { return _file; }
+
+protected:
+    uint64_t absolute_offset(uint64_t relative_offset) const noexcept {
+        return _file_offset + relative_offset;
+    }
+};
+
+class writeable_segment : public segment {
+    seastar::gate _write_gate;
+    seastar::semaphore _append_sem{1};
+    segment_ref _seg_ref;
+    segment_sequence _seq_num;
+
+    uint32_t _current_offset = 0; // next offset for write
+
+    // Set when a write to this segment failed. The segment is retired: it accepts no
+    // further appends, and reserve() returns nullopt so that the caller switches to a
+    // new segment.
+    bool _failed = false;
+
+    future<> do_write(segment_position, bytes_view data);
+
+    bool can_fit(size_t size) const noexcept {
+        return _current_offset + size <= _max_size;
+    }
+
+public:
+    using segment::segment;
+
+    void start(segment_ref, segment_sequence);
+
+    future<> stop();
+
+    struct append_reservation {
+        segment_position pos;
+        seastar::semaphore_units<> units;
+    };
+
+    // Reserve the next append offset for this segment and keep the permit held
+    // until the DMA write completes.
+    // Returns nullopt if the data doesn't fit in the segment, or if the segment was
+    // retired by a failed write. In both cases nothing was written and the caller is
+    // expected to move on to another segment.
+    future<std::optional<append_reservation>> reserve(size_t size);
+
+    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
+
+    // Convenience helper for callers that do not need to split reservation and write.
+    // Fails if the segment cannot fit the write.
+    future<segment_position> append(bytes_view data);
+
+    size_t bytes_remaining() const noexcept {
+        return _max_size - _current_offset;
+    }
+
+    seastar::gate::holder hold() {
+        return _write_gate.hold();
+    }
+
+    segment_ref ref() {
+        return _seg_ref;
+    }
+
+    segment_sequence seq_num() const noexcept {
+        return _seq_num;
+    }
 };
 
 }
