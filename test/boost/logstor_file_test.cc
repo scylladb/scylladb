@@ -9,22 +9,34 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <type_traits>
+#include <vector>
 
 #include <fmt/format.h>
 
+#include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 
+#include "replica/logstor/ondisk.hh"
 #include "replica/logstor/segment_file.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/tmpdir.hh"
+#include "utils/checked-file-impl.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 
 using namespace replica::logstor;
 
@@ -403,4 +415,324 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_zero_region_writes_only_the_region) {
         BOOST_REQUIRE(is(offset, offset + region_size, 0));
         BOOST_REQUIRE(is(offset + region_size, size, char(0xff)));
     }
+}
+
+namespace {
+
+constexpr uint64_t block = ondisk::block_alignment;
+constexpr uint64_t test_segment_size = 16 * block;
+
+// A segment_test_env holds one allocated file of a file manager and the segments of the test in that
+// file. The destructor stops the segments before the file manager, because file_manager::stop()
+// closes the file.
+class segment_test_env {
+    tmpdir _dir;
+    file_manager _files;
+    seastar::file _file;
+    std::vector<lw_shared_ptr<segment>> _segments;
+
+public:
+    segment_test_env()
+        : _files(make_config(_dir, 1, false))
+    {
+        // The destructor does not run when the constructor throws.
+        auto stop_files = defer([this] noexcept { _files.stop().get(); });
+        recover(_files);
+        _file = _files.get_file_for_new_segment(0).get();
+        stop_files.cancel();
+    }
+
+    ~segment_test_env() {
+        for (auto& seg : _segments) {
+            seg->stop().get();
+        }
+        _files.stop().get();
+    }
+
+    seastar::file& file() noexcept {
+        return _file;
+    }
+
+    // Makes and starts segment `index` of the file. The segment writes through `file`, if given.
+    segment& make_segment(uint32_t index, std::optional<seastar::file> file = std::nullopt) {
+        auto seg = make_lw_shared<segment>(log_segment_id{index}, file.value_or(_file), index * test_segment_size, test_segment_size);
+        seg->start(segment_ref(), segment_sequence{index});
+        _segments.push_back(seg);
+        return *seg;
+    }
+
+    // Returns true if all the bytes of the file in [offset, offset + size) have this value.
+    bool file_holds(uint64_t offset, uint64_t size, char value) {
+        auto buf = _file.dma_read_bulk<char>(offset, size).get();
+        return buf.size() == size && std::all_of(buf.get(), buf.get() + size, [value] (char c) { return c == value; });
+    }
+};
+
+// A test_data holds data that a direct write takes, which is aligned memory filled with one value.
+class test_data {
+    temporary_buffer<char> _buf;
+
+public:
+    test_data(size_t size, char value)
+        : _buf(temporary_buffer<char>::aligned(block, size))
+    {
+        std::memset(_buf.get_write(), value, size);
+    }
+
+    bytes_view view() const noexcept {
+        return bytes_view(reinterpret_cast<const int8_t*>(_buf.get()), _buf.size());
+    }
+};
+
+// A file that writes at most `max_write` bytes in each write, as a device can. Its disk write
+// alignment is 512 bytes, its memory alignment is `memory_alignment`, and it refuses a write that is
+// not aligned to them, as a device does. A direct write must have an aligned size, thus the file
+// writes the part of the bytes it reports that is aligned to its disk write alignment.
+//
+// The file under it can need a larger alignment, thus the file writes through an aligned buffer
+// that holds the blocks around the written bytes.
+class short_write_file_impl : public checked_file_impl {
+    size_t _max_write;
+
+public:
+    short_write_file_impl(const io_error_handler& error_handler, seastar::file file, size_t max_write, unsigned memory_alignment)
+        : checked_file_impl(error_handler, std::move(file))
+        , _max_write(max_write)
+    {
+        _disk_write_dma_alignment = 512;
+        _memory_dma_alignment = memory_alignment;
+    }
+
+    future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+        if (pos % _disk_write_dma_alignment != 0 || reinterpret_cast<uintptr_t>(buffer) % _memory_dma_alignment != 0) {
+            co_await coroutine::return_exception(std::system_error(EINVAL, std::system_category(), "misaligned direct write"));
+        }
+        const auto reported = std::min(len, _max_write);
+        const auto written = align_down(reported, size_t(_disk_write_dma_alignment));
+        if (written > 0) {
+            const auto start = align_down(pos, block);
+            const auto end = align_up(pos + written, block);
+            auto blocks = temporary_buffer<char>::aligned(block, end - start);
+            co_await checked_file_impl::read_dma(start, blocks.get_write(), blocks.size(), intent);
+            std::memcpy(blocks.get_write() + (pos - start), buffer, written);
+            co_await checked_file_impl::write_dma(start, blocks.get(), blocks.size(), intent);
+        }
+        co_return reported;
+    }
+};
+
+const io_error_handler rethrow_error_handler = [] (std::exception_ptr ep) {
+    std::rethrow_exception(ep);
+};
+
+} // anonymous namespace
+
+// Checks that each append goes to the next offset of the segment, and that the segment writes only
+// its own region of the file.
+SEASTAR_THREAD_TEST_CASE(test_segment_appends_to_its_region_of_the_file) {
+    segment_test_env env;
+    auto& seg0 = env.make_segment(0);
+    auto& seg1 = env.make_segment(1);
+
+    auto pos = seg0.append(test_data(block, 'a').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.segment.value, 0);
+    BOOST_REQUIRE_EQUAL(pos.offset, 0);
+    pos = seg1.append(test_data(block, 'c').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.segment.value, 1);
+    BOOST_REQUIRE_EQUAL(pos.offset, 0);
+    pos = seg0.append(test_data(2 * block, 'b').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, block);
+
+    BOOST_REQUIRE(env.file_holds(0, block, 'a'));
+    BOOST_REQUIRE(env.file_holds(block, 2 * block, 'b'));
+    BOOST_REQUIRE(env.file_holds(3 * block, test_segment_size - 3 * block, 0));
+    BOOST_REQUIRE(env.file_holds(test_segment_size, block, 'c'));
+    BOOST_REQUIRE(env.file_holds(test_segment_size + block, test_segment_size - block, 0));
+}
+
+// Checks that an append that does not fit is refused, writes nothing and does not move the append
+// offset, and that an append of the exact remaining size fits.
+SEASTAR_THREAD_TEST_CASE(test_segment_refuses_an_append_that_does_not_fit) {
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    seg.append(test_data(test_segment_size - 2 * block, 'a').view()).get();
+    BOOST_REQUIRE(!seg.begin_append(3 * block).get());
+    BOOST_REQUIRE_THROW(seg.append(test_data(3 * block, 'b').view()).get(), std::runtime_error);
+    BOOST_REQUIRE(env.file_holds(test_segment_size - 2 * block, 2 * block, 0));
+
+    auto pos = seg.append(test_data(2 * block, 'c').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, test_segment_size - 2 * block);
+    BOOST_REQUIRE(env.file_holds(test_segment_size - 2 * block, 2 * block, 'c'));
+    BOOST_REQUIRE(!seg.begin_append(block).get());
+}
+
+// Checks that an appender waits until the write of the previous appender completes, and that its
+// write goes after that write.
+SEASTAR_THREAD_TEST_CASE(test_segment_writes_one_append_at_a_time) {
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    auto first = seg.begin_append(2 * block).get();
+    BOOST_REQUIRE(first);
+    auto second_begun = seg.begin_append(block);
+    BOOST_REQUIRE(!second_begun.available());
+
+    auto pos = std::move(*first).append(test_data(2 * block, 'a').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, 0);
+    auto second = second_begun.get();
+    BOOST_REQUIRE(second);
+    pos = std::move(*second).append(test_data(block, 'b').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, 2 * block);
+
+    BOOST_REQUIRE(env.file_holds(0, 2 * block, 'a'));
+    BOOST_REQUIRE(env.file_holds(2 * block, block, 'b'));
+}
+
+// Checks that an appender that is dropped without its write moves nothing, also for an appender
+// that waits for it.
+SEASTAR_THREAD_TEST_CASE(test_segment_ignores_a_dropped_appender) {
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    auto first = seg.begin_append(2 * block).get();
+    BOOST_REQUIRE(first);
+    auto second_begun = seg.begin_append(block);
+    BOOST_REQUIRE(!second_begun.available());
+
+    first.reset();
+    auto second = second_begun.get();
+    BOOST_REQUIRE(second);
+    second.reset();
+
+    auto pos = seg.append(test_data(test_segment_size, 'a').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, 0);
+    BOOST_REQUIRE(env.file_holds(0, test_segment_size, 'a'));
+}
+
+// Checks that a write moves the append offset by the size of its data, also when the data is smaller
+// than the size that begin_append() checked.
+SEASTAR_THREAD_TEST_CASE(test_segment_appends_the_size_of_the_data) {
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    auto appender = seg.begin_append(2 * block).get();
+    BOOST_REQUIRE(appender);
+    auto pos = std::move(*appender).append(test_data(block, 'a').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, 0);
+    pos = seg.append(test_data(block, 'b').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, block);
+
+    BOOST_REQUIRE(env.file_holds(0, block, 'a'));
+    BOOST_REQUIRE(env.file_holds(block, block, 'b'));
+    BOOST_REQUIRE(env.file_holds(2 * block, test_segment_size - 2 * block, 0));
+}
+
+// Checks that a failed write fails the segment, so that these write nothing: an appender that
+// waits for the failed write, and each later appender and append.
+SEASTAR_THREAD_TEST_CASE(test_segment_fails_after_a_failed_write) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    auto first = seg.begin_append(block).get();
+    BOOST_REQUIRE(first);
+    auto second_begun = seg.begin_append(block);
+    BOOST_REQUIRE(!second_begun.available());
+
+    utils::get_local_injector().enable("logstor_fail_segment_write", true /* one shot */);
+    auto disable_injection = defer([] noexcept {
+        utils::get_local_injector().disable("logstor_fail_segment_write");
+    });
+    BOOST_REQUIRE_THROW(std::move(*first).append(test_data(block, 'a').view()).get(), std::runtime_error);
+
+    BOOST_REQUIRE(!second_begun.get());
+    BOOST_REQUIRE(!seg.begin_append(block).get());
+    BOOST_REQUIRE_THROW(seg.append(test_data(block, 'b').view()).get(), std::runtime_error);
+    BOOST_REQUIRE(env.file_holds(0, test_segment_size, 0));
+}
+
+// Checks that stop() waits for the writers that hold the segment, that a second stop() returns at
+// once, and that no writer can hold the segment after stop().
+SEASTAR_THREAD_TEST_CASE(test_segment_stop_waits_for_the_writers) {
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    std::optional<seastar::gate::holder> writer = seg.hold();
+    auto stopped = seg.stop();
+    BOOST_REQUIRE(!stopped.available());
+    BOOST_REQUIRE_THROW(seg.hold(), seastar::gate_closed_exception);
+
+    writer.reset();
+    stopped.get();
+    seg.stop().get();
+}
+
+// Checks that a short write continues from the last boundary of the larger device alignment that it
+// wrote, which is aligned in the file and in memory, and that a write that does not reach that
+// boundary is a disk error and fails the segment.
+SEASTAR_THREAD_TEST_CASE(test_segment_continues_after_a_short_write) {
+    segment_test_env env;
+    auto short_write_file = [&env] (size_t max_write, unsigned memory_alignment = block) {
+        return seastar::file(seastar::make_shared<short_write_file_impl>(rethrow_error_handler, env.file(), max_write, memory_alignment));
+    };
+
+    // Each write ends after a disk write alignment boundary that is not a block boundary.
+    auto& seg0 = env.make_segment(0, short_write_file(3 * block + 512 + 100));
+    seg0.append(test_data(test_segment_size, 'a').view()).get();
+    BOOST_REQUIRE(env.file_holds(0, test_segment_size, 'a'));
+
+    // A device whose alignments are both 512 bytes continues after a write that is shorter than a
+    // block.
+    auto& seg2 = env.make_segment(2, short_write_file(512 + 100, 512));
+    seg2.append(test_data(2 * block, 'c').view()).get();
+    BOOST_REQUIRE(env.file_holds(2 * test_segment_size, 2 * block, 'c'));
+    BOOST_REQUIRE(env.file_holds(2 * test_segment_size + 2 * block, test_segment_size - 2 * block, 0));
+
+    unsigned signalled = 0;
+    boost::signals2::scoped_connection conn = logstor_error.connect([&signalled] { ++signalled; });
+    auto& seg1 = env.make_segment(1, short_write_file(100));
+    BOOST_REQUIRE_THROW(seg1.append(test_data(block, 'b').view()).get(), storage_io_error);
+    BOOST_REQUIRE_EQUAL(signalled, 1u);
+    BOOST_REQUIRE(!seg1.begin_append(block).get());
+    BOOST_REQUIRE(env.file_holds(test_segment_size, test_segment_size, 0));
+}
+
+// Checks that each misuse of an appender is an internal error that writes nothing and does not fail
+// the segment: data that is empty, data whose size or address is not block aligned, data that does
+// not fit in the segment, and an append through an appender that was used or moved.
+SEASTAR_THREAD_TEST_CASE(test_segment_misuse_is_an_internal_error) {
+    const auto do_abort = set_abort_on_internal_error(false);
+    auto reset_abort = defer([do_abort] noexcept {
+        set_abort_on_internal_error(do_abort);
+    });
+
+    segment_test_env env;
+    auto& seg = env.make_segment(0);
+
+    auto appender = seg.begin_append(block).get();
+    BOOST_REQUIRE(appender);
+    BOOST_REQUIRE_THROW(std::move(*appender).append(bytes_view()).get(), std::runtime_error);
+    BOOST_REQUIRE_THROW(std::move(*appender).append(test_data(block, 'a').view()).get(), std::runtime_error);
+    appender = seg.begin_append(block).get();
+    BOOST_REQUIRE(appender);
+    {
+        auto moved = std::move(*appender);
+        BOOST_REQUIRE_THROW(std::move(*appender).append(test_data(block, 'a').view()).get(), std::runtime_error);
+    }
+    BOOST_REQUIRE_THROW(seg.append(test_data(block + 1, 'a').view()).get(), std::runtime_error);
+    BOOST_REQUIRE_THROW(seg.append(test_data(2 * block, 'a').view().substr(8, block)).get(), std::runtime_error);
+
+    seg.append(test_data(test_segment_size - block, 'b').view()).get();
+    appender = seg.begin_append(block).get();
+    BOOST_REQUIRE(appender);
+    BOOST_REQUIRE_THROW(std::move(*appender).append(test_data(2 * block, 'c').view()).get(), std::runtime_error);
+    BOOST_REQUIRE(env.file_holds(test_segment_size - block, 2 * block, 0));
+
+    auto pos = seg.append(test_data(block, 'd').view()).get();
+    BOOST_REQUIRE_EQUAL(pos.offset, test_segment_size - block);
+    BOOST_REQUIRE(env.file_holds(test_segment_size - block, block, 'd'));
 }
