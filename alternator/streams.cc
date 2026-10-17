@@ -219,7 +219,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     }
 
     // Audit the input table name (if specified), not the output table names.
-    maybe_audit(audit_info, audit::statement_category::QUERY,
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY,
                 table ? table->ks_name() : "", table ? table->cf_name() : "",
                 "ListStreams", request);
 
@@ -858,7 +858,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     // _sdks.cdc_get_versioned_streams() uses quorum_if_many() underneath, which uses CL=QUORUM for many token owners and CL=ONE otherwise.
     auto describe_cl = (normal_token_owners > 1) ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(),
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(),
                 bs->cf_name() + "|" + schema->cf_name(), "DescribeStream", request, describe_cl);
 
     if (limit < 1) {
@@ -1178,7 +1178,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     }
 
     // Uses only node-local context (the metadata) to generate response
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(),
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(),
                 base_schema->cf_name() + "|" + schema->cf_name(), "GetShardIterator", request);
 
     if (!sid) {
@@ -1285,7 +1285,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     per_table_stats->api_operations.get_records++;
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(),
+    maybe_audit(audit_info, client_state, permit, audit::statement_category::QUERY, schema->ks_name(),
                 base->cf_name() + "|" + schema->cf_name(), "GetRecords", request, cl);
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());

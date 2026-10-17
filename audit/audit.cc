@@ -370,8 +370,11 @@ future<> audit::log_with_sinks(audit_sink_set sinks, const audit_info& audit_inf
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username);
     }
+    // The caller keeps audit_info alive until the returned storage future
+    // resolves; the storage helpers already rely on the same lifetime. Avoid
+    // retaining another full query copy only for the error continuation.
     return write_to_storage(sinks, audit_info, node_ip, client_ip, cl, username, error)
-        .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (std::exception_ptr ep) {
+        .handle_exception([&audit_info, node_ip, client_ip, cl, username, error] (std::exception_ptr ep) {
             try {
                 std::rethrow_exception(ep);
             } catch (const seastar::gate_closed_exception&) {
@@ -388,18 +391,24 @@ future<> audit::log_with_sinks(audit_sink_set sinks, const audit_info& audit_inf
     });
 }
 
-static sstring print_alternator_table_names(const audit_table_set& tables) {
-    sstring res;
-    for (const auto& [_, table] : tables) {
-        if (!res.empty()) {
-            res += "|";
+static sstring print_alternator_table_names(const audit_table_refs& tables) {
+    size_t size = tables.empty() ? 0 : tables.size() - 1;
+    for (const auto& table_ref : tables) {
+        size += table_ref.get().second.size();
+    }
+    sstring res(sstring::initialized_later{}, size);
+    auto out = res.begin();
+    bool first = true;
+    for (const auto& table_ref : tables) {
+        if (!std::exchange(first, false)) {
+            *out++ = '|';
         }
-        res += table;
+        out = std::ranges::copy(table_ref.get().second, out).out;
     }
     return res;
 }
 
-static sstring print_filtered_alternator_batch_query(const audit_info& audit_info, const audit_table_set& tables) {
+static sstring print_filtered_alternator_batch_query(const audit_info& audit_info, const audit_table_refs& tables) {
     // Alternator audit query strings are built by audit_info::set_query_string()
     // as "<operation>|<serialized request JSON>".
     auto sep = audit_info.query().find('|');
@@ -412,8 +421,8 @@ static sstring print_filtered_alternator_batch_query(const audit_info& audit_inf
         auto& request_items = request["RequestItems"];
         for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ) {
             std::string_view table_name = rjson::to_string_view(it->name);
-            auto found = std::ranges::any_of(tables, [table_name] (const auto& table) {
-                return table.second == table_name;
+            auto found = std::ranges::any_of(tables, [table_name] (const auto& table_ref) {
+                return table_ref.get().second == table_name;
             });
             if (!found) {
                 it = request_items.EraseMember(it);
@@ -421,7 +430,7 @@ static sstring print_filtered_alternator_batch_query(const audit_info& audit_inf
                 ++it;
             }
         }
-        return seastar::format("{}|{}", operation, rjson::print(request));
+        return seastar::format("{}|{}", operation, rjson::print_exact(request));
     } catch (...) {
         // Do not fall back to the unfiltered query: it may contain data for
         // tables that do not match this audit sink.
@@ -429,25 +438,29 @@ static sstring print_filtered_alternator_batch_query(const audit_info& audit_inf
     }
 }
 
-void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_set>>& sink_tables,
-        audit_sink sink, const std::pair<sstring, sstring>& table) {
+void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_refs>>& sink_tables,
+        audit_sink sink, const audit_table_set::value_type& table, size_t table_count) {
     auto it = std::ranges::find_if(sink_tables, [sink] (const auto& entry) {
         return entry.first == sink;
     });
     if (it == sink_tables.end()) {
-        sink_tables.emplace_back(sink, audit_table_set{table});
+        audit_table_refs tables;
+        tables.reserve(table_count);
+        tables.emplace_back(table);
+        sink_tables.emplace_back(sink, std::move(tables));
     } else {
-        it->second.insert(table);
+        it->second.emplace_back(table);
     }
 }
 
 future<> audit::log_alternator_batch(const audit_info& ai, std::string_view role, socket_address node_ip, socket_address client_ip,
         std::optional<db::consistency_level> cl, const sstring& username, bool error) {
-    std::vector<std::pair<audit_sink, audit_table_set>> sink_tables;
+    std::vector<std::pair<audit_sink, audit_table_refs>> sink_tables;
+    sink_tables.reserve(2);
     for (const auto& table : *ai.alternator_batch_tables()) {
         auto sinks = sinks_for_table(ai.category(), table.first, table.second, role);
         for (auto sink : sinks) {
-            add_alternator_batch_sink_tables(sink_tables, sink, table);
+            add_alternator_batch_sink_tables(sink_tables, sink, table, ai.alternator_batch_tables()->size());
         }
     }
 
@@ -626,6 +639,38 @@ bool audit::will_log(statement_category cat, std::string_view keyspace, std::str
                          || cat == statement_category::ADMIN
                          || cat == statement_category::DCL))
            || rules_may_log(cat, keyspace, table);
+}
+
+bool audit::should_log(statement_category cat, std::string_view keyspace, std::string_view table, const service::client_state& client_state) const {
+    std::string_view role;
+    if (!_preprocessed_rules.rules().empty() && client_state.user() && client_state.user()->name) {
+        role = *client_state.user()->name;
+    }
+    return sinks_for_table(cat, keyspace, table, role).intersects(_audit_sinks);
+}
+
+alternator_request_memory_copy_counts audit::alternator_request_memory_copy_counts_for(bool is_batch) const {
+    // A normal audited request needs two serialized-request-sized copies while
+    // serializing and retaining its query. The table sink later needs up to six
+    // copies while freezing its mutation: the retained and bound query, the
+    // mutation cell, the linearized frozen mutation, and up to two copies in
+    // the fragmented serialization being replaced.
+    //
+    // Batch filtering keeps the original query alongside the filtered table
+    // record, adding one table-write copy. With both sinks, a pending syslog
+    // message can coexist with the table's later freeze peak, requiring eight
+    // copies. Batch sink writes are sequential, so their peak remains seven.
+    // Keep the existing conservative six-copy request-processing reservation
+    // for batch and syslog-capable paths.
+    const bool table_sink = _audit_sinks.contains(audit_sink::table);
+    const bool syslog_sink = _audit_sinks.contains(audit_sink::syslog);
+    if (is_batch) {
+        return {6, table_sink ? 7u : 6u};
+    }
+    if (syslog_sink) {
+        return {6, table_sink ? 8u : 6u};
+    }
+    return {2, 6};
 }
 
 template<class T>

@@ -86,8 +86,13 @@ namespace internal {
 // but throws rjson::error on allocation failures
 class throwing_allocator : public rapidjson::CrtAllocator {
     using base = rapidjson::CrtAllocator;
+    size_t* _allocated_memory = nullptr;
 public:
     static const bool kNeedFree = base::kNeedFree;
+    throwing_allocator() = default;
+    explicit throwing_allocator(size_t& allocated_memory) noexcept
+        : _allocated_memory(&allocated_memory)
+    {}
     void* Malloc(size_t size);
     void* Realloc(void* orig_ptr, size_t orig_size, size_t new_size);
     static void Free(void* ptr);
@@ -149,6 +154,23 @@ inline rjson::value empty_string() {
 // Convert the JSON value to a string with JSON syntax, the opposite of parse().
 // The representation is dense - without any redundant indentation.
 std::string print(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
+
+struct serialized_size {
+    size_t value;
+};
+
+// Measure the number of bytes print_exact() needs without allocating its
+// output buffer.
+serialized_size measure_serialized_size(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
+
+// Like print(), but uses two traversals to allocate only the final output
+// string. Prefer this when print()'s RapidJSON scratch buffer, which can
+// reserve six bytes per input character, would materially affect peak memory.
+std::string print_exact(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
+
+// Print using a previously measured upper bound. The value may have shrunk
+// since it was measured, but must not serialize beyond size_limit.
+std::string print_exact(const rjson::value& value, serialized_size size_limit, size_t max_nested_level = default_max_nested_level);
 
 // Writes the JSON value to the output_stream, similar to print() -> string, but
 // directly. Note this has potentially more data copy overhead and should be 
@@ -236,11 +258,22 @@ rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = def
 // content - but individual buffers cannot).
 using chunked_content = std::vector<temporary_buffer<char>>;
 
+struct parsed_value {
+    rjson::value value;
+    size_t memory_usage = 0;
+};
+
 // Additional variants of parse() and parse_yieldable() that work on non-
 // contiguous chunked_content. The chunked_content is moved into the parsing
 // function so that we can start freeing chunks as soon as we parse them.
 rjson::value parse(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = default_max_nested_level);
+
+// Parse a non-contiguous document and also return the memory retained by its
+// RapidJSON DOM allocations. Parser scratch memory has already been released
+// when these functions return.
+parsed_value parse_with_memory_usage(chunked_content&&, size_t max_nested_level = default_max_nested_level);
+parsed_value parse_yieldable_with_memory_usage(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.

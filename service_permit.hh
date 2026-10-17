@@ -25,6 +25,13 @@ public:
             _permit->adopt(std::move(units));
         }
     }
+    // Return part of the shared permit after a conservative admission estimate
+    // has been refined. All copies observe the reduced unit count.
+    void return_units(size_t units) {
+        if (_permit) {
+            _permit->return_units(units);
+        }
+    }
 };
 
 inline service_permit make_service_permit(seastar::semaphore_units<>&& permit) {

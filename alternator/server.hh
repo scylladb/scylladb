@@ -25,6 +25,10 @@
 
 struct client_data;
 
+namespace service {
+class memory_limiter;
+}
+
 namespace alternator {
 
 using chunked_content = rjson::chunked_content;
@@ -44,7 +48,12 @@ class server : public peering_sharded_service<server> {
     static constexpr size_t request_line_and_headers_limit = 16*KB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
             tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>, std::unique_ptr<audit::audit_info_alternator>&)>;
-    using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
+    struct alternator_callback_entry {
+        audit::statement_category audit_category;
+        bool audit_batch;
+        alternator_callback callback;
+    };
+    using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback_entry>;
 
     httpd::http_server _http_server;
     httpd::http_server _https_server;
@@ -79,7 +88,7 @@ class server : public peering_sharded_service<server> {
 
     alternator_callbacks_map _callbacks;
 
-    semaphore* _memory_limiter;
+    service::memory_limiter* _memory_limiter;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
 
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
@@ -87,7 +96,7 @@ class server : public peering_sharded_service<server> {
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
         chunked_content _raw_document;
-        rjson::value _parsed_document;
+        rjson::parsed_value _parsed_document;
         std::exception_ptr _current_exception;
         semaphore _parsing_sem{1};
         condition_variable _document_waiting;
@@ -99,7 +108,7 @@ class server : public peering_sharded_service<server> {
         // Moving a chunked_content into parse() allows parse() to free each
         // chunk as soon as it is parsed, so when chunks are relatively small,
         // we don't need to store the sum of unparsed and parsed sizes.
-        future<rjson::value> parse(chunked_content&& content);
+        future<rjson::parsed_value> parse(chunked_content&& content);
         future<> stop();
     };
     json_parser _json_parser;
@@ -128,7 +137,7 @@ public:
             std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
             std::optional<tls::credentials_builder> creds,
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-            semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
+            service::memory_limiter* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of
@@ -153,4 +162,3 @@ private:
 };
 
 }
-
