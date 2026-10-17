@@ -2672,7 +2672,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_write_io_error_signals_disk_error)
     BOOST_REQUIRE_THROW(ls.write(m, write_target(&cg, {}), db::no_timeout).get(), storage_io_error);
     BOOST_REQUIRE_EQUAL(signalled, 1u);
 
-    // The failed write only retired its segment, so a write to a new segment still succeeds and
+    // The failed write failed only its segment, so a write to a new segment still succeeds and
     // does not signal again.
     write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk1", "value-after-io-error"));
     BOOST_REQUIRE_EQUAL(signalled, 1u);

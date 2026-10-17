@@ -349,26 +349,26 @@ future<> file_manager::zero_region(file_id_t file_id, uint64_t offset, uint64_t 
     co_await write_zeros(get_open_file(file_id), offset, size);
 }
 
-segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size)
+segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t size)
     : _id(id)
     , _file(std::move(file))
     , _file_offset(file_offset)
-    , _max_size(max_size) {
+    , _size(size) {
 }
 
-void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
+void segment::start(segment_ref seg_ref, segment_sequence seq_num) {
     _seg_ref = std::move(seg_ref);
     _seq_num = seq_num;
 }
 
-future<> writeable_segment::stop() {
+future<> segment::stop() {
     if (_write_gate.is_closed()) {
         co_return;
     }
     co_await _write_gate.close();
 }
 
-future<std::optional<writeable_segment::append_reservation>> writeable_segment::reserve(size_t size) {
+future<std::optional<segment::append_reservation>> segment::reserve(size_t size) {
     if (_failed) [[unlikely]] {
         co_return std::nullopt;
     }
@@ -377,9 +377,8 @@ future<std::optional<writeable_segment::append_reservation>> writeable_segment::
     try {
         units = co_await get_units(_append_sem, 1);
     } catch (...) {
-        // The only way _append_sem breaks is a failed write retiring the segment, which
-        // may have happened while we were waiting for the permit. Nothing was reserved,
-        // so the caller can retry on another segment.
+        // Only a failed write breaks _append_sem, and the failure can occur while this call waits
+        // for the unit. Nothing is reserved, thus the caller can try again on another segment.
         co_return std::nullopt;
     }
 
@@ -390,23 +389,24 @@ future<std::optional<writeable_segment::append_reservation>> writeable_segment::
     append_reservation reservation {
         .pos = segment_position {
             .segment = _id,
-            .offset = _current_offset,
+            .offset = _append_offset,
         },
         .units = std::move(*units),
     };
 
-    _current_offset += size;
+    _append_offset += size;
 
     co_return std::move(reservation);
 }
 
-future<segment_position> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
+future<segment_position> segment::write_reserved(append_reservation reservation, bytes_view data) {
     auto write_result = co_await coroutine::as_future(do_write(reservation.pos, data));
     if (write_result.failed()) {
         auto ex = write_result.get_exception();
 
-        // if a write fails, fail also all later writes to the segment, since we assume no holes in a segment.
-        // the segment is retired, so that callers switch to a new segment instead of failing forever.
+        // A segment must have no holes, thus a failed write also fails all the later writes to the
+        // segment. The segment accepts no more appends, so that the callers write to a new segment
+        // and do not fail again.
         _failed = true;
         _append_sem.broken(ex);
         logstor_logger.warn("Write to segment {} seq {} failed: {}, retiring segment", _id, _seq_num, ex);
@@ -416,17 +416,17 @@ future<segment_position> writeable_segment::write_reserved(append_reservation re
     co_return reservation.pos;
 }
 
-future<segment_position> writeable_segment::append(bytes_view data) {
+future<segment_position> segment::append(bytes_view data) {
     auto reservation = co_await reserve(data.size());
     if (!reservation) {
         co_return coroutine::return_exception(std::runtime_error(_failed
-                ? fmt::format("Can't append write of size {} to segment {} retired by a failed write", data.size(), _id)
-                : fmt::format("Can't append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
+                ? fmt::format("Cannot append write of size {} to segment {}, which failed a write", data.size(), _id)
+                : fmt::format("Cannot append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
     }
     co_return co_await write_reserved(std::move(*reservation), data);
 }
 
-future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
+future<> segment::do_write(segment_position pos, bytes_view data) {
     utils::get_local_injector().inject("logstor_fail_segment_write", [] {
         throw std::runtime_error("segment write failed by injection");
     });
@@ -452,6 +452,9 @@ future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
             break;
         }
 
+        // A DMA write can write less than it was given, and the next DMA write must start at an
+        // aligned offset. Thus it starts at the last aligned offset that was written, and writes
+        // the bytes after that offset again.
         written = align_down(written, alignment);
     }
 }

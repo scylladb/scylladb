@@ -209,85 +209,91 @@ private:
     future<seastar::file> open_file(file_id_t);
 };
 
+// A segment that the store writes to. The segment is a fixed-size region of a file of the file
+// manager, and writes append to it from the start of the region to its end. The segment manager
+// makes the object when it allocates the segment. When a writer takes the segment, start() gives
+// the segment its reference and its sequence number. A writer that shares the segment with other
+// writers holds the write gate while it uses the segment, and stop() waits for these writers. The
+// segment writes through the open file of the file manager, and file_manager::stop() closes that
+// file. Thus the writes to the segment must end before the file manager stops.
+//
+// An append has two steps: reserve() takes the next region of the segment, and write_reserved()
+// writes the data to it. _append_sem has one unit, and a reservation holds it until its write
+// completes. Thus the writes go to the disk one at a time, in the order of their offsets, and a
+// segment has no hole before the data that it holds. When a write fails, the segment fails: it
+// accepts no more appends, and the callers write to a new segment.
 class segment {
-protected:
-    log_segment_id _id;
-    seastar::file _file;
-    uint64_t _file_offset; // Offset within the shared file where this segment starts
-    uint64_t _max_size;
-
 public:
-    segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size);
-
-    virtual ~segment() = default;
-
-    log_segment_id id() const noexcept { return _id; }
-    seastar::file& get_file() noexcept { return _file; }
-
-protected:
-    uint64_t absolute_offset(uint64_t relative_offset) const noexcept {
-        return _file_offset + relative_offset;
-    }
-};
-
-class writeable_segment : public segment {
-    seastar::gate _write_gate;
-    seastar::semaphore _append_sem{1};
-    segment_ref _seg_ref;
-    segment_sequence _seq_num;
-
-    uint32_t _current_offset = 0; // next offset for write
-
-    // Set when a write to this segment failed. The segment is retired: it accepts no
-    // further appends, and reserve() returns nullopt so that the caller switches to a
-    // new segment.
-    bool _failed = false;
-
-    future<> do_write(segment_position, bytes_view data);
-
-    bool can_fit(size_t size) const noexcept {
-        return _current_offset + size <= _max_size;
-    }
-
-public:
-    using segment::segment;
-
-    void start(segment_ref, segment_sequence);
-
-    future<> stop();
-
     struct append_reservation {
         segment_position pos;
         seastar::semaphore_units<> units;
     };
 
-    // Reserve the next append offset for this segment and keep the permit held
-    // until the DMA write completes.
-    // Returns nullopt if the data doesn't fit in the segment, or if the segment was
-    // retired by a failed write. In both cases nothing was written and the caller is
-    // expected to move on to another segment.
-    future<std::optional<append_reservation>> reserve(size_t size);
+    segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t size);
 
-    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
+    void start(segment_ref, segment_sequence);
 
-    // Convenience helper for callers that do not need to split reservation and write.
-    // Fails if the segment cannot fit the write.
-    future<segment_position> append(bytes_view data);
-
-    size_t bytes_remaining() const noexcept {
-        return _max_size - _current_offset;
-    }
+    future<> stop();
 
     seastar::gate::holder hold() {
         return _write_gate.hold();
     }
 
-    segment_ref ref() {
+    // Reserves the next region of the segment for an append of this size. The reservation holds
+    // the unit of _append_sem until its write completes. Returns nullopt if the data does not fit
+    // in the segment, or if the segment failed. In both cases nothing is written, and the caller
+    // must write to another segment.
+    future<std::optional<append_reservation>> reserve(size_t size);
+
+    // Writes the data to the region of the reservation. If the write fails, the segment fails.
+    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
+
+    // Reserves and writes in one call, for a caller that does not need the two steps. Fails if
+    // the data does not fit in the segment, or if the segment failed.
+    future<segment_position> append(bytes_view data);
+
+    log_segment_id id() const noexcept { return _id; }
+
+    segment_ref ref() const {
         return _seg_ref;
     }
 
     segment_sequence seq_num() const noexcept {
         return _seq_num;
+    }
+
+private:
+    const log_segment_id _id;
+    seastar::file _file;
+    // The offset in the file where the segment starts.
+    const uint64_t _file_offset;
+    // The size of the region of the segment in the file.
+    const uint64_t _size;
+
+    seastar::gate _write_gate;
+    seastar::semaphore _append_sem{1};
+    segment_ref _seg_ref;
+    segment_sequence _seq_num;
+
+    // The offset in the segment of the next append.
+    uint32_t _append_offset = 0;
+
+    // Set when a write to the segment fails. Then the segment accepts no more appends, and
+    // reserve() returns nullopt, so that the caller writes to a new segment.
+    bool _failed = false;
+
+    future<> do_write(segment_position, bytes_view data);
+
+    bool can_fit(size_t size) const noexcept {
+        return _append_offset + size <= _size;
+    }
+
+    uint64_t absolute_offset(uint64_t relative_offset) const noexcept {
+        return _file_offset + relative_offset;
+    }
+
+    size_t bytes_remaining() const noexcept {
+        return _size - _append_offset;
     }
 };
 
