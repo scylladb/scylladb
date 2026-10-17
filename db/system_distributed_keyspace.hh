@@ -17,6 +17,7 @@
 #include "sstables/types.hh"
 
 #include <seastar/core/future.hh>
+#include <chrono>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -142,6 +143,10 @@ private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };
 
+// Restore uses a TTL to expire rows, cluster snapshots/backups don't anymore, they rely on specific
+// cleanup mechanisms and/or the operator issued cluster clearsnapshot operation, they pass a TTL of 0.
+inline constexpr int32_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
+
 class snapshot_table_helper {
     cql3::query_processor& _qp;
 public:
@@ -230,11 +235,13 @@ public:
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , std::span<const snapshot_sstable_entry> sstables
         , db::consistency_level cl = db::consistency_level::QUORUM
+        , int32_t ttl = snapshot_table_ttl_seconds
     );
 
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , const utils::chunked_vector<snapshot_sstable_entry>& sstables
         , db::consistency_level cl = db::consistency_level::QUORUM
+        , int32_t ttl = snapshot_table_ttl_seconds
     );
 
     /**
@@ -249,7 +256,7 @@ public:
     /**
      * Add backup locations to a snapshot
      */
-    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::QUORUM);
+    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::QUORUM, int32_t ttl = snapshot_table_ttl_seconds);
 
     /**
      * Get all remote locations for snapshot
@@ -269,7 +276,7 @@ public:
     /**
      * Add tables to a snapshot
      */
-    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::QUORUM);
+    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::QUORUM, int32_t ttl = snapshot_table_ttl_seconds);
 
     /**
      * Helper to build a snapshot_table_entry describing the current schema of the given table
