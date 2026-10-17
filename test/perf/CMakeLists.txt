@@ -60,6 +60,7 @@ target_link_libraries(perf-lib
 
 add_perf_test(logalloc)
 add_perf_test(memory_footprint_test)
+add_perf_test(perf_array_search)
 add_perf_test(perf_big_decimal
   LIBRARIES
     mutation
