@@ -72,6 +72,9 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of timestamp");
     }
+    if (tval.is_empty_value()) {
+        throw exceptions::invalid_request_exception("Invalid empty value of timestamp");
+    }
     try {
         return tval.view().validate_and_deserialize<int64_t>(*long_type);
     } catch (marshal_exception& e) {
@@ -84,8 +87,13 @@ std::optional<int32_t> attributes::get_time_to_live(const query_options& options
         return std::nullopt;
 
     cql3::raw_value tval = expr::evaluate(*_time_to_live, options);
+    // A null TTL means that the data doesn't expire - like a zero TTL, and
+    // unlike an unset TTL, it overrides the table's default TTL.
     if (tval.is_null()) {
-        throw exceptions::invalid_request_exception("Invalid null value of TTL");
+        return 0;
+    }
+    if (tval.is_empty_value()) {
+        throw exceptions::invalid_request_exception("Invalid empty value of TTL");
     }
 
     int32_t ttl;
@@ -143,6 +151,9 @@ std::optional<int32_t> attributes::get_concurrency(const query_options& options)
     cql3::raw_value concurrency_raw = expr::evaluate(*_concurrency, options);
     if (concurrency_raw.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of concurrency");
+    }
+    if (concurrency_raw.is_empty_value()) {
+        throw exceptions::invalid_request_exception("Invalid empty value of concurrency");
     }
     int32_t concurrency;
     try {
