@@ -141,6 +141,9 @@ def run_cassandra_cmd(pid, dir):
     # Cassandra creates some subdirectories on its own, but one it doesn't...
     os.mkdir(os.path.join(dir, 'hints'))
     env = { 'CASSANDRA_CONF': confdir,
+            # The entrypoint of older Docker images (e.g., Cassandra 3.0's)
+            # edits the cassandra.yaml in CASSANDRA_CONFIG, not CASSANDRA_CONF.
+            'CASSANDRA_CONFIG': confdir,
             'CASSANDRA_LOG_DIR': logsdir,
             'CASSANDRA_INCLUDE': '',
             'CASSANDRA_HOME': '',
@@ -159,6 +162,12 @@ def run_cassandra_cmd(pid, dir):
                         f' -Djava.rmi.server.hostname={ip}'
                         ' -Dcom.sun.management.jmxremote.authenticate=false'
                         ' -Dcom.sun.management.jmxremote.ssl=false'
+            # In older Docker images, CASSANDRA_CONFIG only tells the
+            # entrypoint which cassandra.yaml to edit, but Cassandra itself
+            # still reads /etc/cassandra/cassandra.yaml. So we also need to
+            # tell Cassandra where our cassandra.yaml is. (Newer images use
+            # the single CASSANDRA_CONF for both.)
+                        f' -Dcassandra.config=file://{os.path.abspath(confdir)}/cassandra.yaml'
             # SAI vector indexes in Cassandra 5.0 reject custom index
             # parameters (like similarity_function) unless this flag is
             # set.  Our tests exercise those options for Cassandra SAI
@@ -295,6 +304,17 @@ def run_cassandra_cmd_docker(ip, dir, env):
     m = re.search(r'"([^"]+)"', jv_out)
     java_version = m.group(1) if m else '(unknown)'
     print(f'Docker Cassandra version: {cassandra_version}, Java: {java_version}')
+    # Some Cassandra 3 versions refuse to start with the enable_sasi_indexes
+    # or enable_materialized_views options, which they don't know. All
+    # Cassandra 3 versions enable both features by default, so we can just
+    # drop these options from cassandra.yaml.
+    if cassandra_version.startswith('3.'):
+        yaml_file = os.path.join(dir, 'conf', 'cassandra.yaml')
+        with open(yaml_file) as f:
+            lines = f.readlines()
+        with open(yaml_file, 'w') as f:
+            f.writelines(l for l in lines
+                if not l.startswith(('enable_sasi_indexes:', 'enable_materialized_views:')))
     # The official cassandra image's default CMD is 'cassandra -f', which
     # is exactly what we want.
     docker_cmd = [docker, 'run', '--rm', '--network', 'host',
