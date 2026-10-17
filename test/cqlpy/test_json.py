@@ -13,7 +13,7 @@
 
 from .util import unique_name, unique_key_int, new_test_table
 
-from cassandra.protocol import FunctionFailure
+from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
 
 import pytest
@@ -231,10 +231,10 @@ def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
 # not just JSON number constants, it also allows a string containing a number.
 # Strings which do not hold a number fail with a FunctionFailure. In
 # particular, the empty string "" is not a valid number, and should report an
-# error, but both Scylla and Cassandra have bugs that allow it for some types
-# and not for others. The following tests reproduce #7944. Where Cassandra
-# has (what we consider to be) a bug, it is marked with "cassandra_bug"
-# which causes it to xfail when testing against Cassandra.
+# error. Cassandra allows it for some types and not for others, which we
+# consider a Cassandra bug (CASSANDRA-21745), so such tests are marked
+# "cassandra_bug", which causes them to xfail when testing against Cassandra.
+# Scylla also allowed it for some types - the following tests reproduce #7944.
 def test_fromjson_int_empty_string_unprepared(cql, table1, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(FunctionFailure):
@@ -244,17 +244,44 @@ def test_fromjson_int_empty_string_prepared(cql, table1, cassandra_bug):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
-@pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_unprepared(cql, table1):
     p = unique_key_int()
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, vi) VALUES ({p}, fromJson('\"\"'))")
-@pytest.mark.xfail(reason="issue #7944")
 def test_fromjson_varint_empty_string_prepared(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
+
+# Most types allow an "empty" value - a zero-length value, which is not the
+# same as null - and SELECT JSON returns it as an empty string. The test
+# cassandra_tests/empty_values_test.py, translated from Cassandra, checks
+# this for some of the types, and the following tests check more.
+def check_select_json_empty_value(cql, test_keyspace, typ):
+    with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v {typ}') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, blobAs{typ}(0x))")
+        assert list(cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")) == [('{"v": ""}',)]
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed, for some
+# of these types with a server error).
+@pytest.mark.parametrize("typ", ["int", "bigint", "varint", "float", "double", "decimal", "timestamp"])
+def test_select_json_empty_value(cql, test_keyspace, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+
+# Cassandra doesn't allow an empty value of these types at all.
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed with a
+# server error).
+@pytest.mark.parametrize("typ", ["smallint", "tinyint"])
+def test_select_json_empty_value_scylla_only(cql, test_keyspace, scylla_only, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+
+# Cassandra fails here with a NullPointerException (CASSANDRA-21743).
+# Reproduces SCYLLADB-5185 (for an empty boolean value, SELECT JSON produced
+# the invalid JSON {"v": }).
+def test_select_json_empty_boolean(cql, test_keyspace, cassandra_bug):
+    check_select_json_empty_value(cql, test_keyspace, "boolean")
 
 # Cassandra allows the strings "true" and "false", not just the JSON constants
 # true and false, to be assigned to a boolean column.
@@ -386,7 +413,6 @@ def test_fromjson_map_key_timestamp(cql, table1):
 # that a normal value is allowed. For example, it cannot be given as an
 # element of a list.
 # Reproduces #7954.
-@pytest.mark.xfail(reason="issue #7954")
 def test_fromjson_null_constant(cql, table1):
     p = unique_key_int()
     # Check that a "null" JSON constant can be used to unset a column
@@ -643,3 +669,79 @@ def test_select_distinct_json(cql, test_keyspace):
         result = list(cql.execute(f"SELECT JSON p FROM {table} WHERE p IN ({p1}, {p2})"))
         json_values = [json.loads(row[0])["p"] for row in result]
         assert sorted(json_values) == sorted([p1, p1, p2, p2])
+
+# Test that INSERT JSON with a bad JSON string - one that isn't valid JSON,
+# isn't a JSON object, or has a value which doesn't fit its column's type -
+# fails with an InvalidRequest error, not some internal server error. Test
+# both a bound value and a string literal. We don't check the specific
+# error messages, which differ between Scylla and Cassandra.
+# Reproduces #8085.
+def test_insert_json_invalid(cql, table1):
+    p = unique_key_int()
+    bad_json = [
+        # Not valid JSON:
+        'not json', '', '{"p": %d, "v": 1' % p,
+        # Valid JSON, but not a JSON object:
+        'null', '[1, 2]', '12.34', '"hello"', 'true',
+        # A JSON object, but with a value which doesn't fit its column:
+        '{"p": %d, "v": "notanint"}' % p,
+        '{"p": %d, "v": [1]}' % p,
+        '{"p": %d, "mai": 3}' % p,
+        '{"p": %d, "l": {"a": 1}}' % p,
+        '{"p": %d, "tup": {"a": 1}}' % p,
+        '{"p": %d, "t1": [1]}' % p,
+        '{"p": %d, "ts": [1]}' % p,
+        '{"p": %d, "blobmap": {"0xzz": 1}}' % p,
+        '{"p": %d, "a": 3}' % p,
+        '{"p": %d, "l": [1]}' % p,
+    ]
+    stmt = cql.prepare(f"INSERT INTO {table1} JSON ?")
+    for s in bad_json:
+        with pytest.raises(InvalidRequest):
+            cql.execute(stmt, [s])
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table1} JSON '{s}'")
+    # A null bound value is also an InvalidRequest error.
+    with pytest.raises(InvalidRequest):
+        cql.execute(stmt, [None])
+
+# A JSON value for a tuple column must have all the tuple's components, so
+# a JSON array which has fewer items than the tuple type is rejected, both
+# in INSERT JSON and in fromJson(). (An explicit null component, e.g.
+# ["hi", null], should be allowed, but that's a different issue, #7954).
+# Reproduces SCYLLADB-5260.
+def test_json_tuple_missing_components(cql, table1):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["hi"]}}'""")
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"""INSERT INTO {table1} (p, tup) VALUES ({p}, fromJson('["hi"]'))""")
+
+# A JSON null in a JSON array for a tuple column sets that component of the
+# tuple to null - in INSERT JSON just like in fromJson() (which is checked
+# by test_fromjson_null_constant above).
+# Reproduces #7954.
+def test_insert_json_tuple_null_component(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["a", null]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [(('a', None),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": [null, 2]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [((None, 2),)]
+
+# Scylla accepts a tuple literal with fewer components than the tuple type,
+# e.g., ('a') for a tuple<text, int> column, and stores a shorter tuple whose
+# missing components are null. SELECT JSON should print these components as
+# null, so its output has all the tuple's components - and can be inserted
+# back with INSERT JSON. This test is Scylla-only because Cassandra 6 rejects
+# such a short tuple literal, and Cassandra 5 accepts it but then fails
+# SELECT JSON with a server error.
+def test_select_json_short_tuple(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, tup) VALUES ({p}, ('a'))")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [(('a', None),)]
+    [(j,)] = cql.execute(f"SELECT JSON p, tup FROM {table1} WHERE p = {p}")
+    assert json.loads(j) == {"p": p, "tup": ["a", None]}
+    # Insert the JSON back, into a different row, and read it back.
+    p2 = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} JSON '{json.dumps({'p': p2, 'tup': json.loads(j)['tup']})}'")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p2}")) == [(('a', None),)]

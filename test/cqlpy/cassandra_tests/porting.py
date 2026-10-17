@@ -13,13 +13,17 @@ import re
 import collections
 import struct
 import time
-from ..util import unique_name
-from contextlib import contextmanager
+import random
+import string
+from ..util import unique_name, is_scylla
+from contextlib import contextmanager, ExitStack
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
 
 from .. import nodetool
+from test.pylib.skip_types import skip_env
+from ..test_materialized_view import wait_for_view_built
 
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -61,6 +65,17 @@ def create_function(cql, keyspace, arg):
     finally:
         cql.execute("DROP FUNCTION " + function_name)
 
+# Scylla doesn't support Java as a language for user-defined functions, but
+# it does support Lua. Many of Cassandra's tests create a Java UDF not to test
+# Java, but just because they need some function. Such tests can use
+# java_or_lua() to get the "LANGUAGE ... AS ..." part of CREATE FUNCTION:
+# the original Java body when running on Cassandra, and an equivalent Lua
+# body when running on Scylla.
+def java_or_lua(cql, java_body, lua_body):
+    if is_scylla(cql):
+        return "LANGUAGE lua AS '" + lua_body + "'"
+    return "LANGUAGE java AS '" + java_body + "'"
+
 @contextmanager
 def create_materialized_view(cql, keyspace, arg):
     mv_name = keyspace + "." + unique_name()
@@ -69,6 +84,62 @@ def create_materialized_view(cql, keyspace, arg):
         yield mv_name
     finally:
         cql.execute("DROP MATERIALIZED VIEW " + mv_name)
+
+# Translation of CQLTester.createView(): The query has two "%s" which are
+# replaced by the new view's name and the given table's name, respectively.
+# Like createView(), we wait for the view to be built - its backfill from the
+# base table's existing data is asynchronous. Updates to the view are not:
+# on a single node, both Scylla and Cassandra apply them as part of the base
+# table write, so the Java tests' updateView() can be a simple execute().
+# With wait=False, this is the translation of CQLTester.createViewAsync(),
+# and the caller can wait with wait_for_view_built() - e.g., to wait for
+# several views being built in parallel. Given a name, the view gets this
+# name (in the table's keyspace) instead of a unique name, like
+# CQLTester.createView(viewName, query).
+#
+# Some Cassandra view tests create views restricting non-key columns of the
+# base table (e.g., "WHERE c = 1" where c is a regular column), which
+# Cassandra allows only if its "cassandra.mv.allow_filtering_nonkey_columns_unsafe"
+# system property is set. We can't set it through CQL, so if it isn't set,
+# create_view() skips the test when running on Cassandra.
+@contextmanager
+def create_view(cql, table, query, wait=True, name=None):
+    keyspace = table.split('.')[0]
+    view = keyspace + "." + (name or unique_name())
+    try:
+        cql.execute(query.replace('%s', view, 1).replace('%s', table, 1))
+    except InvalidRequest as e:
+        if not is_scylla(cql) and "Non-primary key columns can only be restricted with 'IS NOT NULL'" in str(e):
+            skip_env("Cassandra's cassandra.mv.allow_filtering_nonkey_columns_unsafe system property is not set")
+        raise
+    try:
+        if wait:
+            wait_for_view_built(cql, view)
+        yield view
+    finally:
+        cql.execute("DROP MATERIALIZED VIEW IF EXISTS " + view)
+
+# Several of Cassandra's view tests repeat the same operations for several
+# different primary keys of a view, each time on a new base table. Creating
+# all these tables and views takes about a second per test on Scylla, so the
+# translations instead create all the views on the same base table, and check
+# all of them after each operation - each view still sees exactly the same
+# sequence of base-table operations as in the Java test. create_views()
+# creates the views with the given queries (with %s placeholders, as in
+# create_view()) and waits for all of them to be built, and
+# assert_views_rows_ignoring_order() checks the result of the same SELECT
+# from all of them.
+@contextmanager
+def create_views(cql, table, queries):
+    with ExitStack() as stack:
+        views = [stack.enter_context(create_view(cql, table, query, wait=False)) for query in queries]
+        for view in views:
+            wait_for_view_built(cql, view)
+        yield views
+
+def assert_views_rows_ignoring_order(cql, views, query, *rows):
+    for view in views:
+        assert_rows_ignoring_order(execute(cql, view, query), *rows)
 
 @contextmanager
 def create_keyspace(cql, arg):
@@ -385,3 +456,15 @@ def unset():
 # Java true and false are lowercase
 true = True
 false = False
+
+# Translation of TombstonesWithIndexedSSTableTest.makeRandomString(), which
+# other Cassandra tests use too.
+def makeRandomString(length):
+    # Note that the original Java function only sets every second character
+    # (the rest are null characters), probably by mistake. We do the same.
+    chars = ['\0'] * length
+    i = 0
+    while i < length:
+        chars[i] = random.choice(string.ascii_lowercase)
+        i += 2
+    return ''.join(chars)
