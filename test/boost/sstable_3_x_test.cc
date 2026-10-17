@@ -5855,7 +5855,10 @@ SEASTAR_TEST_CASE(test_compression_premature_eof) {
             BOOST_FAIL("produces_partition_start unexpectedly");
         } catch (const sstables::malformed_sstable_exception& e) {
             std::string what = e.what();
-            BOOST_REQUIRE(what.find("compressed reader hit premature end-of-file") != std::string::npos);
+            BOOST_REQUIRE(
+                what.find("compressed reader hit premature end-of-file") != std::string::npos
+                || what.find("compressed cursor hit premature end-of-file") != std::string::npos
+            );
         }
     });
 }

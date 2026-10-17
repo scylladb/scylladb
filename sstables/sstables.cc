@@ -52,6 +52,7 @@
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
+#include "framed_chunk.hh"
 #include "checksummed_data_source.hh"
 #include "digest_checked_data_source.hh"
 #include "index_reader.hh"
@@ -2989,25 +2990,46 @@ trie::bti_position_encoding sstable::get_bti_position_encoding() const {
 }
 
 sstable_position sstable::start_position() const {
-    // Physical start positions (for compressed `mu`) require the physical index
-    // format, which is not implemented yet; until then every version reads from
-    // logical position 0. The physical branch is added together with the physical
-    // index writer/reader.
+    if (uses_physical_positions()) {
+        // `mu` is read by the physical cursor, which navigates by chunk
+        // coordinates, so the start position must carry the real coordinates of
+        // the first chunk. They come from the compression component: the first
+        // chunk begins at on-disk position 0, and its length is the extent of
+        // chunk 0. The logical/uncompressed position is 0.
+        const auto& comp = _components->compression;
+        auto accessor = comp.offsets.get_accessor();
+        auto chunk = comp.locate(0, accessor);
+        // extent_hint is an upper bound of the chunk's extent;
+        // the exact extent is such a bound.
+        return sstable_position::from_physical(
+                chunk.chunk_start, chunk.chunk_len, chunk.offset);
+    }
     return sstable_position::from_logical(0);
 }
 
 sstable_position sstable::end_position() const {
-    // Physical end sentinels (for compressed `mu`) require the physical index
-    // format, which is not implemented yet; until then every version ends at the
-    // uncompressed data size.
+    if (uses_physical_positions()) {
+        // For `mu`, the end-of-data sentinel is the start of a chunk that would
+        // follow the last chunk: the on-disk data size, with offset 0. It orders
+        // after every real position. A cursor doesn't load a chunk that starts at
+        // or after the end of its range, so a read that ends at the sentinel
+        // stops after the last chunk.
+        auto physical_end = ondisk_data_size();
+        return sstable_position::from_physical(physical_end, 0, 0);
+    }
     return sstable_position::from_logical(data_size());
 }
 
 sstable_position sstable::sstable_position_from_logical_position(uint64_t logical_position) const {
-    // The physical mapping (for compressed `mu`) requires the physical index
-    // format, which is not implemented yet; until then every version maps a
-    // logical position to itself.
-    return sstable_position::from_logical(logical_position);
+    if (!_components->compression || !index_holds_physical_positions(_version)) {
+        return sstable_position::from_logical(logical_position);
+    }
+    if (logical_position >= data_size()) {
+        return end_position();
+    }
+    const auto& comp = _components->compression;
+    auto chunk = comp.locate(logical_position, comp.offsets.get_accessor());
+    return sstable_position::from_physical(chunk.chunk_start, chunk.chunk_len, chunk.offset);
 }
 
 disk_read_range sstable::disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const {
@@ -3464,14 +3486,13 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
         digest = get_digest();
     }
 
-    if (range.start.is_physical()) {
-        // A physical range means the caller navigates the compressed data file by
-        // chunk coordinates: read it through the decompressing cursor, which opens
-        // its own (traced) file, verifies per-chunk checksums, and - when reading
-        // the whole file in order from the start - folds each chunk's checksum into
-        // a running whole-file digest (verified at end of file) when `digest` is
-        // set. This is version-agnostic: the choice of physical positions is made
-        // by the higher layer that produced the range.
+    if (_components->compression && index_holds_physical_positions(_version)) {
+        // The physical-position compressed format (`mu`) is read through the
+        // decompressing cursor, which navigates the data file by chunk
+        // coordinates. It opens its own (traced) file, verifies per-chunk
+        // checksums, and - when reading the whole file in order from the start -
+        // folds each chunk's checksum into a running whole-file digest (verified
+        // at end of file) when `digest` is set.
         co_return make_decompressing_cursor(shared_from_this(), range, permit, std::move(trace_state), std::move(options), digest);
     }
 
@@ -3484,11 +3505,11 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
     };
 
     if (_components->compression) {
-        // Compressed formats decompress on the fly using the external
-        // compression offsets, verifying per-chunk checksums (and the whole-file
-        // digest when `digest` is set). The resulting decompressed byte stream is
-        // a plain input_stream fed to the parsers through the seastar-input-stream
-        // adapter.
+        // Logical-position compressed formats (mc..me, ka/la) decompress on the
+        // fly using the external compression offsets, verifying per-chunk
+        // checksums (and the whole-file digest when `digest` is set). The
+        // resulting decompressed byte stream is a plain input_stream fed to the
+        // parsers through the seastar-input-stream adapter.
         if (_version >= sstable_version_types::mc) {
             co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
                 make_compressed_file_m_format_input_stream(stream_creator, &_components->compression, _version,
@@ -3610,7 +3631,7 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, read
 }
 
 template <typename ChecksumType>
-static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, std::optional<uint32_t> expected_digest) {
+static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, std::optional<uint32_t> expected_digest, const framed_chunk_codec& codec) {
     bool valid = true;
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
@@ -3634,24 +3655,17 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
             break;
         }
 
-        // The chunk checksum covers everything in the chunk except its own
-        // trailing 4 bytes: the length prefix (if any) and the compressed data.
-        const char* checksummed_data = buf.get();
-        auto checksummed_len = chunk_len - 4;
-        auto expected_checksum = read_be<uint32_t>(checksummed_data + checksummed_len);
-        auto actual_checksum = ChecksumType::checksum(checksummed_data, checksummed_len);
-        if (actual_checksum != expected_checksum) {
-            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, chunk_len, expected_checksum, actual_checksum);
+        // Throws if the chunk is too small to hold its framing and checksum,
+        // which the caller turns into a validation failure.
+        auto chunk = codec.parse(std::string_view(buf.get(), buf.size()));
+        auto actual_checksum = chunk.template compute_checksum<ChecksumType>();
+        if (actual_checksum != chunk.stored_checksum) {
+            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, chunk_len, chunk.stored_checksum, actual_checksum);
             valid = false;
         }
 
         if (expected_digest) {
-            actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, checksummed_data, checksummed_len);
-            if (checksum_all) {
-                uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-                actual_full_checksum = ChecksumType::checksum(actual_full_checksum,
-                        reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
-            }
+            actual_full_checksum = chunk.template fold_into_digest<ChecksumType>(actual_full_checksum, actual_checksum, checksum_all);
         }
 
         offset += chunk_len;
@@ -3854,11 +3868,13 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
     if (sst->get_compression()) {
         auto raw_stream = co_await sst->data_stream_raw(
                 permit, nullptr, nullptr);
+        const auto& compression = sst->get_compression();
+        const auto codec = sst->get_chunk_codec();
         try {
             if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_compressed<crc32_utils>(raw_stream, sst->get_compression(), true, digest);
+                valid = co_await do_validate_compressed<crc32_utils>(raw_stream, compression, true, digest, codec);
             } else {
-                valid = co_await do_validate_compressed<adler32_utils>(raw_stream, sst->get_compression(), false, digest);
+                valid = co_await do_validate_compressed<adler32_utils>(raw_stream, compression, false, digest, codec);
             }
         } catch (malformed_sstable_exception& e) {
             valid = false;

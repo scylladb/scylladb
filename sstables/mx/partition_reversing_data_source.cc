@@ -710,14 +710,15 @@ private:
         }
     }
 
-    // Builds the cursor backing all IO into the data file. The physical-position
-    // physical_reversing_cursor exists (above) but is not selected here yet: its
-    // input positions only become physical once start_position() and the
-    // logical->physical mapping are flipped for compressed `mu` (a later commit).
-    // Until then the reversing path is fed logical positions, which the compressed
-    // cursor cannot consume, so every sstable keeps using logical_reversing_cursor.
+    // Builds the cursor backing all IO into the data file: a physical_reversing_cursor
+    // for the physical-position compressed format, or a logical_reversing_cursor
+    // (data_stream/data_read) otherwise.
     static std::unique_ptr<reversing_source_cursor> make_cursor(const shared_sstable& sst, reader_permit permit,
-            tracing::trace_state_ptr trace_state, sstable_position partition_start) {
+            tracing::trace_state_ptr trace_state, sstable_position partition_start, sstable_position partition_end) {
+        if (sst->uses_physical_positions()) {
+            return std::make_unique<physical_reversing_cursor>(make_bidirectional_decompressing_cursor(
+                    sst, disk_read_range(partition_start, partition_end), permit, std::move(trace_state)));
+        }
         return std::make_unique<logical_reversing_cursor>(sst, std::move(permit), std::move(trace_state),
                 partition_start);
     }
@@ -735,7 +736,7 @@ public:
         , _ir(ir)
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
-        , _cursor(make_cursor(_sst, _permit, _trace_state, partition_start))
+        , _cursor(make_cursor(_sst, _permit, _trace_state, partition_start, partition_end))
         , _partition_start(partition_start)
         , _partition_end(partition_end)
         , _row_start(_partition_end)
