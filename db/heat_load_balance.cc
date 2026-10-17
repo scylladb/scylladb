@@ -17,21 +17,13 @@ logging::logger hr_logger("heat_load_balance");
 // Return a uniformly-distributed random number in [0,1)
 // We use per-thread state for thread safety.  We seed the random number generator
 // once with a real random value, if available,
-static thread_local std::default_random_engine random_engine{std::random_device{}()};
+static thread_local std::mt19937 random_engine{std::random_device{}()};
 float
 rand_float() {
-    static thread_local std::uniform_real_distribution<float> u(0, 1);
-    float ret = u(random_engine);
-    // Gcc 5 has a bug (fixed in Gcc 6) where the above random number
-    // generator could return 1.0, contradicting the documentation. Let's
-    // replace 1.0 by the largest number below it. It's not really important
-    // what we replace it with... Could have also chosen any arbitrary
-    // constant in [0,1), or to run the random number generator again (this
-    // is what the fix in Gcc 6 does).
-    if (ret == 1.0f) {
-        ret = std::nextafter(ret, 0.0f);
-    }
-    return ret;
+    // Scale 24 random bits into [0,1). We avoid uniform_real_distribution
+    // because libstdc++'s generate_canonical computes a long double log on
+    // every call, which aarch64 emulates in software.
+    return static_cast<float>(random_engine() >> 8) * 0x1p-24f;
 }
 
 // randone() takes a vector of N probability, and randomly returns one of
