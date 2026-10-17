@@ -1,0 +1,34 @@
+    "metrics_config": {
+        "id": "metrics_config",
+        "summary": "An entry in the metrics configuration",
+        "properties": {
+            "source_labels": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                },
+                "description": "The source labels, a match is based on concatenation of the labels"
+            },
+            "action": {
+                "type": "string",
+                "description": "The action to perform on match",
+                "enum": ["skip_when_empty", "report_when_empty", "replace", "keep", "drop", "drop_label"]
+            },
+            "target_label": {
+                "type": "string",
+                "description": "The application state version"
+            },
+            "replacement": {
+                "type": "string",
+                "description": "The replacement string to use when replacing a value"
+            },
+            "regex": {
+                "type": "string",
+                "description": "The regex string to use when replacing a value"
+            },
+            "separator": {
+                "type": "string",
+                "description": "The separator string to use when concatenating the labels"
+            }
+        }
+    }
