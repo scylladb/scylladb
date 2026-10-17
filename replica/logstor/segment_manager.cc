@@ -56,7 +56,7 @@
 
 namespace replica::logstor {
 
-using seg_ptr = lw_shared_ptr<writeable_segment>;
+using seg_ptr = lw_shared_ptr<segment>;
 
 // Maps the shares demand of the rate controller, in [0, 1], to CPU shares: min_shares at 0, at or
 // above the threshold anchor, and logstor_compaction_max_shares at 1, at the space floor. The
@@ -1296,7 +1296,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         try {
             auto seg_loc = segment_id_to_file_location(seg_id);
             auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
-            auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
+            auto seg = make_lw_shared<segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
             get_segment_descriptor(seg_id).reset(_cfg.segment_size);
             _stats.segments_allocated++;
             co_return std::move(seg);
