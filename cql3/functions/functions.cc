@@ -413,14 +413,17 @@ functions::try_get(data_dictionary::database db,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
         std::optional<const std::string_view> receiver_cf,
-        const column_specification* receiver) const {
+        const column_specification* receiver,
+        const schema* receiver_schema) const {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
 
     auto schema = std::invoke([&] () -> schema_ptr {
-        if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
+        if (receiver_schema) {
+            return receiver_schema->shared_from_this();
+        } else if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
             return db.find_schema(receiver_ks, *receiver_cf);
         } else {
             return nullptr;

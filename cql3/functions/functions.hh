@@ -55,13 +55,18 @@ public:
                                     const sstring& receiver_ks,
                                     std::optional<const std::string_view> receiver_cf,
                                     const column_specification* receiver = nullptr) const;
+    // If receiver_schema is given, it is the schema of the receiver_cf table
+    // and is used instead of looking that table up in db. This is needed
+    // for a schema which isn't in db, like the output schema of
+    // SELECT ... FROM MUTATION_FRAGMENTS().
     function_resolution try_get(data_dictionary::database db,
                                     const sstring& keyspace,
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
                                     std::optional<const std::string_view> receiver_cf,
-                                    const column_specification* receiver = nullptr) const;
+                                    const column_specification* receiver = nullptr,
+                                    const schema* receiver_schema = nullptr) const;
     template <typename AssignmentTestablePtrRange>
     shared_ptr<function> get(data_dictionary::database db,
                                     const sstring& keyspace,

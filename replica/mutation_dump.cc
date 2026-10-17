@@ -583,6 +583,11 @@ schema_ptr generate_output_schema_from_underlying_schema(schema_ptr underlying_s
     const auto& ks = underlying_schema->ks_name();
     const auto tbl = format("{}_$mutation_fragments", underlying_schema->cf_name());
     auto sb = schema_builder(this_smp_shard_count(), ks, tbl, generate_legacy_id(ks, tbl));
+    // The partition key is the underlying table's, so it must also be
+    // decorated with the underlying table's partitioner. Otherwise, for a
+    // table with a non-default partitioner (e.g., a CDC log table), token()
+    // and partition key restrictions would compute the wrong token.
+    sb.with_partitioner(underlying_schema->get_partitioner().name());
     // partition key
     for (const auto& pk_col : underlying_schema->partition_key_columns()) {
         sb.with_column(pk_col.name(), pk_col.type, column_kind::partition_key);
@@ -602,7 +607,7 @@ schema_ptr generate_output_schema_from_underlying_schema(schema_ptr underlying_s
     md5_hasher h;
     feed_hash(h, underlying_schema->id());
     feed_hash(h, sb.uuid());
-    feed_hash(h, 0); // bump this on modifications to the schema
+    feed_hash(h, 1); // bump this on modifications to the schema
     sb.with_version(table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize())));
 
     return sb.build();
