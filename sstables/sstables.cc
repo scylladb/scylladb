@@ -61,6 +61,7 @@
 #include <seastar/core/align.hh>
 #include "mutation/range_tombstone_list.hh"
 #include "binary_search.hh"
+#include "utils/bloom_calculations.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/cached_file.hh"
 #include "utils/stall_free.hh"
@@ -2049,11 +2050,15 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     // Skip rebuilding the bloom filter if the false positive rate based
     // on the current bitset size is within 75% to 125% of the configured
     // false positive rate.
+    // 75% of the configured rate can be below the minimum rate that the
+    // bloom filter supports (configured rates just above the minimum are
+    // valid), and get_filter_size() throws for such rates, so clamp it.
     auto curr_bitset_size = downcast_ptr<utils::filter::bloom_filter>(_components->filter.get())->bits().memory_size();
     auto bitset_size_lower_bound = utils::i_filter::get_filter_size(num_partitions,
                                                                     _schema->bloom_filter_fp_chance() * 1.25);
     auto bitset_size_upper_bound = utils::i_filter::get_filter_size(num_partitions,
-                                                                    _schema->bloom_filter_fp_chance() * 0.75);
+                                                                    std::max(_schema->bloom_filter_fp_chance() * 0.75,
+                                                                             utils::bloom_calculations::min_supported_bloom_filter_fp_chance()));
     if (bitset_size_lower_bound <= curr_bitset_size && curr_bitset_size <= bitset_size_upper_bound) {
         return;
     }
