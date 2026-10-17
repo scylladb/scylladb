@@ -466,7 +466,6 @@ future<> segment::do_write(segment_position pos, bytes_view data) {
                 "segment write I/O error by injection")));
     });
 
-    const auto alignment = _file.disk_write_dma_alignment();
     const uint64_t total = data.size();
     auto base_offset = absolute_offset(pos.offset);
     uint64_t written = 0;
@@ -475,15 +474,28 @@ future<> segment::do_write(segment_position pos, bytes_view data) {
         auto new_written = co_await _file.dma_write(
                 base_offset + written, data.data() + written, total - written);
 
+        const auto previous_written = written;
         written += new_written;
         if (written == total) {
             break;
         }
 
         // A DMA write can write less than it was given, and the next DMA write must start at an
-        // aligned offset. Thus it starts at the last aligned offset that was written, and writes
-        // the bytes after that offset again.
-        written = align_down(written, alignment);
+        // aligned offset in the file and in memory. The data starts at a block boundary in both,
+        // and open_file() refuses a device whose alignments do not divide the block size. Thus the
+        // next write starts at the last block boundary that was written, and writes the bytes after
+        // that boundary again.
+        written = align_down(written, ondisk::block_alignment);
+        // A write that did not write a full block would give the same write again, forever. The
+        // device cannot write one block, thus it is a disk error, which isolates the node, as an
+        // EIO from the file does.
+        if (written == previous_written) [[unlikely]] {
+            auto ex = std::make_exception_ptr(std::system_error(EIO, std::system_category(), fmt::format(
+                    "Short write to {} wrote {} bytes at offset {}, less than the block size {}",
+                    _id, new_written, pos.offset + written, ondisk::block_alignment)));
+            logstor_error_handler(ex);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
     }
 }
 
