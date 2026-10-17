@@ -119,6 +119,17 @@ create_function_statement_base::create_function_statement_base(functions::functi
         std::vector<shared_ptr<cql3_type::raw>> raw_arg_types, bool or_replace, bool if_not_exists)
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
 
+void create_function_statement_base::validate_name(std::string_view what) const {
+    // A function's auth resource is named "functions/<keyspace>/<name>[<argument types>]",
+    // and parse_resource() splits it on '/', so a '/' in the name would break, e.g.,
+    // LIST PERMISSIONS. Unlike Cassandra, we do allow '[' and ']' in the name:
+    // decode_signature() finds the argument list by the last '[', and argument
+    // types never contain '[' or ']'.
+    if (_name.name.find('/') != sstring::npos) {
+        throw exceptions::invalid_request_exception(fmt::format("{} name '{}' is invalid: it may not contain '/'", what, _name.name));
+    }
+}
+
 seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
     auto old = functions::instance().find(_name, _arg_types);
