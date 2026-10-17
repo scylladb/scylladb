@@ -6192,7 +6192,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             builder.del_repair_task_info(last_token, _feature_service);
-            if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
+            if (trinfo && trinfo->is_repairing()) {
                 builder.del_session(last_token);
             }
         });
@@ -6407,17 +6407,31 @@ future<> storage_service::abort_restore_tablets(table_id table) {
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // The restore's repairs carry its request id as their task id.
+        std::optional<locator::tablet_task_id> repair_task_id;
+        for (auto req : _topology_state_machine._topology.ongoing_restore_requests) {
+            if ((co_await _sys_ks.local().get_topology_request_entry(req)).restore_table_id == table) {
+                repair_task_id = locator::tablet_task_id(req);
+                break;
+            }
+        }
+
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         group0_update_collector updates;
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto last_token = tmap.get_last_token(tid);
+            // A failed repair keeps its request even after its transition ended, and the load
+            // balancer would repair the tablet after the restore was aborted.
+            if (repair_task_id && info.repair_task_info && info.repair_task_info->tablet_task_id == *repair_task_id) {
+                builder.del_repair_task_info(last_token, _feature_service);
+            }
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
                 co_return;
             }
-            auto last_token = tmap.get_last_token(tid);
-            // Deleting the session aborts the restore: see the restore handling in the
-            // topology coordinator.
+            // Deleting the session aborts the restore, or the repair that follows it: see the
+            // restore and repair handling in the topology coordinator.
             builder.del_session(last_token);
         });
 
@@ -6435,13 +6449,13 @@ future<> storage_service::abort_restore_tablets(table_id table) {
     slogger.info("Aborted tablet restore for table_id={}", table);
 }
 
-future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
+future<> storage_service::restore_tablets(table_id table, sstring snap_name, restore_repair repair) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.restore_tablets(table, snap_name);
+            return ss.restore_tablets(table, snap_name, repair);
         });
     }
 
@@ -6458,6 +6472,9 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
             if (entry.restore_table_id == table) {
                 if (entry.restore_snapshot_name != snap_name) {
                     throw std::runtime_error(fmt::format("Table {} is already being restored from a different snapshot {}", table, *entry.restore_snapshot_name));
+                }
+                if (entry.restore_repair != (repair && _feature_service.tablet_restore_repair)) {
+                    throw std::runtime_error(fmt::format("Table {} is already being restored with skip_repair={}", table, !entry.restore_repair));
                 }
                 ongoing = req;
                 break;
@@ -6478,6 +6495,15 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
         trbuilder.set_restore_tablets_data(table, snap_name)
                  .set("done", false)
                  .set("start_time", db_clock::now());
+        if (repair) {
+            if (_feature_service.tablet_restore_repair) {
+                trbuilder.set_restore_repair(true);
+                slogger.info("Restore of {} repairs each tablet after restoring it, as tablet repair task {}", table, request_id);
+            } else {
+                slogger.warn("Restore of {} will not repair the tablets after restoring them: the TABLET_RESTORE_REPAIR feature "
+                        "is not enabled on the cluster yet. Repair the table once the restore finishes", table);
+            }
+        }
 
         builder.queue_global_topology_request_id(request_id);
         trbuilder.set("request_type", global_topology_request::restore_tablets);

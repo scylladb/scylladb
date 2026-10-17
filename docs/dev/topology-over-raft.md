@@ -398,8 +398,9 @@ stateDiagram-v2
 
 The repair tablet transition kind is different. It transits only to the repair and end_repair stage because no token ownership is changed.
 
-The restore tablet transition kind is also simple. It uses a single `restore` stage and does not change token
-ownership. See the [Tablet-aware restore](#tablet-aware-restore) section below for details.
+The restore tablet transition kind is also simple. It uses the `restore` stage, followed by the `repair` and
+`end_repair` stages when the restore repairs the tablet, and does not change token ownership. See the
+[Tablet restore transition](#tablet-restore-transition) section below for details.
 
 The behavioral difference between "migration" and "intranode_migration" transitions is in the way "streaming" stage
 is performed. In case of intra-node migration, streaming is done by fast duplication of data by creating hard links to
@@ -1147,8 +1148,34 @@ of the target table, sets the topology state machine into the `tablet_migration`
 registers the request in `ongoing_restore_requests` (similar to `ongoing_rf_changes`).
 The existing tablet migration handler then processes the restore transitions by calling the
 `RESTORE_TABLET` RPC on all tablet replicas. Each replica downloads and attaches the SSTables
-that are contained in the tablet's token range. If the operation succeeds or fails, the
-transition is cleared.
+that are contained in the tablet's token range. If the download fails, the transition is
+cleared. If it succeeds, the transition is cleared too, unless the request repairs each
+tablet after restoring it.
+
+A restore repairs each tablet by default; the API's `skip_repair=true` turns it off. The
+request records the choice in its `restore_repair` column, written only once the
+`TABLET_RESTORE_REPAIR` feature is enabled; until then the restore does not repair and the
+node that received the request logs a warning. When the request repairs, a tablet whose
+download succeeded moves to the `repair` stage of the same `restore` transition, carrying a
+`user_repair` repair task whose id is the request id, so all tablets of one restore form a
+single repair task. It then follows the ordinary `repair` and `end_repair` stages, in
+incremental mode. Because the transition kind stays `restore`, the request is not complete
+until every tablet has finished its repair. A failed repair does not fail the restore: the
+coordinator logs a warning, and the tablet keeps its repair request, so the load balancer
+repairs it again later, like any failed user repair. Aborting the restore deletes the session
+and the repair request of every tablet of the restore, which stops the repairs and leaves
+nothing to repair afterwards. Cancelling the repair task, like any user repair, stops the
+repairs in flight, but a tablet restored after the cancel is still repaired. A second restore
+request for the same table is rejected if it asks for a different repair choice.
+
+**A down node holds back a restore that repairs.** The `repair` and `end_repair` stages wait on
+a global token metadata barrier, which needs every normal node that is not ignored to answer.
+While a node is down, every tablet in those stages waits, so the request does not complete, and
+the restore no longer finishes the way the plain `restore` stage does when a replica is lost.
+It is not stuck for good: the coordinator retries the barrier, and the restore completes once
+the node is back, or once it is removed or ignored. The same barrier holds back every other
+tablet transition that uses it, such as migrations and repairs. To restore while a node is down,
+pass `skip_repair=true` and repair the table afterwards.
 
 A replica which is down cannot restore its tablet, so the coordinator fails the tablet's
 restore rather than send it the RPC. An RPC which is already in flight when a node goes down

@@ -439,6 +439,11 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_restore_repair(bool repair) {
+    apply_atomic("restore_repair", repair);
+    return *this;
+}
+
 
 template class topology_mutation_builder_base<topology_mutation_builder>;
 template class topology_mutation_builder_base<topology_node_mutation_builder>;

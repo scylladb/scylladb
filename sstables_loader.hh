@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include <seastar/util/bool_class.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
@@ -44,6 +45,7 @@ class view_building_worker;
 }
 namespace service {
 class storage_service;
+using restore_repair = seastar::bool_class<class restore_repair_tag>;
 }
 namespace locator {
 class effective_replication_map;
@@ -130,7 +132,7 @@ private:
     // Pins the table at tablet_count tablets, restores them from the snapshot and alters the table back
     // to its original hints. Called on the shard that owns the task.
     future<> do_restore_tablets(tablet_restore_progress& progress, table_id, const sstring& snap_name, size_t tablet_count,
-            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count);
+            std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count, service::restore_repair repair);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
     future<> download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard&);
@@ -176,7 +178,8 @@ public:
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     // Takes one backup location per datacenter the keyspace replicates to.
-    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations);
+    future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations,
+            service::restore_repair repair);
 
     replica::database& local_db() {
         return _db.local();
