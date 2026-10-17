@@ -223,11 +223,21 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
         throw marshal_exception(
                 format("Too many values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
     }
+    if (value.Size() < t.all_types().size()) {
+        throw marshal_exception(
+                format("Too few values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
+    }
     std::vector<bytes_opt> raw_tuple;
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();
     for (auto vi = value.Begin(); vi != value.End(); ++vi, ++ti) {
-        raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        // A JSON null sets this component to null, as in a user type (but
+        // unlike in a list or set, whose elements cannot be null).
+        if (vi->IsNull()) {
+            raw_tuple.emplace_back(std::nullopt);
+        } else {
+            raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        }
     }
     return t.build_value(std::move(raw_tuple));
 }
@@ -300,15 +310,18 @@ struct from_json_object_visitor {
         return t.decompose(to_int<T>(value));
     }
     bytes operator()(const string_type_impl& t) {
-        return to_bytes(t.from_string(rjson::to_string_view(value)));
+        return to_bytes(t.from_string(validated_to_string_view(value, "string_type")));
     }
     bytes operator()(const bytes_type_impl& t) {
         std::string_view string_v = validated_to_string_view(value, "bytes_type");
         if (string_v.size() < 2 || string_v[0] != '0' || string_v[1] != 'x') {
             throw marshal_exception("Blob JSON strings must start with 0x");
         }
-        string_v.remove_prefix(2);
-        return to_bytes(bytes_type->from_string(string_v));
+        try {
+            return to_bytes(bytes_type->from_string(string_v.substr(2)));
+        } catch (const std::invalid_argument& e) {
+            throw marshal_exception(fmt::format("Value '{}' is not a valid blob representation: {}", string_v, e.what()));
+        }
     }
     bytes operator()(const boolean_type_impl& t) {
         if (!value.IsBool()) {
@@ -492,6 +505,15 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
         }
         ++ti;
         ++vi;
+    }
+    // A tuple value may be serialized with fewer components than its type
+    // has (e.g., when written as the CQL literal (1) for a tuple<int, text>).
+    // The missing components are null, so print them as such.
+    for (; ti != t.all_types().end(); ++ti) {
+        if (ti != t.all_types().begin()) {
+            out << ", ";
+        }
+        out << "null";
     }
 
     out << ']';
