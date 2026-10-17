@@ -597,6 +597,11 @@ private:
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
+    // Open only if the sstable uses physical positions (`mu`). Such an sstable
+    // reads its chunk offsets from CompressionInfo.db on demand. The file is
+    // kept open, so that the offsets stay readable after the sstable is
+    // unlinked, like the other components that are kept open.
+    file _compression_info_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size = 0;
     uint64_t _partitions_file_size = 0;
