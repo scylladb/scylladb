@@ -161,7 +161,7 @@ UUID UUID_gen::negate(UUID o) {
 }
 
 const thread_local int64_t UUID_gen::spoof_node = make_thread_local_node(make_random_node());
-const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
+thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
 thread_local UUID_gen UUID_gen::_instance;
 
 } // namespace utils

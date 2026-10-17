@@ -60,7 +60,9 @@ private:
     // avoid timeuuid duplicates when multiple nodes run on the
     // same host and share the physical MAC address.
     static thread_local const int64_t spoof_node;
-    static thread_local const int64_t clock_seq_and_node;
+    // Not const only because reset_last_used_time() changes its clock
+    // sequence.
+    static thread_local int64_t clock_seq_and_node;
 
     /*
      * The min and max possible lsb for a UUID.
@@ -108,12 +110,27 @@ private:
     }
 
 public:
-    // Forget this shard's last generated time, so the next time UUIDs follow
-    // the clock even if it moved backward. Only for the test-only clocks
-    // offset (see set_clocks_offset()), whose changes would otherwise leave
-    // the time UUIDs in the future after a test undoes a forward jump.
+    // Set this shard's last generated time to the current time, so the next
+    // time UUIDs follow the clock even if it moved backward. Only for the
+    // test-only clocks offset (see set_clocks_offset()), whose changes would
+    // otherwise leave the time UUIDs in the future after a test undoes a
+    // forward jump.
+    // Time UUIDs are unique only because their time never goes backward, so
+    // if the clock is now behind _last_used_time - which is never earlier
+    // than the time of a UUID generated with the current clock sequence -
+    // the time of a new UUID may repeat that of an earlier one. In that case,
+    // as RFC 4122 prescribes when the clock moves backward, this also changes
+    // the clock sequence - the 14 bits of clock_seq_and_node after its 2
+    // variant bits - to keep the new UUIDs different from earlier ones. The
+    // clock sequence is incremented, so it repeats only after 16,384 such
+    // changes, and tests move the clocks back far fewer times than that.
     static void reset_last_used_time() {
-        _instance._last_used_time = decimicroseconds{0};
+        auto now = from_unix_timestamp(duration_cast<milliseconds>(db_clock::now().time_since_epoch()));
+        if (now < _instance._last_used_time) {
+            constexpr int64_t clock_seq_mask = int64_t(0x3FFF) << 48;
+            clock_seq_and_node = (clock_seq_and_node & ~clock_seq_mask) | ((clock_seq_and_node + (int64_t(1) << 48)) & clock_seq_mask);
+        }
+        _instance._last_used_time = now;
     }
 
     // We have only 17 timeuuid bits available to store this
