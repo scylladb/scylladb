@@ -236,6 +236,10 @@ public:
         return _hints_dir_device_id;
     }
 
+    /// Changes the maximum time a node can be dead for hints to still be generated for it.
+    /// Affects the subsequent hinting decisions.
+    void set_max_hint_window(uint32_t max_hint_window_ms);
+
     void allow_hints();
     void forbid_hints();
     void forbid_hints_for_eps_with_pending_hints();

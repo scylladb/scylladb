@@ -32,6 +32,7 @@
 #include "db/hints/host_filter.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/small_vector.hh"
+#include "utils/updateable_value.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/chunked_fifo.hh>
 #include "exceptions/coordinator_result.hh"
@@ -307,6 +308,8 @@ private:
     db::hints::manager _hints_manager;
     db::hints::directory_initializer _hints_directory_initializer;
     db::hints::manager _hints_for_views_manager;
+    // Propagates changes of `max_hint_window_in_ms` to the hints managers.
+    utils::observer<uint32_t> _max_hint_window_observer;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;

@@ -15,6 +15,7 @@ from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import IPAddress, ServerInfo
+from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
@@ -1565,3 +1566,111 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
                                                 consistency_level=ConsistencyLevel.ONE))
     assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_no_hints_after_max_hint_window_exceeded(manager: ScyllaClusterManager):
+    """
+    Hints must be generated for a node that has been dead for no longer than
+    the configuration option max_hint_window_in_ms, and must not be generated
+    once the node has been dead for longer than that.
+    """
+
+    # Use a single shard to make the test simpler. We wait for the configuration
+    # to be updated, etc.
+    cmdline = ["--smp", "1", "--logger-log-level", "hints_manager=trace"]
+    # To speed up the test.
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    node1, node2 = await manager.servers_add(2, config=config, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "r1"})
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY(pk, ck))")
+    # Pin the replica of the key below.
+    await manager.disable_tablet_balancing()
+
+    async def set_max_hint_window_in_ms(node: ServerInfo, log: ScyllaLogFile,
+                                        mark: int, value: int) -> int:
+        await manager.server_update_config(node.server_id, "max_hint_window_in_ms", value)
+        # Both the regular and view hint manager are going to update their values.
+        # That's why we need to wait for two copies of the logs.
+        await log.wait_for(*[f"Updated max_hint_window to {value} ms" for _ in range(2)], from_mark=mark)
+        mark = await log.mark()
+        return mark
+
+    async def confirm_written_count(expected_written: int):
+        await wait_until_hint_writing_settled(manager, [node1])
+        metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+        assert metrics["written"] == expected_written, f"Unexpected number of hints: {metrics}"
+
+    # First, find the replica for the key. We're going to save hints for it.
+    key = 17
+    natural_endpoints = await manager.api.natural_endpoints(node1.ip_addr, "ks", "tbl", str(key))
+    assert len(natural_endpoints) == 1, \
+        f"Unexpected number of natural endpoints: {len(natural_endpoints)}"
+
+    natural_endpoint = natural_endpoints[0]
+    assert natural_endpoint in [node1.ip_addr, node2.ip_addr], \
+        f"Unknown natural endpoint: {natural_endpoint} vs. [{node1.ip_addr}, {node2.ip_addr}]"
+
+    if natural_endpoint == node1.ip_addr:
+        logger.info("Swapping the nodes")
+        node1, node2 = node2, node1
+        cql = await manager.get_cql_exclusive(node1)
+
+    logger.info(f"The natural endpoint for key={key} is: {node2.server_id} / {node2.ip_addr}")
+
+    # Now that we know which node owns the partition, we can move on to the actual test.
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+
+    insert = cql.prepare("INSERT INTO ks.tbl (pk, ck) VALUES (?, ?)")
+    insert.consistency_level = ConsistencyLevel.ANY
+
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
+    # First set a relatively large window (1 hour) so that we can freely
+    # write hints for the replica.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 1000 * 60 * 60)
+    await cql.run_async(insert, (key, 1))
+    await confirm_written_count(1)
+
+    # Next, reduce the window to a small value (100 ms) to force
+    # a rejection of the write.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 100)
+    await asyncio.sleep(0.1)
+    with pytest.raises(Exception):
+        await cql.run_async(insert, (key, 2))
+    await confirm_written_count(1)
+
+    # If we set the window to 0, it should also force a write to be rejected.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 0)
+    with pytest.raises(Exception):
+        await cql.run_async(insert, (key, 3))
+    await confirm_written_count(1)
+
+    # Set the window to a large value again and observe that a write is accepted.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 1000 * 60 * 60)
+    await cql.run_async(insert, (key, 4))
+    await confirm_written_count(2)
+
+    # Confirm the coordinator is NOT a replica of any of the keys.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay",
+                                       one_shot=False)
+    await manager.server_start(node2.server_id)
+    await manager.servers_see_each_other([node1, node2])
+
+    result = await cql.run_async("SELECT pk, ck FROM ks.tbl")
+    rows = set((row.pk, row.ck) for row in result)
+    assert rows == set()
+
+    # Now confirm which hints were saved.
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=2)
+
+    result = await cql.run_async("SELECT pk, ck FROM ks.tbl")
+    rows = set((row.pk, row.ck) for row in result)
+    assert rows == {(key, 1), (key, 4)}

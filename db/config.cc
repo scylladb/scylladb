@@ -1309,7 +1309,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum concurrency allowed for sending hints. The concurrency is divided across shards and rounded up if not divisible by the number of shards. By default (or when set to 0), concurrency of 8*shard_count will be used.")
     , hinted_handoff_throttle_in_kb(this, "hinted_handoff_throttle_in_kb", value_status::Unused, 1024,
         "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously.")
-    , max_hint_window_in_ms(this, "max_hint_window_in_ms", value_status::Used, 10800000,
+    , max_hint_window_in_ms(this, "max_hint_window_in_ms", liveness::LiveUpdate, value_status::Used, 10800000,
         "Maximum amount of time that hints are generates hints for an unresponsive node. After this interval, new hints are no longer generated until the node is back up and responsive. If the node goes down again, a new interval begins. This setting can prevent a sudden demand for resources when a node is brought back online and the rest of the cluster attempts to replay a large volume of hinted writes.\n"
         "\n"
         "Related information: Failure detection and recovery")

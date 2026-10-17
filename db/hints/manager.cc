@@ -243,6 +243,11 @@ future<> manager::compute_hints_dir_device_id() {
     }
 }
 
+void manager::set_max_hint_window(uint32_t max_hint_window_ms) {
+    _max_hint_window_us = int64_t(max_hint_window_ms) * 1000;
+    manager_logger.info("Updated max_hint_window to {} ms", max_hint_window_ms);
+}
+
 void manager::allow_hints() {
     for (auto& [_, ep_man] : _ep_managers) {
         ep_man.allow_hints();
