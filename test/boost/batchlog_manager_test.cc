@@ -641,6 +641,20 @@ SEASTAR_TEST_CASE(test_batchlog_migrate_v1_v2) {
             .is_empty();
 
         {
+            testlog.info("Replay with an expired deadline - migration should stop before the first entry, all entries stay in v1 table");
+            const auto all_replayed = bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no, db::timeout_clock::now()).get();
+            BOOST_REQUIRE(all_replayed == db::all_batches_replayed::no);
+        }
+
+        assert_that(env.execute_cql(batchlog_v1_query).get())
+            .is_rows()
+            .with_size(batch_count);
+
+        assert_that(env.execute_cql(batchlog_v2_query).get())
+            .is_rows()
+            .is_empty();
+
+        {
             scoped_error_injection error_injection("batchlog_manager_fail_migration");
 
             testlog.info("First replay - migration should fail, all entries stay in v1 table");

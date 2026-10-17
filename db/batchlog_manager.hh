@@ -15,8 +15,10 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "db_clock.hh"
+#include "db/timeout_clock.hh"
 
 #include <chrono>
 #include <limits>
@@ -65,7 +67,7 @@ private:
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
     static constexpr std::chrono::seconds write_timeout = std::chrono::seconds(300);
 
-    using clock_type = lowres_clock;
+    using clock_type = db::timeout_clock;
 
     stats _stats;
 
@@ -78,7 +80,7 @@ private:
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
     unsigned _replay_cleanup_after_replays = 100;
-    semaphore _sem{1};
+    seastar::basic_semaphore<seastar::semaphore_default_exception_factory, clock_type> _sem{1};
     seastar::named_gate _gate;
     unsigned _cpu = 0;
     seastar::abort_source _stop;
@@ -92,11 +94,12 @@ private:
     // which can still produce v1 entries, this migration code can be removed.
     bool _migration_done = false;
 
-    future<> maybe_migrate_v1_to_v2();
+    // Stops at deadline, leaving the rest of the v1 entries for the next call.
+    future<> maybe_migrate_v1_to_v2(timeout_clock::time_point deadline);
 
-    future<all_batches_replayed> replay_all_failed_batches_v1(post_replay_cleanup cleanup);
-    future<all_batches_replayed> replay_all_failed_batches_v2(post_replay_cleanup cleanup);
-    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
+    future<all_batches_replayed> replay_all_failed_batches_v1(post_replay_cleanup cleanup, timeout_clock::time_point deadline);
+    future<all_batches_replayed> replay_all_failed_batches_v2(post_replay_cleanup cleanup, timeout_clock::time_point deadline);
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup, timeout_clock::time_point deadline);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -107,7 +110,13 @@ public:
     future<> drain();
     future<> stop();
 
-    future<all_batches_replayed> do_batch_log_replay(post_replay_cleanup cleanup);
+    // deadline bounds the whole replay: the wait for the replay slot, the v1
+    // to v2 migration, the batchlog reads, the rate limiter wait, the writes
+    // of each batch and the loop over the batchlog shards all stop at it. A
+    // replay cut short returns all_batches_replayed::no and leaves the
+    // batches it did not get to for the next replay.
+    future<all_batches_replayed> do_batch_log_replay(post_replay_cleanup cleanup,
+            timeout_clock::time_point deadline = no_timeout);
 
     future<size_t> count_all_batches() const;
     gc_clock::time_point get_last_replay() const {
