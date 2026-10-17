@@ -237,12 +237,32 @@ Tuning options
      - empty
      - The list of endpoints described above. Live-updateable: endpoints can be
        added without restarting the node.
+   * - ``object_storage_connections``
+     - empty
+     - Maximum number of connections per shard for **S3** endpoints, per scheduling
+       group, as a map from the group name to a positive count. The key
+       ``service_levels`` covers all service-level groups, which share one pool.
+       Entries override the built-in values: ``service_levels: 128``,
+       ``main: 8``, ``memtable: 16``, ``compaction: 16``,
+       ``maintenance_compaction: 16``, ``streaming: 64``, ``backup: 32``,
+       ``maintenance: 16``, ``general: 16``. A group that has neither shares
+       the ``general`` pool; the node logs a warning naming that group and
+       counts it in ``scylla_s3_unclassified_groups``. Live-updateable;
+       removing an entry keeps the cap of a pool that already exists. The GCS
+       backend ignores this option.
    * - ``object_storage_connections_per_shard``
      - 128
-     - Maximum number of connections per shard for **S3** endpoints, distributed
-       across scheduling groups in proportion to their shares so that compaction
-       and streaming traffic does not starve user reads. Live-updateable. The
-       GCS backend ignores this option.
+     - Deprecated, superseded by ``object_storage_connections``. This set one
+       budget for the whole shard, which was split across the scheduling groups
+       by their shares. A value other than the default is still honored as a
+       shard budget: it is spread over the built-in per-group values in their
+       own proportions, and no group is lowered below its built-in value. The
+       built-in values total 312, so a node configured with 512 gets
+       ``streaming`` 105 instead of 64 and ``backup`` 53 instead of 32, while a
+       value at or under 312 leaves every group as it is -- the built-in table
+       already asks for more than this option's own default of 128. Setting
+       ``object_storage_connections`` replaces this entirely: the caps come from
+       there and the old budget is not consulted. Read at startup only.
 
 .. _admin-oci-object-storage:
 
