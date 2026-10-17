@@ -3371,6 +3371,46 @@ def test_describe_udf_with_udt(cql, test_keyspace, scylla_only):
             expected_stmt = f"CREATE FUNCTION {test_keyspace}.{fn}{fn_content}"
             assert udf_stmt == expected_stmt
 
+# Verifies that the output of DESCRIBE AGGREGATE, for an aggregate using a UDT
+# as an argument type and as its state type, can be executed to re-create the
+# aggregate. This is the same as test_describe_udf_with_udt, for aggregates.
+# Reproduces SCYLLADB-5277 (the UDT was printed as frozen<...>, which CREATE
+# AGGREGATE rejects).
+def test_describe_uda_with_udt(cql, test_keyspace):
+    # Scylla supports Lua functions, Cassandra supports Java functions
+    body = "LANGUAGE lua AS 'return x'" if is_scylla(cql) else "LANGUAGE java AS 'return x;'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{udt}>') as table:
+            cql.execute(f'INSERT INTO {table} (p, u) VALUES (1, {{a: 5}})')
+            # The state function returns the last value it was given.
+            with new_function(cql, test_keyspace, f'(s {udt}, x {udt}) CALLED ON NULL INPUT RETURNS {udt} {body}') as sf:
+                with new_aggregate(cql, test_keyspace, f'({udt}) SFUNC {sf} STYPE {udt}') as agg:
+                    desc = cql.execute(f'DESCRIBE AGGREGATE {test_keyspace}.{agg}').one().create_statement
+                    cql.execute(f'DROP AGGREGATE {test_keyspace}.{agg}')
+                    cql.execute(desc)
+                    assert [tuple(r[0]) for r in cql.execute(f'SELECT {test_keyspace}.{agg}(u) FROM {table}')] == [(5,)]
+
+# In Scylla (unlike Cassandra, see #13866), a function's argument or return
+# type, and an aggregate's state type, may be a frozen collection. DESCRIBE
+# must print such a type with its frozen<>: Otherwise, the output of DESCRIBE
+# FUNCTION would re-create a different function (with a non-frozen argument),
+# and the aggregate, whose state function must take its state type, couldn't
+# be re-created at all - as when restoring a schema saved by DESCRIBE SCHEMA.
+# Reproduces SCYLLADB-5277 (the fix of #20256, for functions, removed the
+# frozen<> also from collections).
+def test_describe_uda_with_frozen_collection(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x int') as table:
+        cql.execute(f'INSERT INTO {table} (p, x) VALUES (1, 5)')
+        with new_function(cql, test_keyspace, "(s frozen<list<int>>, x int) CALLED ON NULL INPUT RETURNS frozen<list<int>> LANGUAGE lua AS 'return {x}'") as sf:
+            with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE frozen<list<int>>') as agg:
+                fdesc = cql.execute(f'DESCRIBE FUNCTION {test_keyspace}.{sf}').one().create_statement
+                adesc = cql.execute(f'DESCRIBE AGGREGATE {test_keyspace}.{agg}').one().create_statement
+                cql.execute(f'DROP AGGREGATE {test_keyspace}.{agg}')
+                cql.execute(f'DROP FUNCTION {test_keyspace}.{sf}')
+                cql.execute(fdesc)
+                cql.execute(adesc)
+                assert list(cql.execute(f'SELECT {test_keyspace}.{agg}(x) FROM {table}')) == [([5],)]
+
 # Test that the Scylla-only "tombstone_gc" option appears in the output of
 # "desc table". Reproduces issue #14390.
 # The test is marked scylla_only because Cassandra doesn't have this

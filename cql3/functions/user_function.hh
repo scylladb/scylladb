@@ -64,5 +64,13 @@ public:
     description describe(with_create_statement) const;
 };
 
+// The name of the type of a user-defined function's argument or return value,
+// or of a user-defined aggregate's argument or state, as it is written in
+// CREATE FUNCTION or CREATE AGGREGATE. A user-defined type or a tuple there is
+// always frozen, but is written without frozen<> (which CREATE FUNCTION
+// refuses for a user-defined type). A collection, however, may be declared
+// frozen or not, so a frozen collection is written with frozen<>.
+sstring signature_type_name(const data_type& type);
+
 }
 }

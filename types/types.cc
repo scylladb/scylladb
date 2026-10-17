@@ -4109,7 +4109,9 @@ sstring data_value::to_parsable_string() const {
             if (i != 0) {
                 result << ", ";
             }
-            result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string();
+            // Quote a field name which needs it (e.g., a case-sensitive name),
+            // so that the output can be parsed back.
+            result << cql3::util::maybe_quote(user_typ->string_field_names().at(i)) << ":" << (*field_values)[i].to_parsable_string();
         }
         result << "}";
         return std::move(result).str();

@@ -370,7 +370,9 @@ public:
     template <typename Func>
     friend inline auto visit(const data_value& v, Func&& f);
     // Prints a value of this type in a way which is parsable back from CQL.
-    // Differs from operator<< for collections.
+    // Differs from operator<< for collections. The field names of a user-defined
+    // type are quoted when needed (see cql3::util::maybe_quote()), e.g., a field
+    // named A is printed as "A".
     sstring to_parsable_string() const;
 };
 
