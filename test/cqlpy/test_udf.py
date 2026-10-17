@@ -116,3 +116,91 @@ def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
                     f"CREATE FUNCTION {other_ks}.testfun(v text) "
                     f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
 
+# Test that a frozen collection column can be passed to a function whose
+# parameter is a (non-frozen) collection of the same type. The serialized
+# value of a frozen and a non-frozen collection is the same, so there is no
+# reason to refuse this. Note that an empty frozen collection is not the
+# same as null, and should be passed to the function as an empty collection.
+# Reproduces #13855. The translated Cassandra tests which cite #13855 (in
+# aggregation_test.py and uf_types_test.py) also need other issues fixed,
+# so they don't check #13855 alone.
+@pytest.mark.parametrize("typ,value,empty", [("list<text>", "['a', 'b']", "[]"), ("set<text>", "{'a', 'b'}", "{}"), ("map<text, text>", "{'a': 'x', 'b': 'y'}", "{}")])
+def test_udf_frozen_collection_argument(cql, test_keyspace, has_java_udf, typ, value, empty):
+    if has_java_udf:
+        size_body = "LANGUAGE java AS 'return val == null ? \"null\" : \"size \" + val.size();'"
+    else:
+        size_body = "LANGUAGE lua AS 'if val == nil then return \"null\" end local n = 0 for _ in pairs(val) do n = n + 1 end return \"size \" .. n'"
+    with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, v frozen<{typ}>") as table:
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, {value})")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, {empty})")
+        cql.execute(f"INSERT INTO {table} (p) VALUES (3)")
+        with new_function(cql, test_keyspace, f"(val {typ}) CALLED ON NULL INPUT RETURNS text {size_body}") as size:
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table} WHERE p = 1")) == [("size 2",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table} WHERE p = 2")) == [("size 0",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table} WHERE p = 3")) == [("null",)]
+
+# The opposite of test_udf_frozen_collection_argument: a non-frozen collection
+# column passed to a function whose parameter is a frozen collection of the
+# same type. This test is scylla_only because Cassandra doesn't allow a
+# frozen<...> parameter type at all (see #13866).
+# Reproduces #13855.
+@pytest.mark.parametrize("typ,value", [("list<text>", "['a', 'b']"), ("set<text>", "{'a', 'b'}"), ("map<text, text>", "{'a': 'x', 'b': 'y'}")])
+def test_udf_nonfrozen_collection_to_frozen_parameter(scylla_only, cql, test_keyspace, typ, value):
+    size_body = "LANGUAGE lua AS 'if val == nil then return \"null\" end local n = 0 for _ in pairs(val) do n = n + 1 end return \"size \" .. n'"
+    with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, v {typ}") as table:
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, {value})")
+        cql.execute(f"INSERT INTO {table} (p) VALUES (2)")
+        with new_function(cql, test_keyspace, f"(val frozen<{typ}>) CALLED ON NULL INPUT RETURNS text {size_body}") as size:
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table} WHERE p = 1")) == [("size 2",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table} WHERE p = 2")) == [("null",)]
+
+# Test that a non-frozen UDT column can be passed to a function whose
+# parameter is that UDT. Scylla treats a UDT parameter as frozen, so this is
+# the same problem as #13855 (a frozen collection passed to a non-frozen
+# collection parameter), in the opposite direction.
+def test_udf_nonfrozen_udt_argument(cql, test_keyspace, has_java_udf):
+    with new_type(cql, test_keyspace, "(a int, b text)") as udt:
+        if has_java_udf:
+            body = "LANGUAGE java AS 'return val == null ? \"null\" : val.getInt(\"a\") + val.getString(\"b\");'"
+        else:
+            body = "LANGUAGE lua AS 'if val == nil then return \"null\" end return val.a .. val.b'"
+        with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, v {udt}") as table:
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, {{a: 7, b: 'x'}})")
+            cql.execute(f"INSERT INTO {table} (p) VALUES (2)")
+            with new_function(cql, test_keyspace, f"(val {udt}) CALLED ON NULL INPUT RETURNS text {body}") as f:
+                assert list(cql.execute(f"SELECT {test_keyspace}.{f}(v) FROM {table} WHERE p = 1")) == [("7x",)]
+                assert list(cql.execute(f"SELECT {test_keyspace}.{f}(v) FROM {table} WHERE p = 2")) == [("null",)]
+
+# Scylla (unlike Cassandra) allows a function's parameter to be a frozen
+# collection, so a function can be overloaded with both a frozen and a
+# non-frozen collection parameter. Since a frozen collection can be passed to
+# a non-frozen parameter and vice versa (#13855), check that such a call still
+# chooses the overload whose parameter type matches the argument exactly,
+# instead of failing as ambiguous.
+def test_udf_overload_frozen_and_nonfrozen_parameter(scylla_only, cql, test_keyspace):
+    name = unique_name()
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, l list<text>, fl frozen<list<text>>") as table:
+        cql.execute(f"INSERT INTO {table} (p, l, fl) VALUES (1, ['a'], ['a'])")
+        with new_function(cql, test_keyspace, "(val list<text>) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS 'return \"nonfrozen\"'", name=name, args="list<text>"), \
+             new_function(cql, test_keyspace, "(val frozen<list<text>>) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS 'return \"frozen\"'", name=name, args="frozen<list<text>>"):
+            assert list(cql.execute(f"SELECT {test_keyspace}.{name}(l) FROM {table}")) == [("nonfrozen",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{name}(fl) FROM {table}")) == [("frozen",)]
+
+# Like test_udf_frozen_collection_argument and
+# test_udf_nonfrozen_collection_to_frozen_parameter, but the collection
+# passed to the function is the result of another function call, rather than
+# a column: one function returns a frozen (or non-frozen) list, and is called
+# inside a function whose parameter is a non-frozen (or frozen) list. This
+# test is scylla_only because Cassandra doesn't allow a frozen<...> type in a
+# function's signature at all (see #13866).
+# Reproduces #13855.
+@pytest.mark.parametrize('inner_type,outer_type', [
+    ('frozen<list<int>>', 'list<int>'),
+    ('list<int>', 'frozen<list<int>>'),
+], ids=['frozen_to_nonfrozen', 'nonfrozen_to_frozen'])
+def test_udf_frozen_collection_nested_call(scylla_only, cql, test_keyspace, inner_type, outer_type):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 7)')
+        with new_function(cql, test_keyspace, f"(x int) CALLED ON NULL INPUT RETURNS {inner_type} LANGUAGE lua AS 'return {{x, x}}'") as make_list, \
+             new_function(cql, test_keyspace, f"(l {outer_type}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return #l'") as size:
+            assert list(cql.execute(f'SELECT {test_keyspace}.{size}({test_keyspace}.{make_list}(v)) FROM {table}')) == [(2,)]
