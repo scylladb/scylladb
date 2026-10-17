@@ -467,7 +467,10 @@ permissions can be granted on which types of resources, and which statements are
      - ``GRANT PERMISSION`` and ``REVOKE PERMISSION`` on specified table
    * - ``DESCRIBE``
      - ``ALL ROLES``
-     - ``LIST ROLES`` on all roles or only roles granted to another specified role
+     - ``LIST ROLES`` on all roles or only roles granted to another specified role, and ``LIST PERMISSIONS`` of any role
+   * - ``DESCRIBE``
+     - ``ROLE role_name``
+     - ``LIST PERMISSIONS`` of the specified role
    * - ``VECTOR_SEARCH_INDEXING``
      - ``ALL KEYSPACES``
      - ``SELECT`` on all tables with vector search indexes, and on some :ref:`system tables <external-index-system-tables>`
@@ -596,6 +599,21 @@ query. Adding the ``NORECURSIVE`` switch restricts the results to only those per
     LIST SELECT PERMISSIONS OF carlos;
 
 Show any permissions granted to ``carlos``, limited to ``SELECT`` permissions on any resource.
+
+Who can list which permissions:
+
+* A superuser can list all permissions.
+* Any user can list its own permissions, and those of the roles granted to it.
+* A user with ``DESCRIBE`` permission on a role can list that role's permissions, and a user with ``DESCRIBE``
+  permission on ``ALL ROLES`` can list everyone's permissions. The creator of a role automatically gets ``DESCRIBE``
+  permission on it.
+* A user with ``AUTHORIZE`` permission on a resource can list everyone's permissions on that resource, using
+  ``LIST PERMISSIONS ON``. Such a user may grant and revoke permissions on the resource, so it may also see them. It
+  sees only the permissions it could revoke, i.e., those on resources on which it has ``AUTHORIZE``. For example,
+  the creator of a table automatically gets ``AUTHORIZE`` on it, so it can see who else has permissions on its table.
+  ``LIST PERMISSIONS ON`` a table normally also lists the permissions on the table's keyspace, which apply to the table
+  too, but the table's creator doesn't see those unless it also has ``AUTHORIZE`` on the keyspace.
+  Note that Cassandra doesn't have this rule.
 
 Related Topics
 ```````````````
