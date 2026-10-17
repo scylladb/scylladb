@@ -115,7 +115,6 @@ fedora_packages=(
     curl
     rust
     cargo
-    conan
     rapidxml-devel
     rust-std-static-wasm32-wasip1
     wabt
@@ -179,6 +178,7 @@ fedora_python3_packages=(
 # expected to also go through `uv run --project test --locked` rather than
 # relying on this image.
 declare -A pip_packages=(
+    [conan]=""
     [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
     [geomet]=""
     [traceback-with-variables]=""

@@ -16,4 +16,12 @@ RUN dnf -y update \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 RUN mkdir -p /root/.m2/repository
 RUN ./tools/toolchain/optimized_clang.sh && rm -rf /root/.cache /root/.cargo
+# Detection alone accepts compiler versions missing from Conan's settings.yml.
+RUN CONAN_HOME=$(mktemp -d) \
+    && export CONAN_HOME CC=clang CXX=clang++ \
+    && conan profile detect \
+    && conan profile show \
+    && CC=gcc CXX=g++ conan profile detect --force \
+    && conan profile show \
+    && rm -rf "$CONAN_HOME"
 CMD /bin/bash
