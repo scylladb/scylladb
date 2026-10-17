@@ -294,6 +294,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     manager_logger.trace("hint_sender[{}]:send_hints: Hint is too old, skipping it, "
                         "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
                         _ep_key, now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
+                    ++shard_stats().discarded;
                     return make_ready_future<>();
                 }
 
@@ -460,6 +461,17 @@ void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
 bool hint_sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
+
+    utils::get_local_injector().inject("hinted_handoff_make_segment_older",
+            [&] (auto& handler) -> future<> {
+        const auto parameter = handler.template get<uint32_t>("sec_count");
+        SCYLLA_ASSERT(parameter.has_value());
+        const auto value = parameter.value();
+        manager_logger.debug("Making segment {} seem older by {} seconds", fname, value);
+        secs_since_file_mod -= std::chrono::seconds(value);
+        return make_ready_future<>();
+    }).get();
+
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     struct canceled_draining_exception {};
