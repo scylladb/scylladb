@@ -61,7 +61,6 @@ def testCreateTinyintColumns(cql, test_keyspace):
         #assertInvalidMessage(cql, table, "Expected 1 byte for a tinyint (0)",
         #                     "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", "3", (byte) 1, ByteBufferUtil.EMPTY_BYTE_BUFFER)
 
-@pytest.mark.xfail(reason="Issue #8001")
 def testCreateTableWithDurationColumns(cql, test_keyspace):
     t = unique_name()
     # Messages in Scylla and Cassandra are slightly different - Cassandra

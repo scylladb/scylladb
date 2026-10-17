@@ -2627,7 +2627,9 @@ fragment DURATION_UNIT
     | S
     | M S
     | U S
-    | '\u00B5' S
+    // The micro sign, U+00B5. The lexer reads the UTF-8 input as bytes, so it
+    // must match the micro sign's two-byte UTF-8 encoding.
+    | '\u00C2' '\u00B5' S
     | N S
     ;
 
