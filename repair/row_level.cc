@@ -2216,9 +2216,15 @@ public:
         //     group at capture time (no cross-CG routing mismatch), and
         //   - no concurrent compaction (split bypass, regular minor compaction,
         //     etc.) can move the inputs to a different CG mid-rewrite.
+        //
+        // Sstables which are already repaired (included by full mode) are left
+        // alone. Bumping their repaired_at would take them out of the repaired
+        // set until sstables_repaired_at is committed, or indefinitely if the
+        // repair fails, allowing repaired compaction to purge a tombstone that
+        // shadows their data.
         std::unordered_set<sstables::shared_sstable> repair_set;
         auto add_sstable = [&] (const sstables::shared_sstable& sst) {
-            if (sst->should_update_repaired_at(repaired_at)) {
+            if (sst->should_update_repaired_at(repaired_at) && !repair::is_repaired(_incremental_repair_meta.sstables_repaired_at, sst)) {
                 rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
                              sst->toc_filename(), repaired_at, sst->being_repaired);
                 repair_set.insert(sst);
