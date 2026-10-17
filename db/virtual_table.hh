@@ -10,6 +10,7 @@
 
 #include "replica/memtable.hh"
 #include "replica/database_fwd.hh"
+#include "query/query-request.hh"
 
 namespace db {
 
@@ -33,6 +34,9 @@ public:
     class query_restrictions {
     public:
         virtual const dht::partition_range& partition_range() const = 0;
+        // Clustering-key restrictions from the WHERE clause. Never empty: an unrestricted
+        // clustering key yields one range with is_full() == true, so test that, not empty().
+        virtual const query::clustering_row_ranges& clustering_row_ranges() const = 0;
     };
 
     explicit virtual_table(schema_ptr s) : _s(std::move(s)) {}
