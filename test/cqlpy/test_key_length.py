@@ -280,8 +280,6 @@ def table3(cql, test_keyspace):
 # which in the past were limited to 64KB, now it should work beyond 64KB.
 # Reproduces issue #3017 where Scylla did the worst of both worlds: We allowed
 # oversized set values, but then crashed on compaction.
-# Note that because of #7745, this test needs to use prepared statements
-# for the writes.
 def test_set_65k(cql, table3):
     stmt = cql.prepare(f'UPDATE {table3} SET set_column = set_column + ? WHERE p = ?')
     p = unique_key_int()
