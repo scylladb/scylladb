@@ -54,7 +54,6 @@ class insert_json_statement : public raw::modification_statement {
 private:
     cf_name _name;
     expr::expression _json_value;
-    bool _if_not_exists;
     bool _default_unset;
 public:
     /**

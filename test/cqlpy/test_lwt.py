@@ -223,7 +223,6 @@ def test_lwt_insert_if_not_exists(cql, table1):
 
 # Similarly to the above test, INSERT JSON should also accept IF NOT EXISTS
 # and work as expected with it. Reproduces issue #8682.
-@pytest.mark.xfail(reason="issue #8682")
 def test_lwt_insert_json_if_not_exists(cql, table1):
     p = unique_key_int()
     # The row doesn't yet exist, IF NOT EXISTS will insert it.
@@ -241,6 +240,33 @@ def test_lwt_insert_json_if_not_exists(cql, table1):
     # The following assert failed in #8682 (the INSERT was done despite the
     # row existing).
     assert list(cql.execute(f'SELECT * FROM {table1} WHERE p={p}')) == [(p, 1, None, 1)]
+
+# INSERT JSON ... IF NOT EXISTS checks if the *row* exists, not the partition:
+# A new clustering row in an existing partition (which here even has a static
+# column set) is inserted. Reproduces issue #8682.
+def test_lwt_insert_json_if_not_exists_new_row(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, c, r, s) values ({p}, 1, 1, 1)')
+    rs = list(cql.execute("""INSERT INTO %s JSON '{"p": %s, "c": 2, "r": 2}' IF NOT EXISTS""" % (table1, p)))
+    assert len(rs) == 1 and rs[0].applied
+    rs = list(cql.execute("""INSERT INTO %s JSON '{"p": %s, "c": 2, "r": 3}' IF NOT EXISTS""" % (table1, p)))
+    assert len(rs) == 1 and not rs[0].applied
+    # The first INSERT JSON set the static column s to null, because it is
+    # missing from its JSON value.
+    assert list(cql.execute(f'SELECT p, c, r, s FROM {table1} WHERE p={p}')) == [(p, 1, 1, None), (p, 2, 2, None)]
+
+# INSERT JSON ... IF NOT EXISTS in a table without clustering columns, and
+# with the JSON value given as a bind variable of a prepared statement.
+# Reproduces issue #8682.
+def test_lwt_insert_json_if_not_exists_prepared(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, r int') as table:
+        p = unique_key_int()
+        stmt = cql.prepare(f'INSERT INTO {table} JSON ? IF NOT EXISTS')
+        rs = list(cql.execute(stmt, [f'{{"p": {p}, "r": 1}}']))
+        assert len(rs) == 1 and rs[0].applied
+        rs = list(cql.execute(stmt, [f'{{"p": {p}, "r": 2}}']))
+        assert len(rs) == 1 and not rs[0].applied
+        assert list(cql.execute(f'SELECT p, r FROM {table} WHERE p={p}')) == [(p, 1)]
 
 # Test that the counter syntax SET i = i + 1 is not allowed on non-counter
 # columns. This prepares us to test the same thing for LWT updates, in the
