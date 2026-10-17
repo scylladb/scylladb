@@ -301,40 +301,40 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
             INSERT INTO all_types JSON '{
                 "a": "abc", "c": "6"
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "c": "0392fa"
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
 
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "\"G\"": 87654321
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
 
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "k": 123456
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "k": "3157"
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
 
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "r": 12.34
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO all_types JSON '{
                 "a": "abc", "s": 1234
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
 
         e.execute_cql("CREATE TABLE multi_column_pk_table (p1 int, p2 int, p3 int, c1 int, c2 int, v int, PRIMARY KEY((p1, p2, p3), c1, c2));").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "multi_column_pk_table"));
@@ -531,12 +531,12 @@ SEASTAR_TEST_CASE(test_insert_json_integer_in_scientific_notation) {
             INSERT INTO scientific_notation JSON '{
                 "pk": 8, "v": 12.34
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO scientific_notation JSON '{
                 "pk": 9, "v": 1e-1
             }'
-        )").get(), marshal_exception);
+        )").get(), exceptions::invalid_request_exception);
 
         // JSON specification disallows Inf, -Inf, NaN:
         // "Numeric values that cannot be represented in the 
@@ -548,17 +548,17 @@ SEASTAR_TEST_CASE(test_insert_json_integer_in_scientific_notation) {
             INSERT INTO scientific_notation JSON '{
                 "pk": 10, "v": +Inf
             }'
-        )").get(), rjson::error);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO scientific_notation JSON '{
                 "pk": 11, "v": -inf
             }'
-        )").get(), rjson::error);
+        )").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql(R"(
             INSERT INTO scientific_notation JSON '{
                 "pk": 12, "v": NaN
             }'
-        )").get(), rjson::error);
+        )").get(), exceptions::invalid_request_exception);
     });
 }
 
@@ -710,9 +710,9 @@ SEASTAR_TEST_CASE(test_json_tuple) {
             utf8_type->decompose(sstring("{\"id\": 3, \"v\": [5, \"test543\", 4.5]}"))
         }});
 
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3]}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 2.5]}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\": 5}}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3]}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 2.5]}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\": 5}}';").get(), exceptions::invalid_request_exception);
     });
 }
 
@@ -737,9 +737,9 @@ SEASTAR_TEST_CASE(test_json_vector) {
             utf8_type->decompose(sstring("{\"id\": 3, \"v\": [5, 543, 45]}"))
         }});
 
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, 123, 25, 3]}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 25]}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\" : 5}}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, 123, 25, 3]}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 25]}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\" : 5}}';").get(), exceptions::invalid_request_exception);
     });
 }
 
@@ -772,17 +772,19 @@ static future<> test_json_udt(bool frozen) {
             utf8_type->decompose(sstring("{\"id\": 3, \"v\": {\"first\": 3, \"second\": null, \"third\": 4.5}}"))
         }});
 
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3, 3]}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"wrong\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get(), marshal_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": \"hi\", \"third\": 2.5, \"second\": \"test123\"}}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3, 3]}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"wrong\": 5, \"third\": 2.5, \"second\": \"test123\"}}';").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"first\": \"hi\", \"third\": 2.5, \"second\": \"test123\"}}';").get(), exceptions::invalid_request_exception);
 
         e.execute_cql("CREATE TYPE utype2 (\"WeirdNameThatNeedsEscaping\\n,)\" int);").get();
         e.execute_cql(format("CREATE TABLE t2(id int PRIMARY KEY, v {});", frozen ? "frozen<utype2>" : "utype2")).get();
 
         e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, (7));").get();
         msg = e.execute_cql("SELECT JSON * FROM t2 WHERE id = 1;").get();
+        // A field name with uppercase letters is case-sensitive, so SELECT
+        // JSON prints it in (escaped) quotes, which INSERT JSON can read back.
         assert_that(msg).is_rows().with_rows({{
-            utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"WeirdNameThatNeedsEscaping\\\\n,)\": 7}}"))
+            utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"\\\"WeirdNameThatNeedsEscaping\\\\n,)\\\"\": 7}}"))
         }});
     });
 }
