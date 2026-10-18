@@ -4539,3 +4539,87 @@ async def test_drop_table_during_migration(manager: ScyllaClusterManager, rollba
             expected_status='vnodes' if rollback else 'tablets',
             expected_node_statuses={})
         await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+async def test_truncate_during_migration(manager: ScyllaClusterManager):
+    """SCYLLADB-1098: TRUNCATE mid-migration empties the table on nodes of both flavours.
+
+    A vnode keyspace is truncated through the replica-side RPC, on every token owner,
+    whichever ERM flavour each node holds the table on. The truncation has to survive
+    each node's next restart - a reshard onto tablets for the one still on vnodes -
+    which replays the commitlog against the truncation record. The nodes are killed
+    rather than stopped: a clean shutdown discards the commitlog, which would leave
+    the record untested. A second table is dropped in the same mixed state, so that a
+    drop is applied by a node on vnodes and one on tablets together.
+
+    Steps:
+    1. Start 2 nodes, create a vnode keyspace with RF=2, populate two tables and flush.
+    2. Start the migration; upgrade and restart node 1 onto tablets.
+    3. Drop the second table; its tablet map must be gone on both nodes.
+    4. Write more rows, left unflushed, and TRUNCATE the table.
+    5. The table must read empty through both nodes.
+    6. Upgrade node 2, kill and start both, finalize forward; the table must still be
+       empty, and take new writes.
+    """
+    num_keys = 100
+
+    # One node per rack: the migration requires the keyspace (RF=2) to be RF-rack-valid.
+    # auto_snapshot is off in the test config: on, TRUNCATE and DROP snapshot the table first.
+    servers = [await manager.server_add(cmdline=['--smp', '2'], config={'num_tokens': 8, 'auto_snapshot': True},
+                                        property_file={"dc": "dc1", "rack": f"rack{i}"})
+               for i in range(1, 3)]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def assert_empty(ks):
+        for server in servers:
+            host = cql.cluster.metadata.get_host(server.ip_addr)
+            stmt = SimpleStatement(f"SELECT pk FROM {ks}.test", consistency_level=ConsistencyLevel.ALL)
+            rows = list(await cql.run_async(stmt, host=host))
+            assert not rows, f"{ks}.test read {len(rows)} row(s) through {server.server_id} after TRUNCATE"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        for table in ("test", "dropped"):
+            await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{table} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+            for server in servers:
+                await manager.api.keyspace_flush(server.ip_addr, ks, table)
+        dropped_id = await manager.get_table_id(ks, "dropped")
+
+        logger.info("Starting the migration; moving only node 1 onto tablets")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(servers[0].ip_addr)
+        await manager.server_restart(servers[0].server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Dropping a table while the nodes disagree on the flavour")
+        await cql.run_async(f"DROP TABLE {ks}.dropped")
+        for server in servers:
+            await read_barrier(manager.api, server.ip_addr)
+            await assert_no_tablet_map(cql, server, dropped_id, f"{ks}.dropped")
+
+        logger.info("Writing unflushed rows, then truncating while the nodes disagree on the flavour")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys, 2 * num_keys)))
+        await cql.run_async(f"TRUNCATE {ks}.test")
+        await assert_empty(ks)
+
+        logger.info("Upgrading node 2, then killing and starting both nodes")
+        await manager.api.upgrade_node_to_tablets(servers[1].ip_addr)
+        for server in servers:
+            await manager.server_stop(server.server_id, convict=True)
+            await manager.server_start(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+        await assert_empty(ks)
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for server in servers:
+            await read_barrier(manager.api, server.ip_addr)
+        await assert_empty(ks)
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+        await verify_data_integrity(cql, ks, "test", num_keys)
