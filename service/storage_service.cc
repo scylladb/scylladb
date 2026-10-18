@@ -4399,6 +4399,16 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             throw std::runtime_error(fmt::format("Keyspace {} has no tables to migrate. To use tablets, recreate the keyspace with tablets enabled", ks_name));
         }
 
+        // A vnode keyspace gets a $paxos table only from an LWT during an earlier
+        // migration that was rolled back, and such a table cannot get a map of its own
+        // (see append_tablet_maps_for_unmapped_tables()).
+        for (const auto& [name, _] : cf_meta_data) {
+            if (auto base = paxos::paxos_store::try_get_base_table(name)) {
+                throw std::runtime_error(fmt::format("Table {}.{} was used by lightweight transactions, "
+                    "which cannot be migrated to tablets yet", ks_name, *base));
+            }
+        }
+
         auto topology = co_await get_system_keyspace().load_topology_state({});
         for (const auto& [server_id, replica_state]: topology.normal_nodes) {
             if (replica_state.intended_storage_mode) {
@@ -4619,8 +4629,11 @@ future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(locator::
         std::function<future<>(mutation)> add_mutation) {
     const auto& tablet_metadata = get_token_metadata().tablets();
 
+    // A $paxos table must share its base table's map, since Paxos state is read on the
+    // local replica only, and a migration cannot build shared maps yet. Left without one
+    // it keeps forward finalization refused, as before (SCYLLADB-1158).
     auto unmapped = cfms | std::views::filter([&] (const schema_ptr& cfm) {
-        return !tablet_metadata.has_tablet_map(cfm->id());
+        return !tablet_metadata.has_tablet_map(cfm->id()) && !paxos::paxos_store::try_get_base_table(cfm->cf_name());
     }) | std::ranges::to<std::vector<schema_ptr>>();
     if (unmapped.empty()) {
         co_return 0;
@@ -4908,6 +4921,11 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             for (const auto& schema : tables) {
                 if (tablet_metadata.has_tablet_map(schema->id())) {
                     continue;
+                }
+                if (auto base = paxos::paxos_store::try_get_base_table(schema->cf_name())) {
+                    throw std::runtime_error(fmt::format("Table {}.{} was used by lightweight transactions during "
+                        "the migration, which cannot be migrated to tablets yet; roll the migration back",
+                        ks_name, *base));
                 }
                 throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
                     "all tables in keyspace '{}' must be prepared for migration before finalizing",
