@@ -4971,11 +4971,13 @@ public:
         allocate_tablets_for_new_tables(ksm, {s.shared_from_this()}, muts, ts);
     }
 
+    // A table of a vnode keyspace has a tablet map too while the keyspace is being
+    // migrated to tablets, and the map has to go with the table either way.
     void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
-        if (rs.uses_tablets()) {
-            auto tm = _db.get_shared_token_metadata().get();
+        auto tm = _db.get_shared_token_metadata().get();
+        if (rs.uses_tablets() || tm->tablets().has_tablet_map(s.id())) {
             lblogger.debug("Dropping tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
             muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
         }
@@ -4984,10 +4986,10 @@ public:
     void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(keyspace_name);
         auto&& rs = ks.get_replication_strategy();
-        if (rs.uses_tablets()) {
-            lblogger.debug("Dropping tablets for keyspace {}", keyspace_name);
-            auto tm = _db.get_shared_token_metadata().get();
-            for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+        auto tm = _db.get_shared_token_metadata().get();
+        lblogger.debug("Dropping tablets for keyspace {}", keyspace_name);
+        for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+            if (rs.uses_tablets() || tm->tablets().has_tablet_map(s->id())) {
                 muts.emplace_back(make_drop_tablet_map_mutation(s->id(), ts));
             }
         }
