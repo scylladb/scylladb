@@ -515,7 +515,11 @@ def test_lua_error(cql, test_keyspace, scylla_only):
 def test_lua_error_not_string(cql, test_keyspace, scylla_only, error, description):
     with new_test_table(cql, test_keyspace, 'key text PRIMARY KEY, val int') as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
-        with pytest.raises((InvalidRequest, FunctionFailure), match=re.escape(f'(error object is a {description} value)')):
+        # Lua 5.5 turns a nil error object into the string '<no error object>'
+        pattern = re.escape(f'(error object is a {description} value)')
+        if description == 'nil':
+            pattern += '|<no error object>'
+        with pytest.raises((InvalidRequest, FunctionFailure), match=pattern):
             call_lua(cql, test_keyspace, table, '(val int) RETURNS NULL ON NULL INPUT RETURNS int', error)
 
 # This test relies on the server being configured with a UDF time limit
