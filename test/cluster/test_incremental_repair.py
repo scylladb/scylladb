@@ -981,11 +981,17 @@ async def test_incremental_retry_end_repair_stage(manager):
 # with appending sstables produced by repair to a list work correctly with
 # multishard writer when the shard count is different.
 @pytest.mark.parametrize("use_tablet", [False, True])
-async def test_repair_sigsegv_with_diff_shard_count(manager: ScyllaClusterManager, use_tablet):
+async def test_repair_sigsegv_with_diff_shard_count(manager: ScyllaClusterManager, scale_timeout, use_tablet):
     cmdline0 = [ '--smp', '2']
     cmdline1 = [ '--smp', '3']
-    servers = await manager.servers_add(1, cmdline=cmdline0, auto_rack_dc="dc1")
-    servers.append(await manager.server_add(cmdline=cmdline1, property_file={'dc': 'dc1', 'rack': 'rack2'}))
+    # Hints would replay the missed rows to the restarted peer and empty the repair diff.
+    config = {'hinted_handoff_enabled': False}
+    if use_tablet:
+        # Writes to the stopped node pin the topology version until the write timeout,
+        # stalling the repair barrier for the test-default 60s (dev).
+        config['write_request_timeout_in_ms'] = int(scale_timeout(2000))
+    servers = await manager.servers_add(1, cmdline=cmdline0, config=config, auto_rack_dc="dc1")
+    servers.append(await manager.server_add(cmdline=cmdline1, config=config, property_file={'dc': 'dc1', 'rack': 'rack2'}))
 
     cql = manager.get_cql()
 
