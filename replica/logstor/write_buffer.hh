@@ -118,21 +118,29 @@ struct buffered_write_result {
     future<record_location_with_holder> persisted;
 };
 
-// Builds one chunk in memory.
+// Builds one chunk in memory, in a buffer of buffer_size() bytes:
 //
-// Callers append log records one by one and then seal the buffer with a target
-// segment sequence number, which completes the chunk, before writing it out. The
-// chunk's layout is:
-//   chunk_header
-//   (segment_header)?                 // for segment_kind::full only
-//   record_frame_header + record_header (fixed fields + partition key) + record value
-//   ...
-//   zero padding to the requested final alignment
+//   0                     +------------------+
+//                         |   chunk_header   |  seal()
+//                         |  segment_header  |  seal(), full segments only
+//   chunk_headers_size()  +------------------+
+//                         |   record frame   |  append(), one frame per record,
+//                         |   record frame   |  each padded to record_alignment
+//                         |       ...        |
+//   + records_size        +------------------+
+//                         |   zero padding   |  seal(), to the alignment it is given
+//   serialized_size()     +------------------+
+//                         |      unused      |
+//   buffer_size()         +------------------+
 //
-// Each record frame is padded to record_alignment. For a full segment's chunk,
-// the segment header stores the owning table and the min/max token range of the
-// appended records. This type is serialization-only and is used directly by tests
-// and internally by write_buffer.
+// reset() reserves the space for the headers, so the records start at
+// chunk_headers_size(). The segment_header holds the table and the token range of the
+// records. The record frames are the body of the chunk, which the body CRC covers.
+//
+// seal() pads the chunk and then writes the headers, because they hold the size and the
+// CRC of the body, and the sequence number of the segment that receives the chunk.
+//
+// This type only serializes a chunk. Tests and write_buffer use it directly.
 class raw_write_buffer {
 public:
 
