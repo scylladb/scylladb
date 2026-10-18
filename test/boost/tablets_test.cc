@@ -5290,6 +5290,62 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_drains_with_missing_sizes_of_a_migrating_table) {
+    // A node which keeps a table under vnodes-to-tablets migration in vnodes storage reports
+    // no tablet sizes for it. That must not keep the balancer from draining another node.
+    do_with_cql_env_thread([] (auto& e) {
+
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        // A table under vnodes-to-tablets migration: its keyspace uses vnodes, but it has a tablet map.
+        e.execute_cql(fmt::format("create keyspace vnode_ks with replication = {{'class': 'NetworkTopologyStrategy', '{}': 1}}"
+                                  " and tablets = {{'enabled': false}}", topo.dc())).get();
+        e.execute_cql("create table vnode_ks.t (pk int primary key)").get();
+        auto migrating = e.local_db().find_schema("vnode_ks", "t")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        {
+            abort_source as;
+            auto guard = e.get_raft_group0_client().start_operation(as).get();
+            mutate_tablets(e, guard, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap(4);
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info {
+                        tablet_replica_set {
+                            tablet_replica {host1, 0},
+                        }
+                    });
+                }
+                tmeta.set_tablet_map(migrating, std::move(tmap));
+                co_return;
+            });
+        }
+
+        topo.set_node_state(host2, node_state::decommissioning);
+
+        // host1 keeps the migrating table in vnodes storage: no tablet sizes for it.
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        shared_stats.stats.tablet_stats.at(host1).tablet_sizes.erase(migrating);
+
+        auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+        BOOST_REQUIRE(!plan.migrations().empty());
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE_EQUAL(mig.tablet.table, table1);
+            BOOST_REQUIRE(mig.src);
+            BOOST_REQUIRE_EQUAL(mig.src->host, host2);
+        }
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
     do_with_cql_env_thread([] (auto& e) {
         scoped_logger_level lb_log("load_balancer", seastar::log_level::trace);
