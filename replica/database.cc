@@ -1664,6 +1664,12 @@ bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
 
+bool is_keyspace_under_tablets_migration(const keyspace_metadata& ksm, const locator::tablet_metadata& tablets) {
+    return !ksm.uses_tablets() && std::ranges::any_of(ksm.tables(), [&] (const schema_ptr& s) {
+        return tablets.has_tablet_map(s->id());
+    });
+}
+
 locator::replication_strategy_ptr
 keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata, const locator::topology& topology) {
     using namespace locator;

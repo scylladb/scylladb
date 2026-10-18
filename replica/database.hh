@@ -2425,6 +2425,11 @@ public:
 // into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
+// A vnode keyspace is under vnodes-to-tablets migration iff one of its base tables has
+// a tablet map. Views get maps too, but rollback finalization leaves theirs behind, so
+// they must not count.
+bool is_keyspace_under_tablets_migration(const keyspace_metadata& ksm, const locator::tablet_metadata& tablets);
+
 } // namespace replica
 
 future<> start_large_data_handler(sharded<replica::database>& db);
