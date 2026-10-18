@@ -462,11 +462,6 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     # Precondition: s1 has rf_rack_valid_keyspaces set to false.
     # Postcondition: s1 still has rf_rack_valid_keyspaces set to false.
     async def try_fail(rfs: List[int], dc: str, rf: int, rack_count: int):
-        running_servers = await manager.running_servers()
-        should_start = s1.server_id not in [server.server_id for server in running_servers]
-        if should_start:
-            await manager.server_start(s1.server_id)
-
         ks = await create_keyspace(rfs, True)
         # We need to wait for the new schema to propagate.
         # Otherwise, it's not clear when the mutation
@@ -484,9 +479,11 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
         err = f"The keyspace '{ks}' is required to be RF-rack-valid. " \
               f"That condition is violated for DC '{dc}': RF={rf} vs. rack count={rack_count}."
         await manager.server_start(s1.server_id, expected_error=err)
-        await cql.run_async(f"DROP KEYSPACE {ks}")
 
         await manager.server_update_config(s1.server_id, "rf_rack_valid_keyspaces", "false")
+        # Drop with s1 up: the driver's schema agreement wait stalls on a down node.
+        await manager.server_start(s1.server_id)
+        await cql.run_async(f"DROP KEYSPACE {ks}")
 
     # Test RF-rack-invalid keyspaces.
     await try_fail([2, 0], "dc1", 2, 3)
@@ -497,7 +494,6 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     # sure that it processes the last DROP KEYSPACE.
     # Otherwise, the node could think the RF-rack-invalid
     # keyspace still exists.
-    await manager.server_start(s1.server_id)
     await read_barrier(manager.api, s1.ip_addr)
     await manager.server_stop_gracefully(s1.server_id)
 
