@@ -34,13 +34,8 @@
 namespace replica::logstor {
 
 file_manager::file_manager(file_manager_config cfg)
-    : _configured_file_count(cfg.file_count)
-    , _file_size(cfg.file_size)
-    , _base_dir(std::move(cfg.base_dir))
-    , _format_sg(cfg.format_sg)
-    , _format_on_startup(cfg.format_on_startup)
-    , _sparse_files(cfg.sparse_files)
-    , _open_files(static_cast<size_t>(_configured_file_count))
+    : _cfg(std::move(cfg))
+    , _open_files(static_cast<size_t>(_cfg.file_count))
     , _zero_buf(allocate_aligned_buffer<char>(zero_buffer_size, ondisk::block_alignment))
 {
     std::memset(_zero_buf.get(), 0, zero_buffer_size);
@@ -108,12 +103,12 @@ void file_manager::check_recovery_step(recovery_step expected, std::string_view 
 future<file_id_t> file_manager::recovery::open_found_files() {
     auto& files = _files;
     files.check_recovery_step(recovery_step::started, "open_found_files");
-    co_await seastar::recursive_touch_directory(files._base_dir.string());
+    co_await seastar::recursive_touch_directory(files._cfg.base_dir.string());
 
     std::set<file_id_t> found_file_ids;
     std::vector<sstring> temporary_files;
     const std::string prefix = file_name_prefix();
-    co_await lister::scan_dir(files._base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
+    co_await lister::scan_dir(files._cfg.base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
             [&] (fs::path dir, directory_entry de) {
         if (de.name.starts_with(prefix)) {
             if (auto file_id = file_id_of(de.name)) {
@@ -124,7 +119,7 @@ future<file_id_t> file_manager::recovery::open_found_files() {
         }
         return make_ready_future<>();
     });
-    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), files._base_dir.string());
+    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), files._cfg.base_dir.string());
 
     // A temporary file is a format that did not finish. format_file() makes a new one.
     co_await coroutine::parallel_for_each(temporary_files.begin(), temporary_files.end(), [] (const sstring& path) {
@@ -140,7 +135,7 @@ future<file_id_t> file_manager::recovery::open_found_files() {
         found_file_count++;
     }
 
-    files._open_files.resize(static_cast<size_t>(std::max(files._configured_file_count, found_file_count)));
+    files._open_files.resize(static_cast<size_t>(std::max(files._cfg.file_count, found_file_count)));
     files._allocated_file_count = found_file_count;
     co_await files.open_allocated_files();
     files._recovery_step = recovery_step::opened;
@@ -159,7 +154,7 @@ future<> file_manager::open_allocated_files() {
 future<> file_manager::recovery::retire_unused_files(file_id_t used_file_count) {
     auto& files = _files;
     files.check_recovery_step(recovery_step::opened, "retire_unused_files");
-    const auto kept_file_count = std::max(used_file_count, files._configured_file_count);
+    const auto kept_file_count = std::max(used_file_count, files._cfg.file_count);
     while (files._allocated_file_count > kept_file_count) {
         const auto file_id = files._allocated_file_count - 1;
         logstor_logger.info("Recovery: removing retired file {}", files.file_path(file_id).string());
@@ -171,9 +166,9 @@ future<> file_manager::recovery::retire_unused_files(file_id_t used_file_count) 
 future<> file_manager::remove_file(file_id_t file_id) {
     // The file is the last allocated one, at or above the configured count, thus the
     // last entry of _open_files.
-    if (file_id + 1 != _allocated_file_count || _allocated_file_count <= _configured_file_count) {
+    if (file_id + 1 != _allocated_file_count || _allocated_file_count <= _cfg.file_count) {
         on_internal_error(logstor_logger, fmt::format("Attempted to remove file {}: {} files allocated, {} configured",
-                file_id, _allocated_file_count, _configured_file_count));
+                file_id, _allocated_file_count, _cfg.file_count));
     }
     // The file is open. The handle leaves _open_files before the close, so that stop() does
     // not close it again when the close or the removal fails.
@@ -188,21 +183,21 @@ future<> file_manager::remove_file(file_id_t file_id) {
 future<> file_manager::recovery::finish() {
     auto& files = _files;
     files.check_recovery_step(recovery_step::retired, "finish");
-    if (files._format_on_startup) {
+    if (files._cfg.format_on_startup) {
         auto holder = files._async_gate.hold();
-        co_await with_scheduling_group(files._format_sg, [&files] { return files.format_remaining_files(); });
-    } else if (files._allocated_file_count < files._configured_file_count) {
+        co_await with_scheduling_group(files._cfg.format_sg, [&files] { return files.format_remaining_files(); });
+    } else if (files._allocated_file_count < files._cfg.file_count) {
         files.start_next_file_format();
     }
     files._recovery_step = recovery_step::finished;
 }
 
 future<> file_manager::format_remaining_files() {
-    if (_allocated_file_count >= _configured_file_count) {
+    if (_allocated_file_count >= _cfg.file_count) {
         co_return;
     }
-    logstor_logger.info("Formatting {} logstor files", _configured_file_count - _allocated_file_count);
-    for (file_id_t file_id = _allocated_file_count; file_id < _configured_file_count; ++file_id) {
+    logstor_logger.info("Formatting {} logstor files", _cfg.file_count - _allocated_file_count);
+    for (file_id_t file_id = _allocated_file_count; file_id < _cfg.file_count; ++file_id) {
         co_await format_file(file_id);
         co_await open_file(file_id);
         _allocated_file_count = file_id + 1;
@@ -211,7 +206,7 @@ future<> file_manager::format_remaining_files() {
 
 void file_manager::start_next_file_format() {
     _next_file_format = with_gate(_async_gate, [this, file_id = _allocated_file_count] {
-        return with_scheduling_group(_format_sg, [this, file_id] {
+        return with_scheduling_group(_cfg.format_sg, [this, file_id] {
             return format_file(file_id);
         });
     });
@@ -236,13 +231,13 @@ future<> file_manager::format_file(file_id_t file_id) {
         auto tmp_path = path + ".tmp";
         auto tmp_file = co_await seastar::open_file_dma(tmp_path,
                 seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
-        if (_sparse_files) {
+        if (_cfg.sparse_files) {
             // Reading a hole yields zeros, so the file is already formatted as
             // far as the reader is concerned.
-            co_await tmp_file.truncate(_file_size);
+            co_await tmp_file.truncate(_cfg.file_size);
         } else {
-            co_await tmp_file.allocate(0, _file_size);
-            co_await write_zeros(tmp_file, 0, _file_size);
+            co_await tmp_file.allocate(0, _cfg.file_size);
+            co_await write_zeros(tmp_file, 0, _cfg.file_size);
         }
         co_await tmp_file.flush();
         co_await tmp_file.close();
@@ -301,8 +296,8 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
 }
 
 future<> file_manager::allocate_file(file_id_t file_id) {
-    if (file_id != _allocated_file_count || file_id >= _configured_file_count) [[unlikely]] {
-        on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _configured_file_count));
+    if (file_id != _allocated_file_count || file_id >= _cfg.file_count) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _cfg.file_count));
     }
     co_await _next_file_format.get_future();
     if (file_id != _allocated_file_count) [[unlikely]] {
@@ -314,7 +309,7 @@ future<> file_manager::allocate_file(file_id_t file_id) {
     co_await open_file(file_id);
     _allocated_file_count++;
 
-    if (_allocated_file_count < _configured_file_count) {
+    if (_allocated_file_count < _cfg.file_count) {
         start_next_file_format();
     }
 }
@@ -345,9 +340,9 @@ future<seastar::file> file_manager::open_file(file_id_t file_id) {
 }
 
 future<> file_manager::zero_region(file_id_t file_id, uint64_t offset, uint64_t size) {
-    if (offset > _file_size || size > _file_size - offset) [[unlikely]] {
+    if (offset > _cfg.file_size || size > _cfg.file_size - offset) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to zero bytes {} to {} of file {}, which has {} bytes",
-                offset, offset + size, file_id, _file_size));
+                offset, offset + size, file_id, _cfg.file_size));
     }
     co_await write_zeros(get_open_file(file_id), offset, size);
 }

@@ -39,7 +39,8 @@ using file_id_t = uint64_t;
 struct file_manager_config {
     std::filesystem::path base_dir;
     uint64_t file_size;
-    // The file count of the configuration. A new file is allocated only below it.
+    // The file count of the configuration. A new file is allocated only below it. Recovery can
+    // find more files, from an earlier, larger configuration.
     uint64_t file_count;
     // The scheduling group of the file formats.
     seastar::scheduling_group format_sg;
@@ -86,7 +87,7 @@ public:
 
     std::filesystem::path file_path(file_id_t file_id) const {
         auto fname = fmt::format("{}{}-Data.db", file_name_prefix(), file_id);
-        return _base_dir / fname;
+        return _cfg.base_dir / fname;
     }
 
     // The recovery of the files of the shard. start_recovery() makes one, and its three steps run
@@ -144,15 +145,7 @@ private:
     // small enough that the buffer costs nothing.
     static constexpr size_t zero_buffer_size = 128 * 1024;
 
-    // The file count of the configuration. A new file is allocated only below it. Recovery can
-    // find more files, from an earlier, larger configuration.
-    const uint64_t _configured_file_count;
-
-    const uint64_t _file_size;
-    const std::filesystem::path _base_dir;
-    const seastar::scheduling_group _format_sg;
-    const bool _format_on_startup;
-    const bool _sparse_files;
+    const file_manager_config _cfg;
 
     file_id_t _allocated_file_count{0};
 
