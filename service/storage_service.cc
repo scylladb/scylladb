@@ -4857,6 +4857,13 @@ future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(locator::
     co_return mapped;
 }
 
+sstring storage_service::missing_tablet_map_error(const sstring& ks_name, const schema& s) {
+    return fmt::format("{} {}.{} does not have a tablet map; all tables and views in keyspace '{}' must be "
+        "prepared for migration before finalizing. Run 'nodetool migrate-to-tablets upgrade' on any node "
+        "to build one for it, then restart every node that is in tablets mode",
+        s.is_view() ? "View" : "Table", ks_name, s.cf_name(), ks_name);
+}
+
 future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -5154,25 +5161,17 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
                 "No table in keyspace '{}' has a tablet map; there is no migration to finalize", ks_name));
         }
 
-        // Going forward every table needs a tablet map, or it stays on vnodes in a
-        // keyspace that switched to tablets; one is missing when the CREATE TABLE was
-        // coordinated by a node without allocate_tablets_for_new_tables_under_migration().
-        // A rollback drops the maps that exist, so such a table is already final.
-        //
-        // Decide the direction as the topology coordinator does: forward only when every
-        // node is set to tablets. All unset rolls back and a mix is refused, so neither
-        // may be turned away here for a missing map.
+        // Only a forward finalization needs every table mapped; a rollback drops the maps
+        // that exist. The direction as the topology coordinator decides it: forward iff
+        // every node is set to tablets (a mix is refused there, not here).
         bool forward = std::ranges::all_of(_topology_state_machine._topology.normal_nodes, [] (const auto& e) {
             return e.second.intended_storage_mode == storage_mode::tablets;
         });
         if (forward) {
             for (const auto& schema : tables | std::views::values) {
-                if (tablet_metadata.has_tablet_map(schema->id())) {
-                    continue;
+                if (!tablet_metadata.has_tablet_map(schema->id())) {
+                    throw std::runtime_error(missing_tablet_map_error(ks_name, *schema));
                 }
-                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; "
-                    "all tables and views in keyspace '{}' must be prepared for migration before finalizing",
-                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name(), ks_name));
             }
         }
 

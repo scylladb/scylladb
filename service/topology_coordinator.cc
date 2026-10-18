@@ -57,6 +57,7 @@
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
@@ -1764,15 +1765,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     // Going forward every table needs a tablet map, or it stays on vnodes
-                    // once the keyspace switches; one is missing when the CREATE TABLE was
-                    // coordinated by a node without the migration listener. A rollback
-                    // drops the maps that exist, so such a table is already final.
+                    // once the keyspace switches. A rollback drops the maps that exist, so
+                    // a table without one is already final.
                     if (!rollback) {
                         for (const auto& schema : tables) {
                             if (!tablet_metadata.has_tablet_map(schema->id())) {
-                                throw std::runtime_error(fmt::format(
-                                    "{} {}.{} does not have a tablet map",
-                                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
+                                throw std::runtime_error(storage_service::missing_tablet_map_error(ks_name, *schema));
                             }
                         }
                     }

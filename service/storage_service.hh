@@ -658,6 +658,10 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 
+    // The message of the error finalization raises, here and in the topology coordinator,
+    // when table `s` of keyspace `ks_name` has no tablet map: why, and the way out.
+    static sstring missing_tablet_map_error(const sstring& ks_name, const schema& s);
+
     // Tables created in a keyspace that is being migrated from vnodes to
     // tablets need a tablet map of their own, or the migration can never be
     // finalized. See allocate_tablets_for_new_tables_under_migration().
