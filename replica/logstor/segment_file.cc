@@ -126,6 +126,9 @@ future<file_id_t> file_manager::recovery::open_found_files() {
         logstor_logger.info("Recovery: removing leftover temp file {}", path);
         return seastar::remove_file(path);
     });
+    // A format can rename a file and then stop before it syncs the directory. Recovery allocates
+    // that file, thus its name must be durable before a segment write to it.
+    co_await seastar::sync_directory(files._cfg.base_dir.string());
 
     file_id_t found_file_count = 0;
     for (auto file_id : found_file_ids) {
@@ -257,6 +260,11 @@ future<> file_manager::format_file(file_id_t file_id) {
         // move the temp file to the final location
         co_await seastar::rename_file(tmp_path, path);
     }
+
+    // The name of the file must be durable before the file is allocated, because a segment write to
+    // the file is acknowledged when it completes. Also sync when the file exists: a format that is
+    // tried again can find a file that the failed format renamed but did not sync.
+    co_await seastar::sync_directory(_cfg.base_dir.string());
 }
 
 // The most a single write of the zero fill may ask the disk for. Larger requests keep saturating
