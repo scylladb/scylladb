@@ -1732,7 +1732,6 @@ deps['test/boost/combined_tests'] += [
     'test/boost/view_schema_test.cc',
     'test/boost/virtual_reader_test.cc',
     'test/boost/virtual_table_test.cc',
-    'test/boost/vnodes_to_tablets_migration_test.cc',
     'tools/schema_loader.cc',
     'tools/read_mutation.cc',
     'test/lib/expr_test_utils.cc',

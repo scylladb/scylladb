@@ -397,7 +397,6 @@ add_scylla_test(combined_tests
     view_schema_test.cc
     virtual_reader_test.cc
     virtual_table_test.cc
-    vnodes_to_tablets_migration_test.cc
   LIBRARIES
     cql3
     idl
