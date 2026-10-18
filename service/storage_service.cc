@@ -4615,6 +4615,15 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
         return;
     }
 
+    // Lets a test produce a table without a map in a migrating keyspace, which in the
+    // field takes a CREATE TABLE coordinated by a node without this code. It is the only
+    // way to test the repair in set_node_intended_storage_mode().
+    if (utils::get_local_injector().enter("skip_tablet_map_for_new_table")) {
+        slogger.warn("skip_tablet_map_for_new_table injection: leaving new table(s) in {} without a tablet map",
+                     ksm.name());
+        return;
+    }
+
     // Whichever way the migration is heading: a node still on tablets holds the new
     // table like its siblings, and a rollback drops this map with every other.
     auto erm = _db.local().find_keyspace(ksm.name()).get_static_effective_replication_map();
