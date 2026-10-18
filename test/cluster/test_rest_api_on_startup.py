@@ -13,7 +13,7 @@ from test.pylib.rest_client import HTTPError
 
 logger = logging.getLogger(__name__)
 
-async def test_rest_api_on_startup(request, manager: ScyllaClusterManager):
+async def test_rest_api_on_startup(request, manager: ScyllaClusterManager, scale_timeout):
 
     host = None
     stop_loop = False
@@ -22,7 +22,7 @@ async def test_rest_api_on_startup(request, manager: ScyllaClusterManager):
     # This lets us verify that the server doesn't crash when it is
     # started or restarted while requests are ongoing.
     async def test_rest_api():
-        timeout = 60 # seconds
+        timeout = scale_timeout(60) # seconds
         start_time = time.time()
 
         while True:
