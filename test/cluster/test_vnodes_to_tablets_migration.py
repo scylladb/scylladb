@@ -916,11 +916,6 @@ async def test_migration_overlapping_migrations(manager: ScyllaClusterManager):
             with pytest.raises(HTTPError, match="Another migration is in progress"):
                 await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
 
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
-
 
 async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
     """Verify that finalizing migration before the node has finished upgrading fails."""
@@ -933,11 +928,6 @@ async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
 
         with pytest.raises(HTTPError, match=fr"Migration finalization failed for keyspace '{ks}': Node .* has not yet migrated table {ks}.t to tablets"):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
-
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
 async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
@@ -959,10 +949,6 @@ async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
 
         with pytest.raises(HTTPError, match="cannot be aborted"):
             await tm.abort_task(server.ip_addr, task.task_id)
-
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
 async def test_migration_wait_task(manager: ScyllaClusterManager):
