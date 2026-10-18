@@ -57,6 +57,8 @@ void fulltext_index::check_target(const schema& schema, const std::vector<::shar
         throw exceptions::invalid_request_exception(format("Column {} not found in schema", c_name));
     }
 
+    check_regular_column(*c_def);
+
     auto kind = c_def->type->get_kind();
     if (kind != abstract_type::kind::utf8 && kind != abstract_type::kind::ascii) {
         throw exceptions::invalid_request_exception(

@@ -130,6 +130,7 @@ enum class column_kind { partition_key, clustering_key, static_column, regular_c
 enum class column_view_virtual { no, yes };
 
 sstring to_sstring(column_kind k);
+std::string_view column_kind_name(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
 enum class cf_type : uint8_t {

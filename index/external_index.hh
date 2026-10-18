@@ -37,6 +37,7 @@ public:
 
 protected:
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
+    void check_regular_column(const column_definition& column) const;
 
     template <typename T>
     static void check_cdc_options_impl(const schema& s) {
