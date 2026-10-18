@@ -28,7 +28,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.util import get_enabled_features, wait_for, wait_for_feature, wait_for_cql_and_get_hosts, wait_for_view
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown
+from test.cluster.util import new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -1222,11 +1222,6 @@ async def test_migration_overlapping_migrations(manager: ScyllaClusterManager):
             with pytest.raises(HTTPError, match="Another migration is in progress"):
                 await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
 
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
-
 
 async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
     """Verify that finalizing migration before the node has finished upgrading fails."""
@@ -1239,11 +1234,6 @@ async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
 
         with pytest.raises(HTTPError, match=fr"Migration finalization failed for keyspace '{ks}': Node .* has not yet migrated table {ks}.t to tablets"):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
-
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
 async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
@@ -1265,10 +1255,6 @@ async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
 
         with pytest.raises(HTTPError, match="cannot be aborted"):
             await tm.abort_task(server.ip_addr, task.task_id)
-
-        # Rollback: schema changes are not yet supported for migrating keyspaces.
-        # TODO: Remove this once support is added.
-        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
 async def test_migration_wait_task(manager: ScyllaClusterManager):
@@ -2294,17 +2280,6 @@ async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-@asynccontextmanager
-async def new_migrating_test_keyspace(manager: ScyllaClusterManager, opts: str):
-    """Like new_test_keyspace(), but doesn't drop the keyspace afterwards.
-
-    For use in tests that leave the keyspace in the middle of a vnodes-to-tablets
-    migration. new_test_keyspace() would fail in such tests because
-    DROP KEYSPACE is rejected until the migration is finalized or rolled back.
-    """
-    yield await create_new_test_keyspace(manager.get_cql(), opts)
-
-
 @pytest.mark.parametrize("rbno_enabled", [
     pytest.param(True, id="repair"),
     pytest.param(False, id="range_streamer"),
@@ -2511,7 +2486,7 @@ async def test_replace_during_migration_tablet_followers(manager: ScyllaClusterM
         await manager.server_restart(server.server_id)
 
     logger.info("Creating keyspace and table with RF=3 using vnodes")
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_name = "test"
@@ -2600,7 +2575,7 @@ async def test_replace_during_migration_tablet_followers_unflushed(manager: Scyl
     servers = [replaced_server] + follower_servers
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_name = "test"
@@ -2712,7 +2687,7 @@ async def test_replace_during_migration_repairs_tablet_follower(manager: ScyllaC
     cql, _ = await manager.get_ready_cql(servers)
 
     logger.info("Creating keyspace and table with RF=3 using vnodes")
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_name = "test"
@@ -2777,7 +2752,7 @@ async def test_replace_during_migration_rejects_shard_count_mismatch(manager: Sc
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -2828,7 +2803,7 @@ async def test_replace_during_migration_chunked_updates(manager: ScyllaClusterMa
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_names = ['t1', 't2']
@@ -2912,7 +2887,7 @@ async def test_replace_during_migration_separate_commands(manager: ScyllaCluster
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_names = ['t1', 't2']
@@ -3062,7 +3037,7 @@ async def test_request_routing_during_replace(manager: ScyllaClusterManager, sca
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} "
             f"AND tablets = {{'enabled': false}}") as ks:
         table_name = 'test'
@@ -3227,7 +3202,7 @@ async def test_replace_rollback_during_migration(manager: ScyllaClusterManager):
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} "
             f"AND tablets = {{'enabled': false}}") as ks:
         table_name = 'test'
@@ -3338,7 +3313,7 @@ async def test_replace_rollback_coordinator_failover(manager: ScyllaClusterManag
 
     cql, _ = await manager.get_ready_cql(servers)
 
-    async with new_migrating_test_keyspace(manager,
+    async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         table_names = ['t1', 't2']
@@ -4135,7 +4110,7 @@ async def test_replace_during_migration_with_a_tablets_keyspace(manager: ScyllaC
     async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': true}") as tablets_ks, \
-               new_migrating_test_keyspace(manager,
+               new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
             "AND tablets = {'enabled': false}") as ks:
         await cql.run_async(f"CREATE TABLE {tablets_ks}.t (pk int PRIMARY KEY, c int)")
