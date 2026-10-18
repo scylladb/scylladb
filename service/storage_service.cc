@@ -95,6 +95,7 @@
 #include "replica/tablets.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
+#include "cdc/log.hh"
 #include "cdc/generation_service.hh"
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
@@ -6531,6 +6532,182 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     }
 
     slogger.info("Restoring {} finished", table);
+}
+
+// The tables derived from the tables of the co-location group of `base`, which aren't co-located
+// with it: materialized views (secondary indexes are backed by views) and CDC log tables. Each is
+// represented by the base table of its own co-location group.
+static std::unordered_set<table_id> derived_tables(const replica::database& db, const locator::tablet_metadata& tablets, table_id base) {
+    std::unordered_set<table_id> ret;
+    auto add = [&] (table_id id) {
+        if (tablets.has_tablet_map(id)) {
+            auto group_base = tablets.get_base_table(id);
+            if (group_base != base) {
+                ret.insert(group_base);
+            }
+        }
+    };
+    auto group = tablets.all_table_groups().find(base);
+    auto group_tables = group != tablets.all_table_groups().end() ? group->second : locator::table_group_set{base};
+    for (auto id : group_tables) {
+        if (!db.column_family_exists(id)) {
+            continue;
+        }
+        const auto& cf = db.find_column_family(id);
+        for (const auto& view : cf.views()) {
+            add(view->id());
+        }
+        const auto& s = *cf.schema();
+        if (auto log_name = cdc::log_name(s.cf_name()); db.has_schema(s.ks_name(), log_name)) {
+            add(db.find_schema(s.ks_name(), log_name)->id());
+        }
+    }
+    return ret;
+}
+
+future<utils::UUID> storage_service::compact_tablets(std::optional<sstring> keyspace, std::unordered_set<table_id> tables, bool recursive,
+        sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.compact_tablets(keyspace, tables, recursive, compaction_type, options);
+        });
+    }
+
+    validate_tablet_compaction(compaction_type, options);
+    if (!_feature_service.tablet_cluster_compaction) {
+        throw std::runtime_error("Cluster-wide compaction of tablets requires all nodes to support the TABLET_CLUSTER_COMPACTION cluster feature");
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto tmptr = get_token_metadata_ptr();
+        const auto& tablets = tmptr->tablets();
+        const auto& db = _db.local();
+        // Co-located tables share the tablets, and their transitions, of their base table, whose
+        // tablets keep the compaction state, so the whole group is compacted on behalf of the base
+        // table. Like repair, a request names only base tables: a table given by name which is
+        // co-located is rejected, and the co-located tables of a keyspace are skipped.
+        std::unordered_set<table_id> table_ids;
+        // The task's scope: the table, if a single one was named, or the keyspace, if given;
+        // otherwise the whole cluster.
+        std::optional<table_id> for_table;
+        std::optional<sstring> for_keyspace;
+        if (!tables.empty()) {
+            for (auto table : tables) {
+                if (!tablets.has_tablet_map(table)) {
+                    throw std::invalid_argument(fmt::format("Table {} doesn't use tablets", table));
+                }
+                auto s = db.find_schema(table);
+                // A table of a keyspace being migrated to tablets has a tablet map already, but
+                // its replicas are still vnode-based, so the load balancer doesn't schedule its
+                // tablets until the migration completes. Don't accept it, as a request for its
+                // keyspace isn't accepted either.
+                if (!db.find_keyspace(s->ks_name()).uses_tablets()) {
+                    throw std::invalid_argument(fmt::format("Table {}.{} doesn't use tablets yet: keyspace {} is being migrated to tablets",
+                            s->ks_name(), s->cf_name(), s->ks_name()));
+                }
+                if (!tablets.is_base_table(table)) {
+                    auto base_s = db.find_schema(tablets.get_base_table(table));
+                    throw std::invalid_argument(::format(
+                        "Cannot compact table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
+                        "Compact the base table instead, which compacts its colocated tables too.",
+                        s->ks_name(), s->cf_name(), base_s->ks_name(), base_s->cf_name()));
+                }
+            }
+            table_ids = tables;
+            if (tables.size() == 1) {
+                for_table = *tables.begin();
+            } else if (keyspace) {
+                for_keyspace = keyspace;
+            }
+        } else {
+            std::vector<sstring> keyspaces;
+            if (keyspace) {
+                if (!db.has_keyspace(*keyspace)) {
+                    throw std::invalid_argument(replica::no_such_keyspace(*keyspace).what());
+                }
+                if (!db.find_keyspace(*keyspace).uses_tablets()) {
+                    throw std::invalid_argument(fmt::format("Keyspace {} doesn't use tablets", *keyspace));
+                }
+                keyspaces.push_back(*keyspace);
+                for_keyspace = keyspace;
+            } else {
+                keyspaces = db.get_non_local_strategy_keyspaces();
+            }
+            for (const auto& ks_name : keyspaces) {
+                const auto& ks = db.find_keyspace(ks_name);
+                // Skips the keyspaces which don't use tablets, including those being migrated to
+                // tablets, whose tables have a tablet map already (see above).
+                if (!ks.uses_tablets()) {
+                    continue;
+                }
+                for (const auto& [_, s] : ks.metadata()->cf_meta_data()) {
+                    if (tablets.has_tablet_map(s->id()) && tablets.is_base_table(s->id())) {
+                        table_ids.insert(s->id());
+                    }
+                }
+            }
+            if (table_ids.empty()) {
+                throw std::invalid_argument(keyspace ? fmt::format("Keyspace {} has no tables to compact", *keyspace)
+                                                     : std::string("No keyspace uses tablets"));
+            }
+        }
+        if (recursive) {
+            for (auto table : std::ranges::to<std::vector>(table_ids)) {
+                table_ids.merge(derived_tables(db, tablets, table));
+            }
+        }
+
+        // Two requests compacting the same table at the same time would keep compacting its tablets
+        // again, each recording itself in them in turn. So join a request which compacts all the
+        // tables with the same type and options, and reject one which compacts only some of them,
+        // or compacts them differently.
+        auto requests = std::ranges::to<std::vector>(_topology_state_machine._topology.ongoing_cluster_compaction_requests);
+        requests.insert(requests.end(), _topology_state_machine._topology.global_requests_queue.begin(), _topology_state_machine._topology.global_requests_queue.end());
+        for (auto req : requests) {
+            auto entry = co_await _sys_ks.local().get_topology_request_entry(req);
+            if (entry.cluster_compaction_table_ids.empty() || entry.done) {
+                continue;
+            }
+            auto it = std::ranges::find_if(table_ids, [&] (table_id t) { return entry.cluster_compaction_table_ids.contains(t); });
+            if (it == table_ids.end()) {
+                continue;
+            }
+            if (entry.cluster_compaction_type != compaction_type || entry.cluster_compaction_options != options) {
+                throw std::runtime_error(fmt::format("Table {} is already being compacted by request {}, a {} compaction with options {}",
+                        *it, req, entry.cluster_compaction_type, entry.cluster_compaction_options));
+            }
+            if (std::ranges::all_of(table_ids, [&] (table_id t) { return entry.cluster_compaction_table_ids.contains(t); })) {
+                slogger.info("{} compaction of tables {} is already in progress as request {}", compaction_type, table_ids, req);
+                co_return req;
+            }
+            throw std::runtime_error(fmt::format("Table {} is already being compacted by request {}", *it, req));
+        }
+
+        auto request_id = guard.new_group0_state_id();
+        topology_mutation_builder builder(guard.write_timestamp());
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+        trbuilder.set_cluster_compaction_tables(table_ids, for_table, for_keyspace)
+                 .set_cluster_compaction_params(compaction_type, options)
+                 .set("done", false)
+                 .set("start_time", db_clock::now());
+        builder.queue_global_topology_request_id(request_id);
+        trbuilder.set("request_type", global_topology_request::compact_tablets);
+
+        topology_change change{{builder.build(), trbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, fmt::format("{} compaction of tables {}", compaction_type, table_ids));
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            slogger.info("Queued {} compaction of tables {} as request {}", compaction_type, table_ids, request_id);
+            co_return request_id;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("compact_tablets: concurrent modification, retrying");
+        }
+    }
 }
 
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {

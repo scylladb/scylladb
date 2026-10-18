@@ -1951,6 +1951,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await update_topology_state(std::move(guard), std::move(updates), "restore_tablets: set up tablet transitions");
         }
         break;
+        case global_topology_request::compact_tablets: {
+            // The load balancer schedules the compaction of the tables' tablets from now on.
+            const auto& tables = req_entry.cluster_compaction_table_ids;
+            utils::chunked_vector<canonical_mutation> updates;
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.del_global_topology_request()
+                   .del_global_topology_request_id()
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+            auto tmptr = get_token_metadata_ptr();
+            if (req_entry.done) {
+                rtlogger.info("compact_tablets request {} for tables {} was aborted before it started", req_id, tables);
+            } else if (std::ranges::none_of(tables, [&] (table_id t) { return tmptr->tablets().has_tablet_map(t); })) {
+                updates.push_back(topology_request_tracking_mutation_builder(req_id)
+                        .done(fmt::format("Tables {} do not exist", tables))
+                        .build());
+            } else {
+                rtlogger.info("compact_tablets requested for tables {}", tables);
+                builder.start_cluster_compaction_request(req_id);
+            }
+            updates.push_back(builder.build());
+            co_await update_topology_state(std::move(guard), std::move(updates), "compact_tablets: start");
+        }
+        break;
         }
     }
 
@@ -2229,6 +2252,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
     }
 
+    void generate_cluster_compaction_update(tablet_builder_map& builders, const group0_guard& guard, const locator::global_tablet_id& gid) {
+        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
+        auto last_token = tmap.get_last_token(gid.tablet);
+        if (tmap.get_tablet_transition_info(gid.tablet)) {
+            rtlogger.warn("Tablet already in transition, ignoring tablet compaction: {}", gid);
+            return;
+        }
+        get_tablet_builder(builders, guard, gid.table)
+            .set_new_replicas(last_token, tmap.get_tablet_info(gid.tablet).replicas)
+            .set_stage(last_token, locator::tablet_transition_stage::tablet_compaction)
+            .set_transition(last_token, locator::tablet_transition_kind::tablet_compaction);
+    }
+
     void generate_resize_update(group0_update_collector& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
             // FIXME: indent.
             auto s = _db.find_schema(table_id);
@@ -2379,11 +2415,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             generate_repair_update(migration_builders, guard, gid, sched_time);
         }
 
+        for (const auto& gid : plan.compaction_plan().compactions) {
+            co_await coroutine::maybe_yield();
+            generate_cluster_compaction_update(migration_builders, guard, gid);
+        }
+
         co_await flush_tablet_builders(out, migration_builders);
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
             co_await coroutine::maybe_yield();
             generate_resize_update(out, guard, table_id, resize_decision);
+        }
+
+        if (const auto& completions = plan.compaction_plan().completions; !completions.empty()) {
+            for (const auto& completion : completions) {
+                rtlogger.info("Cluster-wide compaction request {} completed, finishing it", completion.request_id);
+                out.emplace_back(topology_request_tracking_mutation_builder(completion.request_id)
+                        .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error))
+                        .build());
+            }
+            out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                    .finish_cluster_compaction_requests(_topo_sm._topology.ongoing_cluster_compaction_requests,
+                            completions | std::views::transform(&cluster_compaction_completion_info::request_id) | std::ranges::to<std::unordered_set>())
+                    .build());
         }
 
         for (const auto& completion : plan.restore_completions()) {
@@ -2528,6 +2582,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             if (req_entry.restore_table_id) {
                 restore_request_for_table[*req_entry.restore_table_id] = req_id;
+            }
+        }
+
+        // The ongoing cluster-wide compaction request of each table, so that a tablet's
+        // tablet_compaction transition can compact it with the request's compaction type and
+        // options, and record the request it processed the tablet for. A request records the error
+        // of the first tablet it failed to compact, to report it.
+        struct cluster_compaction_request {
+            utils::UUID id;
+            sstring compaction_type;
+            std::unordered_map<sstring, sstring> options;
+            bool has_error;
+        };
+        std::unordered_map<table_id, cluster_compaction_request> cluster_compaction_request_for_table;
+        for (const auto& req_id : _topo_sm._topology.ongoing_cluster_compaction_requests) {
+            auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
+            for (auto t : req_entry.cluster_compaction_table_ids) {
+                cluster_compaction_request_for_table.emplace(t, cluster_compaction_request{req_id,
+                        req_entry.cluster_compaction_type, req_entry.cluster_compaction_options, !req_entry.cluster_compaction_first_error.empty()});
             }
         }
 
@@ -3230,15 +3303,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     // A failure isn't retried: the transition ends, and the tablet is reported as failed.
                     if (action_failed(tablet_state.tablet_compaction)) {
-                        rtlogger.warn("Compaction of tablet {} failed: {}", gid, tablet_state.tablet_compaction->get_exception());
+                        auto ep = tablet_state.tablet_compaction->get_exception();
+                        rtlogger.warn("Compaction of tablet {} failed: {}", gid, ep);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token);
+                        auto& builder = get_mutation_builder().del_transition(last_token);
+                        // The request may have been aborted meanwhile.
+                        if (auto it = cluster_compaction_request_for_table.find(gid.table); it != cluster_compaction_request_for_table.end()) {
+                            auto& req = it->second;
+                            builder.set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(req.id), true);
+                            if (!req.has_error) {
+                                updates.add(topology_request_tracking_mutation_builder(req.id)
+                                        .set("cluster_compaction_first_error", format("{} compaction of tablet {} failed: {}", req.compaction_type, gid, ep))
+                                        .build());
+                                // Other tables of the request share its error.
+                                for (auto& [_, r] : cluster_compaction_request_for_table) {
+                                    if (r.id == req.id) {
+                                        r.has_error = true;
+                                    }
+                                }
+                            }
+                        }
                         break;
                     }
-                    if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction", [this, gid, gids, &tmap] () -> future<> {
+                    // The transition compacts the tablet with the compaction type and options of the
+                    // request it was started for.
+                    auto req_it = cluster_compaction_request_for_table.find(gid.table);
+                    auto req = req_it != cluster_compaction_request_for_table.end() ? std::make_optional(req_it->second) : std::nullopt;
+                    if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction", [this, gid, gids, &tmap, req = std::move(req)] () -> future<> {
+                        if (!req) {
+                            throw std::runtime_error(fmt::format("Table {} has no ongoing cluster-wide compaction request", gid.table));
+                        }
                         auto replicas = tmap.get_tablet_info(gid.tablet).replicas;
-                        rtlogger.info("Initiating compaction of tablet {} on {}", gid, replicas);
-                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids] (locator::tablet_replica r) -> future<> {
+                        rtlogger.info("Initiating {} compaction of tablet {} on {}", req->compaction_type, gid, replicas);
+                        // Copied before suspending: the closure of this action doesn't outlive its first suspension.
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids, compaction_type = req->compaction_type, options = req->options] (locator::tablet_replica r) -> future<> {
                             auto dst = raft::server_id(r.host.uuid());
                             if (is_excluded(dst)) {
                                 co_return;
@@ -3251,17 +3349,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             // The tablets of a co-location group are compacted one at a time, to
                             // bound the space overhead to the size of one tablet.
                             for (auto& g : gids) {
-                                // Nothing creates the transition yet. The cluster-wide compaction request
-                                // which is going to create it is going to supply the compaction type and options.
                                 co_await ser::storage_service_rpc_verbs::send_tablet_compaction(&_messaging, r.host, _as, dst, g,
-                                        sstring("major"), std::unordered_map<sstring, sstring>{});
+                                        compaction_type, options);
                             }
                             rtlogger.debug("Tablet {} compacted on {}", gid, r.host);
                         });
                     })) {
                         rtlogger.info("Finished compaction of tablet {}", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token);
+                        auto& builder = get_mutation_builder().del_transition(last_token);
+                        // The request may have been aborted meanwhile.
+                        if (auto it = cluster_compaction_request_for_table.find(gid.table); it != cluster_compaction_request_for_table.end()) {
+                            builder.set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(it->second.id), false);
+                        }
                     }
                 }
                     break;
