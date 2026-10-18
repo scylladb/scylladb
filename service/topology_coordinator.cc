@@ -1715,7 +1715,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->tables();
+                    // Views have tablet maps of their own, reshard and report load like
+                    // any other table, and a rollback must strip them too.
+                    auto tables = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>();
 
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
