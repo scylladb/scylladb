@@ -1746,9 +1746,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     // Going forward every table needs a tablet map, or it stays on vnodes
-                    // once the keyspace switches; one is missing when the table was created
-                    // mid-migration. A rollback drops the maps that exist, so such a table
-                    // is already final.
+                    // once the keyspace switches; one is missing when the CREATE TABLE was
+                    // coordinated by a node without the migration listener. A rollback
+                    // drops the maps that exist, so such a table is already final.
                     if (!rollback) {
                         for (const auto& schema : tables) {
                             if (!tablet_metadata.has_tablet_map(schema->id())) {
@@ -1834,7 +1834,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     } else {
                         // Rollback: drop every tablet map in the keyspace. A table created
-                        // mid-migration may have none.
+                        // through a node without the migration listener has none.
                         for (const auto& schema : tables) {
                             if (tablet_metadata.has_tablet_map(schema->id())) {
                                 updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
