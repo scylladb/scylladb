@@ -1421,7 +1421,9 @@ async def test_restore_tablets_with_different_tablet_hints(build_mode: str, mana
 
     topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
 
-    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    # Resize finalization in this flow waits for the periodic tablet load stats refresh.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config={'tablet_load_stats_refresh_interval_in_seconds': 1})
 
     cql = manager.get_cql()
 
@@ -1467,7 +1469,9 @@ async def test_restore_tablets_hints_survive_node_loss(build_mode: str, manager:
     so that they survive node crashes during restore.'''
 
     topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
-    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    # Resize finalization in this flow waits for the periodic tablet load stats refresh.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config={'tablet_load_stats_refresh_interval_in_seconds': 1})
     log = await manager.server_open_log(servers[0].server_id)
     await log.wait_for("raft_topology - start topology coordinator fiber", timeout=10)
 
