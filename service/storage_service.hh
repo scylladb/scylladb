@@ -1071,6 +1071,9 @@ public:
     future<> wait_for_topology_not_busy();
 
     future<> abort_rf_change(utils::UUID request_id);
+    // Aborts a cluster-wide compaction request. The topology coordinator then cancels the
+    // compaction of the tablets which are being compacted.
+    future<> abort_cluster_compaction(utils::UUID request_id);
 
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};

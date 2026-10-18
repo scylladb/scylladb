@@ -401,21 +401,27 @@ future<std::optional<tasks::virtual_task_hint>> global_topology_request_virtual_
         co_return std::nullopt;
     }
 
-    auto hint = std::make_optional(tasks::virtual_task_hint{});
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
-    if (entry.has_value() && std::holds_alternative<service::global_topology_request>(entry->request_type) &&
-            std::get<service::global_topology_request>(entry->request_type) == global_topology_request::keyspace_rf_change) {
-        co_return hint;
+    if (!entry.has_value() || !std::holds_alternative<service::global_topology_request>(entry->request_type)) {
+        co_return std::nullopt;
     }
-    co_return std::nullopt;
+    switch (std::get<service::global_topology_request>(entry->request_type)) {
+    case global_topology_request::keyspace_rf_change:
+        co_return tasks::virtual_task_hint{};
+    case global_topology_request::compact_tablets:
+        // The table distinguishes a cluster-wide compaction from an RF change.
+        co_return tasks::virtual_task_hint{.table_id = entry->cluster_compaction_table_id};
+    default:
+        co_return std::nullopt;
+    }
 }
 
 future<tasks::is_abortable> global_topology_request_virtual_task::is_abortable(tasks::virtual_task_hint) const {
     return make_ready_future<tasks::is_abortable>(tasks::is_abortable::yes);
 }
 
-static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requests_entry& entry) {
-    return tasks::task_stats{
+static tasks::task_stats get_task_stats(const replica::database& db, const db::system_keyspace::topology_requests_entry& entry) {
+    auto stats = tasks::task_stats{
         .task_id = tasks::task_id{entry.id},
         .type = fmt::to_string(std::get<service::global_topology_request>(entry.request_type)),
         .kind = tasks::task_kind::cluster,
@@ -429,6 +435,34 @@ static tasks::task_stats get_task_stats(const db::system_keyspace::topology_requ
         .start_time = entry.start_time,
         .end_time = entry.end_time,
     };
+    if (entry.cluster_compaction_table_id) {
+        stats.scope = "table";
+        if (db.column_family_exists(*entry.cluster_compaction_table_id)) {
+            auto s = db.find_schema(*entry.cluster_compaction_table_id);
+            stats.keyspace = s->ks_name();
+            stats.table = s->cf_name();
+        }
+    }
+    return stats;
+}
+
+// The number of tablets of the request's tables, and of those it already processed: compacted,
+// or failed to compact, which isn't retried.
+static tasks::task_manager::task::progress get_cluster_compaction_progress(const locator::token_metadata& tm, const db::system_keyspace::topology_requests_entry& entry) {
+    tasks::task_manager::task::progress progress;
+    for (auto table : entry.cluster_compaction_table_ids) {
+        if (!tm.tablets().has_tablet_map(table)) {
+            continue;
+        }
+        const auto& tmap = tm.tablets().get_tablet_map(table);
+        for (auto tid : tmap.tablet_ids()) {
+            progress.total++;
+            if (tmap.get_tablet_info(tid).cluster_compaction_request_id == locator::cluster_compaction_id(entry.id)) {
+                progress.completed++;
+            }
+        }
+    }
+    return progress;
 }
 
 future<std::optional<tasks::task_status>> global_topology_request_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
@@ -436,7 +470,13 @@ future<std::optional<tasks::task_status>> global_topology_request_virtual_task::
     if (!entry.has_value()) {
         co_return std::nullopt;
     }
-    auto task_stats = get_task_stats(*entry);
+    auto task_stats = get_task_stats(_ss._db.local(), *entry);
+    sstring progress_units;
+    tasks::task_manager::task::progress progress;
+    if (entry->cluster_compaction_table_id) {
+        progress_units = "tablets";
+        progress = get_cluster_compaction_progress(*_ss.get_token_metadata_ptr(), *entry);
+    }
     co_return tasks::task_status{
         .task_id = task_stats.task_id,
         .type = task_stats.type,
@@ -446,15 +486,16 @@ future<std::optional<tasks::task_status>> global_topology_request_virtual_task::
         .is_abortable = co_await is_abortable(std::move(hint)),
         .start_time = task_stats.start_time,
         .end_time = task_stats.end_time,
-        .error = entry->error,
+        // A cluster-wide compaction reports the first tablet which failed while it is still running.
+        .error = entry->error.empty() && !entry->done ? entry->cluster_compaction_first_error : entry->error,
         .parent_id = tasks::task_id::create_null_id(),
         .sequence_number = task_stats.sequence_number,
         .shard = task_stats.shard,
         .keyspace = task_stats.keyspace,
         .table = task_stats.table,
         .entity = task_stats.entity,
-        .progress_units = "",
-        .progress = tasks::task_manager::task::progress{},
+        .progress_units = progress_units,
+        .progress = progress,
         .children = utils::chunked_vector<tasks::task_identity>{},
     };
 }
@@ -469,16 +510,19 @@ future<std::optional<tasks::task_status>> global_topology_request_virtual_task::
     co_return co_await get_status(id, std::move(hint));
 }
 
-future<> global_topology_request_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
+future<> global_topology_request_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
+    if (hint.table_id) {
+        return _ss.abort_cluster_compaction(id.uuid());
+    }
     return _ss.abort_rf_change(id.uuid());
 }
 
 future<std::vector<tasks::task_stats>> global_topology_request_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
-    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await sys_ks.get_topology_request_entries({global_topology_request::keyspace_rf_change}, db_clock::now() - get_task_manager().get_user_task_ttl())
-            | std::views::transform([] (const auto& e) {
-        auto& entry = e.second;
-        return get_task_stats(entry);
+    auto entries = co_await sys_ks.get_topology_request_entries({global_topology_request::keyspace_rf_change, global_topology_request::compact_tablets},
+            db_clock::now() - get_task_manager().get_user_task_ttl());
+    co_return std::ranges::to<std::vector<tasks::task_stats>>(entries | std::views::values | std::views::transform([this] (const auto& entry) {
+        return get_task_stats(_ss._db.local(), entry);
     }));
 }
 

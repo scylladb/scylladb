@@ -3350,6 +3350,47 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
     }
 }
 
+future<> storage_service::abort_cluster_compaction(utils::UUID request_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_cluster_compaction(request_id);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        if (entry.done) {
+            slogger.info("Cluster-wide compaction request {} is already done", request_id);
+            co_return;
+        }
+        utils::chunked_vector<canonical_mutation> updates;
+        // A request which is still queued is dropped from the queue when the coordinator sees it is done.
+        if (_topology_state_machine._topology.ongoing_cluster_compaction_requests.contains(request_id)) {
+            updates.push_back(topology_mutation_builder(guard.write_timestamp())
+                    .finish_cluster_compaction_requests(_topology_state_machine._topology.ongoing_cluster_compaction_requests, {request_id})
+                    .build());
+        }
+        updates.push_back(topology_request_tracking_mutation_builder(request_id)
+                .done("Aborted by user request")
+                .build());
+
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, format("Abort cluster-wide compaction request {}", request_id));
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            slogger.info("Aborted cluster-wide compaction request {}", request_id);
+            co_return;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("abort_cluster_compaction: concurrent modification, retrying");
+        }
+    }
+}
+
 future<> storage_service::abort_rf_change(utils::UUID request_id) {
     auto holder = _async_gate.hold();
 
