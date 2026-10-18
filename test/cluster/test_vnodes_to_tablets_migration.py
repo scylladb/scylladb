@@ -3269,3 +3269,86 @@ async def test_create_table_during_migration_multinode(manager: ScyllaClusterMan
         # node finds every key only if that node routes to those same replicas.
         for server in servers:
             await verify_data_integrity(cql, ks, "late", num_keys, cl=ConsistencyLevel.ONE, server=server)
+
+
+async def test_create_table_during_rollback(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: a table created while a keyspace is rolling back gets a tablet map too.
+
+    A node that has not restarted yet still runs the keyspace on tablets and needs the
+    map to hold the new table like its siblings. Rollback finalization drops it with
+    every other, and a node already restarted into vnodes runs the table on vnodes from
+    the start. Two tables straddle the downgrade so both sides of it are covered.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table and populate it.
+    2. Start the migration, upgrade the node and restart it.
+    3. Create `before_rollback`; it must get a tablet map.
+    4. Downgrade the node, then create `after_rollback`; it must get one too.
+    5. Restart the node and finalize (rollback path).
+       - Check the keyspace still uses vnodes, every tablet map is gone, and the data
+         in all three tables survived.
+    """
+    num_keys = 100
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async def populate(table: str):
+        stmt = cql.prepare(f"INSERT INTO {ks}.{table} (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await populate("test")
+
+        logger.info("Starting vnodes-to-tablets migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Creating a table while the migration is still heading forward")
+        await cql.run_async(f"CREATE TABLE {ks}.before_rollback (pk int PRIMARY KEY, c int)")
+        await populate("before_rollback")
+        await read_barrier(manager.api, server.ip_addr)
+        await verify_new_table_tablet_map(manager, server, ks, 'before_rollback', vnode_boundaries)
+
+        logger.info("Downgrading the node back to vnodes")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+
+        logger.info("Creating a table now that the keyspace is rolling back")
+        await cql.run_async(f"CREATE TABLE {ks}.after_rollback (pk int PRIMARY KEY, c int)")
+        await populate("after_rollback")
+        await read_barrier(manager.api, server.ip_addr)
+        await verify_new_table_tablet_map(manager, server, ks, 'after_rollback', vnode_boundaries)
+
+        logger.info("Restarting the node to reshard back to vnodes")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying the keyspace is still reported as migrating")
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+        logger.info("Finalizing the migration (rollback path)")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0, "Expected keyspace to still use vnodes after rollback"
+
+        for table in ("test", "before_rollback", "after_rollback"):
+            assert await get_tablet_count(manager, server, ks, table) == 0, \
+                f"Expected {ks}.{table} to have no tablet map after rollback"
+
+        await verify_migration_status(manager, server, ks, expected_status='vnodes', expected_node_statuses={})
+
+        for table in ("test", "before_rollback", "after_rollback"):
+            await verify_data_integrity(cql, ks, table, num_keys)
