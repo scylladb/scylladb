@@ -2009,6 +2009,10 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
+    if (uses_physical_positions()) {
+        // Verify that the chunk length is a power of 2.
+        (void)get_bti_position_encoding();
+    }
     co_await update_info_for_opened_data(cfg);
     parse_assert(!_shards.empty(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
