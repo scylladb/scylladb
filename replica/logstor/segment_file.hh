@@ -55,6 +55,7 @@ class segment_geometry {
 public:
     // Throws exceptions::configuration_exception in these cases:
     // - a size is zero,
+    // - the segment size is not a multiple of ondisk::block_alignment,
     // - a segment is larger than a file,
     // - a file is larger than the disk size.
     segment_geometry(uint64_t segment_size, uint64_t file_size, uint64_t disk_size);
