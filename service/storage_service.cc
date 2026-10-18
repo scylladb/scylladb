@@ -4619,27 +4619,14 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
 }
 
 storage_service::migration_status storage_service::get_tablets_migration_status(const sstring& ks_name) {
-    auto& db = _db.local();
-    auto& ks = db.find_keyspace(ks_name);
+    auto& ks = _db.local().find_keyspace(ks_name);
 
     if (ks.uses_tablets()) {
         return migration_status::tablets;
     }
-
-    const auto& tm = get_token_metadata();
-    const auto& tablet_metadata = tm.tablets();
-
-    auto tables = ks.metadata()->tables();
-
-    // Check whether all tables have tablet maps (i.e. migration was started).
-    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
-        return tablet_metadata.has_tablet_map(schema->id());
-    });
-
-    if (!has_tablet_maps) {
+    if (!replica::is_keyspace_under_tablets_migration(*ks.metadata(), get_token_metadata().tablets())) {
         return migration_status::vnodes;
     }
-
     return migration_status::migrating_to_tablets;
 }
 
@@ -4689,9 +4676,19 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
     // datacenters.
     std::unordered_set<locator::host_id> nodes_reporting_tablets;
     if (std::ranges::any_of(topo.normal_nodes, [] (const auto& e) { return !e.second.current_storage_mode; })) {
+        // Sample a table that has a map: one created mid-migration may have none, and
+        // then no reported size either.
         auto& ks = _db.local().find_keyspace(ks_name);
         auto tables = ks.metadata()->tables();
-        auto sample_table_id = tables.front()->id();
+        const auto& tablet_metadata = get_token_metadata().tablets();
+        auto sample = std::ranges::find_if(tables, [&] (const schema_ptr& s) {
+            return tablet_metadata.has_tablet_map(s->id());
+        });
+        if (sample == tables.end()) {
+            // The status computed above says some table has one, and nothing suspended since.
+            on_internal_error(slogger, fmt::format("Keyspace '{}' is migrating to tablets but none of its tables has a tablet map", ks_name));
+        }
+        auto sample_table_id = (*sample)->id();
 
         auto rows = co_await _qp.execute_internal(
                 "SELECT replicas FROM system.tablet_sizes WHERE table_id = ?",
