@@ -3294,8 +3294,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                     break;
                 case locator::tablet_transition_stage::tablet_compaction: {
+                    // The request was aborted: cancel the transition, without recording the request in
+                    // the tablet. Ending the transition aborts the compaction on the replicas, through
+                    // their tablet metadata guards. The compaction RPCs, if still running, fail then,
+                    // and their result is ignored.
+                    auto req_it = cluster_compaction_request_for_table.find(gid.table);
+                    if (req_it == cluster_compaction_request_for_table.end()) {
+                        if (auto& holder = tablet_state.tablet_compaction) {
+                            rtlogger.info("Canceling compaction of tablet {}, as its request was aborted", gid);
+                            // Runs under _async_gate, see advance_in_background().
+                            (void)std::move(*holder).handle_exception([] (std::exception_ptr) {});
+                        } else {
+                            rtlogger.info("Canceling compaction of tablet {} before it started, as its request was aborted", gid);
+                        }
+                        _tablets.erase(gid);
+                        get_mutation_builder().del_transition(last_token);
+                        break;
+                    }
+                    auto& req = req_it->second;
                     // A barrier before compacting, so that no replica still runs the compaction of
-                    // an earlier transition of the tablet, which was canceled: the replica's
+                    // an earlier transition of the tablet, aborted with its request: the replica's
                     // operation would otherwise be joined by the new one, which would inherit its
                     // failure, and the old RPC could run under the new transition.
                     if (!do_barrier()) {
@@ -3306,20 +3324,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto ep = tablet_state.tablet_compaction->get_exception();
                         rtlogger.warn("Compaction of tablet {} failed: {}", gid, ep);
                         _tablets.erase(gid);
-                        auto& builder = get_mutation_builder().del_transition(last_token);
-                        // The request may have been aborted meanwhile.
-                        if (auto it = cluster_compaction_request_for_table.find(gid.table); it != cluster_compaction_request_for_table.end()) {
-                            auto& req = it->second;
-                            builder.set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(req.id), true);
-                            if (!req.has_error) {
-                                updates.add(topology_request_tracking_mutation_builder(req.id)
-                                        .set("cluster_compaction_first_error", format("{} compaction of tablet {} failed: {}", req.compaction_type, gid, ep))
-                                        .build());
-                                // Other tables of the request share its error.
-                                for (auto& [_, r] : cluster_compaction_request_for_table) {
-                                    if (r.id == req.id) {
-                                        r.has_error = true;
-                                    }
+                        get_mutation_builder().del_transition(last_token).set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(req.id), true);
+                        if (!req.has_error) {
+                            updates.add(topology_request_tracking_mutation_builder(req.id)
+                                    .set("cluster_compaction_first_error", format("{} compaction of tablet {} failed: {}", req.compaction_type, gid, ep))
+                                    .build());
+                            // Other tables of the request share its error.
+                            for (auto& [_, r] : cluster_compaction_request_for_table) {
+                                if (r.id == req.id) {
+                                    r.has_error = true;
                                 }
                             }
                         }
@@ -3327,16 +3340,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     // The transition compacts the tablet with the compaction type and options of the
                     // request it was started for.
-                    auto req_it = cluster_compaction_request_for_table.find(gid.table);
-                    auto req = req_it != cluster_compaction_request_for_table.end() ? std::make_optional(req_it->second) : std::nullopt;
-                    if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction", [this, gid, gids, &tmap, req = std::move(req)] () -> future<> {
-                        if (!req) {
-                            throw std::runtime_error(fmt::format("Table {} has no ongoing cluster-wide compaction request", gid.table));
-                        }
+                    if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction",
+                            [this, gid, gids, &tmap, compaction_type = req.compaction_type, options = req.options] () -> future<> {
                         auto replicas = tmap.get_tablet_info(gid.tablet).replicas;
-                        rtlogger.info("Initiating {} compaction of tablet {} on {}", req->compaction_type, gid, replicas);
+                        rtlogger.info("Initiating {} compaction of tablet {} on {}", compaction_type, gid, replicas);
                         // Copied before suspending: the closure of this action doesn't outlive its first suspension.
-                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids, compaction_type = req->compaction_type, options = req->options] (locator::tablet_replica r) -> future<> {
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids, compaction_type, options] (locator::tablet_replica r) -> future<> {
                             auto dst = raft::server_id(r.host.uuid());
                             if (is_excluded(dst)) {
                                 co_return;
@@ -3357,11 +3366,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     })) {
                         rtlogger.info("Finished compaction of tablet {}", gid);
                         _tablets.erase(gid);
-                        auto& builder = get_mutation_builder().del_transition(last_token);
-                        // The request may have been aborted meanwhile.
-                        if (auto it = cluster_compaction_request_for_table.find(gid.table); it != cluster_compaction_request_for_table.end()) {
-                            builder.set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(it->second.id), false);
-                        }
+                        get_mutation_builder().del_transition(last_token).set_cluster_compaction_request_id(last_token, locator::cluster_compaction_id(req.id), false);
                     }
                 }
                     break;

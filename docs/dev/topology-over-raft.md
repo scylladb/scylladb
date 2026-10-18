@@ -1282,3 +1282,13 @@ The compaction state survives coordinator changes and migrations, since it is ke
 tablets: a split copies it to both new tablets, and a merge keeps `cluster_compaction_request_id`
 only when both siblings agree on it, so the merged tablet is otherwise compacted again, except
 that a failure of either sibling sticks, since it isn't retried.
+
+A cluster-wide compaction is tracked by a cluster task of the
+`global_topology_requests` task manager module, whose id is the request's id. Its progress is
+the number of tablets of the request's tables which it processed, compacted or failed, out of
+all of them. While it is running, its error is the first error of a tablet which failed, if any.
+Aborting the task removes the request from `ongoing_cluster_compaction_requests` and marks it done
+with an error. The topology coordinator then cancels the `tablet_compaction` transitions which
+already started, as their tables no longer have an ongoing request: it deletes them without
+recording the request in their tablets, which aborts the compactions on the replicas through their
+tablet metadata guards.
