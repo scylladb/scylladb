@@ -127,16 +127,22 @@ def compute_pow2_boundaries(target_pow2: int) -> list[int]:
     return [(i * UINT64_MAX) // target_pow2 + INT64_MIN for i in range(1, target_pow2 + 1)]
 
 
-async def get_target_pow2_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table_name: str) -> int:
-    """Read target_pow2_tablet_count from system.tablets for a given table."""
+async def get_pow2_tablet_counts(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table_name: str) -> tuple[int, int]:
+    """Read (target_pow2_tablet_count, tablet_count) from system.tablets for a given table."""
     host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
     await read_barrier(manager.api, server.ip_addr)
     table_id = await manager.get_table_or_view_id(ks, table_name)
     rows = await manager.get_cql().run_async(
-        f"SELECT DISTINCT target_pow2_tablet_count FROM system.tablets WHERE table_id = {table_id}",
+        f"SELECT DISTINCT target_pow2_tablet_count, tablet_count FROM system.tablets WHERE table_id = {table_id}",
         host=host)
     assert len(rows) > 0, f"No rows found in system.tablets for table {ks}.{table_name}"
-    return rows[0].target_pow2_tablet_count
+    return rows[0].target_pow2_tablet_count, rows[0].tablet_count
+
+
+async def get_target_pow2_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table_name: str) -> int:
+    """Read target_pow2_tablet_count from system.tablets for a given table."""
+    target, _ = await get_pow2_tablet_counts(manager, server, ks, table_name)
+    return target
 
 
 async def verify_tablet_map_boundaries(manager: ScyllaClusterManager, server: ServerInfo,
@@ -191,15 +197,24 @@ async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: Serve
     Polls target_pow2_tablet_count in system.tablets until it is cleared,
     indicating that the tablet map has converged to a power-of-two layout.
     Once cleared, verifies that the resulting tablet map has a pow2 layout.
+
+    Convergence is a series of merges, each taking up to a minute in debug
+    mode on a slow machine, so `timeout` bounds the time without progress:
+    the deadline is pushed back every time the tablet count changes.
     """
     deadline = time.time() + timeout
+    last_count = None
     while time.time() < deadline:
-        target = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+        target, count = await get_pow2_tablet_counts(manager, server, ks, table_name)
         if target is None or target == 0:
             await verify_pow2_layout(manager, server, ks, table_name)
             return
+        if count != last_count:
+            logger.info(f"Pow2 convergence for {ks}.{table_name}: {count} tablet(s), target {target}")
+            last_count = count
+            deadline = time.time() + timeout
         await asyncio.sleep(1)
-    assert False, f"Pow2 convergence for {ks}.{table_name} did not complete within {timeout}s"
+    assert False, f"Pow2 convergence for {ks}.{table_name} made no progress within {timeout}s (stuck at {last_count} tablet(s))"
 
 
 async def verify_migration_status(manager: ScyllaClusterManager, server: ServerInfo,
@@ -675,7 +690,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
-async def test_migration_multidc(manager: ScyllaClusterManager):
+async def test_migration_multidc(manager: ScyllaClusterManager, scale_timeout):
     """Verify vnodes-to-tablets migration on a multi-DC cluster with asymmetric RF.
 
     Topology:
@@ -828,7 +843,7 @@ async def test_migration_multidc(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", expected_keys)
 
         logger.info("Waiting for pow2 convergence to complete")
-        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test', timeout=scale_timeout(120))
 
 
 async def setup_single_node(manager: ScyllaClusterManager):

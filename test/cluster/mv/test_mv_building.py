@@ -312,7 +312,7 @@ async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_befor
 #
 # Reproduces scylladb/scylladb#26686.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_backoff_when_node_fails_task_rpc(manager: ScyllaClusterManager):
+async def test_backoff_when_node_fails_task_rpc(manager: ScyllaClusterManager, scale_timeout):
     """
     Scenario:
     1. Set up a cluster. Two racks are sufficient.
@@ -346,7 +346,14 @@ async def test_backoff_when_node_fails_task_rpc(manager: ScyllaClusterManager):
     await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
 
     row_count = 50_000
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks.t (pk, ck, v) VALUES ({i}, {i + 1}, {i + 2})") for i in range(row_count)])
+    # Bound the number of in-flight writes: firing all of them at once overloads
+    # a 2-node debug cluster on a slow machine and fails with WriteTimeout.
+    insert = cql.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+    sem = asyncio.Semaphore(100)
+    async def do_insert(i):
+        async with sem:
+            await cql.run_async(insert, [i, i + 1, i + 2])
+    await asyncio.gather(*[do_insert(i) for i in range(row_count)])
 
     # Topology coordinator = view building coordinator.
     topology_coordinator = await get_topology_coordinator(manager)
@@ -399,7 +406,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ScyllaClusterManager):
 
     # Not needed anymore.
     await manager.api.disable_injection(s2.ip_addr, pause_vb_err)
-    await wait_for_view(cql, "mv", 2)
+    await wait_for_view(cql, "mv", 2, timeout=scale_timeout(120))
 
     end = time.time()
     # The duration of the view building process (in seconds, rounded up).

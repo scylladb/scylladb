@@ -883,7 +883,7 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Scyl
             assert len(r.replicas) == 2
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
+async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager, scale_timeout) -> None:
     """Test aborting a 0->N RF increase (adding a new DC)."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -900,7 +900,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     cql = manager.get_cql()
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + scale_timeout(30)))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -919,7 +919,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, deadline=time.time() + scale_timeout(60))
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']})
 
     task_manager_client = TaskManagerClient(manager.api)
@@ -958,7 +958,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
             assert rep[0] in dc1_host_ids
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
+async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager, scale_timeout) -> None:
     """Test aborting an N->0 RF decrease (removing a DC). Abort should not be allowed."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -992,7 +992,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, deadline=time.time() + scale_timeout(60))
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c']})
 
     task_manager_client = TaskManagerClient(manager.api)
@@ -1027,7 +1027,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
             assert rep[0] in dc1_host_ids
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
+async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager, scale_timeout) -> None:
     """Test concurrent 0->N RF changes across multiple keyspaces."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ["--enforce-rack-list", "true", "--smp", "4", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -1042,7 +1042,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
     cql = manager.get_cql()
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + scale_timeout(30)))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 1}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -1070,7 +1070,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     alter_task2 = asyncio.create_task(alter_keyspace2())
 
     # Wait for every keyspace to reach the barrier.
-    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, threshold=2)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, threshold=2, deadline=time.time() + scale_timeout(60))
 
     for s in servers:
         await manager.api.message_injection(s.ip_addr, injection)
@@ -1099,7 +1099,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
                 assert host_id in [r[0] for r in t.replicas]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
+async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager, scale_timeout) -> None:
     """Test aborting an RF change that involves both 0->N increase and N->0 decrease across DCs."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -1116,7 +1116,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     cql = manager.get_cql()
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + scale_timeout(30)))[0]
 
     # Start with dc1 only (dc2: 0).
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
@@ -1136,7 +1136,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, deadline=time.time() + scale_timeout(60))
 
     dc1_host_ids = set(host_ids[0:3])
     replicas_mid = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
