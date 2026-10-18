@@ -1732,6 +1732,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     condition_variable _bg_fiber_cv;
     condition_variable _get_cv;
     future<> _filling_fiber = make_ready_future<>();
+    // Fired by close() and by the caller's abort, to cut a retry backoff short.
+    seastar::abort_source _retry_as;
 
     future<> make_filling_fiber() {
         // The reply handler consumes the body as it arrives, so the transport cannot
@@ -1746,6 +1748,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
         // The strategy keeps no count of its own -- seastar passes it the attempt number
         // for a request it replays, and here this loop is what re-issues.
         unsigned retries = 0;
+        auto as_sub = _as ? _as->subscribe([this]() noexcept { _retry_as.request_abort(); }) : std::nullopt;
+        if (_as && !as_sub) {
+            _retry_as.request_abort();
+        }
         while (!_is_finished) {
             std::exception_ptr failure;
             try {
@@ -1806,7 +1812,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                    [this, &units, &retries, discover_size, pf_length = discover_size ? 0 : current_range.length()](
                         group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         gc.prefetch_bytes += pf_length;
                         if (discover_size) {
@@ -1852,6 +1858,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                             _buffers.emplace_back(std::move(buf));
                             _get_cv.signal();
+                            // Progress resets the budget, so unrelated earlier blips don't add up.
+                            retries = 0;
                             utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                 // Inject a non-`aws_error` after partial data download to verify proper
                                 // handling and that the fiber retries missing chunks
@@ -1875,12 +1883,22 @@ class client::chunked_download_source final : public seastar::data_source_impl {
             // Out here because a catch block cannot co_await. should_retry() answers
             // false both for an error worth no second attempt and for a budget that is
             // spent, and reports either to the brake on the way.
-            if (!co_await retry_strategy.should_retry(failure, retries++)) {
-                s3l.info("Fiber for object '{}' gives up after {} failed requests, last error: {}", _object_name, retries, failure);
-                // Leaving through _get_cv.broken() rather than through the loop
-                // condition: a fiber that just stops parks its reader in _get_cv.wait()
-                // with nothing left to signal it.
-                _get_cv.broken(failure);
+            // Don't hold a download slot through the backoff.
+            units.reset();
+            try {
+                if (!co_await retry_strategy.should_retry(failure, retries++, &_retry_as)) {
+                    s3l.info("Fiber for object '{}' gives up after {} failed requests, last error: {}", _object_name, retries, failure);
+                    // Leaving through _get_cv.broken() rather than through the loop
+                    // condition: a fiber that just stops parks its reader in _get_cv.wait()
+                    // with nothing left to signal it.
+                    _get_cv.broken(failure);
+                    co_return;
+                }
+            } catch (const seastar::abort_requested_exception&) {
+                s3l.trace("Fiber for object '{}' abandoned mid-backoff", _object_name);
+                if (!_is_finished) {
+                    _get_cv.broken(_as->abort_requested_exception_ptr());
+                }
                 co_return;
             }
         }
@@ -1914,6 +1932,7 @@ public:
 
     future<> close() override {
         _is_finished = true;
+        _retry_as.request_abort();
         _bg_fiber_cv.broadcast();
         _get_cv.broadcast();
         s3l.trace("Closing chunked_download_source for object '{}'", _object_name);
