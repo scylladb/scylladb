@@ -1920,6 +1920,8 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     if (uses_physical_positions()) {
+        // Verify that the chunk length is a power of 2.
+        (void)get_bti_position_encoding();
         // CompressionInfo.db is complete only after the sstable is sealed, so
         // it is opened here, not in open_or_create_data().
         _compression_info_file = co_await open_file(component_type::CompressionInfo, open_flags::ro);
