@@ -671,4 +671,67 @@ SEASTAR_TEST_CASE(test_new_view_index_and_cdc_log_in_migrating_keyspace_get_tabl
     }, cfg);
 }
 
+// SCYLLADB-1098: dropping a table of a keyspace being migrated to tablets drops its
+// tablet map with it, whichever DDL statement drops it - including the CDC log table
+// a dropped base table takes along - and so does dropping the whole keyspace.
+SEASTAR_TEST_CASE(test_drop_in_migrating_keyspace_drops_tablet_maps) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto has_map = [&] (table_id id) {
+            return e.shared_token_metadata().local().get()->tablets().has_tablet_map(id);
+        };
+        auto id_of = [&] (const sstring& ks_name, const sstring& cf_name) {
+            return e.local_db().find_schema(ks_name, cf_name)->id();
+        };
+        auto create_migrating_keyspace = [&] (const sstring& ks_name) {
+            e.execute_cql(format("CREATE KEYSPACE {} "
+                    "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                    "AND tablets = {{'enabled': false}}", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int, w int)", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+            e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                    "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+            e.execute_cql(format("CREATE INDEX ON {}.t (w)", ks_name)).get();
+            e.execute_cql(format("ALTER TABLE {}.t WITH cdc = {{'enabled': true}}", ks_name)).get();
+        };
+
+        auto ks_name = sstring("test_drop_table_ks");
+        create_migrating_keyspace(ks_name);
+        auto t = id_of(ks_name, "t");
+        auto t2 = id_of(ks_name, "t2");
+        auto mv = id_of(ks_name, "mv");
+        auto idx = id_of(ks_name, "t_w_idx_index");
+        auto cdc_log = id_of(ks_name, "t_scylla_cdc_log");
+        for (auto id : {t, t2, mv, idx, cdc_log}) {
+            BOOST_REQUIRE(has_map(id));
+        }
+
+        e.execute_cql(format("DROP INDEX {}.t_w_idx", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(idx), "DROP INDEX left the index's tablet map behind");
+
+        e.execute_cql(format("DROP MATERIALIZED VIEW {}.mv", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(mv), "DROP MATERIALIZED VIEW left the view's tablet map behind");
+
+        e.execute_cql(format("DROP TABLE {}.t", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(t), "DROP TABLE left the table's tablet map behind");
+        BOOST_REQUIRE_MESSAGE(!has_map(cdc_log), "DROP TABLE left the CDC log table's tablet map behind");
+
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "DROP TABLE dropped the tablet map of another table");
+
+        auto ks2_name = sstring("test_drop_keyspace_ks");
+        create_migrating_keyspace(ks2_name);
+        std::vector<table_id> ids;
+        for (auto cf_name : {"t", "t2", "mv", "t_w_idx_index", "t_scylla_cdc_log"}) {
+            ids.push_back(id_of(ks2_name, cf_name));
+        }
+
+        e.execute_cql(format("DROP KEYSPACE {}", ks2_name)).get();
+        for (auto id : ids) {
+            BOOST_REQUIRE_MESSAGE(!has_map(id), fmt::format("DROP KEYSPACE left the tablet map of {} behind", id));
+        }
+
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "DROP KEYSPACE dropped the tablet map of a table in another keyspace");
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
