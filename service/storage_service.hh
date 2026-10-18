@@ -1112,6 +1112,9 @@ public:
     future<> wait_for_topology_not_busy(abort_source* as = nullptr);
 
     future<> abort_rf_change(utils::UUID request_id);
+    // Aborts a cluster-wide compaction request. The topology coordinator then cancels the
+    // compaction of the tablets which are being compacted.
+    future<> abort_cluster_compaction(utils::UUID request_id);
 
 private:
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
