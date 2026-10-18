@@ -913,9 +913,10 @@ static sstring start_migration_with_views(cql_test_env& e, const sstring& ks_nam
     return ks_name;
 }
 
-// Schema changes in a keyspace undergoing migration would break the
-// correspondence between its tables and their tablet maps, so they must be
-// rejected until the migration is finalized or rolled back.
+// A table, view or index created in a keyspace undergoing migration would have
+// no tablet map, and dropping the keyspace would leave the nodes' migration
+// state behind, so both are rejected until the migration is finalized or
+// rolled back.
 static void require_rejected_during_migration(cql_test_env& e, const sstring& cql) {
     BOOST_TEST_CONTEXT(cql) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql(cql).get(),
@@ -928,7 +929,6 @@ SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
-        require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
         require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
         // Other table updates don't change the set of tables.
         e.execute_cql(format("ALTER TABLE {}.t ADD w int", ks)).get();
@@ -942,7 +942,6 @@ SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
                 "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
-        require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
         // Altering a view doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
         // Creating a view that already exists doesn't change the set of tables.
@@ -955,7 +954,6 @@ SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
         require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
-        require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
         // Altering the backing view of an index doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
         // Creating an index that already exists doesn't change the set of tables.
