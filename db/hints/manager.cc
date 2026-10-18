@@ -325,7 +325,6 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
         local_as.request_abort();
     }
 
-    const auto tmptr = _proxy.get_token_metadata_ptr();
     std::unordered_map<endpoint_id, replay_position> hid_rps{};
     hid_rps.reserve(rps.size());
 
