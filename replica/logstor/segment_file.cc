@@ -46,6 +46,9 @@ uint64_t segment_geometry::checked_segment_size(uint64_t segment_size, uint64_t 
     if (segment_size == 0) {
         throw exceptions::configuration_exception("Segment size must not be zero");
     }
+    if (segment_size % ondisk::block_alignment != 0) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be a multiple of the block alignment {}", segment_size, ondisk::block_alignment));
+    }
     if (file_size == 0) {
         throw exceptions::configuration_exception("File size must not be zero");
     }

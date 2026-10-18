@@ -53,8 +53,9 @@ struct segment_location {
 // from an earlier, larger configuration, and their segments have the same layout.
 class segment_geometry {
 public:
-    // Throws exceptions::configuration_exception when a size is zero, when a segment is larger than
-    // a file, or when a file is larger than the disk size.
+    // Throws exceptions::configuration_exception when a size is zero, when the segment size is not a
+    // multiple of ondisk::block_alignment, when a segment is larger than a file, or when a file is
+    // larger than the disk size.
     segment_geometry(uint64_t segment_size, uint64_t file_size, uint64_t disk_size);
 
     uint64_t segments_per_file() const noexcept { return _segments_per_file; }

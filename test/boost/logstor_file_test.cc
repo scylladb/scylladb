@@ -128,12 +128,14 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_counts_only_complete_segments_and_fil
     BOOST_REQUIRE_EQUAL(location.file_offset, 0);
 }
 
-// Checks that a configuration without one complete segment in a file, or without one complete file
-// in the disk size, is refused, and that one segment in one file is accepted.
+// Checks that a configuration with an unaligned segment size, without one complete segment in a file,
+// or without one complete file in the disk size, is refused, and that one segment in one file is
+// accepted.
 BOOST_AUTO_TEST_CASE(test_segment_geometry_refuses_an_invalid_configuration) {
     constexpr uint64_t segment_size = 128 * 1024;
     BOOST_REQUIRE_THROW(segment_geometry(0, segment_size, segment_size), exceptions::configuration_exception);
     BOOST_REQUIRE_THROW(segment_geometry(segment_size, 0, segment_size), exceptions::configuration_exception);
+    BOOST_REQUIRE_THROW(segment_geometry(segment_size + 1024, 2 * segment_size, 2 * segment_size), exceptions::configuration_exception);
     BOOST_REQUIRE_THROW(segment_geometry(2 * segment_size, segment_size, 2 * segment_size), exceptions::configuration_exception);
     BOOST_REQUIRE_THROW(segment_geometry(segment_size, 2 * segment_size, segment_size), exceptions::configuration_exception);
 
