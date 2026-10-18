@@ -117,6 +117,12 @@ public:
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = false;
         bool allow_fragmented_entries = false;
+        // Track owned segment files so that enable_manifest() can persist them, and
+        // verify existing manifests in init() on shard 0. Hints leave use_manifest unset.
+        bool use_manifest = false;
+        // Log manifest verification errors at error level instead of refusing to start.
+        // The data in segments that a manifest lists but which are missing is lost.
+        bool ignore_manifest_errors = false;
 
         // The base segment ID to use.
         // The segment IDs of newly allocated segments will be issued sequentially
@@ -138,6 +144,8 @@ public:
         static const std::string SEPARATOR;
         static const std::string FILENAME_PREFIX;
         static const std::string FILENAME_EXTENSION;
+        // Prepended to the segment name when the file is recycled; never listed in a manifest.
+        static const std::string RECYCLED_PREFIX;
 
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
@@ -391,6 +399,32 @@ public:
 
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
+
+    /**
+     * Results of the manifest verification in init(), set on shard 0 only;
+     * the other shards return false and 1. An empty generation directory sets
+     * has_old_manifest_generations() but not manifest_found_on_startup().
+     */
+    bool manifest_found_on_startup() const;
+    bool has_old_manifest_generations() const;
+    uint64_t next_manifest_generation() const;
+    /**
+     * Creates the given generation, at least next_manifest_generation(), and persists this
+     * shard's segment set from now on. Requires config::use_manifest. A failed first write
+     * leaves the shard persisting and refusing a second call, so do not retry or seal.
+     */
+    future<> enable_manifest(uint64_t generation);
+    /**
+     * Writes the generation's record. Call on shard 0, which drops the old
+     * generations, after every shard finished enable_manifest().
+     */
+    future<> seal_manifest(unsigned shard_count);
+    /**
+     * Shard 0: removes the generations verified in init(), after replay and after the new
+     * generation is sealed, and before delete_segments() unlinks the replayed segments: the
+     * old generations still list them, so a crash between unlink and drop refuses the next start. Throws on failure.
+     */
+    future<> drop_old_manifest_generations();
 
     /**
      * Gets the recorded min timestamp for the given id. Optionally filter by
