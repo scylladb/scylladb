@@ -308,6 +308,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("paused_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .with_column("ongoing_rf_changes", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .with_column("ongoing_restore_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("ongoing_cluster_compaction_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -337,6 +338,11 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("finalize_migration_ks_name", utf8_type)
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
+            .with_column("cluster_compaction_table_id", uuid_type)
+            .with_column("cluster_compaction_table_ids", set_type_impl::get_instance(uuid_type, false))
+            .with_column("cluster_compaction_first_error", utf8_type)
+            .with_column("cluster_compaction_type", utf8_type)
+            .with_column("cluster_compaction_options", map_type_impl::get_instance(utf8_type, utf8_type, false))
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3391,6 +3397,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             }
         }
 
+        if (some_row.has("ongoing_cluster_compaction_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "ongoing_cluster_compaction_requests")) {
+                ret.ongoing_cluster_compaction_requests.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
         if (some_row.has("enabled_features")) {
             ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
@@ -3653,6 +3665,24 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("restore_table_id")) {
         entry.restore_table_id = table_id(row.get_as<utils::UUID>("restore_table_id"));
         entry.restore_snapshot_name = row.get_as<sstring>("restore_snapshot_name");
+    }
+    if (row.has("cluster_compaction_table_id")) {
+        entry.cluster_compaction_table_id = table_id(row.get_as<utils::UUID>("cluster_compaction_table_id"));
+        if (row.has("cluster_compaction_table_ids")) {
+            entry.cluster_compaction_table_ids = row.get_set<utils::UUID>("cluster_compaction_table_ids")
+                | std::views::transform([] (auto& uuid) { return table_id(uuid); })
+                | std::ranges::to<std::unordered_set>();
+        }
+        if (row.has("cluster_compaction_first_error")) {
+            entry.cluster_compaction_first_error = row.get_as<sstring>("cluster_compaction_first_error");
+        }
+        if (row.has("cluster_compaction_type")) {
+            entry.cluster_compaction_type = row.get_as<sstring>("cluster_compaction_type");
+        }
+        if (row.has("cluster_compaction_options")) {
+            entry.cluster_compaction_options = row.get_map<sstring, sstring>("cluster_compaction_options")
+                | std::ranges::to<std::unordered_map<sstring, sstring>>();
+        }
     }
 
     return entry;

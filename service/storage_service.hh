@@ -1029,6 +1029,15 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
+    // Starts a cluster-wide compaction of the table, tablet by tablet, of the given type (e.g.
+    // "major") with the given options, and returns the id of the compact_tablets topology request
+    // driving it, which is also the id of its task. Only major compaction, without options, is
+    // supported for now. The table must be the base table of its co-location group, and the whole
+    // group is compacted. With recursive, the tables derived from it which aren't co-located with
+    // it are compacted too: materialized views, secondary indexes and CDC log tables. Joins a
+    // request which is already queued or ongoing for all of these tables, with the same type and
+    // options, and fails if one is for only some of them, or with another type or options.
+    future<utils::UUID> compact_tablets(table_id table, bool recursive, sstring compaction_type, std::unordered_map<sstring, sstring> options);
     future<> abort_restore_tablets(table_id);
     future<> set_tablet_balancing_enabled(bool);
 
