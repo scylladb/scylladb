@@ -4979,7 +4979,9 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
                         ks_name, *base));
                 }
                 throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
+                    "all tables in keyspace '{}' must be prepared for migration before finalizing. "
+                    "Run 'nodetool migrate-to-tablets upgrade' on any node to build one for it, "
+                    "then restart every node that is in tablets mode",
                     ks_name, schema->cf_name(), ks_name));
             }
         }
