@@ -4410,7 +4410,25 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         }
 
         auto topology = co_await get_system_keyspace().load_topology_state({});
+
+        // Finalization clears the nodes' modes once no keyspace is left migrating. A
+        // migration can also end with its keyspace dropped, or the last of its migrating
+        // tables, and a schema change does not touch the topology, so the modes outlive
+        // it. With no keyspace under migration they are stale: clear them here.
+        const bool modes_are_stale = std::invoke([&] {
+            const auto& tablets = get_token_metadata().tablets();
+            return std::ranges::none_of(db.get_non_system_keyspaces(), [&] (const sstring& name) {
+                return replica::is_keyspace_under_tablets_migration(*db.find_keyspace(name).metadata(), tablets);
+            });
+        });
+        std::vector<raft::server_id> stale_modes;
         for (const auto& [server_id, replica_state]: topology.normal_nodes) {
+            if (replica_state.intended_storage_mode && modes_are_stale) {
+                slogger.info("Clearing the storage modes of node '{}', left by a migration whose keyspace or tables were dropped",
+                        server_id);
+                stale_modes.push_back(server_id);
+                continue;
+            }
             if (replica_state.intended_storage_mode) {
                 throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
                         " Please wait for the current migration to finish and retry.",
@@ -4566,6 +4584,14 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             topology_mutation_builder builder(guard.write_timestamp());
             for (const auto& [node_id, _] : topology.normal_nodes) {
                 builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
+            }
+            updates.emplace_back(builder.build());
+        }
+        if (!stale_modes.empty()) {
+            // current_storage_mode, if any, is overwritten just above.
+            topology_mutation_builder builder(guard.write_timestamp());
+            for (auto node_id : stale_modes) {
+                builder.with_node(node_id).del("intended_storage_mode");
             }
             updates.emplace_back(builder.build());
         }
