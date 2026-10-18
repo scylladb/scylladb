@@ -624,4 +624,51 @@ SEASTAR_TEST_CASE(test_new_table_in_vnodes_keyspace_gets_no_tablet_map) {
     });
 }
 
+// SCYLLADB-1169: views, secondary indexes and CDC log tables created mid-migration reach
+// storage_service through prepare_new_view_announcement() and cdc's migration listener
+// rather than CREATE TABLE, and must get a tablet map all the same.
+SEASTAR_TEST_CASE(test_new_view_index_and_cdc_log_in_migrating_keyspace_get_tablet_maps) {
+    std::vector<int64_t> tokens = {-4611686018427387904, 0, 4611686018427387904};
+
+    cql_test_config cfg;
+    cfg.db_config->initial_token.set(fmt::format("{}", fmt::join(tokens, ", ")));
+
+    return do_with_cql_env_thread([tokens] (cql_test_env& e) {
+        auto ks_name = sstring("test_new_view_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int, w int)", ks_name)).get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+        e.execute_cql(format("CREATE INDEX ON {}.t (w)", ks_name)).get();
+        e.execute_cql(format("ALTER TABLE {}.t WITH cdc = {{'enabled': true}}", ks_name)).get();
+
+        std::set<dht::token> expected;
+        for (auto t : tokens) {
+            expected.insert(dht::token(t));
+        }
+        expected.insert(dht::last_token());
+
+        auto& stm = e.shared_token_metadata().local();
+        for (auto cf_name : {"mv", "t_w_idx_index", "t_scylla_cdc_log"}) {
+            auto id = e.local_db().find_schema(ks_name, cf_name)->id();
+            BOOST_REQUIRE_MESSAGE(stm.get()->tablets().has_tablet_map(id),
+                    fmt::format("{}.{} created during migration did not get a tablet map", ks_name, cf_name));
+
+            auto& tmap = stm.get()->tablets().get_tablet_map(id);
+            std::set<dht::token> boundaries;
+            for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+                boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+            }
+            BOOST_REQUIRE_MESSAGE(boundaries == expected,
+                    fmt::format("Tablet map boundaries {} of {}.{} do not match the vnode boundaries {}",
+                            fmt::join(boundaries, ", "), ks_name, cf_name, fmt::join(expected, ", ")));
+        }
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
