@@ -4790,6 +4790,14 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
         return;
     }
 
+    // A test's stand-in for a CREATE TABLE coordinated by a node without this code: the
+    // only way to reach the backfill in set_node_intended_storage_mode().
+    if (utils::get_local_injector().enter("skip_tablet_map_for_new_table")) {
+        slogger.warn("skip_tablet_map_for_new_table injection: leaving new table(s) in {} without a tablet map",
+                     ksm.name());
+        return;
+    }
+
     // Whichever way the migration is heading: a node still on tablets holds the new
     // table like its siblings, and a rollback drops this map with every other.
     auto erm = _db.local().find_keyspace(ksm.name()).get_static_effective_replication_map();
