@@ -3352,3 +3352,67 @@ async def test_create_table_during_rollback(manager: ScyllaClusterManager):
 
         for table in ("test", "before_rollback", "after_rollback"):
             await verify_data_integrity(cql, ks, table, num_keys)
+
+
+async def test_lwt_during_migration_refuses_forward_finalization(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: a $paxos table created mid-migration gets no tablet map of its own.
+
+    An LWT through a node already running the table on tablets creates <table>$paxos.
+    Paxos state is read on the local replica only, so that table must share its base
+    table's map, which a migration cannot build yet. A map of its own would let the
+    load balancer separate the two after finalization; without one, forward
+    finalization keeps refusing, with a reason, and rollback still works. The rollback
+    leaves test$paxos behind, so a new migration of the keyspace is refused up front.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table.
+    2. Start the migration, upgrade the node and restart it onto tablets.
+    3. Run an LWT, which creates test$paxos. It must have no tablet map.
+    4. Forward finalization must refuse, naming the LWT.
+    5. Roll back, restart, finalize; the keyspace must be back on vnodes, data intact.
+    6. Starting a new migration of the keyspace must be refused.
+    """
+    num_keys = 10
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting the migration and moving the node onto tablets")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Running LWTs, which create the table's $paxos table")
+        for k in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k}) IF NOT EXISTS")
+        await read_barrier(manager.api, server.ip_addr)
+
+        rows = await cql.run_async(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{ks}'")
+        assert 'test$paxos' in {r.table_name for r in rows}, "The LWT did not create test$paxos"
+        assert await get_tablet_count(manager, server, ks, 'test$paxos') == 0, \
+            "test$paxos got a tablet map of its own"
+
+        logger.info("Verifying forward finalization is refused")
+        with pytest.raises(HTTPError, match="used by lightweight transactions during the migration"):
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Rolling back")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        await verify_migration_status(manager, server, ks, expected_status='vnodes', expected_node_statuses={})
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+        logger.info("Verifying a new migration is refused while test$paxos exists")
+        with pytest.raises(HTTPError, match="used by lightweight transactions"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
