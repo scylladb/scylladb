@@ -468,7 +468,7 @@ public:
     // Use get_sstable_compression_user_table_options() instead.
     named_value<compression_parameters> sstable_compression_user_table_options;
 
-    compression_parameters get_sstable_compression_user_table_options(bool dicts_feature_enabled) const;
+    compression_parameters get_sstable_compression_user_table_options(bool dicts_feature_enabled, bool raw_chunks_feature_enabled) const;
 
     named_value<bool> sstable_compression_dictionaries_allow_in_ddl;
     named_value<bool> sstable_compression_dictionaries_enable_writing;
