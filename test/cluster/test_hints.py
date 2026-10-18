@@ -563,11 +563,15 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
     # the problem with waiting for hint sync point timing out when the only hint on a shard has been dropped
     # https://scylladb.atlassian.net/browse/SCYLLADB-1192
     cmdline = ['--smp=1', "--logger-log-level", "hints_manager=trace"]
+    # Re-enabling stream_tablet_wait raises no topology event; the coordinator resumes on the
+    # load stats refresh tick, which is 60s by default. Hint replay runs once per flush period (10s).
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1,
+              'error_injections_at_startup': ['decrease_hints_flush_period']}
     servers = await manager.servers_add(3, property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
-    ], cmdline=cmdline)
+    ], cmdline=cmdline, config=config)
     cql = await manager.get_cql_exclusive(servers[0])
     await manager.disable_tablet_balancing()
 
