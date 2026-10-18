@@ -22,12 +22,17 @@ which checks it against a single-register-per-key model:
     DROP+CREATE recreate window, but ONLY for table-absence errors.
   - Unexpected InvalidRequest outside the recreate window fails the test.
 
+The stress phase ends after SCHEMA_OPS_TARGET schema changes, with
+STRESS_DURATION_S as an upper bound.  Every enabled schema operation type
+runs at least once unless the time bound is hit.
+
 Context: scylladb/scylladb#28546
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import random
@@ -84,7 +89,12 @@ TABLE_NAME = "main"
 NUM_KEYS = 100
 NUM_WRITERS = 4
 NUM_READERS = 4
+# Upper bound on the stress phase; it normally ends after SCHEMA_OPS_TARGET
+# schema changes.
 STRESS_DURATION_S = 60
+SCHEMA_OPS_TARGET = 5
+# DML keeps running this long against the final schema after the last change.
+POST_SCHEMA_TAIL_S = 3
 
 # Range for the randomized `default_time_to_live` property.  It applies to
 # every subsequent write, so a row written during the run must not be able to
@@ -300,6 +310,8 @@ class SCSchemaTestState:
     reader_table_absent: int = 0
     schema_ops: int = 0
     recreate_count: int = 0
+    op_counts: collections.Counter = field(default_factory=collections.Counter)
+    timed_out: bool = False
 
     # Closed windows for completed DROP+CREATE sequences.  Written by the
     # schema changer's recreate operations, read by the readers and writers.
@@ -640,6 +652,8 @@ SCHEMA_OP_HANDLERS: dict[str, SchemaOpHandler] = {
 async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
     rng = state.rng_for("schema-changer")
     logger.info("Schema changer started")
+    pending = [name for name, _ in SCHEMA_OPS]
+    rng.shuffle(pending)
     # Keep picking until we either execute a real schema change
     # or the test is asked to stop.
     while not state.stop_event.is_set():
@@ -655,7 +669,17 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
             op_names = [name for name, _ in available_ops]
             op_weights = [weight for _, weight in available_ops]
 
-            [op_name] = rng.choices(op_names, weights=op_weights)
+            # Every op type runs at least once, in a seeded random order.
+            op_name = next((n for n in pending if n in op_names), None)
+            if "drop_column" in pending and "drop_column" not in op_names:
+                # drop_column needs a column; don't let a random recreate
+                # clear the columns again.
+                op_name = "add_column"
+            if op_name:
+                if op_name in pending:
+                    pending.remove(op_name)
+            else:
+                [op_name] = rng.choices(op_names, weights=op_weights)
             # Log the start and the end of every schema change with the raw
             # timestamps the history records, so that it can be located in
             # history.jsonl, which the checker dumps into its artifacts
@@ -671,8 +695,14 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
             break
 
         state.schema_ops += 1
+        state.op_counts[result] += 1
         logger.info("DDL: %s (schema op #%d) done at time_ns=%d",
                     result, state.schema_ops, t_end_ns)
+        if state.schema_ops >= SCHEMA_OPS_TARGET and not pending:
+            await asyncio.sleep(POST_SCHEMA_TAIL_S)
+            state.stop_event.set()
+        if state.stop_event.is_set():
+            break
         await asyncio.sleep(rng.uniform(*SCHEMA_OP_PAUSE_S))
 
     logger.info("Schema changer finished: %d ops", state.schema_ops)
@@ -711,9 +741,9 @@ async def test_sc_linearizability_with_schema_changes(
         # reads as the register's default value 0, which is the same path the
         # readers take after every DROP+RECREATE.
         logger.info(
-            "Starting stress phase (%ds): writers=%d readers=%d "
-            "keys=%d tablets=%d + schema changer",
-            STRESS_DURATION_S, NUM_WRITERS, NUM_READERS,
+            "Starting stress phase (%d schema changes, at most %ds): "
+            "writers=%d readers=%d keys=%d tablets=%d + schema changer",
+            SCHEMA_OPS_TARGET, STRESS_DURATION_S, NUM_WRITERS, NUM_READERS,
             NUM_KEYS, NUM_TABLETS,
         )
 
@@ -722,7 +752,10 @@ async def test_sc_linearizability_with_schema_changes(
             async with asyncio.TaskGroup() as tg:
                 async def stop_timer():
                     try:
-                        await asyncio.sleep(STRESS_DURATION_S)
+                        await asyncio.wait_for(
+                            state.stop_event.wait(), STRESS_DURATION_S)
+                    except TimeoutError:
+                        state.timed_out = True
                     finally:
                         state.stop_event.set()
 
@@ -739,17 +772,20 @@ async def test_sc_linearizability_with_schema_changes(
             task_errors = list(eg.exceptions)
             logger.error("Task(s) failed: %s", task_errors)
 
-        logger.info("Stress phase complete")
+        logger.info("Stress phase complete: %s",
+                    "timed out at STRESS_DURATION_S" if state.timed_out
+                    else "schema ops target reached")
         logger.info(
             "Stats: writes ok=%d table_absent=%d | "
             "reads ok=%d empty=%d table_absent=%d | "
-            "schema_ops=%d recreates=%d | "
+            "schema_ops=%d recreates=%d ops=%s | "
             "ops=%d events=%d",
             state.write_success,
             state.writer_table_absent,
             state.read_success, state.read_empty,
             state.reader_table_absent,
             state.schema_ops, state.recreate_count,
+            dict(state.op_counts),
             state.history.op_count, state.history.event_count,
         )
 
@@ -762,11 +798,6 @@ async def test_sc_linearizability_with_schema_changes(
             f"Too few successful writes ({state.write_success}), "
             f"expected >= {MIN_EXPECTED_WRITES}"
         )
-        assert state.schema_ops >= MIN_EXPECTED_SCHEMA_OPS, (
-            f"Too few schema operations ({state.schema_ops}), "
-            f"expected >= {MIN_EXPECTED_SCHEMA_OPS}"
-        )
-
         checker_output_dir = tmp_path / "porcupine-checker-output"
         logger.info(
             "Running Porcupine linearizability check: %d ops, %d events; artifacts_dir=%s",
@@ -791,6 +822,17 @@ async def test_sc_linearizability_with_schema_changes(
             f"artifacts_dir={result.get('artifacts_dir')}\n"
             f"visualization={result.get('visualization')}\n"
             f"full_result={result}"
+        )
+
+        # A timed-out run may stop before every op type got a turn.
+        missing = [n for n, _ in SCHEMA_OPS if not state.op_counts[n]]
+        assert state.timed_out or not missing, (
+            f"Schema ops never ran: {missing} (seed={seed}, "
+            f"counts={dict(state.op_counts)})"
+        )
+        assert state.schema_ops >= MIN_EXPECTED_SCHEMA_OPS, (
+            f"Too few schema operations ({state.schema_ops}), "
+            f"expected >= {MIN_EXPECTED_SCHEMA_OPS}"
         )
 
         logger.info(
