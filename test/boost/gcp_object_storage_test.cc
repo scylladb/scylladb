@@ -795,8 +795,11 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrap
     auto [is2, total] = stream_from_buffers(std::move(std::move(written)));
     std::vector<temporary_buffer<char>> bufs;
     std::vector<iovec> vecs;
-    for (size_t i = 0; i < total; ) {
-        auto n = std::min(total - i, size_t(8192));
+    // Large and unaligned iovs exercise the inner get_at loop and the position advance
+    // across iovs with few requests.
+    constexpr size_t iov_sizes[] = { 8192, 357, 1024*1024 + 5, 8*1024*1024, 9*1024*1024 + 13 };
+    for (size_t i = 0, k = 0; i < total; ++k) {
+        auto n = std::min(total - i, iov_sizes[k % std::ranges::size(iov_sizes)]);
         bufs.emplace_back(n);
         vecs.emplace_back(iovec{ .iov_base = bufs.back().get_write(), .iov_len = n });
         i += n;
