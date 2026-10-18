@@ -859,7 +859,10 @@ async def test_incremental_repair_tablet_time_metrics(manager: ScyllaClusterMana
 # Reproducer for https://github.com/scylladb/scylladb/issues/26346
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(manager):
-    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    # The retry after the stepdown waits for the load balancer, woken by the
+    # periodic load stats refresh.
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=config)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
