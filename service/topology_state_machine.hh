@@ -200,6 +200,13 @@ struct topology {
     // absorbed into an existing tablet_migration round.
     std::unordered_set<utils::UUID> ongoing_restore_requests;
 
+    // Set of request IDs for ongoing cluster-wide compactions of tables. The topology
+    // coordinator moves a compact_tablets request here when it picks it from the global
+    // request queue. The load balancer then schedules the tablet_compaction transitions of the
+    // table's tablets in each round, a limited number per shard, and completes the request
+    // once all of them are compacted. Requests for different tables can be ongoing at once.
+    std::unordered_set<utils::UUID> ongoing_cluster_compaction_requests;
+
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id> unpublished_cdc_generations;
 
