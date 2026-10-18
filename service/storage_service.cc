@@ -4866,6 +4866,10 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
 
     slogger.info("Setting intended storage mode for node {} to {}", raft_server.id(), mode);
 
+    // What the command did, for its description and the log: it may repair maps
+    // without changing the mode, and must not claim otherwise.
+    sstring done;
+
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
@@ -4873,23 +4877,34 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
         // prepare_for_tablets_migration() has been called for at least one
         // keyspace. prepare_for_tablets_migration() will fail if
         // intended_storage_mode is already set for any node.
-        const auto& tablet_metadata = get_token_metadata().tablets();
-        bool has_any_migrating_table = false;
-        for (const auto& ks : _db.local().get_non_system_keyspaces()) {
-            auto& keyspace = _db.local().find_keyspace(ks);
-            if (!keyspace.uses_tablets()) {
-                for (const auto& schema : keyspace.metadata()->tables()) {
-                    if (tablet_metadata.has_tablet_map(schema->id())) {
-                        has_any_migrating_table = true;
-                        break;
-                    }
+        //
+        // One pass serves both this check and the backfill. Everything the backfill needs
+        // is taken before it suspends: a keyspace dropped meanwhile would make a lookup
+        // by name throw, while stale state only makes add_entry() below reject and retry.
+        struct migrating_keyspace {
+            locator::static_effective_replication_map_ptr erm;
+            std::vector<schema_ptr> cfms;
+        };
+        std::vector<migrating_keyspace> migrating; // filled only when going to tablets: the backfill's input
+        bool any_migrating = false;
+        {
+            auto tmptr = get_token_metadata_ptr();
+            for (const auto& ks_name : _db.local().get_non_system_keyspaces()) {
+                auto& ks = _db.local().find_keyspace(ks_name);
+                if (!locator::is_keyspace_undergoing_tablets_migration(tmptr->tablets(), *ks.metadata())) {
+                    continue;
                 }
-            }
-            if (has_any_migrating_table) {
-                break;
+                any_migrating = true;
+                if (mode != storage_mode::tablets) {
+                    break;
+                }
+                migrating.push_back(migrating_keyspace{
+                    .erm = ks.get_static_effective_replication_map(),
+                    .cfms = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>(),
+                });
             }
         }
-        if (!has_any_migrating_table) {
+        if (!any_migrating) {
             throw std::runtime_error(::format("Cannot set intended storage mode to {}: no migration is in progress. You need to start a migration first.", mode));
         }
 
@@ -4904,18 +4919,45 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
             throw std::runtime_error(::format("Node {} is not in the normal state (current state: {})", raft_server.id(), rs.state));
         }
 
-        if (rs.intended_storage_mode == mode) {
-            slogger.info("Node {} already has intended storage mode set to {}, skipping", raft_server.id(), mode);
+        // Copied out: the backfill suspends, and the topology may be reloaded meanwhile.
+        const auto old_mode = rs.intended_storage_mode;
+
+        group0_update_collector updates;
+
+        // Going to tablets, every migrating table needs a map to reshard onto, and one
+        // created through a node without the migration listener has none: build it now,
+        // before the "already in that mode" return, since the node may be on tablets
+        // already, leaving no mode to change anywhere.
+        size_t backfilled = 0;
+        if (mode == storage_mode::tablets) {
+            for (auto& ks : migrating) {
+                backfilled += co_await append_tablet_maps_for_unmapped_tables(ks.erm, std::move(ks.cfms), guard.write_timestamp(),
+                        [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+            }
+        }
+
+        if (old_mode == mode && !backfilled) {
+            slogger.info("Node {} already has intended storage mode set to {}{}, skipping", raft_server.id(), mode,
+                         mode == storage_mode::tablets ? " and every migrating table has a tablet map" : "");
             co_return;
         }
 
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
-               .set("intended_storage_mode", mode);
+        done = {};
+        if (old_mode != mode) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.with_node(raft_server.id())
+                   .set("intended_storage_mode", mode);
+            updates.emplace_back(canonical_mutation(builder.build()));
+            done = ::format("set intended storage mode for node {} to {}", raft_server.id(), mode);
+        }
+        if (backfilled) {
+            done += ::format("{}built a tablet map for {} table(s) under migration", done.empty() ? "" : " and ", backfilled);
+        }
 
-        topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            ::format("set intended storage mode for node {} to {}", raft_server.id(), mode));
+        topology_change change{co_await updates.collect()};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, done);
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
@@ -4926,7 +4968,7 @@ future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
         break;
     }
 
-    slogger.info("Successfully set intended storage mode for node {} to {}", raft_server.id(), mode);
+    slogger.info("Successfully {}", done);
 }
 
 storage_service::migration_status storage_service::get_tablets_migration_status(const sstring& ks_name) {
