@@ -3814,3 +3814,50 @@ async def test_migration_with_views_under_writes(manager: ScyllaClusterManager):
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "keyspace is still using vnodes after migration finalization"
         await verify_views_match_base(cql, ks, expected)
+
+
+async def test_replace_during_migration_with_a_tablets_keyspace(manager: ScyllaClusterManager):
+    """Replace a node mid-migration while a regular tablets keyspace has replicas on it.
+
+    The replacement waits until the replaced node's tablet replicas are rebuilt
+    elsewhere. The nodes which still keep the migrating table in vnodes storage
+    report no tablet sizes for it, and the load balancer must not count that
+    against them when it drains the replaced node.
+    """
+    num_shards = 2
+    cfg = {'num_tokens': 16}
+    cmdline = ['--smp', str(num_shards)]
+    property_file = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': true}") as tablets_ks, \
+               new_migrating_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {tablets_ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(100)))
+
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for s in servers[:2]:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+
+        replaced_server = servers[0]
+        replaced_host_id = await manager.get_host_id(replaced_server.server_id)
+        await manager.server_stop(replaced_server.server_id, convict=True)
+
+        logger.info("Replacing a node which holds replicas of the tablets keyspace")
+        replace_cfg = ReplaceConfig(replaced_id=replaced_server.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg, cmdline=cmdline,
+                                              property_file=replaced_server.property_file(), config=cfg)
+
+        await reconnect_driver(manager)
+        await manager.get_ready_cql(servers[1:] + [new_server])
+        # The replacement only completes once the replaced node's tablet replicas are rebuilt.
+        replicas = await get_all_tablet_replicas(manager, new_server, tablets_ks, "t")
+        assert replicas and all(host != replaced_host_id for r in replicas for host, _ in r.replicas), \
+            f"tablets of {tablets_ks}.t still have replicas on the replaced node: {replicas}"

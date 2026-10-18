@@ -1518,9 +1518,7 @@ public:
         // returns accurate results for nodes in this DC. Without this, the sketch
         // may contain stale data from the last DC processed by make_plan(), causing
         // shard 0 to always be selected for nodes in other DCs.
-        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch = make_load_sketch();
         co_await _load_sketch->populate_dc(dc);
 
         for (auto& [rack, colocation_sources] : racks) {
@@ -2291,6 +2289,17 @@ public:
         }
         auto& ks = _db.find_keyspace(t->schema()->ks_name());
         return !ks.get_replication_strategy().uses_tablets();
+    }
+
+    locator::load_sketch make_load_sketch() {
+        locator::load_sketch sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        sketch.set_minimal_tablet_size(_minimal_tablet_size);
+        sketch.set_force_capacity_based_load(_force_capacity_based_balancing);
+        // A node which keeps a table under vnodes-to-tablets migration in vnodes storage
+        // reports no tablet sizes for it, and nothing is balanced for such a table. Its
+        // missing sizes must not keep the node from balancing, nor block draining a node.
+        sketch.set_tables_with_optional_sizes([this] (table_id table) { return is_migrating_table(table); });
+        return sketch;
     }
 
     struct table_sizing {
@@ -4552,9 +4561,7 @@ public:
             }
         }
 
-        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch = make_load_sketch();
         co_await _load_sketch->populate_dc(dc);
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
