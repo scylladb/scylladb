@@ -21,6 +21,7 @@ from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tab
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
+import contextlib
 import pytest
 import logging
 import time
@@ -2779,7 +2780,10 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(6, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    # Releasing stream_tablet_wait wakes nothing; the coordinator resumes on the next
+    # load stats refresh.
+    config = DEFAULT_CONFIG | {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(6, config=config, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
@@ -2832,32 +2836,61 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
                 return True if len(await cql.run_async(stmt, host=src_host)) == 1 else None
             await wait_for(has_applied_the_inserts, time.time() + 60)
 
-            logger.info(f"Parking the applier of the leaving replica {src_host_id}")
-            # Mark the log before arming the injection: a message it emits in between
-            # would be invisible to the wait below.
-            src_log = await manager.server_open_log(src_server.server_id)
-            mark = await src_log.mark()
-            await manager.api.enable_injection(src_server.ip_addr, wait_before_apply_injection, one_shot=True)
-            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (100, 101)")
-            await src_log.wait_for(f"{wait_before_apply_injection}: waiting for message", from_mark=mark, timeout=60)
+            # Hold the migration at the streaming stage while the applier is parked. The
+            # earlier stages sync the raft config of every replica with a read barrier,
+            # which a follower with a parked applier can't complete before the RPC times out.
+            async def release_streaming():
+                for s in servers:
+                    await manager.api.disable_injection(s.ip_addr, "stream_tablet_wait")
 
-            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
-            move_task = asyncio.create_task(
-                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
-                                        src_host_id, src_shard, dst_host_id, 0, tablet_token)
-            )
+            move_task = None
+            try:
+                # Only the topology coordinator evaluates it, and it can be any node.
+                for s in servers:
+                    await manager.api.enable_injection(s.ip_addr, "stream_tablet_wait", one_shot=False)
 
-            # Wait until the leaving replica's raft group is being torn down. Without
-            # the teardown ordering this happens only at the end of the migration, by
-            # which time the tablet cleanup already stopped the tablet's storage, and
-            # releasing the applier below kills the node.
-            await src_log.wait_for(f"schedule_raft_group_deletion\\(\\): group id {group_id}: scheduling",
-                                   from_mark=mark, timeout=120)
+                logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+                move_task = asyncio.create_task(
+                    manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                            src_host_id, src_shard, dst_host_id, 0, tablet_token)
+                )
 
-            logger.info("Releasing the parked applier")
-            await manager.api.message_injection(src_server.ip_addr, wait_before_apply_injection)
+                async def migration_reached_streaming():
+                    rows = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='{ks}' "
+                                               f"AND table_name='{table_name}' ALLOW FILTERING")
+                    return any(r.stage == "streaming" for r in rows) or None
+                await wait_for(migration_reached_streaming, time.time() + 60)
 
-            await move_task
+                logger.info(f"Parking the applier of the leaving replica {src_host_id}")
+                # Mark the log before arming the injection: a message it emits in between
+                # would be invisible to the wait below.
+                src_log = await manager.server_open_log(src_server.server_id)
+                mark = await src_log.mark()
+                await manager.api.enable_injection(src_server.ip_addr, wait_before_apply_injection, one_shot=True)
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (100, 101)")
+                await src_log.wait_for(f"{wait_before_apply_injection}: waiting for message", from_mark=mark, timeout=60)
+
+                await release_streaming()
+
+                # Wait until the leaving replica's raft group is being torn down. Without
+                # the teardown ordering this happens only at the end of the migration, by
+                # which time the tablet cleanup already stopped the tablet's storage, and
+                # releasing the applier below kills the node.
+                await src_log.wait_for(f"schedule_raft_group_deletion\\(\\): group id {group_id}: scheduling",
+                                       from_mark=mark, timeout=120)
+
+                logger.info("Releasing the parked applier")
+                await manager.api.message_injection(src_server.ip_addr, wait_before_apply_injection)
+
+                await move_task
+            finally:
+                await release_streaming()
+                # No-op unless the applier is still parked; keeps teardown from hanging.
+                await manager.api.message_injection(src_server.ip_addr, wait_before_apply_injection)
+                if move_task and not move_task.done():
+                    move_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await move_task
             await manager.api.quiesce_topology(servers[0].ip_addr)
 
             replicas = (await get_all_tablet_replicas(manager, servers[0], ks, table_name))[0].replicas
